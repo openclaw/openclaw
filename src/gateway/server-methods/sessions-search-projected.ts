@@ -8,8 +8,14 @@ import type { SessionStoreTarget } from "../../config/sessions/targets.js";
 import { runSynchronousWork } from "../../shared/synchronous-work.js";
 import { filterSessionEntries } from "../session-list-filters.js";
 import { withReadySessionRows } from "../session-row-prepared-read.js";
-import { getSessionRowProjection } from "../session-row-projection-access.js";
-import { prepareProjectedSessionList } from "../session-utils-list.js";
+import {
+  getSessionRowProjection,
+  requireSessionRowProjection,
+} from "../session-row-projection-access.js";
+import {
+  prepareProjectedSessionList,
+  prepareSessionSearchIdentityNames,
+} from "../session-utils-list.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 /** Search all selected resident metadata; only matching rows cross the wire. */
@@ -21,10 +27,8 @@ export async function searchProjectedSessionTranscripts(params: {
   client: GatewayClient | null;
   onResult: (result: SessionsSearchResult) => void;
 }) {
-  const projection = getSessionRowProjection(params.context);
-  if (!projection) {
-    throw new Error("Session projection is unavailable before Gateway startup completes");
-  }
+  const projection = requireSessionRowProjection(params.context);
+  let searchIdentities: Awaited<ReturnType<typeof prepareSessionSearchIdentityNames>> | undefined;
   const select = () => {
     const { prepared, presentation, filters } = prepareProjectedSessionList({
       projection,
@@ -32,6 +36,7 @@ export async function searchProjectedSessionTranscripts(params: {
       context: params.context,
       client: params.client,
       now: Date.now(),
+      searchIdentities,
     });
     const { entries } = withAgentRosterFactsBatch(prepared.cfg, () =>
       runSynchronousWork(filterSessionEntries(filters)),
@@ -87,7 +92,13 @@ export async function searchProjectedSessionTranscripts(params: {
   for (let attempt = 0; attempt < 2; attempt++) {
     do {
       await projection.ensureMaterialized();
-    } while (projection.needsMaterialization);
+      if (params.scope.search?.trim()) {
+        searchIdentities = await prepareSessionSearchIdentityNames(projection, params.scope);
+      }
+    } while (
+      projection.needsMaterialization ||
+      (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
+    );
     const selected = select();
     // Filter every physical store before LIMIT. Never dispatch an empty key set.
     const pages = await Promise.all(
@@ -98,6 +109,7 @@ export async function searchProjectedSessionTranscripts(params: {
             ...target,
             sessionKeys: [...rows.keys()],
             query: params.query,
+            match: "prefix",
             limit,
           },
           { agentId: target.agentId, path: target.storePath },
@@ -107,7 +119,10 @@ export async function searchProjectedSessionTranscripts(params: {
     if (getSessionRowProjection(params.context) !== projection) {
       throw new Error("Session search owner changed while reading; retry the request");
     }
-    if (projection.needsMaterialization) {
+    if (
+      projection.needsMaterialization ||
+      (searchIdentities && searchIdentities.cfg !== projection.state.cfg)
+    ) {
       continue;
     }
     // Reacquire viewer identity, roles, sharing, and presentation after the await.
@@ -133,6 +148,9 @@ export async function searchProjectedSessionTranscripts(params: {
       (read) => {
         if (getSessionRowProjection(params.context) !== projection) {
           throw new Error("Session search owner changed while reading; retry the request");
+        }
+        if (searchIdentities && searchIdentities.cfg !== projection.state.cfg) {
+          return false;
         }
         const refreshed = select();
         if (!sameSelection(selected, refreshed)) {
@@ -164,6 +182,7 @@ export async function searchProjectedSessionTranscripts(params: {
         });
         return true;
       },
+      { selection: true },
     );
     if (published) {
       return;

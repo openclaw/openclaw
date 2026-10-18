@@ -1,6 +1,6 @@
 import { formatErrorMessage } from "openclaw/plugin-sdk/error-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { isIncognitoSessionKey } from "openclaw/plugin-sdk/routing";
-import type { OpenClawPluginApi } from "./api.js";
 import type { MemoryConfig } from "./config.js";
 import {
   type Embeddings,

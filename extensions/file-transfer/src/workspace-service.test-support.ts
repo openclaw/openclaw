@@ -7,16 +7,10 @@ import type {
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { handleFileCreate } from "./node-host/file-create.js";
 import { handleFileFetch } from "./node-host/file-fetch.js";
-import {
-  createWorkspaceMemoryCommand,
-  createWorkspaceSkillsCommand,
-} from "./node-host/workspace-memory.js";
+import { createWorkspaceCommand } from "./node-host/workspace-memory.js";
 import { createFileTransferNodeInvokePolicy } from "./shared/node-invoke-policy.js";
 import { createCtx } from "./shared/node-invoke-policy.test-support.js";
-import {
-  createWorkspaceMemoryPolicy,
-  createWorkspaceSkillsPolicy,
-} from "./shared/workspace-memory-policy.js";
+import { createWorkspaceWorkerPolicy } from "./shared/workspace-memory-policy.js";
 
 /** Real policy and file handlers; only the paired connection is replaced here. */
 export function createNodeWorkspaceTestTransport(
@@ -56,7 +50,8 @@ export function createNodeWorkspaceTestTransport(
       params: request.params as Record<string, unknown>,
       pluginConfig: api.config.plugins!.entries!["file-transfer"]!.config,
     });
-    invokeNode.mockImplementation(async ({ params } = {}) => {
+    invokeNode.mockImplementation(async (options = {}) => {
+      const { params } = options;
       request.assertCurrent?.();
       signal.throwIfAborted();
       if (request.command === "workspace.memory" || request.command === "workspace.skills") {
@@ -69,10 +64,9 @@ export function createNodeWorkspaceTestTransport(
         return {
           ok: true,
           payload: JSON.parse(
-            await (
-              request.command === "workspace.memory"
-                ? createWorkspaceMemoryCommand(nodeApi)
-                : createWorkspaceSkillsCommand(nodeApi)
+            await createWorkspaceCommand(
+              nodeApi,
+              request.command === "workspace.memory" ? "memory" : "skills",
             ).handle(JSON.stringify(params ?? request.params), io),
           ),
         };
@@ -87,9 +81,9 @@ export function createNodeWorkspaceTestTransport(
     });
     const policy =
       request.command === "workspace.memory"
-        ? createWorkspaceMemoryPolicy()
+        ? createWorkspaceWorkerPolicy("memory")
         : request.command === "workspace.skills"
-          ? createWorkspaceSkillsPolicy()
+          ? createWorkspaceWorkerPolicy("skills")
           : createFileTransferNodeInvokePolicy();
     const closed = Promise.resolve(policy.handle(ctx)).then((result) => {
       if (!result.ok) {

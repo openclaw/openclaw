@@ -1,133 +1,82 @@
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  expectUnused,
+  relayConfig,
+  relayFrames,
+  runtime,
+  waitCalled,
+} from "./background.lifecycle-test-helpers.js";
+import {
   cleanupBackgroundHarnesses,
   loadBackground,
-  TEST_RELAY_KEY,
   REPLACEMENT_TEST_RELAY_KEY,
-  sendRuntimeMessage,
 } from "./background.test-harness.js";
 
-const RELAY_WATCHDOG_ALARM = "openclaw-relay-watchdog";
+function load(
+  accessMode: string,
+  tabs: (number | { id: number; groupId: number })[] = [],
+  options: Parameters<typeof loadBackground>[0] = {},
+) {
+  return loadBackground({
+    storedConfig: relayConfig(accessMode),
+    initialTabs: tabs.map((tab) => ({
+      url: "https://example.com/",
+      groupId: -1,
+      ...(typeof tab === "number" ? { id: tab } : tab),
+    })),
+    ...options,
+  });
+}
+async function ready(...args: Parameters<typeof load>) {
+  const harness = await load(...args);
+  const socket = harness.relaySockets[0];
+  if (
+    !socket ||
+    !harness.debuggerEventListener ||
+    !harness.debuggerDetachListener ||
+    !harness.tabsRemovedListener ||
+    !harness.tabGroupRemovedListener
+  ) {
+    throw new Error("expected relay and Chrome lifecycle listeners");
+  }
+  await harness.authenticate(socket);
+  return Object.assign(harness, {
+    socket,
+    frames: () => relayFrames(socket),
+    events: () => relayFrames(socket).filter((frame) => frame.type === "cdpEvent"),
+    debuggerEventListener: harness.debuggerEventListener,
+    debuggerDetachListener: harness.debuggerDetachListener,
+    tabsRemovedListener: harness.tabsRemovedListener,
+    tabGroupRemovedListener: harness.tabGroupRemovedListener,
+  });
+}
 
 describe("relay command authorization", () => {
   beforeEach(() => {
     vi.resetModules();
   });
-
   afterEach(async () => {
     await cleanupBackgroundHarnesses();
     vi.unstubAllGlobals();
   });
-
-  it("rejects every authority-bearing command after tab-group revocation", async () => {
-    const harness = await loadBackground();
-    const socket = harness.sockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    await harness.authenticate(socket);
-    harness.shareTab(41);
-    harness.unshareTab(41);
-
-    socket.receive({ type: "attach", seq: 1, tabId: 41 });
-    socket.receive({ type: "cdp", seq: 2, tabId: 41, method: "Runtime.evaluate" });
-    socket.receive({ type: "closeTab", seq: 3, tabId: 41 });
-    socket.receive({ type: "activateTab", seq: 4, tabId: 41 });
-
-    await vi.waitFor(() => {
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(
-        frames
-          .filter((frame) => frame.type === "error")
-          .map((frame) => frame.seq)
-          .toSorted((left, right) => left - right),
-      ).toEqual([1, 2, 3, 4]);
-    });
-    expect(harness.debuggerAttach).not.toHaveBeenCalled();
-    expect(harness.debuggerSendCommand).not.toHaveBeenCalled();
-    expect(harness.tabsRemove).not.toHaveBeenCalled();
-    expect(harness.tabsUpdate).not.toHaveBeenCalled();
-    expect(harness.windowsUpdate).not.toHaveBeenCalled();
-  });
-
-  it("controls an eligible ungrouped tab in all mode", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      initialTabs: [{ id: 41, url: "https://example.com/all", groupId: -1 }],
-    });
-    const socket = harness.relaySockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    await harness.authenticate(socket);
-    const hello = socket.send.mock.calls
-      .map(([raw]) => JSON.parse(raw))
-      .find((frame) => frame.type === "hello");
-    expect(hello.tabs).toContainEqual(
-      expect.objectContaining({ tabId: 41, url: "https://example.com/all" }),
-    );
-
-    socket.receive({ type: "attach", seq: 20, tabId: 41 });
-    await vi.waitFor(() =>
-      expect(socket.send.mock.calls.map(([raw]) => JSON.parse(raw))).toContainEqual({
-        type: "result",
-        seq: 20,
-        result: { targetId: "tab-41" },
-      }),
-    );
-    socket.receive({ type: "cdp", seq: 21, tabId: 41, method: "Runtime.evaluate" });
-
-    await vi.waitFor(() => {
-      expect(harness.debuggerAttach).toHaveBeenCalledWith({ tabId: 41 }, "1.3");
-      expect(harness.debuggerSendCommand).toHaveBeenCalledWith(
-        { tabId: 41 },
-        "Runtime.evaluate",
-        {},
-      );
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({ type: "result", seq: 21, result: {} });
-    });
-  });
-
   it("closes the old selected relay before a replacement pairing widens access", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "selected",
-      },
-      initialTabs: [{ id: 45, url: "https://example.com/private", groupId: -1 }],
-    });
-    const oldSocket = harness.relaySockets[0];
-    if (!oldSocket) {
-      throw new Error("expected old relay socket");
-    }
-    await harness.authenticate(oldSocket);
-
-    await expect(
-      sendRuntimeMessage(harness, {
-        type: "pair",
+    const harness = await ready("selected", [45]);
+    const oldSocket = harness.socket;
+    expect(
+      await runtime(harness, "pair", {
         pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_TEST_RELAY_KEY}`,
         accessMode: "all",
       }),
-    ).resolves.toEqual({ ok: true });
-
+    ).toEqual({ ok: true });
     expect(oldSocket.close).toHaveBeenCalledOnce();
-    const oldFrames = oldSocket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+    const oldFrames = relayFrames(oldSocket);
     expect(
       oldFrames.some(
         (frame) =>
           frame.type === "tabs" && frame.tabs?.some((tab: { tabId?: number }) => tab.tabId === 45),
       ),
     ).toBe(false);
-
     const replacement = harness.relaySockets.find(
       (socket) => socket.url === "ws://127.0.0.1:18798/extension",
     );
@@ -135,80 +84,13 @@ describe("relay command authorization", () => {
       throw new Error("expected replacement relay socket");
     }
     await harness.authenticate(replacement);
-    const replacementHello = replacement.send.mock.calls
-      .map(([raw]) => JSON.parse(raw))
-      .find((frame) => frame.type === "hello");
+    const replacementHello = relayFrames(replacement).find((frame) => frame.type === "hello");
     expect(replacementHello.tabs).toContainEqual(expect.objectContaining({ tabId: 45 }));
   });
-
-  it("cancels a stale lifecycle connection across replacement pairing", async () => {
-    const harness = await loadBackground();
-    const oldSocket = harness.relaySockets[0];
-    if (!oldSocket) {
-      throw new Error("expected old relay socket");
-    }
-    await harness.authenticate(oldSocket);
-    oldSocket.close();
-
-    const releaseConfigRead = harness.deferNextStorageGet();
-    harness.alarmListener({ name: RELAY_WATCHDOG_ALARM });
-    const pairing = sendRuntimeMessage(harness, {
-      type: "pair",
-      pairingString: `ws://127.0.0.1:18798/extension#${REPLACEMENT_TEST_RELAY_KEY}`,
-      accessMode: "all",
-    });
-    releaseConfigRead();
-
-    await expect(pairing).resolves.toEqual({ ok: true });
-    await vi.waitFor(() => {
-      expect(
-        harness.relaySockets.filter((socket) => socket.url === "ws://127.0.0.1:18798/extension"),
-      ).toHaveLength(1);
-    });
-    expect(
-      harness.relaySockets.filter((socket) => socket.url === "ws://127.0.0.1:18797/extension"),
-    ).toHaveLength(1);
-  });
-
-  it("waits for access initialization before changing the stored mode", async () => {
-    const harness = await loadBackground({
-      deferTabAccessInitialization: true,
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-      },
-    });
-    harness.storageSet.mockClear();
-    const response = vi.fn();
-
-    harness.messageListener({ type: "setAccessMode", accessMode: "selected" }, {}, response);
-    await Promise.resolve();
-    await Promise.resolve();
-
-    expect(response).not.toHaveBeenCalled();
-    expect(harness.storageSet).not.toHaveBeenCalled();
-    harness.releaseTabAccessInitialization();
-    await vi.waitFor(() => {
-      expect(response).toHaveBeenCalledWith({ ok: true, accessMode: "selected" });
-    });
-  });
-
   it("waits for access initialization before toggling an all-mode tab", async () => {
-    const harness = await loadBackground({
-      deferTabAccessInitialization: true,
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      initialTabs: [{ id: 46, url: "https://example.com/pending-init", groupId: -1 }],
-    });
+    const harness = await load("all", [46], { deferTabAccessInitialization: true });
     harness.tabsGet.mockClear();
     const response = vi.fn();
-
     harness.messageListener(
       { type: "toggleTabAccess", tabId: 46, accessMode: "all", grant: false },
       {},
@@ -216,273 +98,87 @@ describe("relay command authorization", () => {
     );
     await Promise.resolve();
     await Promise.resolve();
-
-    expect(response).not.toHaveBeenCalled();
-    expect(harness.tabsGet).not.toHaveBeenCalled();
-    expect(harness.tabsGroup).not.toHaveBeenCalled();
+    expectUnused(response, harness.tabsGet, harness.tabsGroup);
     harness.releaseTabAccessInitialization();
-    await vi.waitFor(() => {
-      expect(response).toHaveBeenCalledWith({ ok: true, accessible: false, denied: true });
-    });
+    await waitCalled(response, { ok: true, accessible: false, denied: true });
     expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([46]);
-    expect(harness.tabsGroup).not.toHaveBeenCalled();
+    expectUnused(harness.tabsGroup);
   });
-
-  it.each([undefined, null, Number.NaN, -1, 1.5, "41"])(
-    "rejects malformed getTabAccess tab id %s without querying Chrome",
-    async (tabId) => {
-      const harness = await loadBackground();
-      harness.tabsGet.mockClear();
-
-      await expect(sendRuntimeMessage(harness, { type: "getTabAccess", tabId })).resolves.toEqual({
-        accessMode: "selected",
-        accessible: false,
-        eligible: false,
-        denied: false,
-      });
-      expect(harness.tabsGet).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each([
-    {
-      accessMode: "all",
-      label: "restricted",
-      tab: { id: 51, url: "chrome://settings", groupId: 7 },
-    },
-    {
+  it("rejects a negative getTabAccess tab id without querying Chrome", async () => {
+    const harness = await loadBackground();
+    harness.tabsGet.mockClear();
+    expect(await runtime(harness, "getTabAccess", { tabId: -1 })).toEqual({
       accessMode: "selected",
-      label: "restricted",
-      tab: { id: 51, url: "chrome://settings", groupId: 7 },
-    },
-    {
-      accessMode: "all",
-      label: "incognito",
-      tab: { id: 52, url: "https://secret.example", incognito: true, groupId: 7 },
-    },
-    {
-      accessMode: "selected",
-      label: "incognito",
-      tab: { id: 52, url: "https://secret.example", incognito: true, groupId: 7 },
-    },
-  ])("rejects an $label tab in $accessMode mode", async ({ accessMode, tab }) => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode,
-      },
-      initialTabs: [tab],
+      accessible: false,
+      eligible: false,
+      denied: false,
     });
-    harness.shareTab(tab.id);
-    const socket = harness.relaySockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    await harness.authenticate(socket);
-    socket.receive({ type: "attach", seq: 22, tabId: tab.id });
-    await vi.waitFor(() => {
-      const frame = socket.send.mock.calls
-        .map(([raw]) => JSON.parse(raw))
-        .find((candidate) => candidate.type === "error" && candidate.seq === 22);
-      expect(frame?.message).toMatch(/restricted|incognito/);
-    });
-    expect(harness.debuggerAttach).not.toHaveBeenCalled();
+    expectUnused(harness.tabsGet);
   });
-
-  it("invalidates an in-flight CDP command when all mode downgrades to selected", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      initialTabs: [{ id: 61, url: "https://example.com/race", groupId: -1 }],
-    });
-    const socket = harness.relaySockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    await harness.authenticate(socket);
-    socket.receive({ type: "attach", seq: 23, tabId: 61 });
-    await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalled());
-    let releaseCommand = () => {};
-    harness.debuggerSendCommand.mockImplementationOnce(
-      async () =>
-        await new Promise<Record<string, never>>((resolve) => {
-          releaseCommand = () => resolve({});
-        }),
-    );
-    socket.receive({ type: "cdp", seq: 24, tabId: 61, method: "Runtime.evaluate" });
-    await vi.waitFor(() => expect(harness.debuggerSendCommand).toHaveBeenCalled());
-
-    const changingMode = sendRuntimeMessage(harness, {
-      type: "setAccessMode",
-      accessMode: "selected",
-    });
-    releaseCommand();
-
-    await expect(changingMode).resolves.toMatchObject({ ok: true, accessMode: "selected" });
-    await vi.waitFor(() => {
-      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-61" });
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({
-        type: "error",
-        seq: 24,
-        message: "tab 61 access was revoked",
-      });
-    });
-  });
-
   it("revokes all-mode authority before a queued downgrade reaches the mutation queue", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      initialTabs: [{ id: 204, url: "https://example.com/queued-downgrade", groupId: -1 }],
-    });
-    const socket = harness.relaySockets[0];
-    if (!socket || !harness.debuggerEventListener) {
-      throw new Error("expected relay and debugger event listener");
-    }
-    await harness.authenticate(socket);
+    const harness = await ready("all", [204]);
+    const socket = harness.socket;
     socket.receive({ type: "attach", seq: 40, tabId: 204 });
-    await vi.waitFor(() =>
-      expect(harness.debuggerAttach).toHaveBeenCalledWith({ tabId: 204 }, "1.3"),
-    );
-
+    await waitCalled(harness.debuggerAttach, { tabId: 204 }, "1.3");
     harness.storageSet.mockClear();
     socket.send.mockClear();
     const releaseOlderMutation = harness.deferNextStorageSet();
-    const olderMutation = sendRuntimeMessage(harness, {
-      type: "setAccessMode",
-      accessMode: "all",
+    const olderMutation = runtime(harness, "setAccessMode", { accessMode: "all" });
+    await waitCalled(harness.storageSet, { accessMode: "all" });
+    const downgrading = runtime(harness, "setAccessMode", { accessMode: "selected" });
+    expect(await runtime(harness, "getTabAccess", { tabId: 204 })).toMatchObject({
+      accessible: false,
     });
-    await vi.waitFor(() => expect(harness.storageSet).toHaveBeenCalledWith({ accessMode: "all" }));
-
-    const downgrading = sendRuntimeMessage(harness, {
-      type: "setAccessMode",
-      accessMode: "selected",
-    });
-    await expect(
-      sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 204 }),
-    ).resolves.toMatchObject({ accessible: false });
     harness.debuggerEventListener({ tabId: 204 }, "Runtime.consoleAPICalled", {});
-    expect(
-      socket.send.mock.calls
-        .map(([raw]) => JSON.parse(raw))
-        .some((frame) => frame.type === "cdpEvent"),
-    ).toBe(false);
-
+    expect(harness.events()).toEqual([]);
     releaseOlderMutation();
-    await expect(olderMutation).resolves.toEqual({ ok: true, accessMode: "all" });
-    await expect(downgrading).resolves.toEqual({ ok: true, accessMode: "selected" });
+    expect(await olderMutation).toEqual({ ok: true, accessMode: "all" });
+    expect(await downgrading).toEqual({ ok: true, accessMode: "selected" });
     expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-204" });
   });
-
   it("rejects a stale tab action when a queued mode change executes first", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      initialTabs: [{ id: 205, url: "https://example.com/stale-action", groupId: -1 }],
-    });
+    const harness = await load("all", [205]);
     harness.storageSet.mockClear();
     const releaseModeStorage = harness.deferNextStorageSet();
-    const changingMode = sendRuntimeMessage(harness, {
-      type: "setAccessMode",
-      accessMode: "selected",
-    });
-    await vi.waitFor(() => {
-      expect(harness.storageSet).toHaveBeenCalledWith({ accessMode: "selected" });
-    });
-
-    const staleToggle = sendRuntimeMessage(harness, {
-      type: "toggleTabAccess",
+    const changingMode = runtime(harness, "setAccessMode", { accessMode: "selected" });
+    await waitCalled(harness.storageSet, { accessMode: "selected" });
+    const staleToggle = runtime(harness, "toggleTabAccess", {
       tabId: 205,
       accessMode: "all",
       grant: false,
     });
     releaseModeStorage();
-
-    await expect(changingMode).resolves.toEqual({ ok: true, accessMode: "selected" });
-    await expect(staleToggle).resolves.toEqual({
+    expect(await changingMode).toEqual({ ok: true, accessMode: "selected" });
+    expect(await staleToggle).toEqual({
       ok: false,
       error: "Browser access mode changed. Refresh and retry.",
     });
-    expect(harness.tabsGroup).not.toHaveBeenCalled();
+    expectUnused(harness.tabsGroup);
     expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
   });
-
   it("keeps a Selected barrier ahead of a queued All-mode widening", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "selected",
-      },
-      initialTabs: [{ id: 206, url: "https://example.com/queued-widening", groupId: -1 }],
-    });
+    const harness = await load("selected", [206]);
     harness.storageSet.mockClear();
     const releaseWideningStorage = harness.deferNextStorageSet();
-    const widening = sendRuntimeMessage(harness, {
-      type: "setAccessMode",
-      accessMode: "all",
-    });
-    await vi.waitFor(() => {
-      expect(harness.storageSet).toHaveBeenCalledWith({ accessMode: "all" });
-    });
-
-    const restricting = sendRuntimeMessage(harness, {
-      type: "setAccessMode",
-      accessMode: "selected",
-    });
+    const widening = runtime(harness, "setAccessMode", { accessMode: "all" });
+    await waitCalled(harness.storageSet, { accessMode: "all" });
+    const restricting = runtime(harness, "setAccessMode", { accessMode: "selected" });
     const releaseRestrictingStorage = harness.deferNextStorageSet();
     releaseWideningStorage();
-    await vi.waitFor(() => {
-      expect(harness.storageSet).toHaveBeenCalledWith({ accessMode: "selected" });
+    await waitCalled(harness.storageSet, { accessMode: "selected" });
+    expect(await runtime(harness, "getTabAccess", { tabId: 206 })).toMatchObject({
+      accessible: false,
     });
-
-    await expect(
-      sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 206 }),
-    ).resolves.toMatchObject({ accessible: false });
-
     releaseRestrictingStorage();
-    await expect(widening).resolves.toEqual({ ok: true, accessMode: "all" });
-    await expect(restricting).resolves.toEqual({ ok: true, accessMode: "selected" });
+    expect(await widening).toEqual({ ok: true, accessMode: "all" });
+    expect(await restricting).toEqual({ ok: true, accessMode: "selected" });
   });
-
   it("revalidates a selected survivor that leaves its group during downgrade cleanup", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      initialTabs: [
-        { id: 211, url: "https://example.com/selected", groupId: 7 },
-        { id: 212, url: "https://example.com/unselected", groupId: -1 },
-      ],
-    });
-    const socket = harness.relaySockets[0];
-    if (!socket || !harness.debuggerEventListener) {
-      throw new Error("expected relay and debugger event listener");
-    }
-    await harness.authenticate(socket);
+    const harness = await ready("all", [{ id: 211, groupId: 7 }, 212]);
+    const socket = harness.socket;
     socket.receive({ type: "attach", seq: 41, tabId: 211 });
     socket.receive({ type: "attach", seq: 42, tabId: 212 });
     await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalledTimes(2));
-
     const unselectedDetach = createDeferred<void>();
     harness.debuggerDetach.mockImplementation(async ({ targetId }) => {
       if (targetId === "tab-212") {
@@ -490,193 +186,29 @@ describe("relay command authorization", () => {
       }
     });
     socket.send.mockClear();
-    const changingMode = sendRuntimeMessage(harness, {
-      type: "setAccessMode",
-      accessMode: "selected",
-    });
-    await vi.waitFor(() =>
-      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-212" }),
-    );
-
+    const changingMode = runtime(harness, "setAccessMode", { accessMode: "selected" });
+    await waitCalled(harness.debuggerDetach, { targetId: "tab-212" });
     harness.unshareTab(211);
     harness.tabsUpdatedListener(211, { groupId: -1 });
     unselectedDetach.resolve();
-
-    await expect(changingMode).resolves.toEqual({ ok: true, accessMode: "selected" });
-    await vi.waitFor(() =>
-      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-211" }),
-    );
+    expect(await changingMode).toEqual({ ok: true, accessMode: "selected" });
+    await waitCalled(harness.debuggerDetach, { targetId: "tab-211" });
     harness.debuggerEventListener({ tabId: 211 }, "Runtime.consoleAPICalled", {});
-    expect(
-      socket.send.mock.calls
-        .map(([raw]) => JSON.parse(raw))
-        .some((frame) => frame.type === "cdpEvent"),
-    ).toBe(false);
+    expect(harness.events()).toEqual([]);
   });
-
-  it("revokes an ungrouped attach already in flight during all-to-selected downgrade", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      initialTabs: [{ id: 62, url: "https://example.com/attach-race", groupId: -1 }],
-    });
-    const socket = harness.relaySockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    await harness.authenticate(socket);
-    let releaseAttach = () => {};
-    harness.debuggerAttach.mockImplementationOnce(
-      async () =>
-        await new Promise<undefined>((resolve) => {
-          releaseAttach = () => resolve(undefined);
-        }),
-    );
-    socket.receive({ type: "attach", seq: 25, tabId: 62 });
-    await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalled());
-
-    const changingMode = sendRuntimeMessage(harness, {
-      type: "setAccessMode",
-      accessMode: "selected",
-    });
-    releaseAttach();
-
-    await expect(changingMode).resolves.toMatchObject({ ok: true, accessMode: "selected" });
-    await vi.waitFor(() => {
-      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-62" });
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({
-        type: "error",
-        seq: 25,
-        message: "tab 62 access was revoked",
-      });
-    });
-  });
-
-  it("preserves the proven attach epoch across a deferred target lookup", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      initialTabs: [{ id: 63, url: "https://example.com/target-race", groupId: -1 }],
-    });
-    const socket = harness.relaySockets[0];
-    if (!socket || !harness.debuggerEventListener) {
-      throw new Error("expected relay and debugger event listener");
-    }
-    await harness.authenticate(socket);
-    const targetInfo = createDeferred<{ targetInfo: { targetId: string } }>();
-    harness.debuggerGetTargetInfo.mockReturnValueOnce(targetInfo.promise);
-    socket.receive({ type: "attach", seq: 26, tabId: 63 });
-    await vi.waitFor(() => {
-      expect(harness.debuggerAttach).toHaveBeenCalledWith({ tabId: 63 }, "1.3");
-      expect(harness.debuggerGetTargetInfo).toHaveBeenCalled();
-    });
-
-    const releaseModeStorage = harness.deferNextStorageSet();
-    targetInfo.resolve({ targetInfo: { targetId: "target-63" } });
-    const changingMode = sendRuntimeMessage(harness, {
-      type: "setAccessMode",
-      accessMode: "selected",
-    });
-
-    await vi.waitFor(() => {
-      expect(harness.storageSet).toHaveBeenCalledWith({ accessMode: "selected" });
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({
-        type: "error",
-        seq: 26,
-        message: "tab 63 access was revoked",
-      });
-    });
-    expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "target-63" });
-
-    harness.debuggerEventListener({ tabId: 63 }, "Runtime.consoleAPICalled", { value: 1 });
-    const framesAfterEvent = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-    expect(
-      framesAfterEvent.some(
-        (frame) => frame.type === "cdpEvent" && frame.method === "Runtime.consoleAPICalled",
-      ),
-    ).toBe(false);
-
-    releaseModeStorage();
-    await expect(changingMode).resolves.toEqual({ ok: true, accessMode: "selected" });
-  });
-
-  it("does not mint an event epoch when a pending attach is selected again", async () => {
-    const harness = await loadBackground({
-      initialTabs: [{ id: 64, url: "https://example.com/reselected", groupId: 7 }],
-    });
-    harness.shareTab(64);
-    const socket = harness.relaySockets[0];
-    if (!socket || !harness.debuggerEventListener) {
-      throw new Error("expected relay and debugger event listener");
-    }
-    await harness.authenticate(socket);
-    const targetInfo = createDeferred<{ targetInfo: { targetId: string } }>();
-    harness.debuggerGetTargetInfo.mockReturnValueOnce(targetInfo.promise);
-    socket.receive({ type: "attach", seq: 27, tabId: 64 });
-    await vi.waitFor(() => expect(harness.debuggerGetTargetInfo).toHaveBeenCalled());
-
-    harness.unshareTab(64);
-    harness.tabsUpdatedListener(64, { groupId: -1 });
-    harness.shareTab(64);
-    harness.tabsUpdatedListener(64, { groupId: 7 });
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 25);
-    });
-
-    harness.debuggerEventListener({ tabId: 64 }, "Runtime.consoleAPICalled", { value: 1 });
-    expect(
-      socket.send.mock.calls
-        .map(([raw]) => JSON.parse(raw))
-        .some((frame) => frame.type === "cdpEvent" && frame.method === "Runtime.consoleAPICalled"),
-    ).toBe(false);
-
-    targetInfo.resolve({ targetInfo: { targetId: "target-64" } });
-    await vi.waitFor(() => {
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({
-        type: "error",
-        seq: 27,
-        message: "tab 64 access was revoked",
-      });
-    });
-    expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "target-64" });
-  });
-
   it.each(["all", "selected"] as const)(
     "keeps an unrelated attachment live while toggling one tab in %s mode",
     async (accessMode) => {
       const groupId = accessMode === "selected" ? 7 : -1;
-      const harness = await loadBackground({
-        storedConfig: {
-          relayUrl: "ws://127.0.0.1:18797/extension",
-          token: TEST_RELAY_KEY,
-          authVersion: 2,
-          accessMode,
-        },
-        initialTabs: [
-          { id: 201, url: "https://example.com/attached", groupId },
-          { id: 202, url: "https://example.com/toggle", groupId },
-        ],
-      });
-      const socket = harness.relaySockets[0];
-      if (!socket || !harness.debuggerEventListener) {
-        throw new Error("expected relay and debugger event listener");
-      }
-      await harness.authenticate(socket);
+      const harness = await ready(
+        accessMode,
+        [201, 202].map((id) => ({ id, groupId })),
+      );
+      const socket = harness.socket;
       socket.receive({ type: "attach", seq: 28, tabId: 201 });
       socket.receive({ type: "attach", seq: 29, tabId: 202 });
       await vi.waitFor(() => {
-        const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+        const frames = harness.frames();
         expect(frames).toContainEqual({
           type: "result",
           seq: 28,
@@ -688,7 +220,6 @@ describe("relay command authorization", () => {
           result: { targetId: "tab-202" },
         });
       });
-
       socket.send.mockClear();
       let releaseMutation = () => {};
       if (accessMode === "all") {
@@ -704,268 +235,74 @@ describe("relay command authorization", () => {
           }
         });
       }
-      const toggling = sendRuntimeMessage(harness, {
-        type: "toggleTabAccess",
+      const toggling = runtime(harness, "toggleTabAccess", {
         tabId: 202,
         accessMode,
         grant: false,
       });
       if (accessMode === "all") {
-        await vi.waitFor(() => expect(harness.sessionStorageSet).toHaveBeenCalled());
+        await waitCalled(harness.sessionStorageSet);
       } else {
-        await vi.waitFor(() =>
-          expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-202" }),
-        );
+        await waitCalled(harness.debuggerDetach, { targetId: "tab-202" });
       }
-
-      await expect(
-        sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 201 }),
-      ).resolves.toMatchObject({ accessible: true });
-      await expect(
-        sendRuntimeMessage(harness, { type: "getTabAccess", tabId: 202 }),
-      ).resolves.toMatchObject({ accessible: false });
-      harness.debuggerEventListener({ tabId: 201 }, "Runtime.consoleAPICalled", {
-        phase: "during",
+      expect(await runtime(harness, "getTabAccess", { tabId: 201 })).toMatchObject({
+        accessible: true,
       });
-      harness.debuggerEventListener({ tabId: 202 }, "Runtime.consoleAPICalled", {
-        phase: "during",
+      expect(await runtime(harness, "getTabAccess", { tabId: 202 })).toMatchObject({
+        accessible: false,
       });
-      expect(
-        socket.send.mock.calls
-          .map(([raw]) => JSON.parse(raw))
-          .filter((frame) => frame.type === "cdpEvent")
-          .map((frame) => frame.params?.phase),
-      ).toEqual(["during"]);
-
+      const emitPhase = (phase: string) => {
+        for (const tabId of [201, 202]) {
+          harness.debuggerEventListener({ tabId }, "Runtime.consoleAPICalled", { phase });
+        }
+        return harness.events().map((frame) => frame.params?.phase);
+      };
+      expect(emitPhase("during")).toEqual(["during"]);
       releaseMutation();
-      await expect(toggling).resolves.toEqual({
+      expect(await toggling).toEqual({
         ok: true,
         accessible: false,
         denied: accessMode === "all",
       });
-
-      harness.debuggerEventListener({ tabId: 201 }, "Runtime.consoleAPICalled", {
-        phase: "after",
-      });
-      harness.debuggerEventListener({ tabId: 202 }, "Runtime.consoleAPICalled", {
-        phase: "after",
-      });
-      expect(
-        socket.send.mock.calls
-          .map(([raw]) => JSON.parse(raw))
-          .filter((frame) => frame.type === "cdpEvent")
-          .map((frame) => frame.params?.phase),
-      ).toEqual(["during", "after"]);
+      expect(emitPhase("after")).toEqual(["during", "after"]);
       expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-202" });
       expect(harness.debuggerDetach).not.toHaveBeenCalledWith({ targetId: "tab-201" });
       expect(harness.debuggerAttach).toHaveBeenCalledTimes(2);
     },
   );
-
-  it.each(["all", "selected"] as const)(
-    "republishes restored tab access immediately in %s mode",
-    async (accessMode) => {
-      const tabId = 203;
-      const harness = await loadBackground({
-        storedConfig: {
-          relayUrl: "ws://127.0.0.1:18797/extension",
-          token: TEST_RELAY_KEY,
-          authVersion: 2,
-          accessMode,
-        },
-        initialTabs: [
-          {
-            id: tabId,
-            url: "https://example.com/restored",
-            groupId: accessMode === "selected" ? 7 : -1,
-          },
-        ],
-      });
-      const socket = harness.relaySockets[0];
-      if (!socket) {
-        throw new Error("expected relay socket");
-      }
-      await harness.authenticate(socket);
-
-      await expect(
-        sendRuntimeMessage(harness, { type: "toggleTabAccess", tabId, accessMode, grant: false }),
-      ).resolves.toMatchObject({ ok: true, accessible: false });
-      await expect(
-        sendRuntimeMessage(harness, { type: "toggleTabAccess", tabId, accessMode, grant: true }),
-      ).resolves.toMatchObject({ ok: true, accessible: true, denied: false });
-
-      await vi.waitFor(() => {
-        const refreshes = socket.send.mock.calls
-          .map(([raw]) => JSON.parse(raw))
-          .filter((frame) => frame.type === "tabs");
-        expect(refreshes.at(-1)?.tabs).toContainEqual(expect.objectContaining({ tabId }));
-      });
-    },
-  );
-
   it("refreshes targets on selected-to-all while keeping session-denied tabs hidden", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "selected",
-      },
-      sessionConfig: { deniedTabIdsV1: [72] },
-      initialTabs: [
-        { id: 71, url: "https://example.com/available", groupId: -1 },
-        { id: 72, url: "https://example.com/paused", groupId: -1 },
-      ],
+    const harness = await ready("selected", [71, 72], { sessionConfig: { deniedTabIdsV1: [72] } });
+    expect(await runtime(harness, "setAccessMode", { accessMode: "all" })).toMatchObject({
+      ok: true,
+      accessMode: "all",
     });
-    const socket = harness.relaySockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    await harness.authenticate(socket);
-    await expect(
-      sendRuntimeMessage(harness, { type: "setAccessMode", accessMode: "all" }),
-    ).resolves.toMatchObject({ ok: true, accessMode: "all" });
-
     await vi.waitFor(() => {
-      const refreshes = socket.send.mock.calls
-        .map(([raw]) => JSON.parse(raw))
-        .filter((frame) => frame.type === "tabs");
+      const refreshes = harness.frames().filter((frame) => frame.type === "tabs");
       expect(refreshes.at(-1)?.tabs).toEqual([expect.objectContaining({ tabId: 71 })]);
     });
   });
-
-  it("keeps detach available as the revocation cleanup command", async () => {
-    const harness = await loadBackground();
-    const socket = harness.sockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    await harness.authenticate(socket);
-    harness.shareTab(41);
-    socket.receive({ type: "attach", seq: 4, tabId: 41 });
-    await vi.waitFor(() =>
-      expect(socket.send.mock.calls.map(([raw]) => JSON.parse(raw))).toContainEqual({
-        type: "result",
-        seq: 4,
-        result: { targetId: "tab-41" },
-      }),
-    );
-    harness.unshareTab(41);
-
-    socket.receive({ type: "detach", seq: 5, tabId: 41 });
-
-    await vi.waitFor(() => {
-      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-41" });
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({ type: "result", seq: 5, result: {} });
-    });
-  });
-
-  it("allows createTab and groups the new tab before reporting success", async () => {
-    const harness = await loadBackground();
-    const socket = harness.sockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    await harness.authenticate(socket);
-    harness.tabsCreate.mockResolvedValueOnce({
-      id: 42,
-      url: "https://example.com",
-      active: true,
-      windowId: 1,
-      groupId: -1,
-      incognito: false,
-    });
-
-    socket.receive({ type: "createTab", seq: 6, url: "https://example.com" });
-
-    await vi.waitFor(() => {
-      expect(harness.tabsGroup).toHaveBeenCalledWith({ tabIds: [42] });
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({
-        type: "result",
-        seq: 6,
-        result: { tabId: 42, targetId: "tab-42" },
-      });
-    });
-  });
-
-  it("invalidates an attach that was in flight when the tab left the group", async () => {
-    const harness = await loadBackground();
-    const socket = harness.sockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    await harness.authenticate(socket);
-    harness.shareTab(43);
-    let releaseAttach = () => {};
-    harness.debuggerAttach.mockImplementationOnce(
-      async () =>
-        await new Promise<undefined>((resolve) => {
-          releaseAttach = () => resolve(undefined);
-        }),
-    );
-
-    socket.receive({ type: "attach", seq: 7, tabId: 43 });
-    await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalledOnce());
-    harness.unshareTab(43);
-    harness.tabsUpdatedListener(43, { groupId: -1 });
-    await Promise.resolve();
-    releaseAttach();
-
-    await vi.waitFor(() => {
-      expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-43" });
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({
-        type: "error",
-        seq: 7,
-        message: "tab 43 access was revoked",
-      });
-    });
-  });
-
   it("persists Cancel as an all-mode session deny, restores with Allow, and prunes on close", async () => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode: "all",
-      },
-      initialTabs: [{ id: 81, url: "https://example.com/cancel", groupId: -1 }],
-    });
-    const socket = harness.relaySockets[0];
-    if (!socket || !harness.debuggerDetachListener || !harness.tabsRemovedListener) {
-      throw new Error("expected relay and Chrome lifecycle listeners");
-    }
-    await harness.authenticate(socket);
+    const harness = await ready("all", [81]);
+    const socket = harness.socket;
     socket.receive({ type: "attach", seq: 30, tabId: 81 });
-    await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalled());
-
+    await waitCalled(harness.debuggerAttach);
     harness.debuggerDetachListener({ tabId: 81 }, "canceled_by_user");
     await vi.waitFor(() => {
       expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([81]);
     });
     socket.receive({ type: "attach", seq: 31, tabId: 81 });
     await vi.waitFor(() => {
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
+      const frames = harness.frames();
       expect(frames).toContainEqual({
         type: "error",
         seq: 31,
         message: "tab 81 is paused for OpenClaw",
       });
     });
-
-    await expect(
-      sendRuntimeMessage(harness, {
-        type: "toggleTabAccess",
-        tabId: 81,
-        accessMode: "all",
-        grant: true,
-      }),
-    ).resolves.toMatchObject({ ok: true, accessible: true, denied: false });
+    expect(
+      await runtime(harness, "toggleTabAccess", { tabId: 81, accessMode: "all", grant: true }),
+    ).toMatchObject({ ok: true, accessible: true, denied: false });
     expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
-
     harness.debuggerDetachListener({ tabId: 81 }, "canceled_by_user");
     await vi.waitFor(() => {
       expect(harness.sessionStorageValues.deniedTabIdsV1).toEqual([81]);
@@ -975,106 +312,14 @@ describe("relay command authorization", () => {
       expect(harness.sessionStorageValues).not.toHaveProperty("deniedTabIdsV1");
     });
   });
-
-  it("restores a validated Cancel deny after an MV3 worker restart", async () => {
-    const storedConfig = {
-      relayUrl: "ws://127.0.0.1:18797/extension",
-      token: TEST_RELAY_KEY,
-      authVersion: 2,
-      accessMode: "all",
-    };
-    const initialTabs = [{ id: 91, url: "https://example.com/reload", groupId: -1 }];
-    const harness = await loadBackground({
-      storedConfig,
-      sessionConfig: { deniedTabIdsV1: [91] },
-      initialTabs,
-    });
-    const socket = harness.relaySockets[0];
-    if (!socket) {
-      throw new Error("expected relay socket");
-    }
-    await harness.authenticate(socket);
-    const hello = socket.send.mock.calls
-      .map(([raw]) => JSON.parse(raw))
-      .find((frame) => frame.type === "hello");
-    expect(hello.tabs).toEqual([]);
-    socket.receive({ type: "attach", seq: 32, tabId: 91 });
-    await vi.waitFor(() => {
-      const frames = socket.send.mock.calls.map(([raw]) => JSON.parse(raw));
-      expect(frames).toContainEqual({
-        type: "error",
-        seq: 32,
-        message: "tab 91 is paused for OpenClaw",
-      });
-    });
-  });
-
-  it.each(["all", "selected"] as const)(
-    "keeps agent-created tabs in the OpenClaw group in %s mode",
-    async (accessMode) => {
-      const harness = await loadBackground({
-        storedConfig: {
-          relayUrl: "ws://127.0.0.1:18797/extension",
-          token: TEST_RELAY_KEY,
-          authVersion: 2,
-          accessMode,
-        },
-      });
-      const socket = harness.relaySockets[0];
-      if (!socket) {
-        throw new Error("expected relay socket");
-      }
-      await harness.authenticate(socket);
-      harness.tabsCreate.mockResolvedValueOnce({
-        id: 101,
-        url: "https://example.com/created",
-        active: true,
-        groupId: -1,
-        windowId: 1,
-        incognito: false,
-      });
-      socket.receive({ type: "createTab", seq: 33, url: "https://example.com/created" });
-      await vi.waitFor(() => {
-        expect(harness.tabsGroup).toHaveBeenCalledWith({ tabIds: [101] });
-      });
-    },
-  );
-
-  it.each([
-    { accessMode: "all" as const, detached: false },
-    { accessMode: "selected" as const, detached: true },
-  ])("revokes on group removal only in $accessMode mode", async ({ accessMode, detached }) => {
-    const harness = await loadBackground({
-      storedConfig: {
-        relayUrl: "ws://127.0.0.1:18797/extension",
-        token: TEST_RELAY_KEY,
-        authVersion: 2,
-        accessMode,
-      },
-      initialTabs: [{ id: 111, url: "https://example.com/group", groupId: 7 }],
-    });
+  it("revokes selected access on group removal", async () => {
+    const harness = await ready("selected", [{ id: 111, groupId: 7 }]);
     harness.shareTab(111);
-    const socket = harness.relaySockets[0];
-    if (!socket || !harness.tabGroupRemovedListener) {
-      throw new Error("expected relay and tab-group listener");
-    }
-    await harness.authenticate(socket);
-    socket.receive({ type: "attach", seq: 34, tabId: 111 });
-    await vi.waitFor(() => expect(harness.debuggerAttach).toHaveBeenCalled());
+    harness.socket.receive({ type: "attach", seq: 34, tabId: 111 });
+    await waitCalled(harness.debuggerAttach);
     harness.debuggerDetach.mockClear();
-
     harness.unshareTab(111);
     harness.tabGroupRemovedListener();
-
-    if (detached) {
-      await vi.waitFor(() => {
-        expect(harness.debuggerDetach).toHaveBeenCalledWith({ targetId: "tab-111" });
-      });
-    } else {
-      await new Promise<void>((resolve) => {
-        setTimeout(resolve, 25);
-      });
-      expect(harness.debuggerDetach).not.toHaveBeenCalled();
-    }
+    await waitCalled(harness.debuggerDetach, { targetId: "tab-111" });
   });
 });

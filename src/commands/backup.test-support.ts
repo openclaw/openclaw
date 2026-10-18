@@ -8,11 +8,10 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import * as backupShared from "./backup-shared.js";
 
 const backupTestMocks = vi.hoisted(() => ({
-  backupVerifyCommandMock: vi.fn(),
   backupWalkMock: vi.fn(),
 }));
 
-export const { backupVerifyCommandMock, backupWalkMock } = backupTestMocks;
+export const { backupWalkMock } = backupTestMocks;
 
 export function createMockTarStream(
   params: {
@@ -35,10 +34,6 @@ export function createMockTarStream(
 
 vi.mock("../infra/backup-tar-walk.js", () => ({
   walkBackupTar: backupTestMocks.backupWalkMock,
-}));
-
-vi.mock("./backup-verify.js", () => ({
-  backupVerifyCommand: backupTestMocks.backupVerifyCommandMock,
 }));
 
 export async function resetBackupTempHome(tempHome: { home: string }) {

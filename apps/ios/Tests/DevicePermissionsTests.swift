@@ -9,7 +9,7 @@ struct DevicePermissionsTests {
     @Test func `contacts statuses map to shared grants`() {
         #expect(DevicePermissionStatusMap.contacts(.authorized) == .granted)
         #expect(DevicePermissionStatusMap.contacts(.limited) == .limited)
-        #expect(DevicePermissionStatusMap.contacts(.notDetermined) == .notRequested)
+        #expect(DevicePermissionStatusMap.contacts(.notDetermined) == .notDetermined)
         #expect(DevicePermissionStatusMap.contacts(.denied) == .denied)
         #expect(DevicePermissionStatusMap.contacts(.restricted) == .denied)
     }
@@ -17,7 +17,7 @@ struct DevicePermissionsTests {
     @Test func `photos statuses map to shared grants`() {
         #expect(DevicePermissionStatusMap.photos(.authorized) == .granted)
         #expect(DevicePermissionStatusMap.photos(.limited) == .limited)
-        #expect(DevicePermissionStatusMap.photos(.notDetermined) == .notRequested)
+        #expect(DevicePermissionStatusMap.photos(.notDetermined) == .notDetermined)
         #expect(DevicePermissionStatusMap.photos(.denied) == .denied)
     }
 
@@ -26,7 +26,7 @@ struct DevicePermissionsTests {
         #expect(DevicePermissionStatusMap.eventKitWrite(.writeOnly) == .granted)
         #expect(DevicePermissionStatusMap.eventKitRead(.fullAccess) == .granted)
         #expect(DevicePermissionStatusMap.eventKitWrite(.fullAccess) == .granted)
-        #expect(DevicePermissionStatusMap.eventKitRead(.notDetermined) == .notRequested)
+        #expect(DevicePermissionStatusMap.eventKitRead(.notDetermined) == .notDetermined)
         #expect(DevicePermissionStatusMap.eventKitRead(.denied) == .denied)
     }
 

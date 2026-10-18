@@ -3,10 +3,12 @@ import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import { managedWorktrees } from "../agents/worktrees/service.js";
 import { getRuntimeConfig } from "../config/io.js";
+import { loadGatewayTestConfig } from "./test-helpers.config-runtime.js";
 import { testState } from "./test-helpers.js";
 import { resetPersistentGatewaySessionStore } from "./test/persistent-session-store.test-support.js";
 import {
   setupGatewaySessionsTestHarness,
+  setupGatewaySessionsHandlerTestHarness,
   getGatewayConfigModule,
 } from "./test/server-sessions.test-helpers.js";
 
@@ -83,7 +85,25 @@ async function actualDashboardTitleScheduler(): Promise<ScheduleChatDashboardSes
 export function setupSessionCreateTestHarness(
   setup?: Parameters<typeof setupGatewaySessionsTestHarness>[0],
 ) {
-  const fixture = setupGatewaySessionsTestHarness(setup);
+  const fixture = setupGatewaySessionsTestHarness(async (makeTempDir) => {
+    await setup?.(makeTempDir);
+    // Load the lazy creation family before wire requests start their response deadline.
+    await import("./server-methods/sessions-create.js");
+  });
+  installSessionCreateTestMocks();
+  return fixture;
+}
+
+/** Direct handlers with nested state must not retain a Gateway on a different state root. */
+export function setupSessionCreateHandlerTestHarness(
+  setup?: Parameters<typeof setupGatewaySessionsHandlerTestHarness>[0],
+) {
+  const fixture = setupGatewaySessionsHandlerTestHarness(setup);
+  installSessionCreateTestMocks();
+  return fixture;
+}
+
+function installSessionCreateTestMocks() {
   beforeEach(async () => {
     sessionDiffBaselineMocks.captureGate = undefined;
     sessionDiffBaselineMocks.captureStarted = undefined;
@@ -96,13 +116,12 @@ export function setupSessionCreateTestHarness(
     dashboardTitleScheduleMocks.schedule.mockReset();
     dashboardTitleScheduleMocks.schedule.mockImplementation(await actualDashboardTitleScheduler());
   });
-  return fixture;
 }
 
 /** Ordinary main-session lifecycle cases can reset rows without reopening their store. */
 export function setupPersistentSessionCreateTestHarness() {
   let dir: string | undefined;
-  setupSessionCreateTestHarness(async (makeTempDir) => {
+  const { openClient } = setupSessionCreateTestHarness(async (makeTempDir) => {
     dir = await fs.realpath(makeTempDir("openclaw-session-create-persistent-"));
   });
   afterEach(async () => {
@@ -112,6 +131,7 @@ export function setupPersistentSessionCreateTestHarness() {
     await resetPersistentGatewaySessionStore(dir);
   });
   return {
+    openClient,
     createSessionStoreDir: async () => {
       if (!dir) {
         throw new Error("Persistent session fixture was not created");
@@ -132,7 +152,7 @@ function requireNonEmptyString(value: string | undefined, label: string): string
 }
 
 async function removeSessionWorktree(key: string | undefined) {
-  const worktree = key ? managedWorktrees.findLiveByOwner("session", key) : undefined;
+  const worktree = key ? await managedWorktrees.findLiveByOwner("session", key) : undefined;
   if (worktree) {
     await managedWorktrees.remove({
       id: worktree.id,
@@ -181,6 +201,7 @@ async function withFixedOwnerSessionStore(
     testState.agentsConfig = { ownership: "explicit", entries: { main: {}, ops: {} } };
     testState.agentConfig = { sessionStore: { agentId: "main" } };
     testState.sessionConfig = { scope };
+    config.setRuntimeConfigSnapshot(loadGatewayTestConfig());
     await run({ storePath, cfg: config.getRuntimeConfig() });
   } finally {
     Object.assign(testState, previous);

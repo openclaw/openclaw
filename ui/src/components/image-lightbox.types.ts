@@ -6,8 +6,15 @@ export type ImageLightboxItem = {
   width?: number;
   height?: number;
   release?: () => void;
-  loadFullResolution?: () => Promise<ImageLightboxItem | null>;
+  loadDisplayImage?: () => Promise<ImageLightboxItem | null>;
+  readOriginalBlob?: () => Promise<Blob>;
   gallery?: ImageLightboxGallery;
+  /** The source owner connects only the selected player and releases on navigation/close. */
+  connectVideo?: (
+    media: HTMLVideoElement,
+    notify: (status: "preparing" | "ready" | "unavailable", retryable?: boolean) => void,
+    retryFailed?: boolean,
+  ) => () => void;
 };
 
 export type ImageLightboxGallery = {

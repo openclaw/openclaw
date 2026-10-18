@@ -1,4 +1,3 @@
-// Nostr plugin module implements nostr bus behavior.
 import { SimplePool, finalizeEvent, getPublicKey, verifyEvent, type Event } from "nostr-tools";
 import { decrypt, encrypt } from "nostr-tools/nip04";
 import type { ChannelOutboundContext } from "openclaw/plugin-sdk/channel-contract";
@@ -6,16 +5,10 @@ import {
   createDirectDmPreCryptoGuardPolicy,
   type DirectDmPreCryptoGuardPolicyOverrides,
 } from "openclaw/plugin-sdk/direct-dm-guard-policy";
+import { captureEffectAuthority } from "openclaw/plugin-sdk/fetch-runtime";
 import { createFixedWindowRateLimiter } from "openclaw/plugin-sdk/webhook-ingress";
 import type { NostrProfile } from "./config-schema.js";
 import { DEFAULT_RELAYS } from "./default-relays.js";
-import {
-  createMetrics,
-  createNoopMetrics,
-  type NostrMetrics,
-  type MetricsSnapshot,
-  type MetricEvent,
-} from "./metrics.js";
 import { createNostrCursorStateWriter, createNostrDurableCursor } from "./nostr-cursor.js";
 import { NostrIngressPermanentError } from "./nostr-ingress-state.js";
 import {
@@ -34,25 +27,26 @@ import {
   writeNostrProfileState,
 } from "./nostr-state-store.js";
 
-// ============================================================================
-// Constants
-// ============================================================================
-
 const STARTUP_LOOKBACK_SEC = 120; // tolerate relay lag / clock skew
-const STATE_PERSIST_DEBOUNCE_MS = 5000; // Debounce state writes
+const STATE_PERSIST_DEBOUNCE_MS = 5000;
 const NOSTR_INGRESS_ENVELOPE_OVERHEAD_BYTES = 16 * 1024;
 const NOSTR_INGRESS_MAX_PENDING_EVENTS = 1_000;
 
-// Circuit breaker configuration
 const CIRCUIT_BREAKER_THRESHOLD = 5; // failures before opening
 const CIRCUIT_BREAKER_RESET_MS = 30000; // 30 seconds before half-open
 
-// Health tracker configuration
-const HEALTH_WINDOW_MS = 60000; // 1 minute window for health stats
+const HEALTH_WINDOW_MS = 60000;
 
-// ============================================================================
-// Types
-// ============================================================================
+type NostrEventRejection =
+  | "self_message"
+  | "future"
+  | "wrong_kind"
+  | "oversized_ciphertext"
+  | "invalid_signature"
+  | "decrypt_failed"
+  | "oversized_plaintext"
+  | "stale"
+  | "rate_limited";
 
 interface NostrBusOptions {
   /** Private key in hex or nsec format */
@@ -61,7 +55,6 @@ interface NostrBusOptions {
   relays?: string[];
   /** Account ID for state persistence (optional, defaults to pubkey prefix) */
   accountId?: string;
-  /** Called when a DM is received */
   onMessage: (
     pubkey: string,
     text: string,
@@ -74,18 +67,17 @@ interface NostrBusOptions {
     senderPubkey: string;
     reply: (text: string) => Promise<void>;
   }) => Promise<"allow" | "block" | "pairing">;
+  /** Internal local rejection hint for literal-only allowlist accounts; never grants access. */
+  admissionPubkeys?: readonly string[];
   /** Override pre-crypto DM guardrails for tests or future channel tuning (optional) */
   guardPolicy?: DirectDmPreCryptoGuardPolicyOverrides;
-  /** Called on errors (optional) */
   onError?: (error: Error, context: string) => void;
-  /** Called on connection status changes (optional) */
   onConnect?: (relay: string) => void;
-  /** Called on disconnection (optional) */
   onDisconnect?: (relay: string) => void;
   /** Called on EOSE (end of stored events) for initial sync (optional) */
   onEose?: (relay: string) => void;
-  /** Called on each metric event (optional) */
-  onMetric?: (event: MetricEvent) => void;
+  onRejected?: (reason: NostrEventRejection) => void;
+  onCircuitBreakerChange?: (relay: string, state: "open" | "closed") => void;
   /** Test seam for awaiting relay callbacks that the transport intentionally ignores. */
   trackIngressTask?: (task: Promise<void>) => void;
 }
@@ -95,28 +87,7 @@ type NostrDmSendOptions = Pick<
   "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
 >;
 
-export interface NostrBusHandle {
-  /** Stop the bus and close relay connections */
-  close: () => Promise<void>;
-  /** Get the bot's public key */
-  publicKey: string;
-  /** Send a DM to a pubkey */
-  sendDm: (toPubkey: string, text: string, options?: NostrDmSendOptions) => Promise<string>;
-  /** Get current metrics snapshot */
-  getMetrics: () => MetricsSnapshot;
-  /** Publish a profile (kind:0) to all relays */
-  publishProfile: (profile: NostrProfile) => Promise<ProfilePublishResult>;
-  /** Get the last profile publish state */
-  getProfileState: () => Promise<{
-    lastPublishedAt: number | null;
-    lastPublishedEventId: string | null;
-    lastPublishResults: Record<string, "ok" | "failed" | "timeout"> | null;
-  }>;
-}
-
-// ============================================================================
-// Circuit Breaker
-// ============================================================================
+export type NostrBusHandle = Awaited<ReturnType<typeof startNostrBus>>;
 
 interface CircuitBreakerState {
   state: "closed" | "open" | "half_open";
@@ -126,7 +97,7 @@ interface CircuitBreakerState {
 
 type CircuitBreaker = ReturnType<typeof createCircuitBreaker>;
 
-function createCircuitBreaker(relay: string, metrics: NostrMetrics) {
+function createCircuitBreaker(relay: string, onChange: NostrBusOptions["onCircuitBreakerChange"]) {
   const state: CircuitBreakerState = {
     state: "closed",
     failures: 0,
@@ -138,7 +109,6 @@ function createCircuitBreaker(relay: string, metrics: NostrMetrics) {
       if (state.state === "open") {
         if (Date.now() - state.lastFailure >= CIRCUIT_BREAKER_RESET_MS) {
           state.state = "half_open";
-          metrics.emit("relay.circuit_breaker.half_open", 1, { relay });
           return true;
         }
         return false;
@@ -151,7 +121,7 @@ function createCircuitBreaker(relay: string, metrics: NostrMetrics) {
       if (state.state === "half_open") {
         state.state = "closed";
         state.failures = 0;
-        metrics.emit("relay.circuit_breaker.close", 1, { relay });
+        onChange?.(relay, "closed");
       } else if (state.state === "closed") {
         state.failures = 0;
       }
@@ -166,15 +136,11 @@ function createCircuitBreaker(relay: string, metrics: NostrMetrics) {
         (state.state === "closed" && state.failures >= CIRCUIT_BREAKER_THRESHOLD)
       ) {
         state.state = "open";
-        metrics.emit("relay.circuit_breaker.open", 1, { relay });
+        onChange?.(relay, "open");
       }
     },
   };
 }
-
-// ============================================================================
-// Relay Health Tracker
-// ============================================================================
 
 interface RelayHealthStats {
   successCount: number;
@@ -184,18 +150,7 @@ interface RelayHealthStats {
   lastFailure: number;
 }
 
-interface RelayHealthTracker {
-  /** Record a successful operation */
-  recordSuccess: (relay: string, latencyMs: number) => void;
-  /** Record a failed operation */
-  recordFailure: (relay: string) => void;
-  /** Get health score (0-1, higher is better) */
-  getScore: (relay: string) => number;
-  /** Get relays sorted by health (best first) */
-  getSortedRelays: (relays: string[]) => string[];
-}
-
-function createRelayHealthTracker(): RelayHealthTracker {
+function createRelayHealthTracker() {
   const stats = new Map<string, RelayHealthStats>();
 
   function getOrCreate(relay: string): RelayHealthStats {
@@ -234,21 +189,14 @@ function createRelayHealthTracker(): RelayHealthTracker {
       } // Unknown relay gets neutral score
 
       const total = s.successCount + s.failureCount;
-      if (total === 0) {
-        return 0.5;
-      }
-
-      // Success rate (0-1)
       const successRate = s.successCount / total;
 
-      // Recency bonus (prefer recently successful relays)
       const now = Date.now();
       const recencyBonus =
         s.lastSuccess > s.lastFailure
           ? Math.max(0, 1 - (now - s.lastSuccess) / HEALTH_WINDOW_MS) * 0.2
           : 0;
 
-      // Latency penalty (lower is better)
       const avgLatency = s.successCount > 0 ? s.latencySum / s.successCount : 1000;
       const latencyPenalty = Math.min(0.2, avgLatency / 10000);
 
@@ -261,10 +209,8 @@ function createRelayHealthTracker(): RelayHealthTracker {
   };
 }
 
-/**
- * Start the Nostr DM bus - subscribes to NIP-04 encrypted DMs
- */
-export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusHandle> {
+/** Subscribe to NIP-04 encrypted DMs. */
+export async function startNostrBus(options: NostrBusOptions) {
   const {
     privateKey,
     relays = DEFAULT_RELAYS,
@@ -272,29 +218,26 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     authorizeSender,
     onError,
     onEose,
-    onMetric,
+    onRejected,
+    onCircuitBreakerChange,
   } = options;
 
   const sk = validatePrivateKey(privateKey);
   const pk = getPublicKey(sk);
   const pool = new SimplePool();
+  const admissionPubkeys = options.admissionPubkeys ? new Set(options.admissionPubkeys) : undefined;
   pool.onRelayConnectionSuccess = options.onConnect;
   const accountId = options.accountId ?? pk.slice(0, 16);
   const gatewayStartedAt = Math.floor(Date.now() / 1000);
   const guardPolicy = createDirectDmPreCryptoGuardPolicy(options.guardPolicy);
 
-  // Initialize metrics
-  const metrics = onMetric ? createMetrics(onMetric) : createNoopMetrics();
-
-  // Initialize circuit breakers and health tracker
   const circuitBreakers = new Map<string, CircuitBreaker>();
   const healthTracker = createRelayHealthTracker();
 
   for (const relay of relays) {
-    circuitBreakers.set(relay, createCircuitBreaker(relay, metrics));
+    circuitBreakers.set(relay, createCircuitBreaker(relay, onCircuitBreakerChange));
   }
 
-  // Read persisted state and compute `since` timestamp (with small overlap)
   const state = await readNostrBusState({ accountId });
   const baseSince = computeSinceTimestamp(state, gatewayStartedAt);
   const since = Math.max(0, baseSince - STARTUP_LOOKBACK_SEC);
@@ -332,80 +275,58 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     maxTrackedKeys: 1,
   });
 
-  const updateRateLimiterSizeMetric = () => {
-    metrics.emit(
-      "memory.rate_limiter_entries",
-      perSenderRateLimiter.size() + globalRateLimiter.size(),
-    );
-  };
-
   const rejectIfRateLimited = (
     limiter: ReturnType<typeof createFixedWindowRateLimiter>,
     key: string,
-    metric: "rate_limit.global" | "rate_limit.per_sender",
   ): boolean => {
-    updateRateLimiterSizeMetric();
     const limited = limiter.isRateLimited(key);
     if (limited) {
-      metrics.emit(metric);
-      metrics.emit("event.rejected.rate_limited");
+      onRejected?.("rate_limited");
     }
-    updateRateLimiterSizeMetric();
     return limited;
   };
 
   async function dispatchEvent(event: Event, lifecycle: NostrIngressLifecycle): Promise<void> {
     // Self-message loop prevention: skip our own messages.
     if (event.pubkey === pk) {
-      metrics.emit("event.rejected.self_message");
+      onRejected?.("self_message");
       return;
     }
 
     // Future events remain retryable until their clock catches up.
     if (event.created_at > Math.floor(Date.now() / 1000) + guardPolicy.maxFutureSkewSec) {
-      metrics.emit("event.rejected.future");
+      onRejected?.("future");
       throw new Error(`Nostr event ${event.id} is too far in the future.`);
     }
 
     if (!guardPolicy.allowedKinds.includes(event.kind)) {
-      metrics.emit("event.rejected.wrong_kind");
+      onRejected?.("wrong_kind");
       return;
     }
 
     if (!event.tags.some((tag) => tag[0] === "p" && tag[1] === pk)) {
-      metrics.emit("event.rejected.wrong_kind");
+      onRejected?.("wrong_kind");
       return;
     }
 
     const replyTo = async (text: string): Promise<void> => {
-      await sendEncryptedDm(
-        pool,
-        sk,
-        event.pubkey,
-        text,
-        relays,
-        metrics,
-        circuitBreakers,
-        healthTracker,
-        onError,
-        { replyToEventId: event.id },
-      );
+      await sendEncryptedDm(event.pubkey, text, { replyToEventId: event.id });
     };
 
     if (Buffer.byteLength(event.content, "utf8") > guardPolicy.maxCiphertextBytes) {
-      if (rejectIfRateLimited(globalRateLimiter, "global", "rate_limit.global")) {
+      if (rejectIfRateLimited(globalRateLimiter, "global")) {
         throw new Error(`Nostr event ${event.id} hit the global rate limit.`);
       }
-      metrics.emit("event.rejected.oversized_ciphertext");
+      onRejected?.("oversized_ciphertext");
       return;
     }
-    if (rejectIfRateLimited(globalRateLimiter, "global", "rate_limit.global")) {
+    if (rejectIfRateLimited(globalRateLimiter, "global")) {
       throw new Error(`Nostr event ${event.id} hit the global rate limit.`);
     }
 
     // nostr-tools recomputes the canonical hash and verifies the signature.
     if (!verifyEvent(event)) {
-      metrics.emit("event.rejected.invalid_signature");
+      onRejected?.("invalid_signature");
       const error = new NostrIngressPermanentError(
         "invalid-signature",
         `Nostr event ${event.id} has an invalid signature.`,
@@ -414,7 +335,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       throw error;
     }
 
-    if (rejectIfRateLimited(perSenderRateLimiter, event.pubkey, "rate_limit.per_sender")) {
+    if (rejectIfRateLimited(perSenderRateLimiter, event.pubkey)) {
       throw new Error(`Nostr sender ${event.pubkey} hit the rate limit.`);
     }
 
@@ -428,10 +349,8 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     let plaintext: string;
     try {
       plaintext = decrypt(sk, event.pubkey, event.content);
-      metrics.emit("decrypt.success");
     } catch (error) {
-      metrics.emit("decrypt.failure");
-      metrics.emit("event.rejected.decrypt_failed");
+      onRejected?.("decrypt_failed");
       onError?.(error as Error, `decrypt from ${event.pubkey}`);
       throw new NostrIngressPermanentError(
         "decrypt-failed",
@@ -441,7 +360,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     }
 
     if (Buffer.byteLength(plaintext, "utf8") > guardPolicy.maxPlaintextBytes) {
-      metrics.emit("event.rejected.oversized_plaintext");
+      onRejected?.("oversized_plaintext");
       return;
     }
     if (lifecycle.abortSignal.aborted) {
@@ -455,7 +374,6 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       { eventId: event.id, createdAt: event.created_at },
       lifecycle,
     );
-    metrics.emit("event.processed");
   }
 
   const dmFilter = { kinds: [4], "#p": [pk], since } satisfies Parameters<
@@ -508,27 +426,24 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       await cursorWriter.persistNow(cursor);
     }
   };
-  const recoverCursorPersistence = async (): Promise<void> => {
-    await cursorWriter.flushUntilSuccess();
-  };
   const handleRelayEvent = async (event: Event): Promise<void> => {
-    metrics.emit("event.received");
     // Apply the relay age fence once, before admission; recovered durable claims must still deliver.
     if (typeof event.created_at === "number" && event.created_at < since) {
-      metrics.emit("event.rejected.stale");
+      onRejected?.("stale");
+      return;
+    }
+    // Keep configured peer identities local, never in relay subscription filters.
+    // Matching events still pass durable ingress and current sender authorization.
+    if (admissionPubkeys && !admissionPubkeys.has(event.pubkey)) {
       return;
     }
     try {
-      const result = await ingress.receive(event);
-      if (result === "duplicate") {
-        metrics.emit("event.duplicate");
-      }
+      await ingress.receive(event);
     } catch (error) {
       onError?.(error as Error, `durable admission for event ${event.id}`);
       if (error instanceof NostrIngressAdmissionRejectedError) {
         if (error.reason === "rate-limited") {
-          metrics.emit("rate_limit.global");
-          metrics.emit("event.rejected.rate_limited");
+          onRejected?.("rate_limited");
         }
         if (error.reason !== "oversized-event") {
           try {
@@ -536,7 +451,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
           } catch (cursorError) {
             onError?.(cursorError as Error, "persist transient replay cursor");
             await stopRelays("cursor persistence failed");
-            await recoverCursorPersistence();
+            await cursorWriter.flushUntilSuccess();
           }
         }
         return;
@@ -553,7 +468,7 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       }
       await stopRelays("durable admission failed");
       if (cursorPersistenceFailed) {
-        await recoverCursorPersistence();
+        await cursorWriter.flushUntilSuccess();
       }
     }
   };
@@ -590,15 +505,11 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
             if (cursor !== undefined) {
               cursorWriter.schedule(cursor);
             }
-            for (const relay of confirmedRelays) {
-              metrics.emit("relay.message.eose", 1, { relay });
-            }
             onEose?.(confirmedRelays.join(", "));
           })
           .catch((error: unknown) => onError?.(error as Error, "finalize relay backfill"));
       },
       onClose: (relay, reasons) => {
-        metrics.emit("relay.message.closed", 1, { relay });
         options.onDisconnect?.(relay);
         onError?.(new Error(`Subscription closed: ${reasons.join(", ")}`), "subscription");
       },
@@ -609,36 +520,12 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     throw error;
   }
 
-  // Public sendDm function
-  const sendDm = async (
-    toPubkey: string,
-    text: string,
-    sendOptions?: NostrDmSendOptions,
-  ): Promise<string> => {
-    return await sendEncryptedDm(
-      pool,
-      sk,
-      toPubkey,
-      text,
-      relays,
-      metrics,
-      circuitBreakers,
-      healthTracker,
-      onError,
-      sendOptions,
-    );
-  };
-
-  // Profile publishing function
   const publishProfile = async (profile: NostrProfile): Promise<ProfilePublishResult> => {
-    // Read last published timestamp for monotonic ordering
     const profileState = await readNostrProfileState({ accountId });
     const lastPublishedAt = profileState?.lastPublishedAt ?? undefined;
 
-    // Publish the profile
     const result = await publishProfileFn(pool, sk, relays, profile, lastPublishedAt);
 
-    // Convert results to state format
     const publishResults: Record<string, "ok" | "failed" | "timeout"> = {};
     for (const relay of result.successes) {
       publishResults[relay] = "ok";
@@ -647,7 +534,6 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
       publishResults[relay] = error === "timeout" ? "timeout" : "failed";
     }
 
-    // Persist the publish state
     await writeNostrProfileState({
       accountId,
       lastPublishedAt: result.createdAt,
@@ -658,7 +544,6 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     return result;
   };
 
-  // Get profile state function
   const getProfileState = async () => {
     const stateLocal = await readNostrProfileState({ accountId });
     return {
@@ -681,99 +566,89 @@ export async function startNostrBus(options: NostrBusOptions): Promise<NostrBusH
     return closePromise;
   };
 
+  async function sendEncryptedDm(
+    toPubkey: string,
+    text: string,
+    sendOptions?: NostrDmSendOptions & { replyToEventId?: string },
+  ): Promise<string> {
+    const effect = captureEffectAuthority();
+    const ciphertext = encrypt(sk, toPubkey, text);
+    // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
+    const tags = [["p", toPubkey]];
+    if (sendOptions?.replyToEventId) {
+      tags.push(["e", sendOptions.replyToEventId]);
+    }
+    const reply = finalizeEvent(
+      {
+        kind: 4,
+        content: ciphertext,
+        tags,
+        created_at: Math.floor(Date.now() / 1000),
+      },
+      sk,
+    );
+
+    const sortedRelays = healthTracker.getSortedRelays(relays);
+
+    let lastError: Error | undefined;
+    for (const relay of sortedRelays) {
+      sendOptions?.assertDirectAdapterHandoff?.();
+      const cb = circuitBreakers.get(relay);
+
+      if (cb && !cb.canAttempt()) {
+        continue;
+      }
+
+      const startTime = Date.now();
+      const recordFailure = (err: unknown) => {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        cb?.recordFailure();
+        healthTracker.recordFailure(relay);
+        onError?.(lastError, `publish to ${relay}`);
+      };
+      // Keep connection preparation separate from the recipient-visible EVENT handoff.
+      const connection = await pool
+        .ensureRelay(relay, { connectionTimeout: pool.maxWaitForConnection })
+        .catch((err: unknown) => {
+          recordFailure(new Error(`connection failure: ${String(err)}`));
+        });
+      if (!connection) {
+        continue;
+      }
+      sendOptions?.assertDirectAdapterHandoff?.();
+      if (sendOptions?.onPlatformSendDispatch) {
+        await sendOptions.onPlatformSendDispatch();
+        sendOptions.assertDirectAdapterHandoff?.();
+      }
+      let initiated = false;
+      try {
+        await effect.initiate(() => {
+          sendOptions?.assertDirectAdapterHandoff?.();
+          initiated = true;
+          return connection.publish(reply);
+        });
+        const latency = Date.now() - startTime;
+
+        cb?.recordSuccess();
+        healthTracker.recordSuccess(relay, latency);
+
+        return reply.id;
+      } catch (err) {
+        if (!initiated) {
+          throw err;
+        }
+        recordFailure(err);
+      }
+    }
+
+    throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
+  }
+
   return {
     close,
     publicKey: pk,
-    sendDm,
-    getMetrics: () => metrics.getSnapshot(),
+    sendDm: sendEncryptedDm,
     publishProfile,
     getProfileState,
   };
-}
-
-// Send DM with Circuit Breaker + Health Scoring
-
-/**
- * Send an encrypted DM to a pubkey
- */
-async function sendEncryptedDm(
-  pool: SimplePool,
-  sk: Uint8Array,
-  toPubkey: string,
-  text: string,
-  relays: string[],
-  metrics: NostrMetrics,
-  circuitBreakers: Map<string, CircuitBreaker>,
-  healthTracker: RelayHealthTracker,
-  onError?: (error: Error, context: string) => void,
-  options?: NostrDmSendOptions & { replyToEventId?: string },
-): Promise<string> {
-  const ciphertext = encrypt(sk, toPubkey, text);
-  // NIP-04 uses an e tag to keep a reply attached to its verified inbound event.
-  const tags = [["p", toPubkey]];
-  if (options?.replyToEventId) {
-    tags.push(["e", options.replyToEventId]);
-  }
-  const reply = finalizeEvent(
-    {
-      kind: 4,
-      content: ciphertext,
-      tags,
-      created_at: Math.floor(Date.now() / 1000),
-    },
-    sk,
-  );
-
-  // Sort relays by health score (best first)
-  const sortedRelays = healthTracker.getSortedRelays(relays);
-
-  // Try relays in order of health, respecting circuit breakers
-  let lastError: Error | undefined;
-  for (const relay of sortedRelays) {
-    options?.assertDirectAdapterHandoff?.();
-    const cb = circuitBreakers.get(relay);
-
-    // Skip if circuit breaker is open
-    if (cb && !cb.canAttempt()) {
-      continue;
-    }
-
-    const startTime = Date.now();
-    const recordFailure = (err: unknown) => {
-      lastError = err instanceof Error ? err : new Error(String(err));
-      const latency = Date.now() - startTime;
-      cb?.recordFailure();
-      healthTracker.recordFailure(relay);
-      metrics.emit("relay.error", 1, { relay, latency });
-      onError?.(lastError, `publish to ${relay}`);
-    };
-    // Keep connection preparation separate from the recipient-visible EVENT handoff.
-    const connection = await pool
-      .ensureRelay(relay, { connectionTimeout: pool.maxWaitForConnection })
-      .catch((err: unknown) => {
-        recordFailure(new Error(`connection failure: ${String(err)}`));
-      });
-    if (!connection) {
-      continue;
-    }
-    options?.assertDirectAdapterHandoff?.();
-    if (options?.onPlatformSendDispatch) {
-      await options.onPlatformSendDispatch();
-      options.assertDirectAdapterHandoff?.();
-    }
-    try {
-      await connection.publish(reply);
-      const latency = Date.now() - startTime;
-
-      // Record success
-      cb?.recordSuccess();
-      healthTracker.recordSuccess(relay, latency);
-
-      return reply.id;
-    } catch (err) {
-      recordFailure(err);
-    }
-  }
-
-  throw new Error(`Failed to publish to any relay: ${lastError?.message}`);
 }

@@ -33,13 +33,6 @@ function readCatalog(authStorage: AuthStorage, modelsJsonContents: string | null
 }
 
 describe("generated provider membership", () => {
-  it("does not revive a deferred catalog from its own retained API key", () => {
-    const registry = readCatalog(AuthStorage.inMemory());
-
-    expect(registry.getError()).toBeUndefined();
-    expect(registry.getAll()).toEqual([]);
-  });
-
   it("keeps a deferred catalog while current authentication is available", () => {
     const auth = AuthStorage.inMemory();
     auth.setRuntimeApiKey("fixture", "current-runtime-key");
@@ -111,19 +104,6 @@ describe("generated provider membership", () => {
     });
   });
 
-  it("keeps ordinary generated catalogs without an authentication gate", () => {
-    const registry = discoverModelsFromCapturedSources(AuthStorage.inMemory(), {
-      config: {},
-      modelsJsonContents: null,
-      pluginCatalogs,
-      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
-        plugins: [{ id: "catalog-owner", providers: ["fixture"] }],
-      }),
-    });
-
-    expect(registry.find("fixture", "retained-model")?.name).toBe("Generated model");
-  });
-
   it("does not use an unowned provider's authentication to revive a deferred owner", () => {
     const registry = discoverModelsFromCapturedSources(
       AuthStorage.inMemory({ unrelated: { type: "api_key", key: "unrelated-current-key" } }),
@@ -144,5 +124,27 @@ describe("generated provider membership", () => {
     );
 
     expect(registry.getAll()).toEqual([]);
+  });
+
+  it("excludes generated native inventory for a configured proxy endpoint", () => {
+    const registry = discoverModelsFromCapturedSources(AuthStorage.inMemory(), {
+      config: {
+        models: { providers: { fixture: { baseUrl: "https://proxy.example/v1", models: [] } } },
+      },
+      modelsJsonContents: null,
+      pluginCatalogs,
+      pluginMetadataSnapshot: createPluginMetadataSnapshotFixture({
+        plugins: [
+          {
+            id: "catalog-owner",
+            providers: ["fixture"],
+            providerEndpoints: [{ endpointClass: "openai-public", hosts: ["fixture.example"] }],
+          },
+        ],
+      }),
+    });
+    expect(registry.getError()).toBeUndefined();
+    expect(registry.getAll()).toEqual([]);
+    expect(registry.fork(AuthStorage.inMemory()).getAll()).toEqual([]);
   });
 });

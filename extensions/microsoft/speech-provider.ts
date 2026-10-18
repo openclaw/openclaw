@@ -1,4 +1,3 @@
-// Microsoft provider module implements model/runtime integration.
 import { readFileSync } from "node:fs";
 import path from "node:path";
 import {
@@ -15,6 +14,7 @@ import {
   asBoolean,
   asFiniteNumber,
   asOptionalRecord,
+  filterStringRecord,
   normalizeOptionalString as trimToUndefined,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { edgeTTS, inferEdgeExtension } from "./tts.js";
@@ -24,35 +24,16 @@ const DEFAULT_EDGE_LANG = "en-US";
 const DEFAULT_EDGE_OUTPUT_FORMAT = "audio-24khz-48kbitrate-mono-mp3";
 const DEFAULT_MICROSOFT_VOICE_LIST_TIMEOUT_MS = 30_000;
 
-type MicrosoftProviderConfig = {
-  enabled: boolean;
-  voice: string;
-  lang: string;
-  outputFormat: string;
-  outputFormatConfigured: boolean;
-  pitch?: string;
-  rate?: string;
-  volume?: string;
-  saveSubtitles: boolean;
-  proxy?: string;
-  timeoutMs?: number;
-};
-
-function normalizeMicrosoftProviderConfig(
-  rawConfig: Record<string, unknown>,
-): MicrosoftProviderConfig {
+function normalizeMicrosoftProviderConfig(rawConfig: Record<string, unknown>) {
   const providers = asOptionalRecord(rawConfig.providers);
-  const rawEdge = asOptionalRecord(rawConfig.edge);
-  const rawMicrosoft = asOptionalRecord(rawConfig.microsoft);
-  const rawProviderMicrosoft = asOptionalRecord(providers?.microsoft);
-  const raw = { ...rawEdge, ...rawMicrosoft, ...rawProviderMicrosoft };
+  const raw = asOptionalRecord(providers?.microsoft) ?? {};
   return readMicrosoftProviderConfig({
     ...raw,
     outputFormatConfigured: Boolean(trimToUndefined(raw.outputFormat)),
   });
 }
 
-function readMicrosoftProviderConfig(config: SpeechProviderConfig): MicrosoftProviderConfig {
+function readMicrosoftProviderConfig(config: SpeechProviderConfig) {
   return {
     enabled: asBoolean(config.enabled) ?? true,
     voice: trimToUndefined(config.voice) ?? DEFAULT_EDGE_VOICE,
@@ -116,8 +97,7 @@ async function listMicrosoftVoices(
 ): Promise<SpeechVoiceOption[]> {
   const { assertOkOrThrowProviderError, readProviderJsonResponse } =
     await import("openclaw/plugin-sdk/provider-http");
-  const { captureHttpExchange, isDebugProxyGlobalFetchPatchInstalled } =
-    await import("openclaw/plugin-sdk/proxy-capture");
+  const proxyCaptureSdk = await import("openclaw/plugin-sdk/proxy-capture");
   const { fetchWithSsrFGuard, ssrfPolicyFromHttpBaseUrlAllowedHostname } =
     await import("openclaw/plugin-sdk/ssrf-runtime");
   const url =
@@ -134,18 +114,21 @@ async function listMicrosoftVoices(
     timeoutMs,
   });
   try {
-    if (!isDebugProxyGlobalFetchPatchInstalled()) {
-      captureHttpExchange({
-        url,
-        method: "GET",
-        requestHeaders: headers,
-        response,
-        transport: "http",
-        meta: {
-          provider: "microsoft",
-          capability: "speech-voices",
-        },
-      });
+    if (!proxyCaptureSdk.isDebugProxyGlobalFetchPatchInstalled()) {
+      // Finalization retains capture failures; observe the Promise returned by the SDK view.
+      void proxyCaptureSdk
+        .captureHttpExchangeAsync({
+          url,
+          method: "GET",
+          requestHeaders: headers,
+          response,
+          transport: "http",
+          meta: {
+            provider: "microsoft",
+            capability: "speech-voices",
+          },
+        })
+        .catch(() => {});
     }
     await assertOkOrThrowProviderError(response, "Microsoft voices API error");
     const voices = await readProviderJsonResponse<unknown>(response, "microsoft.speech-voices");
@@ -178,6 +161,8 @@ async function listMicrosoftVoices(
 }
 
 export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
+  const isConfigured: NonNullable<SpeechProviderPlugin["isConfigured"]> = ({ providerConfig }) =>
+    readMicrosoftProviderConfig(providerConfig).enabled;
   return {
     id: "microsoft",
     label: "Microsoft",
@@ -189,45 +174,32 @@ export function buildMicrosoftSpeechProvider(): SpeechProviderPlugin {
       return {
         ...base,
         enabled: true,
-        ...(trimToUndefined(talkProviderConfig.voiceId) == null
-          ? {}
-          : { voice: trimToUndefined(talkProviderConfig.voiceId) }),
-        ...(trimToUndefined(talkProviderConfig.languageCode) == null
-          ? {}
-          : { lang: trimToUndefined(talkProviderConfig.languageCode) }),
-        ...(trimToUndefined(talkProviderConfig.outputFormat) == null
-          ? {}
-          : { outputFormat: trimToUndefined(talkProviderConfig.outputFormat) }),
-        ...(trimToUndefined(talkProviderConfig.pitch) == null
-          ? {}
-          : { pitch: trimToUndefined(talkProviderConfig.pitch) }),
-        ...(trimToUndefined(talkProviderConfig.rate) == null
-          ? {}
-          : { rate: trimToUndefined(talkProviderConfig.rate) }),
-        ...(trimToUndefined(talkProviderConfig.volume) == null
-          ? {}
-          : { volume: trimToUndefined(talkProviderConfig.volume) }),
-        ...(trimToUndefined(talkProviderConfig.proxy) == null
-          ? {}
-          : { proxy: trimToUndefined(talkProviderConfig.proxy) }),
+        ...filterStringRecord({
+          voice: trimToUndefined(talkProviderConfig.voiceId),
+          lang: trimToUndefined(talkProviderConfig.languageCode),
+          outputFormat: trimToUndefined(talkProviderConfig.outputFormat),
+          pitch: trimToUndefined(talkProviderConfig.pitch),
+          rate: trimToUndefined(talkProviderConfig.rate),
+          volume: trimToUndefined(talkProviderConfig.volume),
+          proxy: trimToUndefined(talkProviderConfig.proxy),
+        }),
         ...(asFiniteNumber(talkProviderConfig.timeoutMs) == null
           ? {}
           : { timeoutMs: asFiniteNumber(talkProviderConfig.timeoutMs) }),
       };
     },
-    resolveTalkOverrides: ({ params }) => ({
-      ...(trimToUndefined(params.voiceId) == null
-        ? {}
-        : { voice: trimToUndefined(params.voiceId) }),
-      ...(trimToUndefined(params.outputFormat) == null
-        ? {}
-        : { outputFormat: trimToUndefined(params.outputFormat) }),
-    }),
+    resolveTalkOverrides: ({ params }) =>
+      filterStringRecord({
+        voice: trimToUndefined(params.voiceId),
+        outputFormat: trimToUndefined(params.outputFormat),
+      }) ?? {},
     listVoices: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig ?? {});
       return await listMicrosoftVoices(config.timeoutMs ?? req.timeoutMs);
     },
-    isConfigured: ({ providerConfig }) => readMicrosoftProviderConfig(providerConfig).enabled,
+    // Retained for synchronous SDK consumers through 2026-12-31.
+    isConfigured,
+    isConfiguredAsync: async (ctx) => isConfigured(ctx),
     synthesize: async (req) => {
       const config = readMicrosoftProviderConfig(req.providerConfig);
       const { isVoiceMessageCompatibleAudio } = await import("openclaw/plugin-sdk/media-runtime");

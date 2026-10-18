@@ -1,14 +1,14 @@
+import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { BrowserProfileUnavailableError } from "../errors.js";
 import { assertBrowserNavigationResultAllowed } from "../navigation-guard.js";
 import { getBrowserProfileCapabilities } from "../profile-capabilities.js";
+import { getPwAiModule } from "../pw-ai-module.js";
 import { mintBrowserScreencastToken } from "../screencast/tokens.js";
 import type { BrowserRouteContext } from "../server-context.js";
-import { getProfileLifecycle, isProfileGenerationCurrent } from "../server-context.lifecycle.js";
+import { getProfileLifecycle, isProfileOperationCurrent } from "../server-context.lifecycle.js";
 import {
   browserNavigationPolicyForProfile,
-  getPwAiModule,
   readBody,
-  resolveTargetIdFromBody,
   withRouteTabContext,
 } from "./agent.shared.js";
 import type { BrowserRouteRegistrar } from "./types.js";
@@ -42,7 +42,7 @@ export function registerBrowserAgentScreencastRoutes(
       req,
       res,
       ctx,
-      targetId: resolveTargetIdFromBody(body),
+      targetId: normalizeOptionalString(body.targetId),
       enforceCurrentUrlAllowed: true,
       run: async ({ profileCtx, tab, cdpUrl, signal, resolveTabUrl }) => {
         if (getBrowserProfileCapabilities(profileCtx.profile).usesChromeMcp) {
@@ -53,7 +53,7 @@ export function registerBrowserAgentScreencastRoutes(
           });
           return;
         }
-        if (!(await getPwAiModule())) {
+        if (!(await getPwAiModule({ mode: "soft" }))) {
           res.status(501).json({
             error: "Browser screencast requires Playwright in this gateway build.",
             code: "SCREENCAST_UNSUPPORTED",
@@ -68,14 +68,13 @@ export function registerBrowserAgentScreencastRoutes(
           throw new BrowserProfileUnavailableError("Browser profile is no longer available.");
         }
         const lifecycle = getProfileLifecycle(runtime);
-        const generation = lifecycle.generation;
-        const configRevision = lifecycle.configRevision;
+        const profileSignal = lifecycle.controller.signal;
         const assertResourceCurrent = req.screencastAuthority?.assertCurrent;
         const assertCurrent = () => {
           assertResourceCurrent?.();
           if (
             state.profiles.get(profileName) !== runtime ||
-            !isProfileGenerationCurrent({ state, runtime, generation, configRevision })
+            !isProfileOperationCurrent({ state, runtime, signal: profileSignal })
           ) {
             throw new BrowserProfileUnavailableError("Browser screencast target was superseded.");
           }
@@ -96,7 +95,7 @@ export function registerBrowserAgentScreencastRoutes(
             maxWidth: clampScreencastOption(body.maxWidth, 320, 2000, 1280),
             maxHeight: clampScreencastOption(body.maxHeight, 320, 2000, 1280),
             quality: clampScreencastOption(body.quality, 30, 90, 70),
-            lifecycleGeneration: generation,
+            profileSignal,
             lifecycleSignal: req.screencastAuthority
               ? AbortSignal.any([lifecycle.controller.signal, req.screencastAuthority.signal])
               : lifecycle.controller.signal,

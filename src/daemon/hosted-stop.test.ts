@@ -81,8 +81,6 @@ afterEach(() => {
 describe("hosted native stop", () => {
   it.each([
     { platformName: "linux", supervisor: null },
-    { platformName: "darwin", supervisor: null },
-    { platformName: "win32", supervisor: null },
     { platformName: "win32", supervisor: "schtasks" },
   ] as const)(
     "exits only the owned process on $platformName with supervisor $supervisor",

@@ -2,7 +2,7 @@
 import { createHash } from "node:crypto";
 import path from "node:path";
 import * as ts from "typescript/unstable/ast";
-import type { Program, Project } from "typescript/unstable/sync";
+import type { Printer, Program, Project } from "typescript/unstable/sync";
 import { formatNativeTypeScriptDiagnostics } from "../../scripts/lib/native-typescript-diagnostics.mts";
 import {
   normalizePluginSdkApiDeclarationText,
@@ -12,7 +12,6 @@ import {
 export type PluginSdkApiDeclarationSection = { name: string; text: string };
 type DeclarationClosure = { hash: string; sections: PluginSdkApiDeclarationSection[] };
 
-type DeclarationReference = { literal: ts.StringLiteralLikeNode; specifier: string };
 type EmittedDeclaration = { declarationFile: ts.SourceFile; text: string };
 type DeclarationSection = PluginSdkApiDeclarationSection;
 type Dependency =
@@ -55,10 +54,10 @@ function appendWalk(target: Sections, walk: Walk): boolean {
   return walk.tainted;
 }
 
-function collectDeclarationReferences(sourceFile: ts.SourceFile): DeclarationReference[] {
-  const references = new Map<string, DeclarationReference>();
+function collectDeclarationReferences(sourceFile: ts.SourceFile): ts.StringLiteralLikeNode[] {
+  const references = new Map<string, ts.StringLiteralLikeNode>();
   const add = (literal: ts.StringLiteralLikeNode) => {
-    references.set(`${literal.pos}\0${literal.text}`, { literal, specifier: literal.text });
+    references.set(`${literal.pos}\0${literal.text}`, literal);
   };
   const visit = (node: ts.Node) => {
     if (ts.isImportDeclaration(node) && ts.isStringLiteralLikeNode(node.moduleSpecifier)) {
@@ -87,8 +86,7 @@ function collectDeclarationReferences(sourceFile: ts.SourceFile): DeclarationRef
   };
   visit(sourceFile);
   return [...references.values()].toSorted(
-    (left, right) =>
-      compareText(left.specifier, right.specifier) || left.literal.pos - right.literal.pos,
+    (left, right) => compareText(left.text, right.text) || left.pos - right.pos,
   );
 }
 
@@ -150,12 +148,12 @@ function importTypeTarget(node: ts.ImportTypeNode): string | null {
 
 export function createDeclarationClosureRenderer(params: {
   project: Project;
+  printer: Printer;
   sourceProgram: Program;
   emittedSources: ReadonlySet<string>;
   repoRoot: string;
 }): (sourceFile: ts.SourceFile, exportName: string) => DeclarationClosure | null {
-  const { project, sourceProgram: program, emittedSources, repoRoot } = params;
-  const printer = project.emitter;
+  const { project, printer, sourceProgram: program, emittedSources, repoRoot } = params;
   const isGlobalAugmentation = (node: ts.Node): node is ts.ModuleDeclaration =>
     ts.isModuleDeclaration(node) &&
     ts.isIdentifier(node.name) &&
@@ -251,24 +249,24 @@ export function createDeclarationClosureRenderer(params: {
 
   const resolveDependency = (
     sourceFile: ts.SourceFile,
-    reference: DeclarationReference,
+    reference: ts.StringLiteralLikeNode,
     exportedName: string,
   ): Dependency => {
     // Resolve the actual emitted literal, including its enclosing import attributes and
     // import-equals syntax. The native checker owns package conditions and resolution modes.
-    const symbol = project.checker.getSymbolAtLocation(reference.literal);
+    const symbol = project.checker.getSymbolAtLocation(reference);
     const target = symbol?.declarations
       .map((handle) => handle.resolve()?.getSourceFile())
       .find((file) => file !== undefined);
     if (!target) {
-      if (!reference.specifier.startsWith("node:")) {
+      if (!reference.text.startsWith("node:")) {
         unresolvedDependencies.add(
-          `${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)} -> ${reference.specifier}`,
+          `${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)} -> ${reference.text}`,
         );
       }
       return {
         kind:
-          reference.specifier.startsWith(".") || path.isAbsolute(reference.specifier)
+          reference.text.startsWith(".") || path.isAbsolute(reference.text)
             ? "failure"
             : "external",
       };
@@ -281,7 +279,7 @@ export function createDeclarationClosureRenderer(params: {
         !path.isAbsolute(relative) &&
         !relative.split(path.sep).includes("node_modules")
         ? (unresolvedDependencies.add(
-            `${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)} -> ${reference.specifier}`,
+            `${normalizePluginSdkApiSourcePath(repoRoot, sourceFile.fileName)} -> ${reference.text}`,
           ),
           { kind: "failure" })
         : { kind: "external" };
@@ -290,11 +288,6 @@ export function createDeclarationClosureRenderer(params: {
       ? { exportedName, kind: "repo", sourceFile: dependency }
       : { kind: "external" };
   };
-
-  const referenceFor = (literal: ts.StringLiteralLikeNode): DeclarationReference => ({
-    literal,
-    specifier: literal.text,
-  });
 
   const getIndex = (sourceFile: ts.SourceFile): DeclarationIndex => {
     const key = canonical(sourceFile.fileName);
@@ -332,7 +325,7 @@ export function createDeclarationClosureRenderer(params: {
         ts.isImportDeclaration(statement) &&
         ts.isStringLiteralLikeNode(statement.moduleSpecifier)
       ) {
-        const reference = referenceFor(statement.moduleSpecifier);
+        const reference = statement.moduleSpecifier;
         if (!statement.importClause) {
           sideEffects.push(resolveDependency(sourceFile, reference, "*"));
           continue;
@@ -366,7 +359,7 @@ export function createDeclarationClosureRenderer(params: {
       ) {
         imports.set(
           statement.name.text,
-          resolveDependency(sourceFile, referenceFor(statement.moduleReference.expression), "*"),
+          resolveDependency(sourceFile, statement.moduleReference.expression, "*"),
         );
       } else if (
         ts.isExportDeclaration(statement) &&
@@ -383,7 +376,7 @@ export function createDeclarationClosureRenderer(params: {
           }
           continue;
         }
-        const reference = referenceFor(statement.moduleSpecifier);
+        const reference = statement.moduleSpecifier;
         if (!statement.exportClause) {
           exportStars.push(resolveDependency(sourceFile, reference, "*"));
         } else if (ts.isNamespaceExport(statement.exportClause)) {
@@ -440,8 +433,8 @@ export function createDeclarationClosureRenderer(params: {
     for (const reference of collectDeclarationReferences(index.declaration.declarationFile)) {
       const dependency = resolveDependency(sourceFile, reference, "*");
       if (dependency.kind !== "external") {
-        text = text.replaceAll(`"${reference.specifier}"`, '"<repo>"');
-        text = text.replaceAll(`'${reference.specifier}'`, "'<repo>'");
+        text = text.replaceAll(`"${reference.text}"`, '"<repo>"');
+        text = text.replaceAll(`'${reference.text}'`, "'<repo>'");
       }
       if (dependency.kind === "repo") {
         appendSections(sections, fallbackFile(dependency.sourceFile, visited));
@@ -515,7 +508,7 @@ export function createDeclarationClosureRenderer(params: {
       ) {
         const dependency = resolveDependency(
           sourceFile,
-          referenceFor(node.argument.literal),
+          node.argument.literal,
           importTypeTarget(node) ?? "*",
         );
         tainted = appendWalk(sections, resolveWalkDependency(dependency, sourceFile)) || tainted;

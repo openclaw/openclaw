@@ -52,14 +52,11 @@ export function buildAssistantMessage(params: {
   now: () => number;
   reasoningText?: string;
   usage?: AssistantUsageSnapshot;
-}): AssistantMessage | undefined {
+}): AssistantMessage {
   const event = params.event;
   const text = event ? event.data.content || params.assistantTexts.at(-1) || "" : "";
   const reasoningText = event?.data.reasoningText ?? params.reasoningText;
   const toolRequests = event?.data.toolRequests ?? [];
-  if (!text && !reasoningText && toolRequests.length === 0) {
-    return undefined;
-  }
   const content: AssistantMessage["content"] = [];
   if (reasoningText) {
     content.push({ thinking: reasoningText, type: "thinking" });
@@ -113,7 +110,7 @@ export function buildAssistantProjectionGroup(
       usage: resolveAssistantUsage(chunk.event, latestUsage, usageByApiCallId),
       assistantTexts: forTranscript ? chunk.transcriptAssistantTexts : chunk.assistantTexts,
     });
-    return message ? [message] : [];
+    return message.content.length > 0 ? [message] : [];
   });
   const replayIncomplete = group.chunks.some(({ event }) =>
     hasUnprojectedAssistantReplayState(event),
@@ -126,7 +123,6 @@ export function buildAssistantProjectionGroup(
   let terminalThinking:
     | Extract<AssistantMessage["content"][number], { type: "thinking" }>
     | undefined;
-  const toolCallOrder: string[] = [];
   const toolCallsById = new Map<
     string,
     Extract<AssistantMessage["content"][number], { type: "toolCall" }>
@@ -134,9 +130,6 @@ export function buildAssistantProjectionGroup(
   for (const message of messages) {
     for (const part of message.content) {
       if (part.type === "toolCall") {
-        if (!toolCallsById.has(part.id)) {
-          toolCallOrder.push(part.id);
-        }
         toolCallsById.set(part.id, part);
         continue;
       }
@@ -154,12 +147,12 @@ export function buildAssistantProjectionGroup(
       }
     }
   }
-  const toolCalls = toolCallOrder.flatMap((id) => {
-    const toolCall = toolCallsById.get(id);
-    return toolCall ? [toolCall] : [];
-  });
-  const content = [...(terminalThinking ? [terminalThinking] : []), ...narrative, ...toolCalls];
-  const toolCallIds = [...toolCallOrder];
+  const content = [
+    ...(terminalThinking ? [terminalThinking] : []),
+    ...narrative,
+    ...toolCallsById.values(),
+  ];
+  const toolCallIds = [...toolCallsById.keys()];
   return {
     message: {
       ...last,

@@ -408,7 +408,7 @@ export async function renderLoginGate(
   page: Page,
   baseUrl: string,
   { lastError = "unauthorized: gateway token required" }: { lastError?: string | null } = {},
-): Promise<void> {
+) {
   const gateway = await installMockGateway(page, { deferredMethods: ["connect"] });
   const response = await page.goto(baseUrl);
   if (response?.status() !== 200) {
@@ -422,35 +422,21 @@ export async function renderLoginGate(
   });
   await page.locator(".login-gate").waitFor();
   await mountLoginGate(page, lastError);
+  return gateway;
 }
 
 async function mountLoginGate(page: Page, lastError: string | null): Promise<void> {
+  await page.waitForFunction(() => window.openclawControlUi?.snapshot().booted === true);
   await page.evaluate(async (failureMessage) => {
     await customElements.whenDefined("openclaw-login-gate");
-    const gate = document.createElement("openclaw-login-gate") as HTMLElement & {
-      props: Record<string, unknown>;
-      updateComplete: Promise<unknown>;
-    };
-    document.body.dataset.connectCount = "0";
-    gate.props = {
-      resourceBasePath: "",
-      connected: false,
-      lastError: failureMessage,
-      lastErrorCode: null,
-      hasToken: false,
-      hasPassword: false,
-      gatewayUrl: "ws://127.0.0.1:18789",
-      secret: "",
-      showGatewaySecret: false,
-      onGatewayUrlChange: () => {},
-      onSecretChange: () => {},
-      onToggleGatewaySecret: () => {},
-      onConnect: () => {
-        const current = Number.parseInt(document.body.dataset.connectCount ?? "0", 10);
-        document.body.dataset.connectCount = String(current + 1);
-      },
-    };
-    document.body.replaceChildren(gate);
+    // This remaining Lit component owns its fixture props; keep all real root callbacks.
+    const gate = document.querySelector("openclaw-login-gate") as
+      | (HTMLElement & { props: Record<string, unknown>; updateComplete: Promise<unknown> })
+      | null;
+    if (!gate) {
+      throw new Error("Missing mounted login gate");
+    }
+    gate.props = { ...gate.props, lastError: failureMessage, lastErrorCode: null };
     await gate.updateComplete;
   }, lastError);
 }

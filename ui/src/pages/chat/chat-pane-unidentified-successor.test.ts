@@ -19,8 +19,11 @@ afterEach(resetTranscriptTestDom);
 
 it.each(
   (["event", "list"] as const).flatMap((admission) =>
-    (["live predecessor", "live run", "live stream", "empty", "optimistic-only"] as const).map(
-      (transcript) => ({ admission, transcript }),
+    (["live predecessor", "live stream", "empty", "optimistic-only"] as const).map(
+      (transcript) => ({
+        admission,
+        transcript,
+      }),
     ),
   ),
 )(
@@ -72,6 +75,17 @@ it.each(
         "chat.startup": history,
       },
     );
+    const emitMessage = (row: GatewaySessionRow, message: typeof predecessorMessage) =>
+      emitGatewayEvent("session.message", {
+        sessionKey: row.key,
+        agentId: "main",
+        sessionId: row.sessionId,
+        messageId: message["__openclaw"].id,
+        messageSeq: message["__openclaw"].seq,
+        message,
+        session: row,
+        ancestorSessions: [],
+      });
     let reading: ReturnType<typeof refreshPane> | undefined;
     try {
       await sessions.refresh({ agentId: "main", force: true });
@@ -86,41 +100,26 @@ it.each(
       expect(pane.state.currentSessionId ?? null).toBeNull();
 
       if (transcript === "live predecessor") {
-        emitGatewayEvent("session.message", {
-          sessionKey: previous.key,
-          agentId: "main",
-          sessionId: previous.sessionId,
-          messageId: "predecessor-live",
-          messageSeq: 1,
-          message: predecessorMessage,
-          session: previous,
-          ancestorSessions: [],
-        });
+        emitMessage(previous, predecessorMessage);
         // Existing live content must not block the next same-incarnation message.
-        emitGatewayEvent("session.message", {
-          sessionKey: previous.key,
-          agentId: "main",
-          sessionId: previous.sessionId,
-          messageId: "predecessor-live-next",
-          messageSeq: 2,
-          message: nextPredecessorMessage,
-          session: previous,
-          ancestorSessions: [],
-        });
+        emitMessage(previous, nextPredecessorMessage);
         expect(pane.state.chatMessages).toEqual([
           expect.objectContaining(predecessorMessage),
           expect.objectContaining(nextPredecessorMessage),
         ]);
-      } else if (transcript === "live run" || transcript === "live stream") {
+      } else if (transcript === "live stream") {
+        const text = "Predecessor is still working.";
         emitGatewayEvent("chat", {
           sessionKey: previous.key,
           agentId: "main",
           runId: "predecessor-live-run",
           seq: 1,
           state: "delta",
-          deltaText: transcript === "live stream" ? "Predecessor is still working." : "",
+          deltaText: text,
+          message: { role: "assistant", content: [{ type: "text", text }] },
         });
         expect(pane.state.chatRunId).toBe("predecessor-live-run");
+        expect(pane.state.chatStream).toBe(text);
         expect(getChatSessionProjection(pane.state).entries).toEqual([]);
       } else if (transcript === "optimistic-only") {
         reduceChatSessionProjection(pane.state, {
@@ -149,33 +148,20 @@ it.each(
         expect(selectedChatSessionRow(pane.state)).toMatchObject(successor);
         expect(pane.state.currentSessionId ?? null).toBeNull();
       }
-      emitGatewayEvent("session.message", {
-        sessionKey: successor.key,
-        agentId: "main",
-        sessionId: successor.sessionId,
-        messageId: "successor-live",
-        messageSeq: 1,
-        message: successorMessage,
-        session: successor,
-        ancestorSessions: [],
-      });
+      emitMessage(successor, successorMessage);
       expect(selectedChatSessionRow(pane.state)).toMatchObject(successor);
-      if (
-        transcript === "live predecessor" ||
-        transcript === "live run" ||
-        transcript === "live stream"
-      ) {
+      if (transcript === "live predecessor" || transcript === "live stream") {
         expect.soft(pane.state.chatMessages).toBe(displayed);
         expect.soft(pane.state.chatRunId).toBe(activeRun);
         expect.soft(pane.state.chatStream).toBe(stream);
-        if (transcript === "live predecessor") {
-          expect(pane.state.chatMessages).toEqual([
-            expect.objectContaining(predecessorMessage),
-            expect.objectContaining(nextPredecessorMessage),
-          ]);
-        } else {
-          expect(pane.state.chatMessages).toEqual([]);
-        }
+        expect(pane.state.chatMessages).toEqual(
+          transcript === "live predecessor"
+            ? [
+                expect.objectContaining(predecessorMessage),
+                expect.objectContaining(nextPredecessorMessage),
+              ]
+            : [],
+        );
       } else {
         expect(pane.state.chatMessages).toEqual([expect.objectContaining(successorMessage)]);
         expect(getChatSessionProjection(pane.state).entries.every((entry) => !entry.pending)).toBe(

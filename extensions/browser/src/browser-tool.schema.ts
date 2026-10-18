@@ -1,9 +1,3 @@
-/**
- * JSON schema for the Browser agent tool.
- *
- * The schema stays intentionally flat because provider function-tool validators
- * reject several nested union shapes that TypeBox can otherwise emit.
- */
 import {
   optionalFiniteNumberSchema,
   optionalNonNegativeIntegerSchema,
@@ -12,53 +6,14 @@ import {
   stringEnum,
 } from "openclaw/plugin-sdk/channel-actions";
 import { Type } from "typebox";
-import { BROWSER_TAB_BOUND_ACTIONS } from "./browser-tool-binding.js";
+import {
+  BROWSER_TAB_BOUND_ACTIONS,
+  BROWSER_TOOL_ACTIONS,
+  BROWSER_TOOL_ACTION_FACTS,
+} from "./browser-tool-action-facts.js";
+import { BROWSER_ACT_KIND_FACTS, BROWSER_MODEL_ACT_KINDS } from "./browser/act-kinds.js";
 import { ACT_MAX_VIEWPORT_DIMENSION } from "./browser/act-policy.js";
 import type { BrowserProfileCapabilities } from "./browser/profile-capabilities.js";
-
-const BROWSER_ACT_KINDS = [
-  "batch",
-  "click",
-  "clickCoords",
-  "type",
-  "press",
-  "hover",
-  "scrollIntoView",
-  "drag",
-  "select",
-  "fill",
-  "resize",
-  "wait",
-  "evaluate",
-  "close",
-] as const;
-
-const BROWSER_TOOL_ACTIONS = [
-  "doctor",
-  "status",
-  "start",
-  "stop",
-  "profiles",
-  "importprofile",
-  "tabs",
-  "open",
-  "focus",
-  "close",
-  "snapshot",
-  "screenshot",
-  "navigate",
-  "console",
-  "requests",
-  "errors",
-  "text",
-  "emulate",
-  "pdf",
-  "download",
-  "waitfordownload",
-  "upload",
-  "dialog",
-  "act",
-] as const;
 
 const BROWSER_TARGETS = ["sandbox", "host", "node"] as const;
 
@@ -75,7 +30,7 @@ const TAB_REFERENCE_DESCRIPTION = "Prefer suggestedTargetId/tabId/label; raw CDP
 // The discriminator (kind) determines which properties are relevant; runtime validates.
 export type BrowserToolCapabilities = {
   actions: readonly (typeof BROWSER_TOOL_ACTIONS)[number][];
-  actKinds: readonly (typeof BROWSER_ACT_KINDS)[number][];
+  actKinds: readonly (typeof BROWSER_MODEL_ACT_KINDS)[number][];
   tabBound: boolean;
   supportsNativeSnapshots?: boolean;
 };
@@ -87,51 +42,23 @@ export function resolveBrowserToolCapabilities(params?: {
     BrowserProfileCapabilities,
     "supportsBatchActions" | "supportsDownloads" | "supportsPdf"
   > &
-    Partial<
-      Pick<
-        BrowserProfileCapabilities,
-        | "supportsRequests"
-        | "supportsErrors"
-        | "supportsPageText"
-        | "supportsEmulation"
-        | "supportsScreenshots"
-        | "supportsVisualActions"
-        | "supportsUploads"
-        | "supportsDialogs"
-        | "supportsConsole"
-        | "supportsNativeSnapshots"
-      >
-    >;
+    Partial<BrowserProfileCapabilities>;
 }): BrowserToolCapabilities {
   const evaluateEnabled = params?.evaluateEnabled !== false;
   const profileCapabilities = params?.profileCapabilities;
   const actions = params?.tabBound ? BROWSER_TAB_BOUND_ACTIONS : BROWSER_TOOL_ACTIONS;
   return {
-    actions: actions.filter(
-      (action) =>
-        (profileCapabilities?.supportsPdf !== false || action !== "pdf") &&
-        (profileCapabilities?.supportsRequests !== false || action !== "requests") &&
-        (profileCapabilities?.supportsErrors !== false || action !== "errors") &&
-        (profileCapabilities?.supportsPageText !== false || action !== "text") &&
-        (profileCapabilities?.supportsEmulation !== false || action !== "emulate") &&
-        (profileCapabilities?.supportsScreenshots !== false || action !== "screenshot") &&
-        (profileCapabilities?.supportsUploads !== false || action !== "upload") &&
-        (profileCapabilities?.supportsDialogs !== false || action !== "dialog") &&
-        (profileCapabilities?.supportsConsole !== false || action !== "console") &&
-        (profileCapabilities?.supportsDownloads !== false ||
-          (action !== "download" && action !== "waitfordownload")),
-    ),
-    actKinds: BROWSER_ACT_KINDS.filter(
-      (kind) =>
+    actions: actions.filter((action) => {
+      const capability = BROWSER_TOOL_ACTION_FACTS[action].capability;
+      return !capability || profileCapabilities?.[capability] !== false;
+    }),
+    actKinds: BROWSER_MODEL_ACT_KINDS.filter((kind) => {
+      const capability = BROWSER_ACT_KIND_FACTS[kind].capability;
+      return (
         (evaluateEnabled || kind !== "evaluate") &&
-        (profileCapabilities?.supportsBatchActions !== false || kind !== "batch") &&
-        (profileCapabilities?.supportsVisualActions !== false ||
-          (kind !== "clickCoords" &&
-            kind !== "drag" &&
-            kind !== "resize" &&
-            kind !== "hover" &&
-            kind !== "scrollIntoView")),
-    ),
+        (!capability || profileCapabilities?.[capability] !== false)
+      );
+    }),
     tabBound: params?.tabBound === true,
     supportsNativeSnapshots: profileCapabilities?.supportsNativeSnapshots !== false,
   };
@@ -140,7 +67,6 @@ export function resolveBrowserToolCapabilities(params?: {
 function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
   const supportsBatch = capabilities.actKinds.includes("batch");
   return {
-    // Common fields
     targetId: Type.Optional(Type.String({ description: TAB_REFERENCE_DESCRIPTION })),
     ref: Type.Optional(Type.String({ description: "snapshot ref." })),
     // batch - permissive children keep the provider schema flat; runtime validates each action.
@@ -153,40 +79,32 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
     stopOnError: Type.Optional(
       Type.Boolean(supportsBatch ? { description: "Stop on error; default true." } : {}),
     ),
-    // click
     doubleClick: Type.Optional(Type.Boolean({ description: "Double-click/clickCoords." })),
     button: Type.Optional(Type.String()),
     modifiers: Type.Optional(Type.Array(Type.String())),
     ...(capabilities.actKinds.includes("clickCoords")
       ? { x: optionalFiniteNumberSchema(), y: optionalFiniteNumberSchema() }
       : {}),
-    // type
     text: Type.Optional(Type.String()),
     submit: Type.Optional(Type.Boolean()),
     slowly: Type.Optional(Type.Boolean()),
-    // press
     key: Type.Optional(
       Type.String({
         description: "Escape, Enter, Control+Shift+T; aliases Esc, Return, Del, Ctrl, Cmd.",
       }),
     ),
     delayMs: optionalNonNegativeIntegerSchema(),
-    // drag
     ...(capabilities.actKinds.includes("drag")
       ? { startRef: Type.Optional(Type.String()), endRef: Type.Optional(Type.String()) }
       : {}),
-    // select
     values: Type.Optional(Type.Array(Type.String())),
-    // fill - use permissive array of objects
     fields: Type.Optional(Type.Array(Type.Object({}, { additionalProperties: true }))),
-    // resize
     ...(capabilities.actKinds.includes("resize")
       ? {
           width: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
           height: optionalPositiveIntegerSchema({ maximum: ACT_MAX_VIEWPORT_DIMENSION }),
         }
       : {}),
-    // wait
     timeMs: optionalNonNegativeIntegerSchema(),
     ...(capabilities.supportsNativeSnapshots !== false
       ? { selector: Type.Optional(Type.String()) }
@@ -195,7 +113,6 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
     loadState: Type.Optional(Type.String()),
     textGone: Type.Optional(Type.String()),
     timeoutMs: optionalPositiveIntegerSchema(),
-    // evaluate
     ...(capabilities.actKinds.includes("evaluate") ? { fn: Type.Optional(Type.String()) } : {}),
   };
 }
@@ -203,7 +120,6 @@ function createBrowserActProperties(capabilities: BrowserToolCapabilities) {
 // IMPORTANT: OpenAI function tool schemas must have a top-level `type: "object"`.
 // A root-level `Type.Union([...])` compiles to `{ anyOf: [...] }` (no `type`),
 // which OpenAI rejects ("Invalid schema ... type: None"). Keep this schema an object.
-/** Provider-compatible Browser tool argument schema. */
 export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
   const actProperties = createBrowserActProperties(capabilities);
   const actKindDescription = capabilities.actKinds.includes("batch")
@@ -265,9 +181,7 @@ export function createBrowserToolSchema(capabilities: BrowserToolCapabilities) {
         }
       : {}),
     urls: Type.Optional(Type.Boolean()),
-    ...(capabilities.actions.some((action) =>
-      ["screenshot", "pdf", "download", "waitfordownload"].includes(action),
-    )
+    ...(capabilities.actions.some((action) => BROWSER_TOOL_ACTION_FACTS[action].path)
       ? { path: Type.Optional(Type.String()) }
       : {}),
     level: Type.Optional(Type.String()),
@@ -319,7 +233,6 @@ const BrowserBatchAbortSchema = Type.Object(
   { additionalProperties: false },
 );
 
-/** Common structured result fields returned across Browser tool actions. */
 export const BrowserToolOutputSchema = Type.Object(
   {
     ok: Type.Optional(Type.Boolean()),
@@ -327,6 +240,9 @@ export const BrowserToolOutputSchema = Type.Object(
     url: Type.Optional(Type.String()),
     format: Type.Optional(stringEnum(BROWSER_SNAPSHOT_FORMATS)),
     snapshot: Type.Optional(Type.String()),
+    text: Type.Optional(
+      Type.String({ description: "Bounded browser observation wrapped as untrusted content." }),
+    ),
     refs: Type.Optional(Type.Union([Type.Number(), Type.Record(Type.String(), Type.Unknown())])),
     stats: Type.Optional(BrowserSnapshotStatsSchema),
     truncated: Type.Optional(Type.Boolean()),

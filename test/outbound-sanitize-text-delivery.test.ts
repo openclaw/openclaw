@@ -51,37 +51,42 @@ afterEach(() => {
   setActivePluginRegistry(createEmptyPluginRegistry());
 });
 
+function createTextDelivery(mode: "default Telegram" | "rich Telegram" | "direct text/media") {
+  const send = vi.fn(async (_to: string, _text: string) => ({
+    messageId: "fixture-message",
+    chatId: "12345",
+  }));
+  const channel = mode === "direct text/media" ? "imessage" : "telegram";
+  const cfg: OpenClawConfig =
+    mode === "rich Telegram" ? { channels: { telegram: { richMessages: true } } } : {};
+  const outbound =
+    channel === "telegram"
+      ? telegramOutbound
+      : createDirectTextMediaOutbound({
+          channel,
+          resolveSender: () => send,
+          resolveMaxBytes: () => undefined,
+          buildTextOptions: () => ({}),
+          buildMediaOptions: () => ({}),
+        });
+  setActivePluginRegistry(
+    createTestRegistry([
+      {
+        pluginId: channel,
+        source: "test",
+        plugin: createOutboundTestPlugin({ id: channel, outbound }),
+      },
+    ]),
+  );
+  return { send, params: { cfg, channel, to: "12345", deps: { telegram: send } } };
+}
+
 describe("HTML sanitization through outbound delivery", () => {
   it.each(["default Telegram", "rich Telegram", "direct text/media"] as const)(
     "preserves the %s transport contract",
     async (mode) => {
-      const send = vi.fn(async (_to: string, _text: string) => ({
-        messageId: "fixture-message",
-        chatId: "12345",
-      }));
-      const channel = mode === "direct text/media" ? "imessage" : "telegram";
-      const cfg: OpenClawConfig =
-        mode === "rich Telegram" ? { channels: { telegram: { richMessages: true } } } : {};
-      const outbound =
-        channel === "telegram"
-          ? telegramOutbound
-          : createDirectTextMediaOutbound({
-              channel,
-              resolveSender: () => send,
-              resolveMaxBytes: () => undefined,
-              buildTextOptions: () => ({}),
-              buildMediaOptions: () => ({}),
-            });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: channel,
-            source: "test",
-            plugin: createOutboundTestPlugin({ id: channel, outbound }),
-          },
-        ]),
-      );
-      const params = { cfg, channel, to: "12345", payloads, deps: { telegram: send } };
+      const { send, params: base } = createTextDelivery(mode);
+      const params = { ...base, payloads };
       const preparedBatch = await prepareOutboundPayloadBatch(params);
       const results = await deliverOutboundPayloadsCore({ ...params, preparedBatch });
 
@@ -98,37 +103,8 @@ describe("HTML sanitization through outbound delivery", () => {
   it.each(["default Telegram", "direct text/media"] as const)(
     "keeps the unspaced angle-link label on the %s delivery boundary",
     async (mode) => {
-      const send = vi.fn(async (_to: string, _text: string) => ({
-        messageId: "fixture-message",
-        chatId: "12345",
-      }));
-      const channel = mode === "direct text/media" ? "imessage" : "telegram";
-      const outbound =
-        channel === "telegram"
-          ? telegramOutbound
-          : createDirectTextMediaOutbound({
-              channel,
-              resolveSender: () => send,
-              resolveMaxBytes: () => undefined,
-              buildTextOptions: () => ({}),
-              buildMediaOptions: () => ({}),
-            });
-      setActivePluginRegistry(
-        createTestRegistry([
-          {
-            pluginId: channel,
-            source: "test",
-            plugin: createOutboundTestPlugin({ id: channel, outbound }),
-          },
-        ]),
-      );
-      const params = {
-        cfg: {} satisfies OpenClawConfig,
-        channel,
-        to: "12345",
-        payloads: [{ text: "<https://example.com/a.pdf|Manual>" }],
-        deps: { telegram: send },
-      };
+      const { send, params: base } = createTextDelivery(mode);
+      const params = { ...base, payloads: [{ text: "<https://example.com/a.pdf|Manual>" }] };
       const preparedBatch = await prepareOutboundPayloadBatch(params);
       const results = await deliverOutboundPayloadsCore({ ...params, preparedBatch });
 

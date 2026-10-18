@@ -1,7 +1,7 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { CHAT_RUN_ACTIVITY_CHANGED_EVENT } from "../pages/chat/chat-history-events.ts";
-import type { ChatPaneBase } from "../pages/chat/chat-pane-base.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
 import { disposeSidebarContextLifecycles } from "../test-helpers/app-sidebar-context-lifecycle.ts";
 import { createContext, createSessionsHarness } from "../test-helpers/app-sidebar.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
@@ -10,8 +10,10 @@ import { connectControlUiFavicon } from "./control-ui-favicon-status.runtime.ts"
 import { client, createGatewayHarness, flushMicrotasks } from "./overlays-access.test-support.ts";
 import { createApplicationOverlays } from "./overlays.ts";
 
+// mock-isolation: Observe source lifetimes without sharing the browser compositor’s DOM state.
 vi.mock("./control-ui-environment-presentation.runtime.ts", () => ({
   applyControlUiFaviconStatus: vi.fn(),
+  applyControlUiFaviconImage: vi.fn(),
   invalidateControlUiFaviconPalette: vi.fn(),
 }));
 const cleanups: Array<() => void> = [];
@@ -35,7 +37,7 @@ function setup(mountPane = true) {
   };
   const shell = document.createElement("div");
   const pane = document.createElement("openclaw-chat-pane");
-  let activity: ChatPaneBase["runActivity"] = {
+  let activity: ChatPaneElement["runActivity"] = {
     client: gatewayClient,
     agentId: "main",
     working: false,
@@ -56,7 +58,7 @@ function setup(mountPane = true) {
     context,
     harness,
     sessions,
-    publish: (next: NonNullable<ChatPaneBase["runActivity"]>) => {
+    publish: (next: NonNullable<ChatPaneElement["runActivity"]>) => {
       activity = next;
       pane.dispatchEvent(new Event(CHAT_RUN_ACTIVITY_CHANGED_EVENT, { bubbles: true }));
     },

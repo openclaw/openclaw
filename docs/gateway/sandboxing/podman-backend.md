@@ -10,7 +10,7 @@ This page covers Podman as the sandbox backend for agent tool execution. Running
 
 ## Podman backend
 
-Use `sandbox.backend: "podman"` to select the native `podman` CLI directly. This is a built-in backend, not a plugin. It does not probe or select Docker, even when the `docker` executable is installed.
+Use `sandbox.backend: "podman"` to select the native `podman` CLI directly. This is a built-in backend, not a plugin. It does not check or select Docker, even when the `docker` executable is installed.
 
 Podman reuses the existing `sandbox.docker.*` settings and the active native `podman` CLI context; it adds no separate connection configuration surface.
 
@@ -75,7 +75,7 @@ Retire the old sandbox through its recorded endpoint before switching:
    `openclaw sandbox recreate --session "<sessionKey>"`. Review the preview before
    confirming. This removes the selected container; mounted workspace files remain.
 5. Set the intended `CONTAINER_CONNECTION` and unset the unused `CONTAINER_HOST`
-   and `CONTAINER_SSHKEY`. Apply that environment to the Gateway as well. Ensure the
+   and `CONTAINER_SSHKEY`. Apply that environment to the Gateway as well. Check that the
    sandbox image and workspace are available on the selected engine. The next use
    creates a new sandbox there; it does not transfer the old container's writable layer.
 
@@ -108,7 +108,7 @@ Podman notes:
 A containerized Gateway creates sibling sandboxes through the host's local Podman engine or Podman Machine.
 
 - **Use host paths consistently**: configure `workspace` with its host absolute path, then mount the complete state root and workspace into the Gateway at those same paths. Otherwise the sandbox may mount the workspace while the Gateway cannot write skill-workspace files.
-- **Podman Machine setup**: bind sources must be under the host home directory. Set the Gateway `HOME` to that path and point `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_DIR` at the canonical mounted state root. The image needs a compatible Podman client, its named connection and SSH identity, plus a dedicated writable SSH directory for known-host metadata.
+- **Podman Machine setup**: bind sources must be under the host home directory. Set the Gateway `HOME` to that path and point `OPENCLAW_HOME`, `OPENCLAW_STATE_DIR`, and `OPENCLAW_CONFIG_DIR` at the resolved mounted state root. The image needs a compatible Podman client, its named connection and SSH identity, plus a dedicated writable SSH directory for known-host metadata.
 - **Keep Podman access Gateway-only**: never mount the engine socket, connection material, or SSH identity into agent sandboxes. Arbitrary remote connections are unsupported; use the SSH backend instead.
 
 </Warning>

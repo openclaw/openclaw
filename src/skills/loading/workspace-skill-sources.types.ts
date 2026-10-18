@@ -30,6 +30,8 @@ export type WorkspaceSkillSourceRequest = {
 export type WorkspaceSkillSource = {
   dir: string;
   source: string;
+  /** Prepared diagnostic provenance, preserved when roots cross hosts. */
+  worktree?: boolean;
   tier: "extra" | "bundled" | "workshop" | "managed" | "personal" | "workspace";
   rejectHardlinks?: boolean;
   /** Original root precedence, retained when discovery is split between hosts. */

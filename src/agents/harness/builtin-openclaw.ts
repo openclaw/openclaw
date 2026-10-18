@@ -1,14 +1,8 @@
-/**
- * Built-in OpenClaw harness registration.
- *
- * Harness selection uses this factory to expose the embedded OpenClaw runtime
- * through the same AgentHarness contract as external harness plugins.
- */
-import { runEmbeddedAttempt } from "../embedded-agent-runner/run/attempt.js";
 import type { EmbeddedRunAttemptParams } from "../embedded-agent-runner/run/types.js";
 import { runHostPreparedIsolatedCompletion } from "../host-prepared-isolated-completion.js";
 import { BUILTIN_AGENT_HARNESS_METADATA } from "./builtin-openclaw-metadata.js";
 import { projectSettledTurnFinalizationAttemptResult } from "./settled-turn-finalization-result.js";
+import { harnessSupportsTurnScopedToolRestrictions } from "./types.js";
 import type {
   AgentHarness,
   AgentHarnessAttemptParamsV2,
@@ -55,7 +49,11 @@ function buildRestrictedFinalizationAttempt(
     onAttemptAbort: attempt.onAttemptAbort,
     preparedModelRuntime: attempt.preparedModelRuntime,
     sessionFile: attempt.sessionFile,
+    // Host-owned transcript custody: detached runs keep the receipt-bearing manager.
+    sessionManager: attempt.sessionManager,
+    sessionPersistence: attempt.sessionPersistence,
     prepareAssistantTranscriptMessage: attempt.prepareAssistantTranscriptMessage,
+    privateCompletion: attempt.privateCompletion,
     contextTokenBudget: attempt.contextTokenBudget,
     contextWindowInfo: attempt.contextWindowInfo,
     resolvedApiKey: attempt.resolvedApiKey,
@@ -83,16 +81,26 @@ function buildRestrictedFinalizationAttempt(
   };
 }
 
-/** Creates the built-in harness backed by the embedded OpenClaw agent runner. */
 export function createOpenClawAgentHarness(): AgentHarnessV2 {
   const harness: AgentHarnessV2 = {
     ...BUILTIN_AGENT_HARNESS_METADATA,
-    runAttempt: (params) => runEmbeddedAttempt(params as EmbeddedRunAttemptParams),
+    supportsTurnScopedToolRestrictions: true,
+    runAttempt: async (params) => {
+      const attempt = {
+        ...(params as EmbeddedRunAttemptParams),
+        supportsTurnScopedToolRestrictions: harnessSupportsTurnScopedToolRestrictions(harness),
+      };
+      // Isolated completions never need the full runner. Capture invocation state before loading it.
+      const { runEmbeddedAttempt } = await import("../embedded-agent-runner/run/attempt.js");
+      return runEmbeddedAttempt(attempt);
+    },
     runIsolatedCompletionV2: runHostPreparedIsolatedCompletion,
     finalizeSettledTurn: async ({ attempt }) => {
       // Preserve only transcript/model transport state. The operation-specific
       // runner path suppresses every ambient prompt and capability contributor.
-      const result = await runEmbeddedAttempt(buildRestrictedFinalizationAttempt(attempt));
+      const restrictedAttempt = buildRestrictedFinalizationAttempt(attempt);
+      const { runEmbeddedAttempt } = await import("../embedded-agent-runner/run/attempt.js");
+      const result = await runEmbeddedAttempt(restrictedAttempt);
       return projectSettledTurnFinalizationAttemptResult(result);
     },
   };

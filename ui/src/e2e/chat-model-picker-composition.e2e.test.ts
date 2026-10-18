@@ -56,8 +56,8 @@ suite.define(() => {
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
-      await expect.poll(() => picker.locator("[data-chat-model-provider-toggle]").count()).toBe(1);
       await picker.locator("[data-chat-model-select]").click();
+      await expect.poll(() => picker.locator("[data-chat-model-provider-toggle]").count()).toBe(1);
       const account = picker.locator(".chat-controls__account-selection");
       await expect.poll(() => account.textContent()).toContain("previous@example.test");
       const accountToggle = picker.locator("[data-chat-account-group-toggle]");
@@ -152,10 +152,10 @@ suite.define(() => {
         const openai = picker.locator(
           '[data-chat-model-provider-group="openai"] [data-chat-model-provider-toggle]',
         );
+        await trigger.click();
         await expect
           .poll(() => picker.locator("[data-chat-model-provider-toggle]").count())
           .toBe(2);
-        await trigger.click();
         const auth = picker.locator(
           '[data-chat-model-provider="openai"] .chat-controls__auth-meta',
         );
@@ -170,13 +170,15 @@ suite.define(() => {
         expect(toggleContentsRight).toBeLessThanOrEqual(authBox!.x);
         await openai.click({ trial: true });
         await captureUiProof(suite, page, "model-account-identity", `${width}.png`);
-        await expect.poll(() => alpha.isVisible()).toBe(false);
+        await expect.poll(() => alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
-        expect(await openai.getAttribute("aria-expanded")).toBe("false");
+        expect(await openai.getAttribute("aria-expanded")).toBe("true");
         await expect
           .poll(() => openai.evaluate((button) => button.getBoundingClientRect().height))
           .toBeGreaterThanOrEqual(minimumTarget);
         await openai.focus();
+        await page.keyboard.press("Enter");
+        await expect.poll(() => alpha.isVisible()).toBe(false);
         await page.keyboard.press("Enter");
         await expect.poll(() => alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
@@ -196,16 +198,23 @@ suite.define(() => {
         expect(await search.inputValue()).toBe("");
         expect(await alpha.isVisible()).toBe(true);
         expect(await beta.isVisible()).toBe(false);
+        await openai.click();
+        await expect.poll(() => alpha.isVisible()).toBe(false);
         await search.press("Escape");
         await expect.poll(() => picker.getAttribute("open")).toBeNull();
         await trigger.click();
         await expect.poll(() => alpha.isVisible()).toBe(false);
         expect(await openai.getAttribute("aria-expanded")).toBe("false");
+        expect(await search.inputValue()).toBe("");
         await search.fill("shared");
         await search.press("ArrowDown");
         await search.press("Enter");
         const patch = await gateway.waitForRequest("sessions.patch");
         expect(patch.params).toMatchObject({ model: "anthropic/shared-beta" });
+        await expect.poll(() => picker.getAttribute("open")).toBeNull();
+        await trigger.click();
+        await expect.poll(() => beta.isVisible()).toBe(true);
+        expect(await alpha.isVisible()).toBe(false);
       });
     },
   );
@@ -225,14 +234,16 @@ suite.define(() => {
           await page.goto(`${suite.server.baseUrl}chat`);
           const picker = page.locator(".agent-chat__input .chat-controls__model-picker").first();
           const trigger = picker.locator("[data-chat-model-select]");
-          await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
           await expect.poll(() => trigger.getAttribute("aria-disabled")).toBe("false");
           await trigger.click();
+          await expect.poll(() => picker.locator("[data-chat-model-option]").count()).toBe(2);
           await page.mouse.move(0, 0);
           const search = picker.locator("[data-chat-model-search]");
           const query = key.startsWith("Arrow") ? "" : "anthropic";
           if (key.startsWith("Arrow")) {
-            for (const toggle of await picker.locator("[data-chat-model-provider-toggle]").all()) {
+            for (const toggle of await picker
+              .locator('[data-chat-model-provider-toggle][aria-expanded="false"]')
+              .all()) {
               await toggle.focus();
               await toggle.press("Enter");
             }

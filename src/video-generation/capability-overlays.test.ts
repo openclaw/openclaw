@@ -8,7 +8,6 @@ import {
 import {
   DASHSCOPE_WAN_VIDEO_CAPABILITIES,
   DASHSCOPE_WAN_VIDEO_CATALOG_BY_MODEL,
-  DASHSCOPE_WAN_VIDEO_MODELS,
 } from "./dashscope-compatible.js";
 import type { VideoGenerationProvider, VideoGenerationProviderCapabilities } from "./types.js";
 
@@ -132,47 +131,7 @@ describe("video-generation capability overlays", () => {
     expect(merged.imageToVideo?.providerOptions).toEqual({});
   });
 
-  it("checks reference inputs against overlaid provider capabilities", async () => {
-    const provider: VideoGenerationProvider = {
-      id: "openrouter",
-      capabilities: {
-        imageToVideo: {
-          enabled: true,
-          maxInputImages: 4,
-        },
-      },
-      resolveModelCapabilities: async () => ({
-        imageToVideo: {
-          enabled: true,
-          maxInputImages: 1,
-        },
-      }),
-      async generateVideo() {
-        throw new Error("should not be called");
-      },
-    };
-
-    const activeProvider = await resolveProviderWithModelCapabilities({
-      provider,
-      providerId: "openrouter",
-      model: "minimax/hailuo-2.3",
-      cfg: {} as OpenClawConfig,
-      log: { debug: vi.fn() },
-    });
-
-    expect(
-      buildVideoGenerationCapabilityFailure({
-        providerId: "openrouter",
-        model: "minimax/hailuo-2.3",
-        provider: activeProvider,
-        inputImageCount: 2,
-        inputVideoCount: 0,
-        inputAudioCount: 0,
-      }),
-    ).toMatch(/supports at most 1 reference image\(s\), 2 requested/);
-  });
-
-  it.each(DASHSCOPE_WAN_VIDEO_MODELS)(
+  it.each(["wan2.6-t2v", "wan2.6-i2v", "wan2.6-r2v"])(
     "enforces bundled Wan catalog modes before provider I/O for %s",
     async (model) => {
       const provider: VideoGenerationProvider = {

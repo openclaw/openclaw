@@ -1,4 +1,3 @@
-// Cron edit command registration and patch construction for existing jobs.
 import {
   normalizeOptionalLowercaseString,
   normalizeOptionalString,
@@ -24,6 +23,7 @@ import {
   validateStreamScheduleMetadata,
 } from "./schedule-options.js";
 import {
+  assertCronCliJobSpec,
   getCronChannelOptions,
   handleCronCliError,
   parseCronIntegerOption,
@@ -101,7 +101,7 @@ export function registerCronEditCommand(cron: Command) {
       .option("--failure-alert-to <dest>", "Failure alert destination")
       .option("--failure-alert-cooldown <duration>", "Minimum time between alerts (e.g. 1h, 30m)")
       .option("--failure-alert-include-skipped", "Count consecutive skipped runs toward alerts")
-      .option("--failure-alert-exclude-skipped", "Alert only on execution errors")
+      .option("--failure-alert-exclude-skipped", "Exclude skips except local-provider outages")
       .option("--failure-alert-mode <mode>", "Failure alert delivery mode (announce or webhook)")
       .option(
         "--failure-alert-account-id <id>",
@@ -115,6 +115,9 @@ export function registerCronEditCommand(cron: Command) {
           }
           if (typeof opts.script === "string" && !readNonBlankString(opts.script)) {
             throw new CronCliError("--script must not be blank");
+          }
+          if (typeof opts.command === "string" && !readNonBlankString(opts.command)) {
+            throw new CronCliError("--command must not be blank");
           }
           const commandCwd = parseCronStringOption(opts.commandCwd, "--command-cwd");
           let existingJobPromise: Promise<CronJobForEdit> | undefined;
@@ -133,26 +136,17 @@ export function registerCronEditCommand(cron: Command) {
           if (typeof opts.session === "string" && !sessionTarget) {
             throw new CronCliError("--session must be main, isolated, current, or session:<id>");
           }
-          if (sessionTarget === "main" && (opts.message || opts.command || opts.commandArgv)) {
-            throw new CronCliError(
-              "Main jobs cannot use --message or --command; use --system-event or --session isolated.",
-            );
-          }
-          if (
-            (sessionTarget === "current" || sessionTarget?.startsWith("session:")) &&
-            typeof opts.script === "string"
-          ) {
-            throw new CronCliError("Script jobs require --session main or --session isolated.");
-          }
-          if (
-            (sessionTarget === "isolated" ||
-              sessionTarget === "current" ||
-              sessionTarget?.startsWith("session:")) &&
-            opts.systemEvent
-          ) {
-            throw new CronCliError(
-              "Isolated jobs cannot use --system-event; use --message, --command, or --session main.",
-            );
+          const payloadKind = opts.systemEvent
+            ? "systemEvent"
+            : typeof opts.script === "string"
+              ? "script"
+              : opts.command || opts.commandArgv
+                ? "command"
+                : opts.message
+                  ? "agentTurn"
+                  : undefined;
+          if (sessionTarget && payloadKind) {
+            await assertCronCliJobSpec({ sessionTarget, payload: { kind: payloadKind } });
           }
           const hasExplicitChatDelivery =
             parseCronThreadIdOption(opts.threadId) !== undefined ||
@@ -204,11 +198,8 @@ export function registerCronEditCommand(cron: Command) {
           if (displayName && opts.clearDisplayName) {
             throw new CronCliError("Use --display-name or --clear-display-name, not both");
           }
-          if (displayName) {
-            patch.displayName = displayName;
-          }
-          if (opts.clearDisplayName) {
-            patch.displayName = null;
+          if (displayName || opts.clearDisplayName) {
+            patch.displayName = displayName ?? null;
           }
           if (typeof opts.description === "string") {
             patch.description = opts.description;
@@ -216,20 +207,14 @@ export function registerCronEditCommand(cron: Command) {
           if (opts.enable && opts.disable) {
             throw new CronCliError("Choose --enable or --disable, not both");
           }
-          if (opts.enable) {
-            patch.enabled = true;
-          }
-          if (opts.disable) {
-            patch.enabled = false;
+          if (opts.enable || opts.disable) {
+            patch.enabled = Boolean(opts.enable);
           }
           if (opts.deleteAfterRun && opts.keepAfterRun) {
             throw new CronCliError("Choose --delete-after-run or --keep-after-run, not both");
           }
-          if (opts.deleteAfterRun) {
-            patch.deleteAfterRun = true;
-          }
-          if (opts.keepAfterRun) {
-            patch.deleteAfterRun = false;
+          if (opts.deleteAfterRun || opts.keepAfterRun) {
+            patch.deleteAfterRun = Boolean(opts.deleteAfterRun);
           }
           if (typeof opts.session === "string") {
             patch.sessionTarget = sessionTarget;
@@ -245,21 +230,15 @@ export function registerCronEditCommand(cron: Command) {
           if (agentId && opts.clearAgent) {
             throw new CronCliError("Use --agent or --clear-agent, not both");
           }
-          if (agentId) {
-            patch.agentId = sanitizeAgentId(agentId);
-          }
-          if (opts.clearAgent) {
-            patch.agentId = null;
+          if (agentId || opts.clearAgent) {
+            patch.agentId = agentId ? sanitizeAgentId(agentId) : null;
           }
           const sessionKey = parseCronStringOption(opts.sessionKey, "--session-key");
           if (sessionKey && opts.clearSessionKey) {
             throw new CronCliError("Use --session-key or --clear-session-key, not both");
           }
-          if (sessionKey) {
-            patch.sessionKey = sessionKey;
-          }
-          if (opts.clearSessionKey) {
-            patch.sessionKey = null;
+          if (sessionKey || opts.clearSessionKey) {
+            patch.sessionKey = sessionKey ?? null;
           }
 
           const pacingMin = parseCronStringOption(opts.pacingMin, "--pacing-min");
@@ -349,30 +328,26 @@ export function registerCronEditCommand(cron: Command) {
             ),
           );
 
-          const hasFailureAlertAfter = typeof opts.failureAlertAfter === "string";
-          const hasFailureAlertChannel = typeof opts.failureAlertChannel === "string";
-          const hasFailureAlertTo = typeof opts.failureAlertTo === "string";
-          const hasFailureAlertCooldown = typeof opts.failureAlertCooldown === "string";
           const hasFailureAlertIncludeSkipped =
             typeof opts.failureAlertIncludeSkipped === "boolean";
           const hasFailureAlertExcludeSkipped =
             typeof opts.failureAlertExcludeSkipped === "boolean";
-          const hasFailureAlertMode = typeof opts.failureAlertMode === "string";
-          const hasFailureAlertAccountId = typeof opts.failureAlertAccountId === "string";
           if (hasFailureAlertIncludeSkipped && hasFailureAlertExcludeSkipped) {
             throw new CronCliError(
               "Use either --failure-alert-include-skipped or --failure-alert-exclude-skipped.",
             );
           }
           const hasFailureAlertFields =
-            hasFailureAlertAfter ||
-            hasFailureAlertChannel ||
-            hasFailureAlertTo ||
-            hasFailureAlertCooldown ||
+            [
+              "failureAlertAfter",
+              "failureAlertChannel",
+              "failureAlertTo",
+              "failureAlertCooldown",
+              "failureAlertMode",
+              "failureAlertAccountId",
+            ].some((key) => typeof opts[key] === "string") ||
             hasFailureAlertIncludeSkipped ||
-            hasFailureAlertExcludeSkipped ||
-            hasFailureAlertMode ||
-            hasFailureAlertAccountId;
+            hasFailureAlertExcludeSkipped;
           const failureAlertFlag =
             typeof opts.failureAlert === "boolean" ? opts.failureAlert : undefined;
           if (failureAlertFlag === false && hasFailureAlertFields) {
@@ -384,20 +359,19 @@ export function registerCronEditCommand(cron: Command) {
             patch.failureAlert = false;
           } else if (failureAlertFlag === true || hasFailureAlertFields) {
             const failureAlert: Record<string, unknown> = {};
-            if (hasFailureAlertAfter) {
+            if (typeof opts.failureAlertAfter === "string") {
               failureAlert.after = parseCronIntegerOption(
                 opts.failureAlertAfter,
                 "--failure-alert-after",
               );
             }
-            if (hasFailureAlertChannel) {
+            if (typeof opts.failureAlertChannel === "string") {
               failureAlert.channel = normalizeOptionalLowercaseString(opts.failureAlertChannel);
             }
-            if (hasFailureAlertTo) {
-              const to = normalizeOptionalString(opts.failureAlertTo) ?? "";
-              failureAlert.to = to ? to : undefined;
+            if (typeof opts.failureAlertTo === "string") {
+              failureAlert.to = normalizeOptionalString(opts.failureAlertTo);
             }
-            if (hasFailureAlertCooldown) {
+            if (typeof opts.failureAlertCooldown === "string") {
               let cooldownMs: number;
               try {
                 cooldownMs = parseDurationMs(String(opts.failureAlertCooldown));
@@ -409,7 +383,7 @@ export function registerCronEditCommand(cron: Command) {
             if (hasFailureAlertIncludeSkipped || hasFailureAlertExcludeSkipped) {
               failureAlert.includeSkipped = hasFailureAlertIncludeSkipped;
             }
-            if (hasFailureAlertMode) {
+            if (typeof opts.failureAlertMode === "string") {
               const mode = normalizeOptionalLowercaseString(opts.failureAlertMode);
               if (mode !== "announce" && mode !== "webhook") {
                 throw new CronCliError(
@@ -418,9 +392,8 @@ export function registerCronEditCommand(cron: Command) {
               }
               failureAlert.mode = mode;
             }
-            if (hasFailureAlertAccountId) {
-              const accountId = normalizeOptionalString(opts.failureAlertAccountId) ?? "";
-              failureAlert.accountId = accountId ? accountId : undefined;
+            if (typeof opts.failureAlertAccountId === "string") {
+              failureAlert.accountId = normalizeOptionalString(opts.failureAlertAccountId);
             }
             patch.failureAlert = failureAlert;
           }

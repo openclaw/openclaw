@@ -1,5 +1,4 @@
 import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-contract";
-// Matrix plugin module implements directory live behavior.
 import {
   isRecord,
   normalizeLowercaseStringOrEmpty,
@@ -21,14 +20,6 @@ type MatrixUserDirectoryResponse = {
 
 type MatrixJoinedRoomsResponse = {
   joined_rooms?: string[];
-};
-
-type MatrixRoomNameState = {
-  name?: string;
-};
-
-type MatrixAliasLookup = {
-  room_id?: string;
 };
 
 type MatrixDirectoryLiveParams = {
@@ -59,19 +50,6 @@ async function createMatrixDirectoryClient(
     ssrfPolicy: auth.ssrfPolicy,
     dispatcherPolicy: auth.dispatcherPolicy,
   });
-}
-
-function createGroupDirectoryEntry(params: {
-  id: string;
-  name: string;
-  handle?: string;
-}): ChannelDirectoryEntry {
-  return {
-    kind: "group",
-    id: params.id,
-    name: params.name,
-    handle: params.handle,
-  } satisfies ChannelDirectoryEntry;
 }
 
 async function requestMatrixJson<T>(
@@ -134,31 +112,17 @@ export async function listMatrixDirectoryPeersLive(
     .filter(Boolean) as ChannelDirectoryEntry[];
 }
 
-async function resolveMatrixRoomAlias(
+async function readOptionalMatrixDirectoryString(
   client: MatrixAuthedHttpClient,
-  alias: string,
+  endpoint: string,
+  field: string,
 ): Promise<string | null> {
   try {
-    const res = await requestMatrixJson<MatrixAliasLookup>(client, {
+    const res = await requestMatrixJson<Record<string, unknown>>(client, {
       method: "GET",
-      endpoint: `/_matrix/client/v3/directory/room/${encodeURIComponent(alias)}`,
+      endpoint,
     });
-    return normalizeOptionalString(res.room_id) ?? null;
-  } catch {
-    return null;
-  }
-}
-
-async function fetchMatrixRoomName(
-  client: MatrixAuthedHttpClient,
-  roomId: string,
-): Promise<string | null> {
-  try {
-    const res = await requestMatrixJson<MatrixRoomNameState>(client, {
-      method: "GET",
-      endpoint: `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.name`,
-    });
-    return normalizeOptionalString(res.name) ?? null;
+    return normalizeOptionalString(res[field]) ?? null;
   } catch {
     return null;
   }
@@ -174,7 +138,7 @@ export async function listMatrixDirectoryGroupsLive(
   const directTarget = normalizeMatrixMessagingTarget(query);
 
   if (directTarget?.startsWith("!")) {
-    return [createGroupDirectoryEntry({ id: directTarget, name: directTarget })];
+    return [{ kind: "group", id: directTarget, name: directTarget, handle: undefined }];
   }
 
   const client = await createMatrixDirectoryClient(params);
@@ -182,11 +146,15 @@ export async function listMatrixDirectoryGroupsLive(
   const limit = resolveMatrixDirectoryLimit(params.limit);
 
   if (directTarget?.startsWith("#")) {
-    const roomId = await resolveMatrixRoomAlias(client, directTarget);
+    const roomId = await readOptionalMatrixDirectoryString(
+      client,
+      `/_matrix/client/v3/directory/room/${encodeURIComponent(directTarget)}`,
+      "room_id",
+    );
     if (!roomId) {
       return [];
     }
-    return [createGroupDirectoryEntry({ id: roomId, name: directTarget, handle: directTarget })];
+    return [{ kind: "group", id: roomId, name: directTarget, handle: directTarget }];
   }
 
   const joined = await requestMatrixJson<MatrixJoinedRoomsResponse>(client, {
@@ -199,7 +167,11 @@ export async function listMatrixDirectoryGroupsLive(
   const results: ChannelDirectoryEntry[] = [];
 
   for (const roomId of rooms) {
-    const name = await fetchMatrixRoomName(client, roomId);
+    const name = await readOptionalMatrixDirectoryString(
+      client,
+      `/_matrix/client/v3/rooms/${encodeURIComponent(roomId)}/state/m.room.name`,
+      "name",
+    );
     if (!name || !normalizeLowercaseStringOrEmpty(name).includes(queryLower)) {
       continue;
     }

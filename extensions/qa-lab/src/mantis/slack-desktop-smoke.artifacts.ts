@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import { walkRootDirectory } from "openclaw/plugin-sdk/root-walk";
 import { root } from "openclaw/plugin-sdk/security-runtime";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -7,7 +8,7 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 type ArtifactRoot = Awaited<ReturnType<typeof root>>;
 type ApprovalIdentity = { approvalId: string; channelId: string; messageTs: string };
 
-export type SlackDesktopRemoteMetadata = {
+type SlackDesktopRemoteMetadata = {
   gatewayAlive?: boolean;
   gatewayPid?: string;
   hydrateMode?: string;
@@ -71,14 +72,14 @@ function assertApprovalCheckpointBaseJson(params: {
   scenarioId: string;
   state: MantisApprovalCheckpointState;
 }) {
-  if (params.record.version !== 1) {
-    throw new Error(`${params.label} has unexpected version in ${params.filePath}`);
-  }
-  if (params.record.scenarioId !== params.scenarioId) {
-    throw new Error(`${params.label} has unexpected scenarioId in ${params.filePath}`);
-  }
-  if (params.record.state !== params.state) {
-    throw new Error(`${params.label} has unexpected state in ${params.filePath}`);
+  for (const [field, expected] of [
+    ["version", 1],
+    ["scenarioId", params.scenarioId],
+    ["state", params.state],
+  ] as const) {
+    if (params.record[field] !== expected) {
+      throw new Error(`${params.label} has unexpected ${field} in ${params.filePath}`);
+    }
   }
 }
 
@@ -91,7 +92,7 @@ function assertApprovalCheckpointJson(params: {
   state: MantisApprovalCheckpointState;
 }) {
   assertApprovalCheckpointBaseJson(params);
-  const expectedKind = params.scenarioId === "slack-approval-exec-native" ? "exec" : "plugin";
+  const expectedKind = params.scenarioId.endsWith("-approval-exec-native") ? "exec" : "plugin";
   if (params.record.approvalKind !== expectedKind) {
     throw new Error(`${params.label} has an unexpected approval kind.`);
   }
@@ -118,24 +119,17 @@ function assertApprovalCheckpointJson(params: {
   if (params.record.decision !== (params.state === "pending" ? null : "allow-once")) {
     throw new Error(`${params.label} has an unexpected approval decision.`);
   }
-  const message = params.record.message;
-  if (!isRecord(message)) {
+  const candidate = params.record.message;
+  if (!isRecord(candidate)) {
     throw new Error(`${params.label} is missing Slack message evidence in ${params.filePath}`);
   }
-  const candidate = message;
   if (typeof candidate.text !== "string") {
     throw new Error(`${params.label} message evidence is missing text in ${params.filePath}`);
   }
-  if (
-    !Array.isArray(candidate.blockText) ||
-    !candidate.blockText.every((entry) => typeof entry === "string")
-  ) {
+  if (!isStringArray(candidate.blockText)) {
     throw new Error(`${params.label} message evidence is missing blockText in ${params.filePath}`);
   }
-  if (
-    !Array.isArray(candidate.actionLabels) ||
-    !candidate.actionLabels.every((entry) => typeof entry === "string")
-  ) {
+  if (!isStringArray(candidate.actionLabels)) {
     throw new Error(
       `${params.label} message evidence is missing actionLabels in ${params.filePath}`,
     );
@@ -253,11 +247,10 @@ async function readRemoteMetadata(
     return undefined;
   }
   try {
-    const parsed: unknown = JSON.parse(await owner.readText(metadataPath));
-    if (!isRecord(parsed)) {
+    const candidate: unknown = JSON.parse(await owner.readText(metadataPath));
+    if (!isRecord(candidate)) {
       return undefined;
     }
-    const candidate = parsed;
     return {
       gatewayAlive:
         typeof candidate.gatewayAlive === "boolean" ? candidate.gatewayAlive : undefined,

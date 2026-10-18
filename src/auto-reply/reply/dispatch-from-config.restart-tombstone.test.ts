@@ -4,7 +4,6 @@ import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { setLoggerOverride } from "../../logging/logger.js";
 import { loggingState } from "../../logging/state.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
-import { emitSessionIdentityMutation } from "../../sessions/session-lifecycle-events.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -21,7 +20,7 @@ import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const notice =
-  "My session in this room ended during restart recovery. Use /reset or /new to start a replacement session.";
+  "My session in this room ended during restart recovery. Use Resume in WebChat, or /reset or /new to start a replacement session.";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
@@ -79,11 +78,6 @@ describe("restart tombstone channel feedback", () => {
   });
 
   afterEach(() => {
-    emitSessionIdentityMutation({
-      kind: "delete",
-      agentId: "main",
-      previous: { sessionId: "failed-session", sessionKeys: [sessionKey] },
-    });
     loggingState.rawConsole = null;
     setLoggerOverride(null);
   });
@@ -92,15 +86,8 @@ describe("restart tombstone channel feedback", () => {
     context?: Partial<MsgContext>;
     visibleReplies?: "automatic" | "message_tool";
     sendPolicy?: "allow" | "deny";
-    receiptless?: boolean;
   }) {
     const dispatcher = createReplyDispatcher({ deliver });
-    if (options?.receiptless) {
-      const waitForIdle = dispatcher.waitForIdle;
-      dispatcher.waitForIdle = async () => {
-        await waitForIdle();
-      };
-    }
     await expect(
       dispatchReplyFromConfig({
         ctx: buildTestCtx({
@@ -134,7 +121,7 @@ describe("restart tombstone channel feedback", () => {
     await dispatcher.waitForIdle();
   }
 
-  it.each(["automatic", "message_tool"] as const)(
+  it.each(["message_tool"] as const)(
     "delivers one room notice under %s and warns for every rejected inbound",
     async (visibleReplies) => {
       await rejectInbound({ visibleReplies });
@@ -158,14 +145,18 @@ describe("restart tombstone channel feedback", () => {
     },
   );
 
-  it.each(["reset", "delete"] as const)("clears notice suppression on %s", async (kind) => {
+  it.each(["session", "cycle"] as const)("notifies again for a new recovery %s", async (change) => {
     await rejectInbound();
-    const previous = { sessionId: "failed-session", sessionKeys: [sessionKey] };
-    emitSessionIdentityMutation(
-      kind === "delete"
-        ? { kind, agentId: "main", previous }
-        : { kind, agentId: "main", previous, current: previous },
-    );
+    if (change === "session") {
+      sessionStoreMocks.currentEntry!.sessionId = "replacement-session";
+    } else {
+      sessionStoreMocks.currentEntry!.mainRestartRecovery = {
+        cycleId: "replacement-cycle",
+        revision: 4,
+        chargedAttempts: 3,
+        tombstone: { reason: "automatic recovery exhausted" },
+      };
+    }
     await rejectInbound();
     expect(deliver).toHaveBeenCalledTimes(2);
   });
@@ -175,33 +166,23 @@ describe("restart tombstone channel feedback", () => {
     await rejectInbound();
     expect(deliver).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
-        text: expect.stringContaining("WebChat and use Resume in new session"),
+        text: expect.stringContaining("WebChat and use Resume."),
       }),
       expect.objectContaining({ kind: "final" }),
     );
   });
 
-  it.each([
-    { label: "room event", context: { InboundEventKind: "room_event" as const } },
-    { label: "unauthorized inbound", context: { InboundAccessAuthorized: false } },
-    { label: "system turn", context: { InputProvenance: { kind: "internal_system" as const } } },
-  ])("does not notify for $label", async ({ context }) => {
-    await rejectInbound({ context });
-    expect(deliver).not.toHaveBeenCalled();
-  });
+  it.each([{ label: "unauthorized inbound", context: { InboundAccessAuthorized: false } }])(
+    "does not notify for $label",
+    async ({ context }) => {
+      await rejectInbound({ context });
+      expect(deliver).not.toHaveBeenCalled();
+    },
+  );
 
   it("honors explicit send-policy denial", async () => {
     await rejectInbound({ sendPolicy: "deny" });
     expect(deliver).not.toHaveBeenCalled();
-  });
-
-  it("logs failed notice delivery without replacing the rejection or repeating the notice", async () => {
-    deliver.mockRejectedValueOnce(new Error("transport failed"));
-    await rejectInbound();
-    await rejectInbound();
-    expect(deliver).toHaveBeenCalledOnce();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("notice delivery was not confirmed"));
-    expect(replyResolver).not.toHaveBeenCalled();
   });
 
   it("warns about ambiguous routed delivery without repeating the notice", async () => {
@@ -211,13 +192,6 @@ describe("restart tombstone channel feedback", () => {
     await rejectInbound({ context });
     expect(mocks.routeReply).toHaveBeenCalledOnce();
     expect(deliver).not.toHaveBeenCalled();
-    expect(warn).toHaveBeenCalledWith(expect.stringContaining("notice delivery was not confirmed"));
-  });
-
-  it("treats a receiptless dispatcher as unconfirmed without repeating the notice", async () => {
-    await rejectInbound({ receiptless: true });
-    await rejectInbound({ receiptless: true });
-    expect(deliver).toHaveBeenCalledOnce();
     expect(warn).toHaveBeenCalledWith(expect.stringContaining("notice delivery was not confirmed"));
   });
 

@@ -61,6 +61,12 @@ export function createPlacementStartupHarness(
     get state() {
       return state;
     },
+    describe: ((params, describeOptions) => {
+      if (!describeOptions?.client) {
+        throw new Error("placement describe requires its captured client");
+      }
+      return describeOptions.client.request("sessions.describe", params);
+    }) satisfies SessionCapability["describe"],
     invalidate: vi.fn(),
     refresh: vi.fn(async () => undefined),
     subscribe: vi.fn(() => () => undefined),

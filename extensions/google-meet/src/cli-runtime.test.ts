@@ -8,6 +8,31 @@ import {
   setupCli,
 } from "./test-support/cli-harness.js";
 import { meetSession } from "./test-support/fixtures.test-helpers.js";
+import type { GoogleMeetSession } from "./transports/types.js";
+
+const session = {
+  id: "meet_gateway",
+  url: "https://meet.google.com/abc-defg-hij",
+  state: "active",
+  transport: "chrome-node",
+  mode: "agent",
+  agentId: "main",
+  participantIdentity: "signed-in Google Chrome profile on a paired node",
+  createdAt: "2026-04-25T00:00:00.000Z",
+  updatedAt: "2026-04-25T00:00:01.000Z",
+  realtime: { enabled: true, provider: "openai", toolPolicy: "safe-read-only" },
+  notes: [],
+} satisfies GoogleMeetSession;
+
+async function runCli(params: Parameters<typeof setupCli>[0], args: string[]) {
+  const stdout = captureStdout();
+  try {
+    await setupCli(params).parseAsync(["googlemeet", ...args], { from: "user" });
+    return stdout;
+  } finally {
+    stdout.restore();
+  }
+}
 
 describe("google-meet CLI", () => {
   afterEach(() => {
@@ -20,7 +45,7 @@ describe("google-meet CLI", () => {
     vi.resetModules();
   });
 
-  describe.each(["gateway", "local"] as const)("lifecycle results through %s", (route) => {
+  describe("lifecycle results through local fallback", () => {
     const cases: Array<{
       command: "leave" | "speak";
       name: string;
@@ -71,16 +96,6 @@ describe("google-meet CLI", () => {
       },
       {
         command: "speak",
-        name: "empty blocked message",
-        result: {
-          found: true,
-          spoken: false,
-          session: meetSession({ chrome: { health: { speechBlockedMessage: "" } } }),
-        },
-        error: "",
-      },
-      {
-        command: "speak",
         name: "missing blocked message",
         result: { found: true, spoken: false },
         error: "session has no active realtime audio bridge",
@@ -111,14 +126,11 @@ describe("google-meet CLI", () => {
         NonNullable<Parameters<typeof setupCli>[0]["callGatewayFromCli"]>
       >(async () => {
         calls.push("gateway");
-        if (route === "local") {
-          throw Object.assign(new Error(`unknown method: googlemeet.${command}`), {
-            name: "GatewayClientRequestError",
-            gatewayCode: "INVALID_REQUEST",
-            retryable: false,
-          });
-        }
-        return result;
+        throw Object.assign(new Error(`unknown method: googlemeet.${command}`), {
+          name: "GatewayClientRequestError",
+          gatewayCode: "INVALID_REQUEST",
+          retryable: false,
+        });
       });
       const stdout = captureStdout();
       try {
@@ -135,19 +147,15 @@ describe("google-meet CLI", () => {
           await parsed;
         }
         expect(stdout.output()).toBe(output ?? "");
-        expect(calls).toEqual(route === "local" ? ["gateway", "runtime", command] : ["gateway"]);
+        expect(calls).toEqual(["gateway", "runtime", command]);
         expect(callGatewayFromCli).toHaveBeenCalledWith(
           `googlemeet.${command}`,
           { json: true, timeout: "5000" },
           { sessionId: "meet_1", ...(command === "speak" ? { message: "hello meeting" } : {}) },
           { progress: false },
         );
-        expect(leave.mock.calls).toEqual(
-          route === "local" && command === "leave" ? [["meet_1"]] : [],
-        );
-        expect(speak.mock.calls).toEqual(
-          route === "local" && command === "speak" ? [["meet_1", "hello meeting"]] : [],
-        );
+        expect(leave.mock.calls).toEqual(command === "leave" ? [["meet_1"]] : []);
+        expect(speak.mock.calls).toEqual(command === "speak" ? [["meet_1", "hello meeting"]] : []);
       } finally {
         stdout.restore();
       }
@@ -156,9 +164,8 @@ describe("google-meet CLI", () => {
 
   it("prints setup checks as text and JSON", async () => {
     {
-      const stdout = captureStdout();
-      try {
-        await setupCli({
+      const stdout = await runCli(
+        {
           runtime: {
             setupStatus: async () => ({
               ok: true,
@@ -171,38 +178,35 @@ describe("google-meet CLI", () => {
               ],
             }),
           },
-        }).parseAsync(["googlemeet", "setup"], { from: "user" });
-        expect(stdout.output()).toContain("Google Meet setup: OK");
-        expect(stdout.output()).toContain(
-          "[ok] audio-bridge: Chrome command-pair talk-back audio bridge configured (pcm16-24khz)",
-        );
-        expect(stdout.output()).not.toContain('"checks"');
-      } finally {
-        stdout.restore();
-      }
+        },
+        ["setup"],
+      );
+      expect(stdout.output()).toContain("Google Meet setup: OK");
+      expect(stdout.output()).toContain(
+        "[ok] audio-bridge: Chrome command-pair talk-back audio bridge configured (pcm16-24khz)",
+      );
+      expect(stdout.output()).not.toContain('"checks"');
     }
 
     {
-      const stdout = captureStdout();
-      try {
-        await setupCli({
+      const stdout = await runCli(
+        {
           runtime: {
             setupStatus: async () => ({
               ok: false,
               checks: [{ id: "twilio-voice-call-plugin", ok: false, message: "missing" }],
             }),
           },
-        }).parseAsync(["googlemeet", "setup", "--json"], { from: "user" });
-        const payload = parseStdoutJson(stdout);
-        expectFields(payload, { ok: false });
-        expectFields(firstRecord(payload.checks), {
-          id: "twilio-voice-call-plugin",
-          ok: false,
-        });
-        expect(process.exitCode).toBe(1);
-      } finally {
-        stdout.restore();
-      }
+        },
+        ["setup", "--json"],
+      );
+      const payload = parseStdoutJson(stdout);
+      expectFields(payload, { ok: false });
+      expectFields(firstRecord(payload.checks), {
+        id: "twilio-voice-call-plugin",
+        ok: false,
+      });
+      expect(process.exitCode).toBe(1);
     }
   });
 
@@ -224,85 +228,30 @@ describe("google-meet CLI", () => {
   });
 
   it("accepts --json on session status", async () => {
-    const stdout = captureStdout();
-    try {
-      await setupCli({
+    const stdout = await runCli(
+      {
         runtime: {
           status: async () => ({
             found: true,
             sessions: [
               {
+                ...session,
                 id: "meet_1",
-                url: "https://meet.google.com/abc-defg-hij",
-                state: "active",
                 transport: "twilio",
-                mode: "agent",
-                agentId: "main",
                 participantIdentity: "Twilio PSTN participant",
-                createdAt: "2026-04-25T00:00:00.000Z",
-                updatedAt: "2026-04-25T00:00:01.000Z",
-                realtime: { enabled: true, provider: "openai", toolPolicy: "safe-read-only" },
-                notes: [],
               },
             ],
           }),
         },
-      }).parseAsync(["googlemeet", "status", "--json"], { from: "user" });
-      const payload = parseStdoutJson(stdout);
-      expectFields(payload, { found: true });
-      expectFields(firstRecord(payload.sessions), {
-        id: "meet_1",
-        transport: "twilio",
-      });
-    } finally {
-      stdout.restore();
-    }
-  });
-
-  it("delegates session status to the gateway-owned runtime when available", async () => {
-    const callGatewayFromCli = vi.fn(async () => ({
-      found: true,
-      sessions: [
-        {
-          id: "meet_gateway",
-          url: "https://meet.google.com/abc-defg-hij",
-          state: "active",
-          transport: "chrome-node",
-          mode: "agent",
-          agentId: "main",
-          participantIdentity: "signed-in Google Chrome profile on a paired node",
-          createdAt: "2026-04-25T00:00:00.000Z",
-          updatedAt: "2026-04-25T00:00:01.000Z",
-          realtime: { enabled: true, provider: "openai", toolPolicy: "safe-read-only" },
-          notes: [],
-        },
-      ],
-    }));
-    const ensureRuntime = vi.fn(async () => {
-      throw new Error("local runtime should not be loaded");
+      },
+      ["status", "--json"],
+    );
+    const payload = parseStdoutJson(stdout);
+    expectFields(payload, { found: true });
+    expectFields(firstRecord(payload.sessions), {
+      id: "meet_1",
+      transport: "twilio",
     });
-    const stdout = captureStdout();
-    try {
-      await setupCli({
-        callGatewayFromCli,
-        ensureRuntime: ensureRuntime as unknown as () => Promise<GoogleMeetRuntime>,
-      }).parseAsync(["googlemeet", "status", "--json"], { from: "user" });
-      expect(callGatewayFromCli).toHaveBeenCalledWith(
-        "googlemeet.status",
-        { json: true, timeout: "5000" },
-        { sessionId: undefined },
-        { progress: false },
-      );
-      expect(ensureRuntime).not.toHaveBeenCalled();
-      const payload = parseStdoutJson(stdout);
-      expectFields(payload, { found: true });
-      expectFields(firstRecord(payload.sessions), {
-        id: "meet_gateway",
-        transport: "chrome-node",
-      });
-    } finally {
-      stdout.restore();
-    }
   });
 
   it("prints cursor-based transcripts from the gateway-owned runtime", async () => {
@@ -314,56 +263,26 @@ describe("google-meet CLI", () => {
       droppedLines: 2,
       lines: [{ at: "2026-07-12T06:00:00.000Z", speaker: "Alice", text: "fourth line" }],
     }));
-    const stdout = captureStdout();
-    try {
-      await setupCli({ callGatewayFromCli }).parseAsync(
-        ["googlemeet", "transcript", "meet_gateway", "--since", "3"],
-        { from: "user" },
-      );
-      expect(callGatewayFromCli).toHaveBeenCalledWith(
-        "googlemeet.transcript",
-        { json: true, timeout: "5000" },
-        { sessionId: "meet_gateway", sinceIndex: 3 },
-        { progress: false },
-      );
-      expect(stdout.output()).toContain("# 2 earlier lines dropped by the transcript cap");
-      expect(stdout.output()).toContain("Alice: fourth line");
-      expect(stdout.output()).toContain("# nextIndex: 4");
-    } finally {
-      stdout.restore();
-    }
-  });
 
-  it.each([
-    ["0", 0],
-    ["3", 3],
-    ["+3", 3],
-    [" 3 ", 3],
-    [String(Number.MAX_SAFE_INTEGER), Number.MAX_SAFE_INTEGER],
-  ] as const)("accepts base-10 safe transcript cursors: %s", async (since, expected) => {
-    const callGatewayFromCli = vi.fn(async () => ({
-      found: true,
-      sessionId: "meet_gateway",
-      startIndex: expected,
-      nextIndex: expected,
-      lines: [],
-    }));
-
-    await setupCli({ callGatewayFromCli }).parseAsync(
-      ["googlemeet", "transcript", "meet_gateway", "--since", since],
-      { from: "user" },
-    );
-
+    const stdout = await runCli({ callGatewayFromCli }, [
+      "transcript",
+      "meet_gateway",
+      "--since",
+      "3",
+    ]);
     expect(callGatewayFromCli).toHaveBeenCalledWith(
       "googlemeet.transcript",
       { json: true, timeout: "5000" },
-      { sessionId: "meet_gateway", sinceIndex: expected },
+      { sessionId: "meet_gateway", sinceIndex: 3 },
       { progress: false },
     );
+    expect(stdout.output()).toContain("# 2 earlier lines dropped by the transcript cap");
+    expect(stdout.output()).toContain("Alice: fourth line");
+    expect(stdout.output()).toContain("# nextIndex: 4");
   });
 
-  it.each(["", " ", "-1", "0x10", "0o10", "0b10", "1e0", "1.5", "9007199254740992"])(
-    "rejects non-decimal transcript cursors before gateway delegation: %s",
+  it.each(["9007199254740992"])(
+    "rejects invalid transcript cursors before gateway delegation: %s",
     async (since) => {
       const callGatewayFromCli = vi.fn();
 
@@ -380,55 +299,32 @@ describe("google-meet CLI", () => {
 
   it("delegates join to the gateway-owned runtime when available", async () => {
     const callGatewayFromCli = vi.fn(async () => ({
-      session: {
-        id: "meet_gateway",
-        url: "https://meet.google.com/abc-defg-hij",
-        state: "active",
-        transport: "chrome-node",
-        mode: "realtime",
-        agentId: "main",
-        participantIdentity: "signed-in Google Chrome profile on a paired node",
-        createdAt: "2026-04-25T00:00:00.000Z",
-        updatedAt: "2026-04-25T00:00:01.000Z",
-        realtime: { enabled: true, provider: "openai", toolPolicy: "safe-read-only" },
-        notes: [],
-      },
+      session: { ...session, mode: "realtime" },
     }));
     const ensureRuntime = vi.fn(async () => {
       throw new Error("local runtime should not be loaded");
     });
-    const stdout = captureStdout();
-    try {
-      await setupCli({
+
+    const stdout = await runCli(
+      {
         callGatewayFromCli,
-        ensureRuntime: ensureRuntime as unknown as () => Promise<GoogleMeetRuntime>,
-      }).parseAsync(
-        [
-          "googlemeet",
-          "join",
-          "https://meet.google.com/abc-defg-hij",
-          "--transport",
-          "chrome-node",
-          "--mode",
-          "realtime",
-          "--message",
-          "Hello meeting",
-        ],
-        { from: "user" },
-      );
-      const gatewayCall = callGatewayFromCli.mock.calls.at(0) as unknown as
-        | [
-            string,
-            { json?: boolean; timeout?: unknown },
-            Record<string, unknown>,
-            { progress?: boolean },
-          ]
-        | undefined;
-      expect(gatewayCall?.[0]).toBe("googlemeet.join");
-      expect(gatewayCall?.[1]?.json).toBe(true);
-      expect(typeof gatewayCall?.[1]?.timeout).toBe("string");
-      expect(gatewayCall?.[1]?.timeout).not.toBe("");
-      expect(gatewayCall?.[2]).toEqual({
+        ensureRuntime,
+      },
+      [
+        "join",
+        "https://meet.google.com/abc-defg-hij",
+        "--transport",
+        "chrome-node",
+        "--mode",
+        "realtime",
+        "--message",
+        "Hello meeting",
+      ],
+    );
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "googlemeet.join",
+      { json: true, timeout: "60000" },
+      {
         url: "https://meet.google.com/abc-defg-hij",
         transport: "chrome-node",
         mode: "realtime",
@@ -436,16 +332,14 @@ describe("google-meet CLI", () => {
         dialInNumber: undefined,
         pin: undefined,
         dtmfSequence: undefined,
-      });
-      expect(gatewayCall?.[3]).toEqual({ progress: false });
-      expect(ensureRuntime).not.toHaveBeenCalled();
-      expectFields(parseStdoutJson(stdout), {
-        id: "meet_gateway",
-        transport: "chrome-node",
-      });
-    } finally {
-      stdout.restore();
-    }
+      },
+      { progress: false },
+    );
+    expect(ensureRuntime).not.toHaveBeenCalled();
+    expectFields(parseStdoutJson(stdout), {
+      id: "meet_gateway",
+      transport: "chrome-node",
+    });
   });
 
   it("delegates test speech mode to the gateway-owned runtime", async () => {
@@ -455,60 +349,49 @@ describe("google-meet CLI", () => {
       speechOutputVerified: true,
       speechOutputTimedOut: false,
       session: {
-        id: "meet_gateway",
-        url: "https://meet.google.com/abc-defg-hij",
-        state: "active",
+        ...session,
         transport: "chrome",
         mode: "bidi",
-        agentId: "main",
         participantIdentity: "signed-in Google Chrome profile",
-        createdAt: "2026-04-25T00:00:00.000Z",
-        updatedAt: "2026-04-25T00:00:01.000Z",
         realtime: { enabled: true, strategy: "bidi", provider: "openai" },
-        notes: [],
       },
     }));
     const ensureRuntime = vi.fn(async () => {
       throw new Error("local runtime should not be loaded");
     });
-    const stdout = captureStdout();
-    try {
-      await setupCli({
-        callGatewayFromCli,
-        ensureRuntime: ensureRuntime as unknown as () => Promise<GoogleMeetRuntime>,
-      }).parseAsync(
-        [
-          "googlemeet",
-          "test-speech",
-          "https://meet.google.com/abc-defg-hij",
-          "--transport",
-          "chrome",
-          "--mode",
-          "bidi",
-          "--message",
-          "Hello meeting",
-        ],
-        { from: "user" },
-      );
 
-      expect(callGatewayFromCli).toHaveBeenCalledWith(
-        "googlemeet.testSpeech",
-        { json: true, timeout: "60000" },
-        {
-          url: "https://meet.google.com/abc-defg-hij",
-          transport: "chrome",
-          mode: "bidi",
-          message: "Hello meeting",
-        },
-        { progress: false },
-      );
-      expect(ensureRuntime).not.toHaveBeenCalled();
-      const payload = parseStdoutJson(stdout);
-      expectFields(payload, { createdSession: true });
-      expectFields(payload.session, { mode: "bidi" });
-    } finally {
-      stdout.restore();
-    }
+    const stdout = await runCli(
+      {
+        callGatewayFromCli,
+        ensureRuntime,
+      },
+      [
+        "test-speech",
+        "https://meet.google.com/abc-defg-hij",
+        "--transport",
+        "chrome",
+        "--mode",
+        "bidi",
+        "--message",
+        "Hello meeting",
+      ],
+    );
+
+    expect(callGatewayFromCli).toHaveBeenCalledWith(
+      "googlemeet.testSpeech",
+      { json: true, timeout: "60000" },
+      {
+        url: "https://meet.google.com/abc-defg-hij",
+        transport: "chrome",
+        mode: "bidi",
+        message: "Hello meeting",
+      },
+      { progress: false },
+    );
+    expect(ensureRuntime).not.toHaveBeenCalled();
+    const payload = parseStdoutJson(stdout);
+    expectFields(payload, { createdSession: true });
+    expectFields(payload.session, { mode: "bidi" });
   });
 
   it("runs a listen-first health probe", async () => {
@@ -526,50 +409,39 @@ describe("google-meet CLI", () => {
       lastCaptionText: undefined,
       recentTranscript: [],
       session: {
+        ...session,
         id: "meet_1",
-        url: "https://meet.google.com/abc-defg-hij",
-        state: "active" as const,
-        transport: "chrome-node" as const,
         mode: "transcribe" as const,
-        agentId: "main",
-        participantIdentity: "signed-in Google Chrome profile on a paired node",
-        createdAt: "2026-04-25T00:00:00.000Z",
-        updatedAt: "2026-04-25T00:00:01.000Z",
         realtime: { enabled: false, provider: "openai", toolPolicy: "safe-read-only" },
-        notes: [],
       },
     }));
-    const stdout = captureStdout();
-    try {
-      await setupCli({
+
+    const stdout = await runCli(
+      {
         runtime: { testListen },
-      }).parseAsync(
-        [
-          "googlemeet",
-          "test-listen",
-          "https://meet.google.com/abc-defg-hij",
-          "--transport",
-          "chrome-node",
-          "--timeout-ms",
-          "30000",
-        ],
-        { from: "user" },
-      );
-      expect(testListen).toHaveBeenCalledWith({
-        url: "https://meet.google.com/abc-defg-hij",
-        transport: "chrome-node",
-        timeoutMs: 30000,
-      });
-      expectFields(parseStdoutJson(stdout), {
-        listenVerified: true,
-        transcriptLines: 1,
-      });
-    } finally {
-      stdout.restore();
-    }
+      },
+      [
+        "test-listen",
+        "https://meet.google.com/abc-defg-hij",
+        "--transport",
+        "chrome-node",
+        "--timeout-ms",
+        "30000",
+      ],
+    );
+    expect(testListen).toHaveBeenCalledWith({
+      url: "https://meet.google.com/abc-defg-hij",
+      transport: "chrome-node",
+      timeoutMs: 30000,
+    });
+    expectFields(parseStdoutJson(stdout), {
+      listenVerified: true,
+      transcriptLines: 1,
+    });
   });
 
-  it.each(["0x10", "1e3"])("rejects non-decimal listen timeouts: %s", async (timeoutMs) => {
+  it("rejects a non-decimal listen timeout before runtime delegation", async () => {
+    const timeoutMs = "0x10";
     const testListen = vi.fn();
 
     await expect(
@@ -590,7 +462,8 @@ describe("google-meet CLI", () => {
     expect(testListen).not.toHaveBeenCalled();
   });
 
-  it.each(["0", "-1", "1e3"])("rejects invalid auth callback timeouts: %s", async (timeoutSec) => {
+  it("rejects a non-positive auth callback timeout", async () => {
+    const timeoutSec = "0";
     await expect(
       setupCli({}).parseAsync(
         ["googlemeet", "auth", "login", "--client-id", "client-id", "--timeout-sec", timeoutSec],

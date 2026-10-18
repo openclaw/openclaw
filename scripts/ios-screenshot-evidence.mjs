@@ -31,7 +31,6 @@ const FAMILY_SPECS = {
     captureAttempts: false,
   },
 };
-const EXPECTED_FAMILIES = Object.keys(FAMILY_SPECS).toSorted();
 // Model only whole OpenClaw Fastlane invocations. Fastlane's internal launch
 // retries remain workflow-log evidence.
 const ATTEMPT_MODEL = Object.freeze({
@@ -233,118 +232,82 @@ function collectCaptureAttempts({
   screenshotNames,
   xcresultDirectory,
   readXcresultSummary,
+  captureSource,
 }) {
-  const directoryEntries = listEntries(xcresultDirectory);
-  const unexpectedEntries = directoryEntries.filter(
-    (entry) =>
-      !(
-        (entry.isFile() && entry.name === CAPTURE_ATTEMPTS_FILENAME) ||
-        (entry.isDirectory() && entry.name.endsWith(".xcresult"))
-      ),
+  const xcresultNames = captureSource.xcresultNames.filter((name) =>
+    name.startsWith(`${deviceName}-`),
   );
-  if (unexpectedEntries.length > 0) {
-    fail(
-      `OpenClaw capture evidence contains unexpected entries: ${unexpectedEntries.map((entry) => entry.name).join(", ")}`,
-    );
-  }
-  const xcresultNames = directoryEntries
-    .filter((entry) => entry.isDirectory() && entry.name.endsWith(".xcresult"))
-    .map((entry) => entry.name);
-  const ledgerEntries = readCaptureAttemptLedger(xcresultDirectory);
+  const ledgerEntries = captureSource.ledgerEntries.filter(
+    (entry) => entry.deviceName === deviceName,
+  );
   const results = [];
   for (const screenshotName of screenshotNames) {
-    const attempts = ledgerEntries
-      .filter((entry) => entry.deviceName === deviceName && entry.screenshotName === screenshotName)
-      .toSorted((left, right) => left.attempt - right.attempt);
+    const attempts = ledgerEntries.filter(
+      (entry) => entry.deviceName === deviceName && entry.screenshotName === screenshotName,
+    );
     if (attempts.length !== 1 || attempts[0].attempt !== 1) {
       fail(`${deviceName} ${screenshotName} expected exactly one OpenClaw capture attempt`);
     }
-    const summaries = attempts.map((entry) => {
-      const expectedKeys = ["attempt", "captureOutcome", "deviceName", "screenshotName"];
-      const actualKeys =
-        entry && typeof entry === "object" && !Array.isArray(entry)
-          ? Object.keys(entry).toSorted((left, right) => left.localeCompare(right))
-          : [];
-      if (actualKeys.join("\n") !== expectedKeys.join("\n")) {
-        fail(`${deviceName} ${screenshotName} has an invalid capture attempt record`);
-      }
-      const { attempt, captureOutcome } = entry;
-      if (captureOutcome !== "succeeded") {
-        fail(`${deviceName} ${screenshotName} capture attempt did not succeed`);
-      }
-      const name = `${deviceName}-${screenshotName}-attempt-${attempt}.xcresult`;
-      const source = path.join(xcresultDirectory, name);
-      if (!fs.existsSync(source)) {
-        fail(`${name} is missing for the successful capture attempt`);
-      }
-      const summary = readXcresultSummary(source);
-      if (!Number.isInteger(summary.failedTests) || summary.failedTests < 0) {
-        fail(`${name} has invalid failedTests`);
-      }
-      const artifactPath = path.posix.join("xcresults", name);
-      copyEntry(source, path.join(familyDirectory, artifactPath));
-      return {
-        screenshotName,
-        attempt,
-        artifactPath,
-        canonicalPath: path.posix.join("apps/ios/build/SnapshotTestResults", name),
-        captureOutcome,
-        testResult: summary.testResult,
-        failedTests: summary.failedTests,
-        sha256: sha256Directory(source),
-      };
-    });
-    const final = summaries.at(-1);
-    if (
-      final.captureOutcome !== "succeeded" ||
-      final.artifactPath === null ||
-      final.testResult !== "Passed" ||
-      final.failedTests !== 0
-    ) {
+    const [entry] = attempts;
+    const expectedKeys = ["attempt", "captureOutcome", "deviceName", "screenshotName"];
+    const actualKeys = Object.keys(entry).toSorted((left, right) => left.localeCompare(right));
+    if (actualKeys.join("\n") !== expectedKeys.join("\n")) {
+      fail(`${deviceName} ${screenshotName} has an invalid capture attempt record`);
+    }
+    const { attempt, captureOutcome } = entry;
+    if (captureOutcome !== "succeeded") {
+      fail(`${deviceName} ${screenshotName} capture attempt did not succeed`);
+    }
+    const name = `${deviceName}-${screenshotName}-attempt-${attempt}.xcresult`;
+    const source = path.join(xcresultDirectory, name);
+    if (!fs.existsSync(source)) {
+      fail(`${name} is missing for the successful capture attempt`);
+    }
+    const summary = readXcresultSummary(source);
+    if (!Number.isInteger(summary.failedTests) || summary.failedTests < 0) {
+      fail(`${name} has invalid failedTests`);
+    }
+    const artifactPath = path.posix.join("xcresults", name);
+    copyEntry(source, path.join(familyDirectory, artifactPath));
+    const sha256 = sha256Directory(source);
+    if (summary.testResult !== "Passed" || summary.failedTests !== 0) {
       fail(`${deviceName} ${screenshotName} does not have a passing final capture attempt`);
     }
-    results.push(...summaries);
+    results.push({
+      screenshotName,
+      attempt,
+      artifactPath,
+      canonicalPath: path.posix.join("apps/ios/build/SnapshotTestResults", name),
+      captureOutcome,
+      testResult: summary.testResult,
+      failedTests: summary.failedTests,
+      sha256,
+    });
   }
   if (ledgerEntries.length !== results.length) {
     fail(`${deviceName} capture attempt ledger contains unexpected evidence`);
   }
-  const expectedNames = results
-    .filter(({ artifactPath }) => artifactPath !== null)
-    .map(({ artifactPath }) => path.posix.basename(artifactPath));
-  const familyEntries = xcresultNames.filter((name) => name.startsWith(`${deviceName}-`));
+  const expectedNames = results.map(({ artifactPath }) => path.posix.basename(artifactPath));
   if (
-    familyEntries.length !== xcresultNames.length ||
-    familyEntries.toSorted((left, right) => left.localeCompare(right)).join("\n") !==
-      expectedNames.toSorted((left, right) => left.localeCompare(right)).join("\n")
+    xcresultNames.toSorted((left, right) => left.localeCompare(right)).join("\n") !==
+    expectedNames.toSorted((left, right) => left.localeCompare(right)).join("\n")
   ) {
     fail(`${deviceName} xcresult union contains unexpected evidence`);
   }
   return results;
 }
 
-export function collectIosScreenshotEvidence({
+function collectFamilyEvidence({
   family,
   screenshotDirectory,
   xcresultDirectory,
   outputDirectory,
   provenance,
-  readXcresultSummary = defaultReadXcresultSummary,
+  readXcresultSummary,
+  captureSource,
 }) {
   const spec = FAMILY_SPECS[family];
-  if (!spec) {
-    fail(`unsupported screenshot family: ${family}`);
-  }
-  const normalizedProvenance = {
-    targetSha: requireSha(provenance.targetSha, "target SHA"),
-    workflowSha: requireSha(provenance.workflowSha, "workflow SHA"),
-    runId: requireString(provenance.runId, "workflow run id"),
-    runAttempt: requirePositiveInteger(provenance.runAttempt, "workflow run attempt"),
-    tooling: {
-      xcode: requireString(provenance.tooling?.xcode, "Xcode version"),
-      fastlane: requireString(provenance.tooling?.fastlane, "Fastlane version"),
-      node: requireString(provenance.tooling?.node, "Node version"),
-    },
-  };
+  const normalizedProvenance = readProvenance(provenance);
   const familyDirectory = path.join(outputDirectory, family);
   fs.rmSync(familyDirectory, { recursive: true, force: true });
   fs.mkdirSync(familyDirectory, { recursive: true });
@@ -361,6 +324,7 @@ export function collectIosScreenshotEvidence({
         screenshotNames: spec.screenshotNames,
         xcresultDirectory,
         readXcresultSummary,
+        captureSource,
       })
     : [];
   const manifest = {
@@ -379,10 +343,69 @@ export function collectIosScreenshotEvidence({
   return manifest;
 }
 
+export function collectIosScreenshotEvidence({
+  screenshotDirectory,
+  xcresultDirectory,
+  outputDirectory,
+  provenance,
+  readXcresultSummary = defaultReadXcresultSummary,
+}) {
+  const entries = listEntries(xcresultDirectory);
+  if (
+    entries.some(
+      (entry) =>
+        !(
+          (entry.isFile() && entry.name === CAPTURE_ATTEMPTS_FILENAME) ||
+          (entry.isDirectory() && entry.name.endsWith(".xcresult"))
+        ),
+    )
+  ) {
+    fail("OpenClaw capture evidence contains unexpected entries");
+  }
+  const captureSource = {
+    xcresultNames: entries.filter((entry) => entry.isDirectory()).map((entry) => entry.name),
+    ledgerEntries: readCaptureAttemptLedger(xcresultDirectory),
+  };
+  const families = Object.keys(FAMILY_SPECS).map((family) =>
+    collectFamilyEvidence({
+      family,
+      screenshotDirectory,
+      xcresultDirectory,
+      outputDirectory,
+      provenance,
+      readXcresultSummary,
+      captureSource,
+    }),
+  );
+  // Account for every source entry before publishing family evidence;
+  // filtering alone would hide stale or unrecognized devices.
+  const screenshots = families.flatMap((family) => family.screenshots);
+  const captures = families.flatMap((family) => family.captureAttempts);
+  const actualPngs = listEntries(screenshotDirectory)
+    .filter((entry) => entry.isFile() && entry.name.endsWith(".png"))
+    .map((entry) => entry.name)
+    .toSorted();
+  const expectedPngs = screenshots
+    .map((entry) => path.posix.basename(entry.artifactPath))
+    .toSorted();
+  if (actualPngs.join("\n") !== expectedPngs.join("\n")) {
+    fail("combined screenshot PNG union mismatch");
+  }
+  const expectedXcresults = captures
+    .map((entry) => path.posix.basename(entry.artifactPath))
+    .toSorted();
+  if (
+    captureSource.xcresultNames.toSorted().join("\n") !== expectedXcresults.join("\n") ||
+    captureSource.ledgerEntries.length !== captures.length
+  ) {
+    fail("combined capture attempt union contains unexpected evidence");
+  }
+  return { ...readProvenance(provenance), families };
+}
+
 function loadExpectedManifests(inputDirectory, targetSha) {
   const expectedContainers = {
-    [`ios-release-screenshot-shard-iphone-${targetSha}`]: ["iphone"],
-    [`ios-release-screenshot-shard-ipad-13-${targetSha}`]: ["ipad-13", "watch"],
+    [`ios-release-screenshot-capture-${targetSha}`]: ["iphone", "ipad-13", "watch"],
   };
   const actualContainers = listEntries(inputDirectory);
   if (actualContainers.some((entry) => !entry.isDirectory())) {
@@ -508,12 +531,6 @@ function verifyManifestFamily(manifestPath, manifest) {
   if (!spec.devicePattern.test(deviceName)) {
     fail(`${manifest.family} has unexpected device name: ${deviceName}`);
   }
-  requireString(manifest.runId, `${manifest.family} workflow run id`);
-  requirePositiveInteger(manifest.runAttempt, `${manifest.family} workflow run attempt`);
-  requireString(manifest.tooling?.xcode, `${manifest.family} Xcode version`);
-  requireString(manifest.tooling?.fastlane, `${manifest.family} Fastlane version`);
-  requireString(manifest.tooling?.node, `${manifest.family} Node version`);
-
   const screenshotNames = manifest.screenshots?.map((entry) => entry.name).toSorted();
   if (
     screenshotNames?.join("\n") !==
@@ -549,65 +566,53 @@ function verifyManifestFamily(manifestPath, manifest) {
     fail(`${manifest.family} capture attempt union contains an unexpected screenshot`);
   }
   for (const screenshotName of spec.screenshotNames) {
-    const attempts = manifest.captureAttempts
-      ?.filter((entry) => entry.screenshotName === screenshotName)
-      .toSorted((left, right) => left.attempt - right.attempt);
+    const attempts = manifest.captureAttempts.filter(
+      (entry) => entry.screenshotName === screenshotName,
+    );
     if (attempts.length !== 1 || attempts[0].attempt !== 1) {
       fail(`${manifest.family} ${screenshotName} capture attempt union mismatch`);
     }
-    const final = attempts.at(-1);
+    const [attempt] = attempts;
     if (
-      final.captureOutcome !== "succeeded" ||
-      final.artifactPath === null ||
-      final.testResult !== "Passed" ||
-      final.failedTests !== 0
+      attempt.captureOutcome !== "succeeded" ||
+      attempt.artifactPath === null ||
+      attempt.testResult !== "Passed" ||
+      attempt.failedTests !== 0
     ) {
       fail(`${manifest.family} ${screenshotName} final xcresult is not passing`);
     }
-    for (const attempt of attempts) {
-      requireString(attempt.testResult, `${manifest.family} ${screenshotName} test result`);
-      if (!Number.isInteger(attempt.failedTests) || attempt.failedTests < 0) {
-        fail(`${manifest.family} ${screenshotName} has invalid failedTests`);
-      }
-      const expectedFilename = `${deviceName}-${screenshotName}-attempt-${attempt.attempt}.xcresult`;
-      const expectedCanonicalPath = `apps/ios/build/SnapshotTestResults/${expectedFilename}`;
-      if (attempt.canonicalPath !== expectedCanonicalPath) {
-        fail(`${manifest.family} has unexpected xcresult path: ${attempt.canonicalPath}`);
-      }
-      if (attempt.artifactPath !== `xcresults/${expectedFilename}`) {
-        fail(`${manifest.family} has unexpected xcresult artifact path: ${attempt.artifactPath}`);
-      }
+    const expectedFilename = `${deviceName}-${screenshotName}-attempt-${attempt.attempt}.xcresult`;
+    const expectedCanonicalPath = `apps/ios/build/SnapshotTestResults/${expectedFilename}`;
+    if (attempt.canonicalPath !== expectedCanonicalPath) {
+      fail(`${manifest.family} has unexpected xcresult path: ${attempt.canonicalPath}`);
+    }
+    if (attempt.artifactPath !== `xcresults/${expectedFilename}`) {
+      fail(`${manifest.family} has unexpected xcresult artifact path: ${attempt.artifactPath}`);
     }
   }
   verifyFamilyArtifactUnion(manifestPath, manifest);
 }
 
-export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expectedProvenance }) {
-  const expected = {
-    targetSha: requireSha(expectedProvenance.targetSha, "expected target SHA"),
-    workflowSha: requireSha(expectedProvenance.workflowSha, "expected workflow SHA"),
-    runId: requireString(expectedProvenance.runId, "expected workflow run id"),
-    runAttempt: requirePositiveInteger(
-      expectedProvenance.runAttempt,
-      "expected workflow run attempt",
-    ),
+function readProvenance(provenance, prefix = "") {
+  return {
+    targetSha: requireSha(provenance.targetSha, `${prefix}target SHA`),
+    workflowSha: requireSha(provenance.workflowSha, `${prefix}workflow SHA`),
+    runId: requireString(provenance.runId, `${prefix}workflow run id`),
+    runAttempt: requirePositiveInteger(provenance.runAttempt, `${prefix}workflow run attempt`),
     tooling: {
-      xcode: requireString(expectedProvenance.tooling?.xcode, "expected Xcode version"),
-      fastlane: requireString(expectedProvenance.tooling?.fastlane, "expected Fastlane version"),
-      node: requireString(expectedProvenance.tooling?.node, "expected Node version"),
+      xcode: requireString(provenance.tooling?.xcode, `${prefix}Xcode version`),
+      fastlane: requireString(provenance.tooling?.fastlane, `${prefix}Fastlane version`),
+      node: requireString(provenance.tooling?.node, `${prefix}Node version`),
     },
   };
+}
+
+export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expectedProvenance }) {
+  const expected = readProvenance(expectedProvenance, "expected ");
   const manifests = loadExpectedManifests(inputDirectory, expected.targetSha);
-  const families = manifests
-    .map(({ manifest }) => manifest.family)
-    .toSorted((left, right) => left.localeCompare(right));
-  if (families.join("\n") !== EXPECTED_FAMILIES.join("\n")) {
-    fail(
-      `screenshot family union mismatch; expected ${EXPECTED_FAMILIES.join(", ")}, found ${families.join(", ") || "none"}`,
-    );
-  }
   const canonicalEntries = [];
-  for (const { manifestPath, manifest } of manifests) {
+  const captureAttemptsByContainer = new Map();
+  for (const { containerName, manifestPath, manifest } of manifests) {
     if (manifest.schemaVersion !== 1) {
       fail(`unsupported screenshot manifest schema in ${manifestPath}`);
     }
@@ -622,9 +627,20 @@ export function reduceIosScreenshotEvidence({ inputDirectory, outputRoot, expect
     if (manifest.runId !== expected.runId) {
       fail(`${manifest.family} workflow run id does not match the reducer context`);
     }
-    if (manifest.runAttempt !== expected.runAttempt) {
+    // A reducer-only rerun reuses the successful capture job from this run.
+    // All three families must still come from that one capture invocation.
+    if (
+      !Number.isInteger(manifest.runAttempt) ||
+      manifest.runAttempt < 1 ||
+      manifest.runAttempt > expected.runAttempt
+    ) {
       fail(`${manifest.family} workflow run attempt does not match the reducer context`);
     }
+    const captureAttempt = captureAttemptsByContainer.get(containerName) ?? manifest.runAttempt;
+    if (manifest.runAttempt !== captureAttempt) {
+      fail(`${containerName} mixes evidence from different workflow run attempts`);
+    }
+    captureAttemptsByContainer.set(containerName, captureAttempt);
     for (const tool of ["xcode", "fastlane", "node"]) {
       if (manifest.tooling?.[tool] !== expected.tooling[tool]) {
         fail(`${manifest.family} ${tool} version does not match the reducer context`);
@@ -690,42 +706,32 @@ function parseIosScreenshotEvidenceArgs(argv) {
 
 function main(argv) {
   const { command, options } = parseIosScreenshotEvidenceArgs(argv);
+  const provenance = {
+    targetSha: options["target-sha"],
+    workflowSha: options["workflow-sha"],
+    runId: options["run-id"],
+    runAttempt: options["run-attempt"],
+    tooling: {
+      xcode: options["xcode-version"],
+      fastlane: options["fastlane-version"],
+      node: options["node-version"],
+    },
+  };
   if (command === "collect") {
     const manifest = collectIosScreenshotEvidence({
-      family: options.family,
       screenshotDirectory: options.screenshots,
       xcresultDirectory: options.xcresults,
       outputDirectory: options.output,
-      provenance: {
-        targetSha: options["target-sha"],
-        workflowSha: options["workflow-sha"],
-        runId: options["run-id"],
-        runAttempt: options["run-attempt"],
-        tooling: {
-          xcode: options["xcode-version"],
-          fastlane: options["fastlane-version"],
-          node: options["node-version"],
-        },
-      },
+      provenance,
     });
-    console.log(`collected ${manifest.family} screenshot evidence for ${manifest.targetSha}`);
+    console.log(`collected all iOS screenshot evidence for ${manifest.targetSha}`);
     return;
   }
   if (command === "reduce") {
     const manifest = reduceIosScreenshotEvidence({
       inputDirectory: options.input,
       outputRoot: options.output,
-      expectedProvenance: {
-        targetSha: options["target-sha"],
-        workflowSha: options["workflow-sha"],
-        runId: options["run-id"],
-        runAttempt: options["run-attempt"],
-        tooling: {
-          xcode: options["xcode-version"],
-          fastlane: options["fastlane-version"],
-          node: options["node-version"],
-        },
-      },
+      expectedProvenance: provenance,
     });
     console.log(`reduced iOS screenshot evidence for ${manifest.targetSha}`);
     return;

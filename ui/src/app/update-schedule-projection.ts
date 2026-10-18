@@ -1,13 +1,8 @@
+import type { GatewayUpdateAvailableEventPayload } from "../../../src/gateway/events.js";
 import type { GatewayHelloOk } from "../api/gateway.ts";
 import type { UpdateAvailable, UpdateScheduleState } from "../api/types.ts";
 import { t } from "../i18n/index.ts";
 import { formatCountdown } from "../lib/format.ts";
-import {
-  readUpdateAvailable,
-  readUpdateAvailableValue,
-  readUpdateSchedule,
-  readUpdateScheduleValue,
-} from "./update-schedule-dto.ts";
 
 type UpdateScheduleProjection = {
   updateAvailable: UpdateAvailable | null;
@@ -16,19 +11,21 @@ type UpdateScheduleProjection = {
   updateCampaignStatusHydrated: boolean;
 };
 
-function retainCampaignStatusHydration(
-  current: UpdateScheduleState | null,
-  next: UpdateScheduleState | null | undefined,
-  hydrated: boolean,
-): boolean {
-  const currentCampaign = current?.campaign;
-  const nextCampaign = next?.campaign;
-  return (
-    !nextCampaign ||
-    (hydrated &&
-      currentCampaign?.id === nextCampaign.id &&
-      currentCampaign.updatedAtMs === nextCampaign.updatedAtMs)
-  );
+function projectUpdateSchedule(
+  current: UpdateScheduleProjection,
+  updateSchedule: UpdateScheduleState | null,
+): Omit<UpdateScheduleProjection, "updateAvailable"> {
+  const currentCampaign = current.updateSchedule?.campaign;
+  const nextCampaign = updateSchedule?.campaign;
+  return {
+    updateSchedule,
+    heldUpdateCampaignId: resolveHeldUpdateCampaignId(updateSchedule, current.heldUpdateCampaignId),
+    updateCampaignStatusHydrated:
+      !nextCampaign ||
+      (current.updateCampaignStatusHydrated &&
+        currentCampaign?.id === nextCampaign.id &&
+        currentCampaign.updatedAtMs === nextCampaign.updatedAtMs),
+  };
 }
 
 export function resolveHeldUpdateCampaignId(
@@ -42,43 +39,21 @@ export function projectConnectedUpdateSnapshot(
   current: UpdateScheduleProjection,
   hello: GatewayHelloOk | null,
 ): UpdateScheduleProjection {
-  const updateSchedule = readUpdateSchedule(hello);
   return {
-    updateAvailable: readUpdateAvailable(hello),
-    updateSchedule,
-    heldUpdateCampaignId: resolveHeldUpdateCampaignId(updateSchedule, current.heldUpdateCampaignId),
-    updateCampaignStatusHydrated: retainCampaignStatusHydration(
-      current.updateSchedule,
-      updateSchedule,
-      current.updateCampaignStatusHydrated,
-    ),
+    updateAvailable: hello?.snapshot?.updateAvailable ?? null,
+    ...projectUpdateSchedule(current, hello?.snapshot?.updateSchedule ?? null),
   };
 }
 
 export function projectUpdateAvailableEvent(
   current: UpdateScheduleProjection,
-  payload: { updateAvailable?: unknown; schedule?: unknown } | undefined,
+  payload: GatewayUpdateAvailableEventPayload | undefined,
 ): Partial<UpdateScheduleProjection> {
   const updateSchedule =
-    payload && Object.hasOwn(payload, "schedule")
-      ? readUpdateScheduleValue(payload.schedule)
-      : undefined;
+    payload && Object.hasOwn(payload, "schedule") ? (payload.schedule ?? null) : undefined;
   return {
-    updateAvailable: readUpdateAvailableValue(payload?.updateAvailable),
-    ...(updateSchedule !== undefined
-      ? {
-          updateSchedule,
-          heldUpdateCampaignId: resolveHeldUpdateCampaignId(
-            updateSchedule,
-            current.heldUpdateCampaignId,
-          ),
-          updateCampaignStatusHydrated: retainCampaignStatusHydration(
-            current.updateSchedule,
-            updateSchedule,
-            current.updateCampaignStatusHydrated,
-          ),
-        }
-      : {}),
+    updateAvailable: payload?.updateAvailable ?? null,
+    ...(updateSchedule !== undefined ? projectUpdateSchedule(current, updateSchedule) : {}),
   };
 }
 

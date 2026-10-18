@@ -1,6 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
 import { createCronRegressionState } from "../../../test/helpers/cron/service-regression-fixtures.js";
-import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { createCronMutationCompletion } from "../mutation-completion.js";
 import { setupCronServiceSuite } from "../service.test-harness.js";
@@ -83,21 +82,29 @@ describe("Cron mutation completion", () => {
     }
   });
 
-  it("retains a committed add when its post-commit reporting fails", async () => {
+  it("leaves completion unmarked when the native commit fails", async () => {
     const { storePath } = await makeStorePath();
     const state = createMutationState(storePath);
     const completion = createCronMutationCompletion("cron.add")!;
-    const failure = new Error("post-commit reporting failed");
-    const info = vi.spyOn(state.deps.log, "info").mockImplementationOnce(() => {
-      throw failure;
-    });
+    const database = openOpenClawStateDatabase().db;
+    // A deferred constraint reaches the worker's native COMMIT after the job write succeeds.
+    database.exec(`
+      CREATE TABLE cron_commit_failure_parent (id TEXT PRIMARY KEY) STRICT;
+      CREATE TABLE cron_commit_failure_child (
+        parent_id TEXT REFERENCES cron_commit_failure_parent(id) DEFERRABLE INITIALLY DEFERRED
+      ) STRICT;
+      CREATE TRIGGER reject_cron_job_commit AFTER INSERT ON cron_jobs
+      BEGIN
+        INSERT INTO cron_commit_failure_child (parent_id) VALUES (NEW.job_id);
+      END;
+    `);
     try {
       await expect(
         completion.run(() =>
           add(
             state,
             {
-              name: "committed before reporting",
+              name: "durable completion boundary",
               enabled: true,
               schedule: { kind: "every", everyMs: 60_000 },
               sessionTarget: "isolated",
@@ -107,76 +114,16 @@ describe("Cron mutation completion", () => {
             { commitGuard: () => {} },
           ),
         ),
-      ).rejects.toBe(failure);
-      expect(completion.isCommitted()).toBe(true);
-      expect((await loadCronStore(storePath)).jobs).toHaveLength(1);
+      ).rejects.toThrow("FOREIGN KEY constraint failed");
+      expect((await loadCronStore(storePath)).jobs).toHaveLength(0);
+      expect(completion.isCommitted()).toBe(false);
     } finally {
-      info.mockRestore();
+      database.exec(`
+        DROP TRIGGER reject_cron_job_commit;
+        DROP TABLE cron_commit_failure_child;
+        DROP TABLE cron_commit_failure_parent;
+      `);
       stop(state);
     }
   });
-
-  it.each(["commit", "coordinator release"] as const)(
-    "records durable completion accurately when %s fails",
-    async (boundary) => {
-      const { storePath } = await makeStorePath();
-      const state = createMutationState(storePath);
-      const completion = createCronMutationCompletion("cron.add")!;
-      const database = openOpenClawStateDatabase().db;
-      const { DatabaseSync } = requireNodeSqlite();
-      // oxlint-disable-next-line typescript/unbound-method -- Every delegated call restores the intercepted database as its receiver.
-      const originalExec = DatabaseSync.prototype.exec;
-      const failure = new Error(`simulated ${boundary} failure`);
-      let committed = false;
-      let injected = false;
-      const exec = vi.spyOn(DatabaseSync.prototype, "exec").mockImplementation(function (
-        this: import("node:sqlite").DatabaseSync,
-        sql: string,
-      ) {
-        if (this === database && sql === "COMMIT" && boundary === "commit") {
-          injected = true;
-          throw failure;
-        }
-        originalExec.call(this, sql);
-        if (this === database && sql === "COMMIT") {
-          committed = true;
-        }
-        if (this !== database && sql === "ROLLBACK" && committed && !injected) {
-          injected = true;
-          throw failure;
-        }
-      });
-      try {
-        await expect(
-          completion.run(() =>
-            add(
-              state,
-              {
-                name: "durable completion boundary",
-                enabled: true,
-                schedule: { kind: "every", everyMs: 60_000 },
-                sessionTarget: "isolated",
-                wakeMode: "now",
-                payload: { kind: "agentTurn", message: "run" },
-              },
-              { commitGuard: () => {} },
-            ),
-          ),
-        ).rejects.toThrow(
-          boundary === "commit"
-            ? "simulated commit failure"
-            : "completed, but releasing its coordinator failed",
-        );
-        expect(injected).toBe(true);
-        exec.mockRestore();
-        expect((await loadCronStore(storePath)).jobs).toHaveLength(
-          boundary === "coordinator release" ? 1 : 0,
-        );
-        expect(completion.isCommitted()).toBe(boundary === "coordinator release");
-      } finally {
-        exec.mockRestore();
-        stop(state);
-      }
-    },
-  );
 });

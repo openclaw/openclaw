@@ -71,8 +71,8 @@ function repair(config: OpenClawConfig) {
 }
 
 describe("Doctor conflict repair preserves effective profile grants", () => {
-  it("does not restore inherited global exec after repairing an agent override", () => {
-    const entry: PolicyCase = {
+  const cases: PolicyCase[] = [
+    {
       name: "restricted agent",
       global: { alsoAllow: ["exec"] },
       agent: {
@@ -80,49 +80,12 @@ describe("Doctor conflict repair preserves effective profile grants", () => {
         allow: ["session_status", "exec"],
         alsoAllow: ["session_status"],
       },
-    };
-    const raw = configFor(entry);
-    const before = effective(raw, entry);
-    expect(before.tools).toContain("session_status");
-    expect(before.tools).not.toContain("exec");
-
-    const result = repair(raw);
-
-    expect(effective(result.config, entry)).toStrictEqual(before);
-    expect(
-      validateConfigObjectWithPlugins(result.config, { pluginValidation: "core-only" }).ok,
-    ).toBe(true);
-    expect(result.config.agents?.entries?.restricted?.tools?.alsoAllow).toEqual([]);
-    expect(repair(result.config).changes).toEqual([]);
-  });
-
-  it("retains intentional profile extras and reports exact manual choices", () => {
-    const entry: PolicyCase = {
+    },
+    {
       name: "explicit exec",
       global: { alsoAllow: ["read"] },
       agent: { profile: "minimal", allow: ["session_status", "exec"], alsoAllow: ["exec"] },
-    };
-    const raw = configFor(entry);
-    const before = effective(raw, entry);
-    expect(before.tools).toContain("exec");
-    expect(before.tools).not.toContain("gateway");
-
-    const result = repair(raw);
-
-    expect(effective(result.config, entry)).toStrictEqual(before);
-    expect(result.config).toEqual(raw);
-    expect(result.changes).toEqual([]);
-    expect(result.warnings).toEqual([
-      expect.stringContaining('agents.entries.restricted.tools.alsoAllow=["exec"]'),
-    ]);
-    expect(result.warnings?.[0]).toContain(
-      'agents.entries.restricted.tools.allow=["session_status","exec"]',
-    );
-    expect(result.warnings?.[0]).toContain("remove agents.entries.restricted.tools.allow");
-    expect(result.warnings?.[0]).toContain("agents.entries.restricted.tools.alsoAllow=[]");
-  });
-
-  const cases: PolicyCase[] = [
+    },
     {
       name: "no profile",
       global: { alsoAllow: ["read"] },
@@ -194,6 +157,31 @@ describe("Doctor conflict repair preserves effective profile grants", () => {
 
   it.each(cases)("preserves all runtime grants for $name", (entry) => {
     const raw = configFor(entry);
-    expect(effective(repair(raw).config, entry)).toStrictEqual(effective(raw, entry));
+    const before = effective(raw, entry);
+    const result = repair(raw);
+    expect(effective(result.config, entry)).toStrictEqual(before);
+    if (entry.name === "restricted agent") {
+      expect(before.tools).toContain("session_status");
+      expect(before.tools).not.toContain("exec");
+      expect(
+        validateConfigObjectWithPlugins(result.config, { pluginValidation: "core-only" }).ok,
+      ).toBe(true);
+      expect(result.config.agents?.entries?.restricted?.tools?.alsoAllow).toEqual([]);
+      expect(repair(result.config).changes).toEqual([]);
+    }
+    if (entry.name === "explicit exec") {
+      expect(before.tools).toContain("exec");
+      expect(before.tools).not.toContain("gateway");
+      expect(result.config).toEqual(raw);
+      expect(result.changes).toEqual([]);
+      expect(result.warnings).toEqual([
+        expect.stringContaining('agents.entries.restricted.tools.alsoAllow=["exec"]'),
+      ]);
+      expect(result.warnings?.[0]).toContain(
+        'agents.entries.restricted.tools.allow=["session_status","exec"]',
+      );
+      expect(result.warnings?.[0]).toContain("remove agents.entries.restricted.tools.allow");
+      expect(result.warnings?.[0]).toContain("agents.entries.restricted.tools.alsoAllow=[]");
+    }
   });
 });

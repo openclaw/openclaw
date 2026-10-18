@@ -1,7 +1,6 @@
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
-import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { hasUnjoinedWork } from "../../../scripts/lib/managed-child-process.mts";
@@ -15,7 +14,7 @@ import { withTempHomeCore } from "./temp-home.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-describe("shared temp-home root acquisition", () => {
+describe("temporary home cleanup", () => {
   it.each(["joined", "kill-error", "exit-timeout"])(
     "cleans a failed CLI fixture only after child cleanup is verified (%s)",
     async (cleanupMode) => {
@@ -121,55 +120,44 @@ describe("shared temp-home root acquisition", () => {
     },
   );
 
-  it("shares a failed acquisition, then recovers on the next explicit call", async () => {
-    const parent = await fs.mkdtemp(path.join(os.tmpdir(), "sdk-home-acquisition-"));
+  it("recovers after failed allocations without leaking roots or removing retained homes", async () => {
+    const parent = tempDirs.make("sdk-home-acquisition-");
     const missingParent = path.join(parent, "missing");
     const prefix = path.join(path.basename(parent), "missing", "shared-");
     const options = { prefix, skipSessionCleanup: true };
     const unexpectedCallback = async () => {
       throw new Error("callback must not run when root acquisition fails");
     };
-    try {
-      const failures = await Promise.allSettled([
-        withTempHomeCore(unexpectedCallback, options),
-        withTempHomeCore(unexpectedCallback, options),
-        withTempHomeCore(unexpectedCallback, options),
-      ]);
-      const errors = failures.map((result) => {
-        expect(result.status).toBe("rejected");
-        return result.status === "rejected" ? result.reason : undefined;
-      });
-      expect(errors[0]).toMatchObject({ code: "ENOENT" });
-      expect(errors.every((error) => error === errors[0])).toBe(true);
-      expect(await fs.readdir(parent)).toEqual([]);
-
-      await fs.mkdir(missingParent);
-      const first = await withTempHomeCore(
-        async (home) => {
-          await fs.writeFile(path.join(home, "retained.txt"), "keep");
-          return home;
-        },
-        { ...options, skipHomeCleanup: true },
-      );
-      const second = await withTempHomeCore(async (home) => home, options);
-      const third = await withTempHomeCore(async (home) => home, options);
-      expect(path.dirname(second)).toBe(path.dirname(first));
-      expect(path.dirname(third)).toBe(path.dirname(first));
-      expect([first, second, third].map((home) => path.basename(home))).toEqual([
-        "case-0",
-        "case-1",
-        "case-2",
-      ]);
-      expect(await fs.readdir(path.dirname(first))).toEqual([path.basename(first)]);
-      expect(await fs.readFile(path.join(first, "retained.txt"), "utf8")).toBe("keep");
-      const independent = await withTempHomeCore(async (home) => home, {
-        prefix: path.join(path.basename(parent), "independent-"),
-        skipSessionCleanup: true,
-      });
-      expect(path.dirname(independent)).not.toBe(path.dirname(first));
-      expect(await fs.readdir(path.dirname(independent))).toEqual([]);
-    } finally {
-      await fs.rm(parent, { recursive: true, force: true });
+    const failures = await Promise.allSettled([
+      withTempHomeCore(unexpectedCallback, options),
+      withTempHomeCore(unexpectedCallback, options),
+      withTempHomeCore(unexpectedCallback, options),
+    ]);
+    for (const result of failures) {
+      expect(result).toMatchObject({ status: "rejected", reason: { code: "ENOENT" } });
     }
+    expect(await fs.readdir(parent)).toEqual([]);
+
+    await fs.mkdir(missingParent);
+    const first = await withTempHomeCore(
+      async (home) => {
+        await fs.writeFile(path.join(home, "retained.txt"), "keep");
+        return home;
+      },
+      { ...options, skipHomeCleanup: true },
+    );
+    const second = await withTempHomeCore(async (home) => home, options);
+    const third = await withTempHomeCore(async (home) => home, options);
+    expect(new Set([first, second, third]).size).toBe(3);
+    expect(await fs.readdir(missingParent)).toEqual([path.basename(first)]);
+    expect(await fs.readFile(path.join(first, "retained.txt"), "utf8")).toBe("keep");
+    const independent = await withTempHomeCore(async (home) => home, {
+      prefix: path.join(path.basename(parent), "independent-"),
+      skipSessionCleanup: true,
+    });
+    await expect(fs.stat(independent)).rejects.toMatchObject({ code: "ENOENT" });
+    expect(await fs.readdir(parent)).toEqual(["missing"]);
+    await fs.rm(first, { recursive: true });
+    expect(await fs.readdir(missingParent)).toEqual([]);
   });
 });

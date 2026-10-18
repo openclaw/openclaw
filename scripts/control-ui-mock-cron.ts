@@ -282,6 +282,16 @@ export function buildCronMocks(
       provider: "openai",
     },
   }));
+  for (const run of queuedRuns) {
+    run.entry.runId = run.runId;
+  }
+  const transcriptRuns = [...runs, ...queuedRuns.map((run) => run.entry)];
+  for (const [index, entry] of transcriptRuns.entries()) {
+    entry.runId ??= `mock-cron-history-${index}`;
+    const agentId = jobs.find((job) => job.id === entry.jobId)?.agentId ?? "main";
+    entry.sessionKey = `agent:${agentId}:cron:${entry.jobId}:run:${entry.runId}`;
+    entry.sessionId = `mock-cron-transcript-${index}`;
+  }
   const status: CronStatus = {
     enabled: true,
     triggersEnabled: true,
@@ -293,36 +303,17 @@ export function buildCronMocks(
     ),
   };
   const runByJobId = new Map(runs.map((entry) => [entry.jobId, entry]));
-  const sortedJobLists = [
-    {
-      match: { sortBy: "nextRunAtMs", sortDir: "asc" },
-      jobs: jobs.toSorted(
-        (left, right) => (left.state?.nextRunAtMs ?? 0) - (right.state?.nextRunAtMs ?? 0),
-      ),
-    },
-    {
-      match: { sortBy: "nextRunAtMs", sortDir: "desc" },
-      jobs: jobs.toSorted(
-        (left, right) => (right.state?.nextRunAtMs ?? 0) - (left.state?.nextRunAtMs ?? 0),
-      ),
-    },
-    {
-      match: { sortBy: "updatedAtMs", sortDir: "asc" },
-      jobs: jobs.toSorted((left, right) => (left.updatedAtMs ?? 0) - (right.updatedAtMs ?? 0)),
-    },
-    {
-      match: { sortBy: "updatedAtMs", sortDir: "desc" },
-      jobs: jobs.toSorted((left, right) => (right.updatedAtMs ?? 0) - (left.updatedAtMs ?? 0)),
-    },
-    {
-      match: { sortBy: "name", sortDir: "asc" },
-      jobs: jobs.toSorted((left, right) => left.name.localeCompare(right.name)),
-    },
-    {
-      match: { sortBy: "name", sortDir: "desc" },
-      jobs: jobs.toSorted((left, right) => right.name.localeCompare(left.name)),
-    },
-  ];
+  const sortComparators: Record<string, (left: CronJob, right: CronJob) => number> = {
+    nextRunAtMs: (left, right) => (left.state?.nextRunAtMs ?? 0) - (right.state?.nextRunAtMs ?? 0),
+    updatedAtMs: (left, right) => (left.updatedAtMs ?? 0) - (right.updatedAtMs ?? 0),
+    name: (left, right) => left.name.localeCompare(right.name),
+  };
+  const sortedJobLists = Object.entries(sortComparators).flatMap(([sortBy, compare]) =>
+    ["asc", "desc"].map((sortDir) => ({
+      match: { sortBy, sortDir },
+      jobs: jobs.toSorted(sortDir === "asc" ? compare : (left, right) => compare(right, left)),
+    })),
+  );
 
   return {
     "cron.status": status,
@@ -370,6 +361,23 @@ export function buildCronMocks(
         { match: { statuses: ["error"] }, response: runsResult(failedRuns) },
         { response: runsResult(runs) },
       ],
+    },
+    "cron.history": {
+      cases: transcriptRuns.map((entry) => ({
+        match: { id: entry.jobId, runId: entry.runId },
+        response: {
+          messages: [
+            {
+              role: "assistant",
+              content: [
+                { type: "text", text: entry.summary ?? entry.error ?? "Automation completed." },
+              ],
+              timestamp: entry.ts,
+              __openclaw: { id: `cron-result-${entry.runId}` },
+            },
+          ],
+        },
+      })),
     },
     // Writes acknowledge the UI action but intentionally keep the fixture snapshot immutable.
     "cron.add": { id: "mock-cron-created" },

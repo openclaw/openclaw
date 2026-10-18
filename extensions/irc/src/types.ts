@@ -1,4 +1,3 @@
-// Irc type declarations define plugin contracts.
 import type { BaseProbeResult } from "openclaw/plugin-sdk/channel-contract";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import type { IrcAccountConfigInput } from "./config-schema.js";

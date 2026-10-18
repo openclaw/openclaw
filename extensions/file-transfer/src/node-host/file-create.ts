@@ -17,16 +17,12 @@ import {
 import {
   canonicalTargetForSymlinkError,
   captureWriteBinding,
+  fileWriteError as failure,
   openBoundWriteRoot,
   symlinkRedirectError,
   writeFsSafeError,
-  type FileWriteError,
 } from "./file-write-path.js";
 import { rejectCanonicalPathChange } from "./path-errors.js";
-
-function failure(code: string, message: string): FileWriteError {
-  return { ok: false, code, message };
-}
 
 async function receiveContent(
   io: OpenClawPluginNodeHostCommandIo,

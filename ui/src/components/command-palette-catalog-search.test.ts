@@ -27,16 +27,16 @@ describe("command palette catalog search", () => {
     expect(regular).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ category: "apps", label: "iPhone" }),
-        expect.objectContaining({ category: "settings", routeId: "profile" }),
+        expect.objectContaining({ category: "settings", action: "nav:profile" }),
       ]),
     );
-    expect(regular.some((item) => item.routeId === "security")).toBe(false);
-    expect(admin.some((item) => item.routeId === "security")).toBe(true);
+    expect(regular.some((item) => item.action === "nav:security")).toBe(false);
+    expect(admin.some((item) => item.action === "nav:security")).toBe(true);
     expect(regular.some((item) => item.label === "Meeting capture")).toBe(false);
     expect(admin).toContainEqual(
       expect.objectContaining({
         label: "Meeting capture",
-        routeId: "communications",
+        action: "nav:communications",
         search: "?section=transcripts",
       }),
     );

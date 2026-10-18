@@ -1,12 +1,92 @@
 import fs from "node:fs";
-import { hasErrnoCode } from "./errno.js";
+import fsPromises from "node:fs/promises";
+import { hasNodeErrorCode, isNotFoundPathError } from "@openclaw/fs-safe/path";
+import { isMissingPathError } from "./errno.js";
 
-/** Only a definite missing leaf permits callers to treat a path as absent. */
+/** Only definite absence, including a non-directory ancestor, permits an absent verdict. */
 export function pathMayExistSync(filePath: string): boolean {
   try {
     fs.lstatSync(filePath);
     return true;
   } catch (error) {
-    return !hasErrnoCode(error, "ENOENT");
+    return !isMissingPathError(error);
+  }
+}
+
+/** Optional discovery directories may be absent or unreadable. */
+export function readDirectoryEntriesSync(filePath: string): fs.Dirent[] {
+  try {
+    return fs.readdirSync(filePath, { withFileTypes: true });
+  } catch {
+    return [];
+  }
+}
+
+/** Inspect the entry itself, including dangling links; only ENOENT means absent. */
+export async function pathEntryExists(filePath: string): Promise<boolean> {
+  return (await lstatIfExists(filePath, "ENOENT")) !== undefined;
+}
+
+/** Inspect links themselves; callers decide whether a non-directory ancestor counts as absent. */
+export async function lstatIfExists(
+  filePath: string,
+  missingErrors: "ENOENT" | "ENOENT_OR_ENOTDIR" = "ENOENT_OR_ENOTDIR",
+): Promise<fs.Stats | undefined> {
+  try {
+    return await fsPromises.lstat(filePath);
+  } catch (error) {
+    if (
+      missingErrors === "ENOENT" ? hasNodeErrorCode(error, "ENOENT") : isNotFoundPathError(error)
+    ) {
+      return undefined;
+    }
+    throw error;
+  }
+}
+
+/** Best-effort discovery probe; inaccessible candidates are not usable. */
+export async function canAccess(filePath: string, mode?: number): Promise<boolean> {
+  try {
+    await fsPromises.access(filePath, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+export function canAccessSync(filePath: string, mode?: number): boolean {
+  try {
+    fs.accessSync(filePath, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** Follow links for optional discovery; filesystem errors make the candidate unavailable. */
+export async function safeStat(filePath: string): Promise<fs.Stats | null> {
+  return fsPromises.stat(filePath).catch(() => null);
+}
+
+/** X_OK admits searchable directories too; executable discovery also needs a regular target. */
+export async function executableFileExists(
+  filePath: string,
+  platform: NodeJS.Platform = process.platform,
+): Promise<boolean> {
+  return (
+    (await canAccess(filePath, platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK)) &&
+    (await safeStat(filePath))?.isFile() === true
+  );
+}
+
+/** X_OK admits searchable directories too; discovery requires a regular target. */
+export function executableFileExistsSync(filePath: string, platform: NodeJS.Platform): boolean {
+  try {
+    return (
+      fs.statSync(filePath).isFile() &&
+      canAccessSync(filePath, platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK)
+    );
+  } catch {
+    return false;
   }
 }

@@ -2,9 +2,13 @@ import { isSessionProfileDependentMethod } from "../session-method-policy.js";
 
 const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   "agent.wait",
+  // The first UI interaction may arrive before post-hello identity hydration.
+  "presence.activity",
   // Wait for post-hello identity enrichment so an identified caller does not
   // cache a shared-only catalog before their personal accounts are available.
   "models.list",
+  "mcp.events.list",
+  "presence.query",
   "webSearch.status",
   "webSearch.test",
   // talk.config projects the caller's profile accent; without this gate a
@@ -14,14 +18,18 @@ const PROFILE_DEPENDENT_CORE_METHODS = new Set([
   // Voice catalogs authorize participation in the call's chat.
   "talk.voice.get",
   "ui.command",
+  "ui.command.result",
   "users.linkAuthProfile",
   "users.linkEmail",
+  "users.merge",
   "users.linkChannelIdentity",
   "users.unlinkChannelIdentity",
   "users.listChannelIdentities",
   "users.listAuthLinks",
   "users.listModelAccounts",
   "users.selectModelAccount",
+  // Resolve the initial identity before the router captures the caller's profile guard.
+  "users.self",
   "users.mentionable",
   "users.setAvatar",
   "users.setDisplayName",
@@ -43,11 +51,11 @@ const PROFILE_DEPENDENT_CORE_PREFIXES = [
   "session.",
   "sessions.",
   "taskSuggestions.",
-  "tasks.",
   "terminal.",
   "transcripts.",
   "users.authConnect.",
   "users.prefs.",
+  "users.background.",
   "themes.",
   "users.github.",
   "skills.library.",

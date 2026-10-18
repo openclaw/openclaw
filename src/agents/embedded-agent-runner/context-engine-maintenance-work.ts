@@ -1,11 +1,7 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { randomUUID } from "node:crypto";
-import { hasSameContextEngineInstance } from "../../context-engine/registry.js";
 import type { ContextEngine } from "../../context-engine/types.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { AsyncWorkScope, trackAsyncWork } from "../../shared/async-work-scope.js";
-import { CONTEXT_ENGINE_TURN_MAINTENANCE_TASK_KIND as TURN_MAINTENANCE_TASK_KIND } from "../../tasks/context-engine-maintenance-task-owner.js";
-import { createQueuedTaskRun } from "../../tasks/detached-task-runtime.js";
 import type { createSessionMaintenanceOwner } from "../session-maintenance/coordinator.js";
 import { log } from "./logger.js";
 
@@ -64,18 +60,17 @@ export async function disposeDeferredMaintenanceContextEngine(
   maintenance: Pick<ReturnType<typeof createSessionMaintenanceOwner>, "run" | "signal">,
 ): Promise<void> {
   const failures: unknown[] = [];
+  const settle = async (work: Promise<unknown>[]) => {
+    for (const outcome of await Promise.allSettled(work)) {
+      if (outcome.status === "rejected") {
+        failures.push(outcome.reason);
+      }
+    }
+  };
   const resources = [...(params.factoryResourceOwners ?? [])];
   let releasing: Promise<void> | undefined;
   const releaseResources = () =>
-    (releasing ??= Promise.allSettled(resources.map(async (owner) => await owner.release())).then(
-      (outcomes) => {
-        for (const outcome of outcomes) {
-          if (outcome.status === "rejected") {
-            failures.push(outcome.reason);
-          }
-        }
-      },
-    ));
+    (releasing ??= settle(resources.map(async (owner) => await owner.release())));
   try {
     await params.runInContext(() =>
       maintenance.run(() =>
@@ -87,12 +82,7 @@ export async function disposeDeferredMaintenanceContextEngine(
             const factoryWork = resources.map(({ closeFactoryWork }) =>
               trackAsyncWork(closeFactoryWork),
             );
-            const outcomes = await Promise.allSettled([disposal, ...factoryWork]);
-            for (const outcome of outcomes) {
-              if (outcome.status === "rejected") {
-                failures.push(outcome.reason);
-              }
-            }
+            await settle([disposal, ...factoryWork]);
           },
           maintenance.signal,
           releaseResources,
@@ -109,57 +99,4 @@ export async function disposeDeferredMaintenanceContextEngine(
       errorMessage: formatErrorMessage(error),
     });
   }
-}
-
-type ContextEngineFactoryWork = {
-  contextEngine: ContextEngine;
-  factoryResourceOwners: Set<ContextEngineMaintenanceResources>;
-};
-
-/** Shared engine instances retain every factory lifetime until their final disposer starts. */
-export function mergeContextEngineFactoryWork(
-  params: ContextEngineFactoryWork,
-  activeEngine: ContextEngine,
-  activeResources: Set<ContextEngineMaintenanceResources>,
-  superseded?: ContextEngineFactoryWork,
-): Set<ContextEngineMaintenanceResources> {
-  if (superseded && hasSameContextEngineInstance(superseded.contextEngine, params.contextEngine)) {
-    for (const resources of superseded.factoryResourceOwners) {
-      params.factoryResourceOwners.add(resources);
-    }
-  }
-  if (hasSameContextEngineInstance(params.contextEngine, activeEngine)) {
-    for (const resources of params.factoryResourceOwners) {
-      activeResources.add(resources);
-    }
-    return activeResources;
-  }
-  return params.factoryResourceOwners;
-}
-
-export function buildTurnMaintenanceTaskDescriptor(params: {
-  sessionKey: string;
-  runId?: string;
-  notifyPolicy?: "silent" | "done_only" | "state_changes";
-  deliveryStatus?: "not_applicable" | "pending";
-}) {
-  const runId =
-    params.runId ??
-    `turn-maint:${params.sessionKey}:${Date.now().toString(36)}:${randomUUID().slice(0, 8)}`;
-  return createQueuedTaskRun({
-    runtime: "acp",
-    taskKind: TURN_MAINTENANCE_TASK_KIND,
-    sourceId: TURN_MAINTENANCE_TASK_KIND,
-    requesterSessionKey: params.sessionKey,
-    ownerKey: params.sessionKey,
-    scopeKind: "session",
-    runId,
-    label: "Context engine turn maintenance",
-    task: "Deferred context-engine maintenance after turn.",
-    notifyPolicy: params.notifyPolicy ?? "silent",
-    // Fast maintenance stays silent and must not create a one-task flow.
-    // Long-running and failed workers promote it to pending before notifying.
-    deliveryStatus: params.deliveryStatus ?? "not_applicable",
-    preferMetadata: true,
-  });
 }

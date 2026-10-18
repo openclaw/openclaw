@@ -27,8 +27,11 @@ vi.mock("../../plugins/bundle-commands.js", () => ({
 }));
 
 vi.mock("../loading/workspace-skill-loader.js", () => ({
-  filterWorkspaceSkills: (entries: SkillEntry[]) => entries,
   loadVisibleSkills: () => [],
+}));
+
+vi.mock("../loading/workspace-skill-filter.js", () => ({
+  filterSkillEntries: (entries: SkillEntry[]) => entries,
 }));
 
 beforeEach(() => {
@@ -81,6 +84,7 @@ describe("buildWorkspaceSkillCommandSpecs", () => {
     expect(specs[0]?.displayName).toBe("Emoji Skill");
     expect(specs[0]?.description).toBe(entry.skill.description);
     expect(specs[0]?.skillFile).toBe(entry.skill.filePath);
+    expect(specs[0]).not.toHaveProperty("skillFileHost");
   });
 
   it("preserves bundle command descriptions for provider-specific limits", async () => {

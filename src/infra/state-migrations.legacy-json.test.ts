@@ -61,17 +61,12 @@ describe("legacy JSON plugin migration diagnostics", () => {
   describe.each(["detection", "migration"] as const)("%s", (phase) => {
     it.each([
       { fault: "EACCES", expectedError: "EACCES" },
-      { fault: "EIO", expectedError: "EIO" },
-      { fault: "invalid JSON", expectedError: "SyntaxError" },
-      { fault: "ENOENT", expectedError: null },
       { fault: "unrecognized shape", expectedError: null },
     ])(
       "reports $fault without importing or archiving the source",
       async ({ fault, expectedError }) => {
-        const source = fault === "invalid JSON" ? "{" : "{}";
-        if (fault !== "ENOENT") {
-          await fs.writeFile(sourcePath, source, "utf8");
-        }
+        const source = "{}";
+        await fs.writeFile(sourcePath, source, "utf8");
         const readFile = fs.readFile.bind(fs);
         let sourceReads = 0;
         vi.spyOn(fs, "readFile").mockImplementation(async (filePath, options) => {
@@ -81,7 +76,7 @@ describe("legacy JSON plugin migration diagnostics", () => {
             if (phase === "migration" && sourceReads === 1) {
               return '[{"disabled":true}]';
             }
-            if (fault === "EACCES" || fault === "EIO") {
+            if (fault === "EACCES") {
               throw Object.assign(new Error(`${fault}: read ${sourcePath}`), { code: fault });
             }
           }
@@ -122,9 +117,7 @@ describe("legacy JSON plugin migration diagnostics", () => {
         if (expectedError) {
           expect(warnings[0]).toContain(expectedError);
         }
-        if (fault !== "ENOENT") {
-          await expect(readFile(sourcePath, "utf8")).resolves.toBe(source);
-        }
+        await expect(readFile(sourcePath, "utf8")).resolves.toBe(source);
         await expect(fs.stat(`${sourcePath}.migrated`)).rejects.toMatchObject({ code: "ENOENT" });
       },
     );

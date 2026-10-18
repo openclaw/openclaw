@@ -4,7 +4,6 @@ import {
   getSenderIdentity,
   type WhatsAppReplyContext,
 } from "../../identity.js";
-import { requireWhatsAppInboundAdmission } from "../../inbound/admission.js";
 import type { AdmittedWebInboundMessage } from "../../inbound/types.js";
 import { formatInboundEnvelope, type EnvelopeFormatOptions } from "./message-line.runtime.js";
 
@@ -24,7 +23,7 @@ export function buildInboundLine(params: {
   visibleReplyTo?: WhatsAppReplyContext | null;
 }) {
   const { msg, previousTimestamp, envelope } = params;
-  const admission = requireWhatsAppInboundAdmission(msg);
+  const admission = msg.admission;
   const conversationId = admission.conversation.id;
   const conversationKind = admission.conversation.kind;
   const replyContext = formatReplyTarget(
@@ -33,7 +32,6 @@ export function buildInboundLine(params: {
   const baseLine = `${msg.payload.body}${replyContext ? `\n\n${replyContext}` : ""}`;
   const sender = getSenderIdentity(msg);
 
-  // Wrap with standardized envelope for the agent.
   return formatInboundEnvelope({
     channel: "WhatsApp",
     from: conversationKind === "group" ? conversationId : conversationId.replace(/^whatsapp:/, ""),

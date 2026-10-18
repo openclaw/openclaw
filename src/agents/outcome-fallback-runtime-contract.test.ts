@@ -6,20 +6,42 @@ import {
   OUTCOME_FALLBACK_RUNTIME_CONTRACT,
 } from "openclaw/plugin-sdk/agent-runtime-test-contracts";
 import { beforeAll, describe, expect, it, vi } from "vitest";
+import { getReplyPayloadMetadata, type ReplyPayload } from "../auto-reply/reply-payload.js";
+import { resolveTerminalAgentRunFailurePayload } from "../auto-reply/reply/agent-runner-failure-reply.js";
+import { applyInputProvenanceToUserMessage } from "../sessions/input-provenance.js";
 import {
   classifyEmbeddedAgentRunResultForModelFallback,
   mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
 } from "./embedded-agent-runner/result-fallback-classifier.js";
+import { resolveEmbeddedRunTerminal } from "./embedded-agent-runner/run/terminal-resolution.js";
+import {
+  emptyAssistant,
+  makeTerminalInput,
+} from "./embedded-agent-runner/run/terminal-resolution.test-support.js";
 import { runWithModelFallback } from "./model-fallback-runner.js";
+import {
+  createMockUsage,
+  makeEmbeddedRunnerAttempt,
+} from "./test-helpers/embedded-agent-runner-e2e-fixtures.js";
 
+// mock-isolation: Outcome classification skips auth runtime and must not initialize credential-source state.
 vi.mock("./auth-profiles/source-check.js", () => ({
-  hasAnyAuthProfileStoreSource: () => false,
+  hasAnyAuthProfileStoreSourceAsync: () => false,
 }));
 
 const contractFallbackOverride = [
   // Keep fallback target aligned with the plugin-sdk runtime contract fixture.
   `${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackProvider}/${OUTCOME_FALLBACK_RUNTIME_CONTRACT.fallbackModel}`,
 ];
+
+const contractRunOptions = {
+  cfg: undefined,
+  provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
+  model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+  fallbacksOverride: contractFallbackOverride,
+  classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+  skipAuthProfileRuntime: true,
+};
 
 describe("Outcome/fallback runtime contract - embedded runtime fallback classifier", () => {
   beforeAll(async () => {
@@ -32,6 +54,130 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
       skipAuthProfileRuntime: true,
     });
   });
+
+  it.each([
+    ["optional", undefined, 1, 1],
+    ["optional", "empty", 1, 1],
+    ["optional", "reasoning-only", 1, 1],
+    ["result-required", undefined, 1, 2],
+    ["result-required", "empty", 3, 6],
+    ["result-required", "reasoning-only", 3, 9],
+    ["required", "empty", 3, 6],
+    ["required", "reasoning-only", 3, 9],
+  ] as const)(
+    "settles an empty stop for %s replies with harness classification %s",
+    async (expectation, classification, expectedModels, expectedRequests) => {
+      const prompt = "The result is already incorporated. No new update.";
+      const provenance = { kind: "inter_session" as const, sourceTool: "sessions_send" };
+      // Recorded shape: fresh inter-session input, response.completed, blank text,
+      // four output tokens, no tool calls or compaction. Content is synthetic.
+      const assistant = emptyAssistant({
+        ...(classification === "reasoning-only"
+          ? { content: [{ type: "thinking" as const, thinking: "checking" }] }
+          : {}),
+        stopReason: "stop",
+        usage: createMockUsage(89, 4),
+      });
+      let modelRequests = 0;
+      const notices: ReplyPayload[] = [];
+      const run = vi.fn(async () => {
+        const attempt = makeEmbeddedRunnerAttempt({
+          assistantTexts: [],
+          agentHarnessResultClassification: classification,
+          messagesSnapshot: [
+            expectation === "required"
+              ? { role: "user" as const, content: prompt, timestamp: 0 }
+              : applyInputProvenanceToUserMessage(
+                  { role: "user", content: prompt, timestamp: 0 },
+                  provenance,
+                ),
+            assistant,
+          ],
+          lastAssistant: assistant,
+          currentAttemptAssistant: assistant,
+          currentAttemptReplayMetadata: { hadPotentialSideEffects: false, replaySafe: true },
+        });
+        const input = makeTerminalInput({
+          attempt,
+          runParams: {
+            prompt,
+            inputProvenance: expectation === "required" ? undefined : provenance,
+            terminalReplyExpectation: expectation,
+          },
+        });
+        for (;;) {
+          modelRequests += 1;
+          const terminal = await resolveEmbeddedRunTerminal(input);
+          if (terminal.action === "complete") {
+            notices.push(
+              ...(terminal.result.payloads?.filter((payload) => payload.isStatusNotice) ?? []),
+            );
+            expect(terminal.result.payloads).toBeUndefined();
+            expect(terminal.result.meta.terminalReply).toEqual({ disposition: "empty" });
+            expect(terminal.result.meta.finalAssistantVisibleText).toBe(
+              expectation === "optional" ? "" : undefined,
+            );
+            expect(terminal.result.meta.finalAssistantRawText).toBeUndefined();
+            return terminal.result;
+          }
+        }
+      });
+
+      const result = await runWithModelFallback({
+        cfg: undefined,
+        provider: "openai",
+        model: "gpt-5.6-sol",
+        fallbacksOverride: ["openai/gpt-5.6-terra", "openai/gpt-5.6-luna"],
+        skipAuthProfileRuntime: true,
+        classifyResult: classifyEmbeddedAgentRunResultForModelFallback,
+        run,
+      });
+
+      expect(run).toHaveBeenCalledTimes(expectedModels);
+      expect(modelRequests).toBe(expectedRequests);
+      const fallbackExpected = expectation !== "optional" && classification !== undefined;
+      expect(result.model).toBe(fallbackExpected ? "gpt-5.6-luna" : "gpt-5.6-sol");
+      expect(result.attempts).toHaveLength(fallbackExpected ? 3 : 0);
+      expect(result.result.meta.error?.kind).toBe(
+        expectation === "optional" ? undefined : "incomplete_turn",
+      );
+      expect(result.result.meta.terminalReply).toEqual({ disposition: "empty" });
+      expect(result.result.meta.finalAssistantVisibleText).toBe(
+        expectation === "optional" ? "" : undefined,
+      );
+      expect(result.result.meta.finalAssistantRawText).toBeUndefined();
+      expect(result.result.payloads).toBeUndefined();
+      expect(notices).toEqual([]);
+      if (!result.result.meta.error) {
+        return;
+      }
+      const notice = await resolveTerminalAgentRunFailurePayload({
+        result: result.result,
+        run: {
+          messageChannel: "telegram",
+          terminalReplyExpectation: expectation,
+          inputProvenance: expectation === "required" ? undefined : provenance,
+        },
+        visibleReplyDelivered: async () => false,
+      });
+      if (notice) {
+        notices.push(notice);
+      }
+      if (expectation === "required") {
+        expect(result.outcome).toBe("exhausted");
+        expect(notices).toEqual([
+          expect.objectContaining({
+            text: "No answer was returned. Ask again if you still need one.",
+            isError: true,
+            isStatusNotice: true,
+          }),
+        ]);
+        expect(getReplyPayloadMetadata(notice ?? {})?.assistantTranscriptOwned).toBe(true);
+      } else {
+        expect(notices).toEqual([]);
+      }
+    },
+  );
 
   const fallbackClassificationCases = [
     ["empty", "empty_result"],
@@ -100,6 +246,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           requestedProvider: primaryProvider,
           requestedModel: primaryModel,
           stage: "fallback",
+          selectionChanged: false,
           fallbackReason: "format",
         },
       },
@@ -110,7 +257,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     expect(result.attempts[0]?.code).toBe("empty_result");
   });
 
-  it("preserves a tool-authored summary when fallback candidates are exhausted", async () => {
+  it("preserves an incomplete tool-authored summary over stale silence when fallbacks exhaust", async () => {
     const terminalSummary =
       "Web fetch completed.\nOrigin: https://example.com\nStatus: 200\n\n" +
       "Agent couldn't generate a response.";
@@ -118,6 +265,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
       payloads: [{ text: terminalSummary, isError: true }],
       meta: {
         durationMs: 1,
+        terminalReply: { disposition: "silent" },
         toolSummary: { calls: 1, tools: ["web_fetch"] },
         error: {
           kind: "incomplete_turn",
@@ -129,19 +277,10 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     });
 
     const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
-      cfg: undefined,
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
+      ...contractRunOptions,
       fallbacksOverride: [],
       run: vi.fn().mockResolvedValue(incomplete),
-      classifyResult: ({ provider, model, result: resultValue }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({
-          provider,
-          model,
-          result: resultValue,
-        }),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-      skipAuthProfileRuntime: true,
     });
 
     expect(result.outcome).toBe("exhausted");
@@ -183,19 +322,9 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
 
     const result = await runWithModelFallback({
-      cfg: undefined,
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-      fallbacksOverride: contractFallbackOverride,
+      ...contractRunOptions,
       run,
-      classifyResult: ({ provider, model, result: resultValue }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({
-          provider,
-          model,
-          result: resultValue,
-        }),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-      skipAuthProfileRuntime: true,
     });
 
     expect(result.outcome).toBe("exhausted");
@@ -257,19 +386,9 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     const run = vi.fn().mockResolvedValueOnce(primary).mockResolvedValueOnce(fallback);
 
     const result = await runWithModelFallback<ReturnType<typeof createContractRunResult>>({
-      cfg: undefined,
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-      fallbacksOverride: contractFallbackOverride,
+      ...contractRunOptions,
       run,
-      classifyResult: ({ provider, model, result: resultValue }) =>
-        classifyEmbeddedAgentRunResultForModelFallback({
-          provider,
-          model,
-          result: resultValue,
-        }),
       mergeExhaustedResult: mergeEmbeddedAgentRunResultForModelFallbackExhaustion,
-      skipAuthProfileRuntime: true,
     });
 
     expect(result.outcome).toBe("exhausted");
@@ -305,18 +424,8 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
 
     await expect(
       runWithModelFallback<ReturnType<typeof createContractRunResult>>({
-        cfg: undefined,
-        provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-        model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-        fallbacksOverride: contractFallbackOverride,
+        ...contractRunOptions,
         run,
-        classifyResult: ({ provider, model, result: resultValue }) =>
-          classifyEmbeddedAgentRunResultForModelFallback({
-            provider,
-            model,
-            result: resultValue,
-          }),
-        skipAuthProfileRuntime: true,
       }),
     ).rejects.toBe(finalError);
     expect(run).toHaveBeenCalledTimes(2);
@@ -326,7 +435,12 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     {
       name: "intentional NO_REPLY",
       result: createContractRunResult({
-        meta: { durationMs: 1, finalAssistantRawText: "NO_REPLY" },
+        meta: {
+          durationMs: 1,
+          agentHarnessResultClassification: "empty",
+          finalAssistantRawText: "NO_REPLY",
+          terminalReply: { disposition: "silent" },
+        },
       }),
     },
     {
@@ -415,10 +529,7 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
     const contractCase = expectDefined(nonFallbackCases[0], "nonFallbackCases[0] test invariant");
     const run = vi.fn().mockResolvedValue(contractCase.result);
     const result = await runWithModelFallback({
-      cfg: undefined,
-      provider: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryProvider,
-      model: OUTCOME_FALLBACK_RUNTIME_CONTRACT.primaryModel,
-      fallbacksOverride: contractFallbackOverride,
+      ...contractRunOptions,
       run,
       classifyResult: ({ provider, model, result: resultLocal }) =>
         classifyEmbeddedAgentRunResultForModelFallback({
@@ -428,7 +539,6 @@ describe("Outcome/fallback runtime contract - embedded runtime fallback classifi
           hasDirectlySentBlockReply: contractCase.hasDirectlySentBlockReply,
           hasBlockReplyPipelineOutput: contractCase.hasBlockReplyPipelineOutput,
         }),
-      skipAuthProfileRuntime: true,
     });
 
     expect(result.outcome).toBe("completed");

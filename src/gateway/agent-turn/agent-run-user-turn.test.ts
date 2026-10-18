@@ -1,5 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import * as execHandoff from "../../agents/bash-tools.exec-approval-followup-state.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import type { stageSessionPendingInput } from "../../config/sessions/session-accessor.pending-inputs.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import { prepareAgentRunUserTurn } from "./agent-run-user-turn.js";
 import type { AgentTurnContext } from "./types.js";
@@ -7,23 +10,84 @@ import type { AgentTurnContext } from "./types.js";
 const mocks = vi.hoisted(() => ({
   loadSessionEntry: vi.fn(),
   persistSessionTranscriptTurn: vi.fn(),
+  resolveSessionTranscriptRuntimeTarget: vi.fn(),
+  stageSessionPendingInput: vi.fn(),
+  persistInboundImagesForTranscript: vi.fn(),
+  deleteMediaBuffer: vi.fn(),
+  persistedMessages: [] as unknown[],
+  beforeTranscriptCommit: undefined as (() => void) | undefined,
 }));
 
-vi.mock("../session-utils.js", async () => {
-  const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
-  return { ...actual, loadSessionEntry: mocks.loadSessionEntry };
+vi.mock("../chat-attachments.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../chat-attachments.js")>("../chat-attachments.js");
+  return { ...actual, persistInboundImagesForTranscript: mocks.persistInboundImagesForTranscript };
 });
+
+vi.mock("../../media/store.js", async () => {
+  const actual =
+    await vi.importActual<typeof import("../../media/store.js")>("../../media/store.js");
+  return { ...actual, deleteMediaBuffer: mocks.deleteMediaBuffer };
+});
+
+// mock-isolation: User-turn orchestration receives fixture session rows without starting a read worker.
+vi.mock("../session-utils-store-worker.js", () => ({
+  loadGatewaySessionEntryReadOnlyInWorker: mocks.loadSessionEntry,
+}));
 
 vi.mock("../../config/sessions/session-accessor.js", async () => {
   const actual = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
     "../../config/sessions/session-accessor.js",
   );
-  return { ...actual, persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn };
+  return {
+    ...actual,
+    persistSessionTranscriptTurn: mocks.persistSessionTranscriptTurn,
+  };
+});
+
+vi.mock("../../config/sessions/session-accessor.pending-inputs.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-accessor.pending-inputs.js")
+  >("../../config/sessions/session-accessor.pending-inputs.js");
+  return { ...actual, stageSessionPendingInput: mocks.stageSessionPendingInput };
+});
+
+vi.mock("../../config/sessions/session-accessor.transcript-target.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../config/sessions/session-accessor.transcript-target.js")
+  >("../../config/sessions/session-accessor.transcript-target.js");
+  return {
+    ...actual,
+    resolveSessionTranscriptRuntimeTarget: mocks.resolveSessionTranscriptRuntimeTarget,
+  };
 });
 
 describe("prepareAgentRunUserTurn", () => {
   beforeEach(() => {
     mocks.loadSessionEntry.mockReset();
+    mocks.resolveSessionTranscriptRuntimeTarget.mockReset().mockResolvedValue({});
+    mocks.persistInboundImagesForTranscript.mockReset().mockResolvedValue({ entries: [] });
+    mocks.deleteMediaBuffer.mockReset().mockResolvedValue(undefined);
+    mocks.persistedMessages.length = 0;
+    mocks.beforeTranscriptCommit = undefined;
+    mocks.stageSessionPendingInput.mockReset().mockImplementation(async (_scope, options) => {
+      options.assertCurrent();
+      const message = options.prepareMessageAfterIdempotencyCheck
+        ? options.prepareMessageAfterIdempotencyCheck(options.message)
+        : options.message;
+      if (!message) {
+        return undefined;
+      }
+      mocks.beforeTranscriptCommit?.();
+      options.assertCurrent();
+      mocks.persistedMessages.push(message);
+      return {
+        inputId: "pending-user-turn",
+        message,
+        run: <T>(operation: () => T) => operation(),
+        finish: vi.fn(),
+      };
+    });
     mocks.persistSessionTranscriptTurn.mockReset().mockImplementation(async (scope, options) => {
       const message = options.messages[0]?.message;
       return {
@@ -51,47 +115,229 @@ describe("prepareAgentRunUserTurn", () => {
     });
   });
 
-  it("fails closed when the admitted session entry disappeared before transcript persistence", async () => {
-    const sessionKey = "agent:main:main";
-    const admittedSessionId = "admitted-session";
-    const sessionEntry: SessionEntry = {
-      sessionId: admittedSessionId,
-      updatedAt: 1,
-    };
-    mocks.loadSessionEntry.mockReturnValue({
+  it.each([undefined, "replacement-session"])(
+    "fails closed when the admitted session entry changed to %s before transcript persistence",
+    async (currentSessionId) => {
+      const sessionKey = "agent:main:main";
+      const admittedSessionId = "admitted-session";
+      const sessionEntry: SessionEntry = {
+        sessionId: admittedSessionId,
+        updatedAt: 1,
+      };
+      mocks.loadSessionEntry.mockResolvedValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        canonicalKey: sessionKey,
+        entry: currentSessionId ? { ...sessionEntry, sessionId: currentSessionId } : undefined,
+        store: {},
+      });
+
+      await expect(
+        prepareAgentRunUserTurn({
+          onUserTurnMediaPersisted: vi.fn(),
+          assertCurrent: () => {},
+          request: {
+            message: "must not reach the stale session",
+            idempotencyKey: "disappeared-session-run",
+          } as AgentRunRequest,
+          cfg: {},
+          sessionEntry,
+          resolvedSessionKey: sessionKey,
+          admittedSessionId,
+          activeSessionAgentId: "main",
+          suppressVisibleSessionEffects: false,
+          requestedPromptPersistenceSuppression: false,
+          canUseInternalRuntimeHandoff: false,
+          message: "must not reach the stale session",
+          effectiveTranscriptInputText: "must not reach the stale session",
+          images: [],
+          offloadedRefs: [],
+          runId: "disappeared-session-run",
+          client: null,
+          context: {
+            logGateway: { warn: vi.fn() },
+          } as unknown as AgentTurnContext,
+        }),
+      ).rejects.toThrow("agent turn was not durably admitted");
+      expect(mocks.persistSessionTranscriptTurn).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each([false, true])(
+    "does not stage input after authority closes (fresh child=%s)",
+    async (freshChild) => {
+      const sessionKey = "agent:main:worker-child";
+      const admittedSessionId = "worker-child-session";
+      const sessionEntry: SessionEntry = { sessionId: admittedSessionId, updatedAt: 1 };
+      mocks.loadSessionEntry.mockResolvedValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        canonicalKey: sessionKey,
+        entry: sessionEntry,
+        store: { [sessionKey]: sessionEntry },
+      });
+      let authorityActive = true;
+      mocks.beforeTranscriptCommit = () => {
+        authorityActive = false;
+      };
+
+      await expect(
+        prepareAgentRunUserTurn({
+          onUserTurnMediaPersisted: vi.fn(),
+          request: { message: "must not outlive the worker turn", idempotencyKey: "closed-run" },
+          cfg: {},
+          sessionEntry,
+          freshChildStorePath: freshChild ? "/tmp/sessions.json" : undefined,
+          resolvedSessionKey: sessionKey,
+          admittedSessionId,
+          activeSessionAgentId: "main",
+          suppressVisibleSessionEffects: false,
+          requestedPromptPersistenceSuppression: false,
+          canUseInternalRuntimeHandoff: false,
+          message: "must not outlive the worker turn",
+          effectiveTranscriptInputText: "must not outlive the worker turn",
+          images: [],
+          offloadedRefs: [],
+          runId: "closed-run",
+          client: null,
+          context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+          assertCurrent: () => {
+            if (!authorityActive) {
+              throw new TypeError("agent runtime authority is no longer active");
+            }
+          },
+        }),
+      ).rejects.toThrow("agent runtime authority is no longer active");
+      expect(mocks.persistedMessages).toEqual([]);
+    },
+  );
+
+  it("deletes persisted media when delegated runtime authority closes during persistence", async () => {
+    const sessionKey = "agent:main:worker-child";
+    const sessionEntry: SessionEntry = { sessionId: "revoked-media-session", updatedAt: 1 };
+    mocks.loadSessionEntry.mockResolvedValue({
       cfg: {},
       storePath: "/tmp/sessions.json",
       canonicalKey: sessionKey,
-      entry: undefined,
-      store: {},
+      entry: sessionEntry,
+      store: { [sessionKey]: sessionEntry },
+    });
+    let authorityActive = true;
+    mocks.persistInboundImagesForTranscript.mockImplementationOnce(async () => {
+      authorityActive = false;
+      return { entries: [{ id: "revoked-media", imageKind: "inline", fact: {} }] };
     });
 
     await expect(
       prepareAgentRunUserTurn({
-        assertCurrent: () => {},
-        request: {
-          message: "must not reach the stale session",
-          idempotencyKey: "disappeared-session-run",
-        } as AgentRunRequest,
+        onUserTurnMediaPersisted: vi.fn(),
+        request: { message: "private image", idempotencyKey: "revoked-media-run" },
         cfg: {},
         sessionEntry,
         resolvedSessionKey: sessionKey,
-        admittedSessionId,
+        admittedSessionId: "revoked-media-session",
         activeSessionAgentId: "main",
         suppressVisibleSessionEffects: false,
         requestedPromptPersistenceSuppression: false,
         canUseInternalRuntimeHandoff: false,
-        message: "must not reach the stale session",
-        effectiveTranscriptInputText: "must not reach the stale session",
+        message: "private image",
+        effectiveTranscriptInputText: "private image",
         images: [],
         offloadedRefs: [],
-        runId: "disappeared-session-run",
+        runId: "revoked-media-run",
         client: null,
-        context: {
-          logGateway: { warn: vi.fn() },
-        } as unknown as AgentTurnContext,
+        context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+        assertCurrent: () => {
+          if (!authorityActive) {
+            throw new TypeError("agent runtime authority is no longer active");
+          }
+        },
       }),
-    ).rejects.toThrow("agent turn was not durably admitted");
-    expect(mocks.persistSessionTranscriptTurn).not.toHaveBeenCalled();
+    ).rejects.toThrow("agent runtime authority is no longer active");
+    expect(mocks.deleteMediaBuffer).toHaveBeenCalledWith("revoked-media", "inbound");
+    expect(mocks.loadSessionEntry).not.toHaveBeenCalled();
+    expect(mocks.resolveSessionTranscriptRuntimeTarget).not.toHaveBeenCalled();
+    expect(mocks.stageSessionPendingInput).not.toHaveBeenCalled();
+    expect(mocks.persistedMessages).toEqual([]);
   });
+
+  it.each(["committed", "unknown", "unretained"] as const)(
+    "transfers failed preparation cleanup exactly once for %s input custody",
+    async (custody) => {
+      const sessionKey = "agent:main:worker-child";
+      const sessionEntry: SessionEntry = { sessionId: "media-custody-session", updatedAt: 1 };
+      mocks.loadSessionEntry.mockResolvedValue({
+        cfg: {},
+        storePath: "/tmp/sessions.json",
+        canonicalKey: sessionKey,
+        entry: sessionEntry,
+        store: { [sessionKey]: sessionEntry },
+      });
+      mocks.persistInboundImagesForTranscript.mockResolvedValue({
+        entries: [{ id: "retained-media", imageKind: "inline", fact: {} }],
+      });
+      const failure =
+        custody === "unknown"
+          ? new SqliteWorkerError("input settlement unavailable", "outcome-unknown")
+          : new Error("input preparation failed");
+      mocks.stageSessionPendingInput.mockImplementationOnce(
+        async (
+          _scope: Parameters<typeof stageSessionPendingInput>[0],
+          options: Parameters<typeof stageSessionPendingInput>[1],
+        ) => {
+          if (custody === "committed") {
+            options.onCommitted?.({
+              state: "queued",
+              inputId: "committed-media-input",
+              message: options.message,
+              run: (operation) => operation(),
+              finish: vi.fn(),
+            });
+          }
+          throw failure;
+        },
+      );
+      const onUserTurnMediaPersisted = vi.fn();
+      const release = execHandoff.releaseExecApprovalFollowupRuntimeHandoff;
+      const cleanup = vi
+        .spyOn(execHandoff, "releaseExecApprovalFollowupRuntimeHandoff")
+        .mockImplementation((params) => {
+          expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);
+          return release(params);
+        });
+      try {
+        await expect(
+          prepareAgentRunUserTurn({
+            onUserTurnMediaPersisted,
+            assertCurrent: () => {},
+            request: { message: "retained input", idempotencyKey: "media-custody-run" },
+            cfg: {},
+            sessionEntry,
+            resolvedSessionKey: sessionKey,
+            admittedSessionId: sessionEntry.sessionId,
+            activeSessionAgentId: "main",
+            suppressVisibleSessionEffects: false,
+            requestedPromptPersistenceSuppression: false,
+            canUseInternalRuntimeHandoff: false,
+            message: "retained input",
+            effectiveTranscriptInputText: "retained input",
+            images: [],
+            offloadedRefs: [],
+            runId: "media-custody-run",
+            client: null,
+            context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+          }),
+        ).rejects.toBe(failure);
+        expect(cleanup).toHaveBeenCalledTimes(1);
+        expect(mocks.stageSessionPendingInput).toHaveBeenCalledTimes(1);
+        expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);
+        expect(mocks.deleteMediaBuffer).toHaveBeenCalledTimes(custody === "unretained" ? 1 : 0);
+        if (custody === "unretained") {
+          expect(mocks.deleteMediaBuffer).toHaveBeenCalledWith("retained-media", "inbound");
+        }
+      } finally {
+        cleanup.mockRestore();
+      }
+    },
+  );
 });

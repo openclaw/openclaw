@@ -1,5 +1,11 @@
 // MTS declarations preserve the source extension before runner preparation.
 export const scriptModuleEntrypoints = {
+  crabboxWrapper: {
+    currentModuleUrl: import.meta.url,
+    sourceWorkerName: "crabbox-wrapper",
+    sourceExtension: ".mts",
+    distWorkerPath: "legacy-finalizer/scripts/crabbox-wrapper.js",
+  },
   docsLinkAudit: {
     currentModuleUrl: import.meta.url,
     sourceWorkerName: "docs-link-audit",

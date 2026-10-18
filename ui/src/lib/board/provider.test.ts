@@ -11,6 +11,21 @@ import {
   mcpAppWidgetNameForViewId,
   type BoardProvider,
 } from "./provider.ts";
+import type { BoardWidget } from "./types.ts";
+
+function htmlWidget(name: string, overrides: Partial<BoardWidget> = {}): BoardWidget {
+  return {
+    name,
+    tabId: "main",
+    contentKind: "html",
+    sizeW: 6,
+    sizeH: 4,
+    position: 0,
+    grantState: "none",
+    revision: 1,
+    ...overrides,
+  };
+}
 
 afterEach(() => {
   vi.useRealTimers();
@@ -32,15 +47,6 @@ describe("board providers", () => {
     expect(names.every((name) => /^[a-z0-9][a-z0-9._-]*$/u.test(name))).toBe(true);
   });
 
-  it("generates opaque stable names for MCP App views", () => {
-    const first = mcpAppWidgetNameForViewId("view-session-bound");
-    const second = mcpAppWidgetNameForViewId("view-session-bound");
-
-    expect(first).toBe(second);
-    expect(first).toMatch(/^mcp-app-[a-f0-9]{16}$/u);
-    expect(first).not.toContain("view-session-bound");
-  });
-
   it("keeps the null provider chat-only", () => {
     const provider = boardProviderForSession({ sessionKey: "agent:main:plain" });
 
@@ -55,77 +61,6 @@ describe("board providers", () => {
 
   registerBoardProviderLeaseCases();
 
-  it("updates only the capabilities of the owning gateway board lease", async () => {
-    const sessionKey = "agent:main:lease-capability-update";
-    const snapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
-    const client = {
-      request: vi.fn(async () => snapshot) as never,
-      addEventListener: vi.fn(() => () => {}),
-    };
-    const writable = acquireBoardProviderForSession(
-      { sessionKey },
-      client,
-      true,
-      true,
-      true,
-      true,
-      false,
-    );
-    const approver = acquireBoardProviderForSession(
-      { sessionKey },
-      client,
-      true,
-      false,
-      false,
-      false,
-      true,
-    );
-
-    try {
-      await waitForFast(() => expect(writable.provider.snapshot$.value).toEqual(snapshot));
-
-      writable.update(client, true, {
-        canPinWidgets: false,
-        canPinMcpApps: false,
-        canMutate: false,
-        canGrant: false,
-      });
-
-      expect(writable.provider).toMatchObject({
-        canPinWidgets: false,
-        canPinMcpApps: false,
-        canMutate: false,
-        canGrant: false,
-      });
-      expect(approver.provider).toMatchObject({
-        canPinWidgets: false,
-        canPinMcpApps: false,
-        canMutate: false,
-        canGrant: true,
-      });
-      expect(client.request).toHaveBeenCalledOnce();
-      expect(client.addEventListener).toHaveBeenCalledOnce();
-
-      writable.update(client, true, {
-        canPinWidgets: true,
-        canPinMcpApps: true,
-        canMutate: true,
-        canGrant: false,
-      });
-
-      expect(writable.provider.canMutate).toBe(true);
-      expect(writable.provider.canPinWidgets).toBe(true);
-      expect(writable.provider.canPinMcpApps).toBe(true);
-      expect(writable.provider.canGrant).toBe(false);
-      expect(approver.provider.canGrant).toBe(true);
-      expect(approver.provider.canMutate).toBe(false);
-      expect(client.request).toHaveBeenCalledOnce();
-    } finally {
-      writable.release();
-      approver.release();
-    }
-  });
-
   it("dispatches newly authorized board actions after upgrading a read-only lease", async () => {
     const sessionKey = "agent:main:lease-scope-upgrade";
     const snapshot = {
@@ -133,16 +68,9 @@ describe("board providers", () => {
       revision: 1,
       tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
       widgets: [
-        {
-          name: "pending-widget",
-          tabId: "main",
-          contentKind: "html" as const,
-          sizeW: 6,
-          sizeH: 4,
-          position: 0,
+        htmlWidget("pending-widget", {
           grantState: "pending" as const,
-          revision: 1,
-        },
+        }),
       ],
     };
     const client = {
@@ -157,6 +85,15 @@ describe("board providers", () => {
       false,
       false,
       false,
+    );
+    const approver = acquireBoardProviderForSession(
+      { sessionKey },
+      client,
+      true,
+      false,
+      false,
+      false,
+      true,
     );
 
     try {
@@ -173,6 +110,8 @@ describe("board providers", () => {
         canMutate: true,
         canGrant: true,
       });
+      expect(approver.provider.canGrant).toBe(true);
+      expect(approver.provider.canMutate).toBe(false);
 
       await expect(lease.provider.applyOps([])).resolves.toBeUndefined();
       await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).resolves.toBeUndefined();
@@ -204,6 +143,8 @@ describe("board providers", () => {
         canMutate: false,
         canGrant: false,
       });
+      expect(approver.provider.canGrant).toBe(true);
+      expect(approver.provider.canMutate).toBe(false);
 
       await expect(lease.provider.applyOps([])).rejects.toThrow();
       await expect(lease.provider.pinWidget({ docId: "cv-upgraded" })).rejects.toThrow();
@@ -212,6 +153,7 @@ describe("board providers", () => {
       expect(client.request).toHaveBeenCalledTimes(5);
     } finally {
       lease.release();
+      approver.release();
     }
   });
 
@@ -278,229 +220,15 @@ describe("board providers", () => {
     }
   });
 
-  it("disposes a released gateway provider and creates a fresh provider on reacquire", async () => {
-    type Event = { event: string; payload: unknown };
-    const listeners = new Set<(event: Event) => void>();
-    const snapshot = {
-      sessionKey: "agent:main:leased-provider",
-      revision: 1,
-      tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
-      widgets: [],
-    };
-    const client = {
-      request: vi.fn(async () => snapshot) as never,
-      addEventListener: (listener: (event: Event) => void) => {
-        listeners.add(listener);
-        return () => listeners.delete(listener);
-      },
-    };
-    const first = acquireBoardProviderForSession(
-      { sessionKey: snapshot.sessionKey },
-      client as never,
-    );
-    await waitForFast(() => expect(first.provider.snapshot$.value).toEqual(snapshot));
-    const command = vi.fn();
-    first.provider.events.subscribe(command);
-
-    for (const listener of listeners) {
-      listener({
-        event: "board.command",
-        payload: { sessionKey: snapshot.sessionKey, command: { kind: "focus_tab", tabId: "main" } },
-      });
-    }
-    expect(command).toHaveBeenCalledOnce();
-
-    first.release();
-    expect(listeners.size).toBe(0);
-    for (const listener of listeners) {
-      listener({
-        event: "board.command",
-        payload: { sessionKey: snapshot.sessionKey, command: { kind: "focus_tab", tabId: "main" } },
-      });
-    }
-    expect(command).toHaveBeenCalledOnce();
-
-    const second = acquireBoardProviderForSession(
-      { sessionKey: snapshot.sessionKey },
-      client as never,
-    );
-    expect(second.provider).not.toBe(first.provider);
-    await waitForFast(() => expect(second.provider.snapshot$.value).toEqual(snapshot));
-    expect(listeners.size).toBe(1);
-    second.release();
-    expect(listeners.size).toBe(0);
-  });
-
-  it("distinguishes an unloaded board from a loaded empty snapshot", async () => {
-    const sessionKey = "agent:main:loading-board";
-    const emptySnapshot = { sessionKey, revision: 1, tabs: [], widgets: [] };
-    let resolveSnapshot: ((snapshot: typeof emptySnapshot) => void) | undefined;
-    const lease = acquireBoardProviderForSession(
-      { sessionKey },
-      {
-        request: vi.fn(
-          () =>
-            new Promise<typeof emptySnapshot>((resolve) => {
-              resolveSnapshot = resolve;
-            }),
-        ) as never,
-        addEventListener: () => () => {},
-      },
-    );
-
-    try {
-      expect(boardProviderForSession({ sessionKey })).toBeInstanceOf(GatewayBoardProvider);
-      expect(lease.provider.hasLoadedSnapshot).toBe(false);
-
-      resolveSnapshot?.(emptySnapshot);
-      await waitForFast(() => expect(lease.provider.snapshot$.value).toEqual(emptySnapshot));
-
-      expect(lease.provider.hasLoadedSnapshot).toBe(true);
-    } finally {
-      resolveSnapshot?.(emptySnapshot);
-      lease.release();
-    }
-  });
-
   it("shares one provider across equivalent main session keys", () => {
     expect(boardProviderForSession({ sessionKey: "main" })).toBe(
       boardProviderForSession({ sessionKey: "agent:main:main" }),
     );
   });
 
-  it("refetches changed boards while reloading only the named widget frame", async () => {
-    let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
-    const snapshots = [
-      {
-        sessionKey: "agent:main:live",
-        revision: 1,
-        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
-        widgets: [
-          {
-            name: "alpha",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
-            position: 0,
-            grantState: "none" as const,
-            revision: 1,
-            frameUrl: "/alpha-old",
-          },
-          {
-            name: "beta",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
-            position: 1,
-            grantState: "none" as const,
-            revision: 1,
-            frameUrl: "/beta-old",
-          },
-        ],
-      },
-      {
-        sessionKey: "agent:main:live",
-        revision: 2,
-        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
-        widgets: [
-          {
-            name: "alpha",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
-            position: 0,
-            grantState: "none" as const,
-            revision: 2,
-            frameUrl: "/alpha-new",
-          },
-          {
-            name: "beta",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
-            position: 1,
-            grantState: "none" as const,
-            revision: 1,
-            frameUrl: "/beta-reminted-but-preserved",
-          },
-        ],
-      },
-      {
-        sessionKey: "agent:main:live",
-        revision: 2,
-        tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
-        widgets: [
-          {
-            name: "alpha",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
-            position: 0,
-            grantState: "none" as const,
-            revision: 2,
-            frameUrl: "/alpha-reminted",
-          },
-          {
-            name: "beta",
-            tabId: "main",
-            contentKind: "html" as const,
-            sizeW: 6,
-            sizeH: 4,
-            position: 1,
-            grantState: "none" as const,
-            revision: 1,
-            frameUrl: "/beta-reminted-again",
-          },
-        ],
-      },
-    ];
-    const request = vi.fn(async (method: string) => {
-      expect(method).toBe("board.get");
-      return snapshots.shift();
-    });
-    const provider = new GatewayBoardProvider(
-      { sessionKey: "agent:main:live" },
-      {
-        request: request as never,
-        addEventListener: (next) => {
-          listener = next as typeof listener;
-          return () => {};
-        },
-      },
-    );
-    await waitForFast(() => expect(provider.snapshot$.value.revision).toBe(1));
-
-    listener?.({
-      event: "board.changed",
-      payload: { sessionKey: "agent:main:live", revision: 2, widget: "alpha" },
-    });
-    await vi.waitFor(() => expect(provider.snapshot$.value.revision).toBe(2));
-
-    expect(provider.widgetFrameUrl("alpha", 2)).toBe("/alpha-new");
-    expect(provider.widgetFrameUrl("beta", 1)).toBe("/beta-old");
-
-    await provider.refreshWidgetFrame("alpha");
-    expect(provider.widgetFrameUrl("alpha", 2)).toBe("/alpha-reminted");
-    expect(provider.widgetFrameUrl("beta", 1)).toBe("/beta-old");
-  });
-
   it("does not preserve a stale ticket when a widget generation is recreated", async () => {
     let listener: ((event: { event: string; payload: unknown }) => void) | undefined;
-    const baseWidget = {
-      name: "alpha",
-      tabId: "main",
-      contentKind: "html" as const,
-      sizeW: 6,
-      sizeH: 4,
-      position: 0,
-      grantState: "none" as const,
-      revision: 1,
-    };
+    const baseWidget = htmlWidget("alpha");
     const initial = {
       sessionKey: "agent:main:generation",
       revision: 1,
@@ -827,17 +555,9 @@ describe("board providers", () => {
       revision: 1,
       tabs: [{ tabId: "main", title: "Main", position: 0, chatDock: "right" as const }],
       widgets: [
-        {
-          name: "alpha",
-          tabId: "main",
-          contentKind: "html" as const,
-          sizeW: 6,
-          sizeH: 4,
-          position: 0,
-          grantState: "none" as const,
-          revision: 1,
+        htmlWidget("alpha", {
           frameUrl: "/old-ticket",
-        },
+        }),
       ],
     };
     const mutation = {

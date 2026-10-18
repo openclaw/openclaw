@@ -1,30 +1,13 @@
-/**
- * Channel metadata normalizer.
- *
- * Recomputes required metadata fields while preserving optional manifest/registry fields.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { ChannelMeta } from "./types.public.js";
-
-function stripRequiredChannelMeta(meta?: Partial<ChannelMeta> | null) {
-  const {
-    id: _ignoredId,
-    label: _ignoredLabel,
-    selectionLabel: _ignoredSelectionLabel,
-    docsPath: _ignoredDocsPath,
-    blurb: _ignoredBlurb,
-    ...rest
-  } = meta ?? {};
-  return rest;
-}
 
 export function normalizeChannelMeta<TId extends string>(params: {
   id: TId;
   meta?: Partial<ChannelMeta> | null;
   existing?: Partial<ChannelMeta> | null;
 }): ChannelMeta & { id: TId } {
-  const next = params.meta ?? undefined;
-  const existing = params.existing ?? undefined;
+  const next = params.meta;
+  const existing = params.existing;
   const label =
     normalizeOptionalString(next?.label) ??
     normalizeOptionalString(existing?.label) ??
@@ -42,15 +25,13 @@ export function normalizeChannelMeta<TId extends string>(params: {
   const blurb =
     normalizeOptionalString(next?.blurb) ?? normalizeOptionalString(existing?.blurb) ?? "";
 
-  // Required fields are recomputed from normalized precedence above. Spreading
-  // only optional leftovers prevents stale ids or labels from winning later.
   return {
-    ...stripRequiredChannelMeta(existing),
-    ...stripRequiredChannelMeta(next),
+    ...existing,
+    ...next,
     id: params.id,
     label,
     selectionLabel,
     docsPath,
     blurb,
-  } as ChannelMeta & { id: TId };
+  };
 }

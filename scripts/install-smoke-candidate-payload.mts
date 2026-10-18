@@ -4,6 +4,7 @@ import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { assembleStandaloneInstaller } from "./lib/standalone-installers.mjs";
 
 const MANIFEST_NAME = "install-smoke-candidate-payload.json";
 const SCHEMA = "openclaw.install-smoke-candidate-payload/v1";
@@ -239,16 +240,18 @@ export async function sealInstallSmokeCandidatePayload(
 
   // Re-read installers from the immutable source archive after candidate execution. Candidate
   // build hooks never get a writable handle to the sealed scripts consumed by privileged jobs.
-  const installScript = runPythonTarReader([
-    "repo-file",
-    options.archivePath,
-    "scripts/install.sh",
-  ]);
-  const cliInstallScript = runPythonTarReader([
-    "repo-file",
-    options.archivePath,
-    "scripts/install-cli.sh",
-  ]);
+  const readInstaller = (name: string) =>
+    assembleStandaloneInstaller(
+      runPythonTarReader(["repo-file", options.archivePath, `scripts/${name}`]).toString("utf8"),
+      () =>
+        runPythonTarReader([
+          "repo-file",
+          options.archivePath,
+          "scripts/install-policy.sh",
+        ]).toString("utf8"),
+    );
+  const installScript = readInstaller("install.sh");
+  const cliInstallScript = readInstaller("install-cli.sh");
   await fs.copyFile(sourceTarballPath, path.join(options.outputDir, "candidate.tgz"));
   await writeExclusive(
     path.join(options.outputDir, "candidate-pack.json"),

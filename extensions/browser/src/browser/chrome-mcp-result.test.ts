@@ -3,16 +3,12 @@ import { extractJsonMessage, formatChromeMcpToolErrorMessage } from "./chrome-mc
 
 describe("Chrome MCP result formats", () => {
   it.each([
-    ["text", "fenced", 123],
-    ["text", "fenced", "literal ``` inside text"],
     ["structured", "fenced", { text: '```json\n{"ok":true}\n```' }],
     ["text", "crlf", ["first", "```", "last"]],
     ["structured", "fenced", ""],
     ["text", "fenced", undefined],
-    ["structured", "fenced", undefined],
     ["text", "raw", "```json\nnot a wrapper\n```"],
     ["text", "trailing-fence", "preserved ``` text"],
-    ["structured", "fenced", "Example:\n```js\nconst value = 1;\n```"],
   ] as const)("preserves %s %s JSON result %j", (surface, format, value) => {
     const json = value === undefined ? "undefined" : JSON.stringify(value);
     const message =

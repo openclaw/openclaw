@@ -162,7 +162,7 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
         },
         async () => {
           expect(getAsyncWorkSignal()).toBeUndefined();
-          const create = vi.spyOn(ModelRegistry, "create");
+          const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
           const fork = vi.spyOn(ModelRegistry.prototype, "fork");
           spies.push(create, fork);
           if (mode === "callback-tail" || mode === "cancel-tail") {

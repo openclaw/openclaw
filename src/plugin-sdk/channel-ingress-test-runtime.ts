@@ -8,7 +8,8 @@ export {
 export { createHostChannelIngressRuntime } from "../channels/message-access/runtime.js";
 export {
   createChannelIngressQueue as createChannelIngressQueueForTests,
-  listChannelIngressQueueAccountIds as listChannelIngressQueueAccountIdsForTests,
+  listChannelIngressQueueAccountIdsReadOnly as listChannelIngressQueueAccountIdsForTests,
 } from "../channels/message/ingress-queue.js";
 export { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
+export { observeChannelIngressQueueWrite } from "../channels/message/ingress-drain.test-helpers.js";
 export { withRegisteredChannelIngress } from "./test-helpers/registered-channel-ingress.js";

@@ -13,10 +13,10 @@ describe("Codex network proxy config admission", () => {
       },
     },
     {
-      name: "invalid sibling field",
-      field: "appServer.remoteWorkspaceRoot",
+      name: "malformed auth input",
+      field: "appServer.authToken",
       appServer: {
-        remoteWorkspaceRoot: " ",
+        authToken: { unexpected: "synthetic-secret" },
         networkProxy: { enabled: true, domains: { "example.com": "allow" } },
       },
     },
@@ -25,9 +25,9 @@ describe("Codex network proxy config admission", () => {
     ({ appServer, field }) => {
       const pluginConfig = {
         appServer: {
-          ...appServer,
           authToken: "synthetic-secret-token",
           headers: { Authorization: "Bearer synthetic-secret-header" },
+          ...appServer,
         },
       };
       const validated = validateJsonSchemaValue({
@@ -46,28 +46,6 @@ describe("Codex network proxy config admission", () => {
       );
     },
   );
-
-  it("rejects a manifest-valid malformed auth input without dropping the enabled allowlist", () => {
-    const validated = validateJsonSchemaValue({
-      schema: manifest.configSchema,
-      value: {
-        appServer: {
-          authToken: { unexpected: "synthetic-secret" },
-          networkProxy: { enabled: true, domains: { "example.com": "allow" } },
-        },
-      },
-      applyDefaults: true,
-    });
-    expect(validated.ok).toBe(true);
-    if (!validated.ok) {
-      throw new Error("Expected manifest-valid config");
-    }
-    expect(() => resolveRuntimeForTest({ pluginConfig: validated.value })).toThrow(
-      new Error(
-        'Invalid plugins.entries.codex.config.appServer.authToken; fix this field before starting Codex with network restrictions. Run "openclaw doctor --fix" for supported repairs.',
-      ),
-    );
-  });
 
   it("identifies an invalid domains map without exposing its keys or values", () => {
     expect(() =>

@@ -1,4 +1,3 @@
-// Qa Lab plugin module implements generic QA evidence gallery data.
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -61,17 +60,9 @@ export class QaEvidenceGalleryError extends Error {
   }
 }
 
-function evidenceError(message: string, statusCode: number): QaEvidenceGalleryError {
-  return new QaEvidenceGalleryError(message, statusCode);
-}
+type GalleryRoots = { extraRoots?: readonly string[]; repoRoot: string };
 
-function sanitizeGalleryText(
-  value: string,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function sanitizeGalleryText(value: string, params: GalleryRoots) {
   const localRoots = [...new Set([params.repoRoot, ...(params.extraRoots ?? [])])];
   const roots = [
     ...localRoots.flatMap((root) => [
@@ -86,13 +77,7 @@ function sanitizeGalleryText(
     .reduce((text, entry) => text.replaceAll(entry.from, entry.to), value);
 }
 
-function displayGalleryPath(
-  value: string,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function displayGalleryPath(value: string, params: GalleryRoots) {
   if (path.isAbsolute(value)) {
     const absolute = path.resolve(value);
     for (const root of [params.repoRoot, ...(params.extraRoots ?? [])]) {
@@ -105,23 +90,11 @@ function displayGalleryPath(
   return sanitizeGalleryText(value, params);
 }
 
-function sanitizeGalleryPreview(
-  value: string | null,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function sanitizeGalleryPreview(value: string | null, params: GalleryRoots) {
   return value === null ? null : sanitizeGalleryText(value, params);
 }
 
-function sanitizeGalleryStringArray(
-  values: Iterable<unknown>,
-  params: {
-    extraRoots?: readonly string[];
-    repoRoot: string;
-  },
-) {
+function sanitizeGalleryStringArray(values: Iterable<unknown>, params: GalleryRoots) {
   return readOrderedStringArray(
     Array.from(values)
       .filter((value): value is string => typeof value === "string")
@@ -152,18 +125,18 @@ async function resolveQaEvidenceFile(params: {
   inputPath: string;
   repoRoot: string;
 }): Promise<string> {
-  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const repoRoot = params.repoRoot;
   const raw = params.inputPath.trim();
   if (!raw) {
-    throw evidenceError("Evidence path is required.", 400);
+    throw new QaEvidenceGalleryError("Evidence path is required.", 400);
   }
   const candidate = path.resolve(repoRoot, raw);
   const realCandidate = await realpathIfExists(candidate);
   if (!realCandidate) {
-    throw evidenceError("Evidence path not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence path not found.", 404);
   }
   if (!isPathInside(repoRoot, realCandidate)) {
-    throw evidenceError("Evidence path must stay inside the repo root.", 403);
+    throw new QaEvidenceGalleryError("Evidence path must stay inside the repo root.", 403);
   }
   const stats = await fs.stat(realCandidate);
   const evidencePath = stats.isDirectory()
@@ -171,10 +144,10 @@ async function resolveQaEvidenceFile(params: {
     : realCandidate;
   const realEvidencePath = await realpathIfExists(evidencePath);
   if (!realEvidencePath) {
-    throw evidenceError("qa-evidence.json not found.", 404);
+    throw new QaEvidenceGalleryError("qa-evidence.json not found.", 404);
   }
   if (!isPathInside(repoRoot, realEvidencePath)) {
-    throw evidenceError("qa-evidence.json must stay inside the repo root.", 403);
+    throw new QaEvidenceGalleryError("qa-evidence.json must stay inside the repo root.", 403);
   }
   return realEvidencePath;
 }
@@ -187,7 +160,7 @@ export async function resolveQaEvidenceArtifactFile(params: {
   const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
   const evidencePath = await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot });
   if (!params.artifactPath.trim()) {
-    throw evidenceError("Artifact path is required.", 400);
+    throw new QaEvidenceGalleryError("Artifact path is required.", 400);
   }
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
@@ -198,7 +171,7 @@ export async function resolveQaEvidenceArtifactFile(params: {
     repoRoot,
   });
   if (!artifactFile) {
-    throw evidenceError("Evidence artifact not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence artifact not found.", 404);
   }
   const allowedArtifactFiles = await collectDeclaredQaEvidenceArtifactFiles({
     evidencePath,
@@ -209,7 +182,10 @@ export async function resolveQaEvidenceArtifactFile(params: {
   if (allowedArtifactFiles.has(artifactFile)) {
     return artifactFile;
   }
-  throw evidenceError("Evidence artifact is not declared by this evidence summary.", 403);
+  throw new QaEvidenceGalleryError(
+    "Evidence artifact is not declared by this evidence summary.",
+    403,
+  );
 }
 
 export async function resolveQaEvidenceArtifactFileByIndex(params: {
@@ -226,7 +202,7 @@ export async function resolveQaEvidenceArtifactFileByIndex(params: {
     !Number.isSafeInteger(params.artifactIndex) ||
     params.artifactIndex < 0
   ) {
-    throw evidenceError("Evidence artifact index is invalid.", 400);
+    throw new QaEvidenceGalleryError("Evidence artifact index is invalid.", 400);
   }
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
@@ -234,7 +210,7 @@ export async function resolveQaEvidenceArtifactFileByIndex(params: {
   const artifacts = await projectQaEvidenceArtifacts({ evidencePath, repoRoot, summary });
   const artifact = artifacts[params.entryIndex]?.[params.artifactIndex];
   if (!artifact) {
-    throw evidenceError("Evidence artifact not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence artifact not found.", 404);
   }
   const artifactFile = await resolveArtifactFileWithinRoots({
     artifactPath: artifact.path,
@@ -242,7 +218,7 @@ export async function resolveQaEvidenceArtifactFileByIndex(params: {
     repoRoot,
   });
   if (!artifactFile) {
-    throw evidenceError("Evidence artifact not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence artifact not found.", 404);
   }
   return artifactFile;
 }
@@ -256,7 +232,7 @@ export async function resolveQaEvidenceProducerFile(params: {
   const evidencePath = await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot });
   const producerFile = UX_MATRIX_PRODUCER_FILES.find((file) => file.key === params.producerFile);
   if (!producerFile) {
-    throw evidenceError("Evidence producer file is unknown.", 400);
+    throw new QaEvidenceGalleryError("Evidence producer file is unknown.", 400);
   }
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
@@ -267,7 +243,7 @@ export async function resolveQaEvidenceProducerFile(params: {
     summaryEntries: summary.entries,
   });
   if (!producerRoot) {
-    throw evidenceError("Evidence producer context not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence producer context not found.", 404);
   }
   const evidenceDir = path.dirname(evidencePath);
   const producerPath = path.join(producerRoot, producerFile.path);
@@ -276,7 +252,7 @@ export async function resolveQaEvidenceProducerFile(params: {
     evidenceDir,
   ]);
   if (!realProducerFile) {
-    throw evidenceError("Evidence producer file not found.", 404);
+    throw new QaEvidenceGalleryError("Evidence producer file not found.", 404);
   }
   return realProducerFile;
 }
@@ -410,7 +386,7 @@ async function collectDeclaredQaEvidenceArtifactFiles(params: {
   summaryEntries: readonly QaEvidenceSummaryEntry[];
   artifacts: readonly (readonly QaEvidenceArtifact[])[];
 }): Promise<Set<string>> {
-  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const repoRoot = params.repoRoot;
   const evidenceDir = path.dirname(params.evidencePath);
   const allowed = new Set<string>();
   for (const entryArtifacts of params.artifacts) {
@@ -568,7 +544,6 @@ async function buildProducerContextFile(params: {
 }
 
 async function buildArtifactView(params: {
-  allowedArtifactFiles: ReadonlySet<string>;
   artifactIndex: number;
   artifact: QaEvidenceArtifact;
   evidenceDir: string;
@@ -590,35 +565,26 @@ async function buildArtifactView(params: {
   const displayPath =
     (realFileRepoPath ? sanitizeGalleryText(realFileRepoPath, params) : null) ??
     sanitizeGalleryText(params.artifact.path, params);
-  if (!realFile || !params.allowedArtifactFiles.has(realFile)) {
-    return {
-      exists: false,
-      error: realFile
-        ? "Evidence artifact is not declared by this evidence summary."
-        : "Evidence artifact not found.",
-      href: null,
-      kind: sanitizeGalleryText(params.artifact.kind, params),
-      mediaKind,
-      path: displayPath,
-      preview: null,
-      source: sanitizeGalleryText(params.artifact.source, params),
-    };
-  }
+  const exists = realFile !== null;
   return {
-    exists: true,
-    error: null,
-    href: artifactHref(params.hrefEvidencePath, {
-      artifactIndex: params.artifactIndex,
-      entryIndex: params.entryIndex,
-    }),
+    exists,
+    error: exists ? null : "Evidence artifact not found.",
+    href: exists
+      ? artifactHref(params.hrefEvidencePath, {
+          artifactIndex: params.artifactIndex,
+          entryIndex: params.entryIndex,
+        })
+      : null,
     kind: sanitizeGalleryText(params.artifact.kind, params),
     mediaKind,
     path: displayPath,
-    preview: await readPreview(realFile, mediaKind)
-      .then((preview) => sanitizeGalleryPreview(preview, params))
-      .catch((error: unknown) =>
-        sanitizeGalleryText(`Preview unavailable: ${formatErrorMessage(error)}`, params),
-      ),
+    preview: exists
+      ? await readPreview(realFile, mediaKind)
+          .then((preview) => sanitizeGalleryPreview(preview, params))
+          .catch((error: unknown) =>
+            sanitizeGalleryText(`Preview unavailable: ${formatErrorMessage(error)}`, params),
+          )
+      : null,
     source: sanitizeGalleryText(params.artifact.source, params),
   };
 }
@@ -654,22 +620,15 @@ function readMatrixDimensionIds(params: {
   if (!Array.isArray(params.value)) {
     return sanitizeGalleryStringArray(params.fallback, params);
   }
-  const ids = sanitizeGalleryStringArray(
-    params.value.map((entry) => {
-      if (typeof entry === "string") {
-        return entry;
-      }
-      return readStringValue(readRecord(entry)?.id) ?? null;
-    }),
+  return sanitizeGalleryStringArray(
+    [
+      ...params.value.map((entry) =>
+        typeof entry === "string" ? entry : (readStringValue(readRecord(entry)?.id) ?? null),
+      ),
+      ...params.fallback,
+    ],
     params,
   );
-  for (const rawFallbackId of params.fallback) {
-    const fallbackId = sanitizeGalleryText(rawFallbackId, params);
-    if (!ids.includes(fallbackId)) {
-      ids.push(fallbackId);
-    }
-  }
-  return ids;
 }
 
 function uxMatrixEntryKey(
@@ -774,7 +733,7 @@ async function candidateProducerRoots(params: {
   repoRoot: string;
   summaryEntries: readonly QaEvidenceSummaryEntry[];
 }) {
-  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
+  const repoRoot = params.repoRoot;
   const evidenceDir = path.dirname(params.evidencePath);
   const roots = new Set<string>([evidenceDir]);
   for (const entry of params.summaryEntries) {
@@ -830,10 +789,8 @@ async function buildProducerContext(params: {
   if (!rootPath) {
     return null;
   }
-  const repoRoot = await fs.realpath(path.resolve(params.repoRoot));
-  const evidenceDir = path.dirname(
-    await resolveQaEvidenceFile({ inputPath: params.evidencePath, repoRoot }),
-  );
+  const repoRoot = params.repoRoot;
+  const evidenceDir = path.dirname(params.evidencePath);
   const allowedRoots = [repoRoot, evidenceDir];
   const producerPaths = Object.fromEntries(
     UX_MATRIX_PRODUCER_FILES.map((file) => [file.key, path.join(rootPath, file.path)]),
@@ -930,6 +887,8 @@ export async function buildQaEvidenceGalleryModel(params: {
     repoRoot,
   });
   const hrefEvidencePath = toRepoRelativePath(repoRoot, evidencePath);
+  const viewContext = { extraRoots: [requestedRepoRoot], hrefEvidencePath, repoRoot };
+  const sanitizeEntryText = (value: string) => sanitizeGalleryText(value, viewContext);
   const summary = validateQaEvidenceSummaryJson(
     JSON.parse(await fs.readFile(evidencePath, "utf8")) as unknown,
   );
@@ -941,27 +900,16 @@ export async function buildQaEvidenceGalleryModel(params: {
   };
   const effectiveEntries = new Set(getEffectiveQaEvidenceEntries(summary));
   const projectedArtifacts = await projectQaEvidenceArtifacts({ evidencePath, repoRoot, summary });
-  // Resolve the declared-artifact allowlist once; buildArtifactView then only checks membership
-  // instead of re-reading the evidence file and re-collecting the allowlist per artifact.
   const evidenceDir = path.dirname(evidencePath);
-  const allowedArtifactFiles = await collectDeclaredQaEvidenceArtifactFiles({
-    evidencePath,
-    repoRoot,
-    summaryEntries: summary.entries,
-    artifacts: projectedArtifacts,
-  });
   const artifactTasks = projectedArtifacts.flatMap((entryArtifacts, entryIndex) =>
     entryArtifacts.map(
       (artifact, artifactIndex) => () =>
         buildArtifactView({
-          allowedArtifactFiles,
           artifact,
           artifactIndex,
           evidenceDir,
           entryIndex,
-          extraRoots: [requestedRepoRoot],
-          hrefEvidencePath,
-          repoRoot,
+          ...viewContext,
         }),
     ),
   );
@@ -980,11 +928,6 @@ export async function buildQaEvidenceGalleryModel(params: {
     const artifactCount = projectedArtifacts[entryIndex]!.length;
     const artifacts = artifactViews.slice(artifactOffset, artifactOffset + artifactCount);
     artifactOffset += artifactCount;
-    const sanitizeEntryText = (value: string) =>
-      sanitizeGalleryText(value, {
-        extraRoots: [requestedRepoRoot],
-        repoRoot,
-      });
     return {
       artifacts,
       key: String(entryIndex),
@@ -999,10 +942,7 @@ export async function buildQaEvidenceGalleryModel(params: {
       id: sanitizeEntryText(entry.test.id),
       kind: sanitizeEntryText(entry.test.kind),
       sourcePath: entry.test.source?.path
-        ? displayGalleryPath(entry.test.source.path, {
-            extraRoots: [requestedRepoRoot],
-            repoRoot,
-          })
+        ? displayGalleryPath(entry.test.source.path, viewContext)
         : null,
       status: entry.result.status,
       title: sanitizeEntryText(entry.test.title),
@@ -1014,14 +954,10 @@ export async function buildQaEvidenceGalleryModel(params: {
     evidenceMode: summary.evidenceMode,
     evidencePath: hrefEvidencePath,
     generatedAt: summary.generatedAt,
-    profile: summary.profile
-      ? sanitizeGalleryText(summary.profile, { extraRoots: [requestedRepoRoot], repoRoot })
-      : null,
+    profile: summary.profile ? sanitizeEntryText(summary.profile) : null,
     producerContext: await buildProducerContext({
       evidencePath,
-      extraRoots: [requestedRepoRoot],
-      hrefEvidencePath,
-      repoRoot,
+      ...viewContext,
       summaryEntries: summary.entries,
       effectiveEntries,
     }),

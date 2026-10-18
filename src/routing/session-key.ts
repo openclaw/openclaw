@@ -107,8 +107,11 @@ export function agentSessionKeysMatchByRequestKey(
   if (!leftRaw || !rightRaw) {
     return false;
   }
+  const leftKey = parseAgentSessionKey(leftRaw);
+  const rightKey = parseAgentSessionKey(rightRaw);
   return (
-    leftRaw === rightRaw || toAgentRequestSessionKey(leftRaw) === toAgentRequestSessionKey(rightRaw)
+    (!leftKey || !rightKey || leftKey.agentId === rightKey.agentId) &&
+    (leftKey?.rest ?? leftRaw) === (rightKey?.rest ?? rightRaw)
   );
 }
 

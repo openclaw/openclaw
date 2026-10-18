@@ -1,4 +1,3 @@
-// Mistral plugin module implements memory embedding adapter behavior.
 import {
   embeddingProviderOwnsDestination,
   isMissingEmbeddingApiKeyError,

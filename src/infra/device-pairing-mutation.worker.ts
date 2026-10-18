@@ -1,5 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import type { DevicePairingAdmissionFacts } from "./device-pairing-worker-contract.js";
+import type { DevicePairingAdmissionFacts } from "./device-pairing-admission.types.js";
 import { requestSqliteWorkerOperationAdmission } from "./sqlite-worker-operation-admission.js";
 
 const admission = new AsyncLocalStorage<DevicePairingAdmissionFacts[]>();

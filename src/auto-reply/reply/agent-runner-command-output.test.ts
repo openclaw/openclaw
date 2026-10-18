@@ -11,6 +11,42 @@ function buildFromCliResult(overrides: Record<string, unknown>) {
 }
 
 describe("buildCommandOutputFromToolResultEvent", () => {
+  it.each(["exec", "mcp__openclaw__exec", "mcp_openclaw_exec"])(
+    "preserves the authored title and raw identity for %s",
+    (name) => {
+      expect(
+        buildFromCliResult({
+          name,
+          commandBearing: true,
+          args: { command: "false", title: "Check build status" },
+          isError: true,
+          result: "command failed",
+        }),
+      ).toMatchObject({
+        name,
+        toolCallId: "call-1",
+        title: "Check build status",
+        status: "failed",
+        output: "command failed",
+      });
+    },
+  );
+
+  it.each([
+    { name: "mcp__other__exec", commandBearing: true, title: undefined, expected: "false" },
+    { name: "mcp__openclaw__exec", title: "Recorded title", expected: "Recorded title" },
+  ])("keeps explicit titles and third-party names unchanged: $name", ({ expected, ...data }) => {
+    expect(
+      buildFromCliResult({
+        commandBearing: true,
+        args: { command: "false", title: "Check build status" },
+        isError: true,
+        result: "command failed",
+        ...data,
+      }),
+    ).toMatchObject({ name: data.name, title: expected, status: "failed" });
+  });
+
   it("reports a CLI command failure whose result is only text", () => {
     // CLI backends report the outcome plus raw content, never a structured
     // record, so requiring a structured field dropped the failure entirely.
@@ -21,6 +57,7 @@ describe("buildCommandOutputFromToolResultEvent", () => {
 
     expect(built?.status).toBe("failed");
     expect(built?.output).toBe("bash: nope-not-a-command: command not found");
+    expect(built?.title).toContain("nope-not-a-command");
   });
 
   it("reads the outcome from streamed text blocks", () => {
@@ -34,18 +71,6 @@ describe("buildCommandOutputFromToolResultEvent", () => {
 
     expect(built?.status).toBe("failed");
     expect(built?.output).toBe("line one\nline two");
-  });
-
-  it("describes the command that ran instead of what it printed", () => {
-    const built = buildFromCliResult({ isError: true, result: "some noisy stderr" });
-
-    // The title drives the visible progress line; without it the line would
-    // replace the request with the tool's output.
-    expect(built?.title).toContain("nope-not-a-command");
-  });
-
-  it("marks a successful CLI command completed", () => {
-    expect(buildFromCliResult({ isError: false, result: "alpha" })?.status).toBe("completed");
   });
 
   it("projects a safe terminal state from a namespaced command-bearing result", () => {

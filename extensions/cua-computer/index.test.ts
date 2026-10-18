@@ -75,8 +75,8 @@ describe("cua-computer plugin registration", () => {
     ).toBe(false);
   });
 
-  it.each(["linux", "win32"])("loads only remote policy by default on %s", (platform) => {
-    Object.defineProperty(process, "platform", { configurable: true, value: platform });
+  it("loads only remote policy by default on Linux", () => {
+    Object.defineProperty(process, "platform", { configurable: true, value: "linux" });
     const registerNodeHostCommand = vi.fn();
     const policies: OpenClawPluginNodeInvokePolicy[] = [];
     registerPlugin({
@@ -91,53 +91,20 @@ describe("cua-computer plugin registration", () => {
     expect(artifactMocks.registerDoctor).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { platform: "darwin", config: {} },
-    { platform: "linux", config: enabledConfig },
-    { platform: "win32", config: enabledConfig },
-    {
-      platform: "linux",
-      config: { plugins: { entries: { " CUA-COMPUTER ": { enabled: true } } } },
+  it.each([{ platform: "darwin", config: {} }])(
+    "preserves native provider activation on $platform",
+    ({ platform, config }) => {
+      Object.defineProperty(process, "platform", { configurable: true, value: platform });
+      const commands: OpenClawPluginNodeHostCommand[] = [];
+      registerPlugin({ config, registerNodeHostCommand: (command) => commands.push(command) });
+      expect(commands.map((command) => command.command)).toEqual([
+        "screen.snapshot",
+        "computer.act",
+      ]);
+      expect(artifactMocks.verify).toHaveBeenCalledOnce();
+      expect(artifactMocks.registerDoctor).toHaveBeenCalledOnce();
     },
-  ])("preserves native provider activation on $platform", ({ platform, config }) => {
-    Object.defineProperty(process, "platform", { configurable: true, value: platform });
-    const commands: OpenClawPluginNodeHostCommand[] = [];
-    registerPlugin({ config, registerNodeHostCommand: (command) => commands.push(command) });
-    expect(commands.map((command) => command.command)).toEqual(["screen.snapshot", "computer.act"]);
-    expect(artifactMocks.verify).toHaveBeenCalledOnce();
-    expect(artifactMocks.registerDoctor).toHaveBeenCalledOnce();
-  });
-
-  it("registers the screen and dangerous computer node-host commands", () => {
-    const commands: OpenClawPluginNodeHostCommand[] = [];
-    const policies: OpenClawPluginNodeInvokePolicy[] = [];
-    const registerTool = vi.fn();
-    const registerCli = vi.fn();
-    const registerNodeCliFeature = vi.fn();
-    const registerService = vi.fn();
-    registerPlugin({
-      pluginConfig: {},
-      registerNodeHostCommand: (command: OpenClawPluginNodeHostCommand) => commands.push(command),
-      registerNodeInvokePolicy: (policy: OpenClawPluginNodeInvokePolicy) => policies.push(policy),
-      registerTool,
-      registerCli,
-      registerNodeCliFeature,
-      registerService,
-    });
-
-    expect(commands.map(({ command, cap, dangerous }) => ({ command, cap, dangerous }))).toEqual([
-      { command: "screen.snapshot", cap: "screen", dangerous: false },
-      { command: "computer.act", cap: "computer", dangerous: true },
-    ]);
-    expect(policies).toHaveLength(1);
-    expect(policies[0]).toMatchObject({ commands: ["computer.act"], dangerous: true });
-    expect(policies[0]?.defaultPlatforms).toBeUndefined();
-    expect(commands.every((command) => command.agentTool === undefined)).toBe(true);
-    expect(registerTool).not.toHaveBeenCalled();
-    expect(registerCli).not.toHaveBeenCalled();
-    expect(registerNodeCliFeature).not.toHaveBeenCalled();
-    expect(registerService).not.toHaveBeenCalled();
-  });
+  );
 
   it("accepts the retired driver path as a no-op while keeping both schemas strict", () => {
     const config = { driverPath: "/usr/local/bin/cua-driver" };

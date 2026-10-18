@@ -5,12 +5,13 @@ import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
 import { roleScopesAllow } from "../shared/operator-scope-compat.js";
-import { resolveGatewayAuthPolicyGeneration } from "./auth-policy.js";
+import { captureGatewayAuthPolicy } from "./auth-policy.js";
 import type { ResolvedGatewayAuth } from "./auth.js";
 import { resolveControlUiPluginAuthCookieGrants } from "./control-ui-plugin-auth-cookie.js";
 import {
   applyHttpOperatorRoleScopeCeiling,
   checkHttpCookieUserProfile,
+  prepareHttpUserProfileCatalog,
 } from "./http-auth-user-profile.js";
 import { sendUnauthorized } from "./http-common.js";
 import { getBearerToken } from "./http-header-value.js";
@@ -18,7 +19,14 @@ import {
   bindHttpOperatorAccessAuthority,
   sendGatewayHttpAuthFailure,
 } from "./http-operator-access.js";
-import { hasCurrentGatewayOperatorAccess } from "./operator-access-policy.js";
+import {
+  bindHttpResponseAuthority,
+  GatewayHttpRequestAuthorityError,
+} from "./http-request-authority.js";
+import {
+  getRemoteControlUiIngressContext,
+  assertRemoteControlUiIngressCurrent,
+} from "./ingress-attribution.js";
 import { normalizeOperatorScopeList } from "./operator-scopes.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
@@ -29,14 +37,16 @@ export function resolveControlUiPluginAuthCookieGeneration(
   cfg: OpenClawConfig,
 ): string | undefined {
   return authGeneration
-    ? sha256Base64Url(`${authGeneration}\0${resolveGatewayAuthPolicyGeneration(cfg)}`)
+    ? sha256Base64Url(`${authGeneration}\0${captureGatewayAuthPolicy(cfg, null).generation}`)
     : undefined;
 }
 
-export function authorizeControlUiPluginCookieRequest(
+function readControlUiPluginCookieRequest(
   req: IncomingMessage,
-  params: { requestPath: string; authGeneration: string | undefined; res?: ServerResponse },
+  params: { requestPath: string; authGeneration: string | undefined },
 ) {
+  const ingress = getRemoteControlUiIngressContext(req);
+  assertRemoteControlUiIngressCurrent(ingress);
   // WebSocket upgrades bypass this HTTP-only handoff and use
   // checkGatewayHttpRequestAuth directly in attachGatewayUpgradeHandler.
   // Explicit owner/staff credentials retain their own authority even when an
@@ -55,10 +65,50 @@ export function authorizeControlUiPluginCookieRequest(
   if (grants.length === 0) {
     return null;
   }
-  const profileAuth = checkHttpCookieUserProfile(
-    cfg,
-    grants.map((grant) => grant.profileId),
-  );
+  const profileId = grants[0]?.profileId;
+  if (grants.some((grant) => grant.profileId !== profileId)) {
+    return null;
+  }
+  return { cfg, grants, profileId };
+}
+
+export async function prepareControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined; res: ServerResponse },
+) {
+  const selected = readControlUiPluginCookieRequest(req, params);
+  if (
+    !getRemoteControlUiIngressContext(req) &&
+    selected?.profileId &&
+    !(await prepareHttpUserProfileCatalog(params.res))
+  ) {
+    return null;
+  }
+  return authorizeControlUiPluginCookieRequest(req, params);
+}
+
+export function authorizeControlUiPluginCookieRequest(
+  req: IncomingMessage,
+  params: { requestPath: string; authGeneration: string | undefined; res?: ServerResponse },
+) {
+  const selected = readControlUiPluginCookieRequest(req, params);
+  if (!selected) {
+    return null;
+  }
+  const { cfg, grants, profileId } = selected;
+  const ingress = getRemoteControlUiIngressContext(req);
+  const principal = ingress?.resolvePrincipal();
+  const profileAuth = principal
+    ? {
+        ok: true as const,
+        profile: {
+          authenticatedUserProfile: principal.authenticatedUserProfile,
+          operatorRolePolicy: principal.operatorRolePolicy,
+          operatorRoleActor: principal.operatorRoleActor,
+          operatorAccessAuthority: principal.operatorAccessAuthority,
+        },
+      }
+    : checkHttpCookieUserProfile(cfg, profileId);
   if (!profileAuth.ok) {
     if (profileAuth.authResult.reason === "operator_access_denied" && params.res) {
       sendGatewayHttpAuthFailure(params.res, profileAuth.authResult);
@@ -102,17 +152,14 @@ export function bindControlUiPluginCookieRequestAuthority(
     hasCurrentClientAuthority: () => boolean;
   },
 ) {
-  const hasCurrentClientAuthority = () =>
-    !params.res.writableEnded &&
-    !params.res.destroyed &&
-    params.hasCurrentClientAuthority() &&
-    hasCurrentGatewayOperatorAccess(cookieAuth.requestAuth.operatorAccessAuthority);
+  const requestAuth = bindHttpResponseAuthority(
+    cookieAuth.requestAuth,
+    params.res,
+    params.hasCurrentClientAuthority,
+  );
   const revalidate = async () => {
-    if (params.res.writableEnded || params.res.destroyed) {
-      throw new Error("HTTP request authority expired");
-    }
     // A renewed grant may satisfy a new request, never revive this original source.
-    cookieAuth.requestAuth.operatorAccessAuthority?.assertCurrent();
+    requestAuth.assertCurrent();
     // Reuse the cookie/profile owner, including expiry and the current auth
     // generation. Admission does not extend a browser grant across awaited work.
     const current = authorizeControlUiPluginCookieRequest(params.req, {
@@ -123,10 +170,10 @@ export function bindControlUiPluginCookieRequestAuthority(
       ),
     });
     const currentGrants = current?.requestAuth.controlUiPluginGrants ?? [];
+    requestAuth.assertCurrent();
     // Prepared data used the admitted policy, not just its operator scopes. A
     // policy change requires a fresh request before that data can be disclosed.
     if (
-      !hasCurrentClientAuthority() ||
       !isDeepStrictEqual(
         current?.requestAuth.operatorRolePolicy,
         cookieAuth.requestAuth.operatorRolePolicy,
@@ -147,14 +194,13 @@ export function bindControlUiPluginCookieRequestAuthority(
       )
     ) {
       sendUnauthorized(params.res);
-      throw new Error("Unauthorized");
+      throw new GatewayHttpRequestAuthorityError("Unauthorized");
     }
   };
   return {
     ...cookieAuth,
     requestAuth: {
-      ...cookieAuth.requestAuth,
-      hasCurrentClientAuthority,
+      ...requestAuth,
       revalidate,
     },
   };

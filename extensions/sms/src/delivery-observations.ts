@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { sha256Hex } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { getSmsRuntime } from "./runtime.js";
 import { resolveTwilioMessageSid } from "./twilio.js";
@@ -43,12 +43,7 @@ export type SmsDeliveryRecord = {
   observations: SmsDeliveryObservation[];
 };
 
-export type SmsDeliveryRecorder = {
-  record: (params: {
-    account: ResolvedSmsAccount;
-    form: Record<string, string>;
-  }) => Promise<{ duplicate: boolean; record: SmsDeliveryRecord }>;
-};
+export type SmsDeliveryRecorder = ReturnType<typeof createSmsDeliveryRecorder>;
 
 let deliveryStore: PluginStateKeyedStore<SmsDeliveryRecord> | undefined;
 let deliveryStoreRuntime: ReturnType<typeof getSmsRuntime> | undefined;
@@ -68,10 +63,6 @@ function resolveDeliveryStatus(form: Record<string, string>): string {
   );
 }
 
-function hashAccountSid(accountSid: string): string {
-  return createHash("sha256").update(accountSid).digest("hex");
-}
-
 function fingerprintObservation(params: {
   source: SmsDeliveryObservationSource;
   messageSid: string;
@@ -79,17 +70,15 @@ function fingerprintObservation(params: {
   errorCode?: string;
   rawDlrDoneDate?: string;
 }): string {
-  return createHash("sha256")
-    .update(
-      JSON.stringify([
-        params.source,
-        params.messageSid,
-        params.status,
-        params.errorCode ?? "",
-        params.rawDlrDoneDate ?? "",
-      ]),
-    )
-    .digest("hex");
+  return sha256Hex(
+    JSON.stringify([
+      params.source,
+      params.messageSid,
+      params.status,
+      params.errorCode ?? "",
+      params.rawDlrDoneDate ?? "",
+    ]),
+  );
 }
 
 function deliveryRecordKey(params: {
@@ -97,9 +86,7 @@ function deliveryRecordKey(params: {
   accountSidHash: string;
   messageSid: string;
 }): string {
-  return createHash("sha256")
-    .update(`${params.accountId}\n${params.accountSidHash}\n${params.messageSid}`)
-    .digest("hex");
+  return sha256Hex(`${params.accountId}\n${params.accountSidHash}\n${params.messageSid}`);
 }
 
 function openDeliveryStore(): PluginStateKeyedStore<SmsDeliveryRecord> {
@@ -232,12 +219,12 @@ async function recordSmsDeliveryObservation(params: {
   messageSid: string;
   observation: SmsDeliveryObservation;
   store: PluginStateKeyedStore<SmsDeliveryRecord>;
-}): Promise<{ duplicate: boolean; record: SmsDeliveryRecord }> {
+}) {
   if (!params.store.observe || !params.store.compareAndApply) {
     throw new Error("SMS delivery observations require plugin state comparisons.");
   }
   const accountId = params.account.accountId;
-  const accountSidHash = hashAccountSid(params.account.accountSid);
+  const accountSidHash = sha256Hex(params.account.accountSid);
   const key = deliveryRecordKey({
     accountId,
     accountSidHash,
@@ -273,9 +260,9 @@ async function recordSmsDeliveryObservation(params: {
 
 export function createSmsDeliveryRecorder(
   store: PluginStateKeyedStore<SmsDeliveryRecord> = openDeliveryStore(),
-): SmsDeliveryRecorder {
+) {
   return {
-    async record({ account, form }) {
+    async record({ account, form }: { account: ResolvedSmsAccount; form: Record<string, string> }) {
       const parsed = parseSmsDeliveryObservation(form);
       if (!parsed) {
         throw new Error("Invalid Twilio delivery status callback.");
@@ -295,7 +282,7 @@ export async function recordInitialSmsDeliveryResult(params: {
   result: SmsSendResult;
   nowMs?: number;
   store?: PluginStateKeyedStore<SmsDeliveryRecord>;
-}): Promise<{ duplicate: boolean; record: SmsDeliveryRecord } | null> {
+}) {
   const messageSid = params.result.sid.trim();
   const status = normalizeDeliveryStatus(params.result.status ?? "");
   if (!messageSid || !status) {
@@ -326,7 +313,7 @@ export async function listRecentSmsDeliveryRecords(
   if (limit <= 0) {
     return [];
   }
-  const accountSidHash = hashAccountSid(account.accountSid);
+  const accountSidHash = sha256Hex(account.accountSid);
   return (await store.entries())
     .map((entry) => entry.value)
     .filter(

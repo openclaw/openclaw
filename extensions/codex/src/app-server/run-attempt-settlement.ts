@@ -29,6 +29,9 @@ export async function beginCodexAttemptSettlement(
     }
     drainGraceTimer = setTimeout(() => {
       settlementPhase = "expired";
+      // The cutoff also closes optional native binding/subscription admission.
+      // Queuing fresh row authority after this point would rejoin the blocked writer.
+      resourceState.nativeSettlementExpired = true;
       drainGraceElapsed.resolve();
     }, TURN_FINALIZE_DRAIN_ABORT_GRACE_MS);
     drainGraceTimer.unref?.();

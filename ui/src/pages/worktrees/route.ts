@@ -1,12 +1,23 @@
 import { definePage } from "@openclaw/uirouter";
-import { html } from "lit";
+import { createComponent } from "solid-js";
 import { routePageSpec } from "../../app-route-paths.ts";
+import { ShellLayoutBoundary } from "../../app/shell-layout-traits-solid.tsx";
 
 export const page = definePage({
   ...routePageSpec("worktrees"),
   component: () =>
-    import("./worktrees-page.ts").then(() => ({
+    import("./worktrees-page.tsx").then((module) => ({
       header: true,
-      render: () => html`<openclaw-worktrees-page></openclaw-worktrees-page>`,
+      renderSolid: () =>
+        createComponent(ShellLayoutBoundary, {
+          traits: {
+            settingsPage: true,
+            settingsWide: true,
+            settingsWorkspace: true,
+          },
+          get children() {
+            return createComponent(module.WorktreesPage, {});
+          },
+        }),
     })),
 });

@@ -1,28 +1,18 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
+import { useLazyEnglishTest } from "./lazy-english.test-support.ts";
 
-let restoreI18n: (() => Promise<void>) | undefined;
-
-beforeEach(() => vi.resetModules());
-afterEach(async () => {
-  await restoreI18n?.();
-});
+const loadI18n = useLazyEnglishTest();
 
 it.each([
-  { surface: "tool panel", load: () => import("../pages/agents/panels-tools-skills.ts") },
-  { surface: "skills panel", load: () => import("../pages/agents/panels-skills.ts") },
+  { surface: "tool panel", load: () => import("../pages/agents/panels-tools-skills.tsx") },
+  { surface: "skills panel", load: () => import("../pages/agents/panels-skills.tsx") },
 ])("loads agent tool fallback copy with the $surface, preserving GitHub copy", async ({ load }) => {
-  const { captureI18nStateForTesting, createI18nManagerForTesting } =
-    await import("./lib/translate.test-support.ts");
-  restoreI18n = captureI18nStateForTesting();
-  const { en } = await import("./locales/en.ts");
+  const { en, manager } = await loadI18n({ agentTools: { title: "Werkzeugzugriff" } });
   const agentTools = en.agentTools;
   expect(agentTools.disableAll).toBeUndefined();
 
   const { registerGitHubEnglish } = await import("./locales/en-github.ts");
   registerGitHubEnglish();
-  const manager = createI18nManagerForTesting(async () => ({
-    agentTools: { title: "Werkzeugzugriff" },
-  }));
   await manager.setLocale("de");
   await load();
 

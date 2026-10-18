@@ -138,6 +138,7 @@ export function installGatewaySessionsTestResources(
 
   installGatewayTestHooks({
     scope: "suite",
+    prepareServer: startServer,
     setup: async () => {
       const workspace = getRuntimeConfig().agents?.defaults?.workspace;
       if (!workspace) {
@@ -199,7 +200,7 @@ export function installGatewaySessionsTestResources(
       runQaGatewayFixture(
         () => run(state),
         disposeSessionReadContexts,
-        // The suite projection also reads this state, but its store lives outside state.root.
+        // Nested fixtures can leave suite projection work pending outside state.root.
         () => releaseGatewaySessionStoreFixture(requireSharedSessionStoreDir()),
       ),
     );

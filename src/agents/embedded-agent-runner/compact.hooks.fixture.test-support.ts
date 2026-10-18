@@ -1,6 +1,6 @@
 import { rm } from "node:fs/promises";
 import { join } from "node:path";
-import { afterAll, afterEach } from "vitest";
+import { afterAll, afterEach, expect } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
@@ -53,6 +53,20 @@ export function useCompactHooksSessionFixture(sessionKey: string) {
       await drainSessionStateForTest({ stateDir: state.stateDir, rootPath: directory });
       await closeOpenClawAgentDatabasesAsync(directory);
       await rm(directory, { force: true, recursive: true });
+    },
+  };
+}
+
+export function expectedNativeCompactionOptions(
+  nativeCompactionRequest: "after_context_engine" | "required_preflight",
+) {
+  return {
+    nativeCompactionRequest,
+    preparedModelRuntime: expect.any(Object),
+    sourceAuthority: {
+      assertActive: expect.any(Function),
+      prepareDispatch: expect.any(Function),
+      operatorAuthority: undefined,
     },
   };
 }

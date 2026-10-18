@@ -1,4 +1,3 @@
-// iMessage plugin module owns raw-row durable admission and replay.
 import {
   createChannelIngressError,
   createChannelIngressMonitor,
@@ -39,12 +38,7 @@ export type IMessageIngressLifecycle = Omit<ChannelIngressMonitorLifecycle, "adm
 
 type IMessageIngressDispatchResult = ChannelIngressMonitorDeliveryResult;
 
-type IMessageIngressFacts = {
-  eventId: string;
-  laneKey: string;
-  rowid: number;
-  createdAt?: string;
-};
+type IMessageIngressFacts = ReturnType<typeof inspectIMessageIngress>;
 
 type IMessageIngressDispatch = (
   message: IMessagePayload,
@@ -67,7 +61,7 @@ function rawRowid(raw: unknown): number | null {
 }
 
 /** Read only stable transport metadata; payload normalization waits for dispatch. */
-function inspectIMessageIngress(raw: unknown): IMessageIngressFacts {
+function inspectIMessageIngress(raw: unknown) {
   const message = rawMessageRecord(raw);
   const guid = typeof message?.guid === "string" ? message.guid.trim() : "";
   if (!guid) {
@@ -147,13 +141,6 @@ function resolveIMessageIngressNonRetryableFailure(error: unknown) {
   return null;
 }
 
-type IMessageDurableIngress = {
-  receive: (raw: unknown, opts?: { catchup?: boolean }) => Promise<void>;
-  start: () => void;
-  stop: () => Promise<void>;
-  waitForIdle: () => Promise<void>;
-};
-
 export function createIMessageDurableIngress(options: {
   accountId: string;
   queue?: ChannelIngressQueue<IMessageIngressPayload>;
@@ -163,7 +150,7 @@ export function createIMessageDurableIngress(options: {
   onDurableEnqueue?: (facts: IMessageIngressFacts) => void | Promise<void>;
   onDurableEnqueueFailure?: (rowid: number | null, error: unknown) => void | Promise<void>;
   now?: () => number;
-}): IMessageDurableIngress {
+}) {
   const queue =
     options.queue ??
     getIMessageRuntime().state.openChannelIngressQueue<IMessageIngressPayload>({
@@ -267,7 +254,7 @@ export function createIMessageDurableIngress(options: {
   let stopTask: Promise<void> | undefined;
 
   return {
-    receive: async (raw, receiveOpts) => {
+    receive: async (raw: unknown, receiveOpts?: { catchup?: boolean }) => {
       await monitor.admit({ raw, ...(receiveOpts?.catchup ? { catchup: true } : {}) });
     },
     start: monitor.start,

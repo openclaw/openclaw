@@ -1,0 +1,153 @@
+.workboard-session-tile {
+  display: grid;
+  gap: 10px;
+  width: 100%;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--panel);
+  color: var(--text);
+  font: inherit;
+  text-align: start;
+}
+
+.workboard-session-tile:hover,
+.workboard-session-tile:focus-within {
+  border-color: var(--workboard-column-accent);
+}
+
+.workboard-session-tile--dragging {
+  opacity: 0.45;
+}
+
+.workboard-session-tile__title {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: inherit;
+  overflow-wrap: anywhere;
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+.workboard-session-tile__headline {
+  color: var(--muted);
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+.workboard-session-tile__meta,
+.workboard-session-tile__agent,
+.workboard-session-tile__prs,
+.workboard-session-pr {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  font-size: 0.76rem;
+}
+
+.workboard-session-tile__meta {
+  justify-content: space-between;
+}
+
+.workboard-session-tile__agent > span {
+  width: 22px;
+  height: 22px;
+}
+
+.workboard-session-pr {
+  color: var(--muted);
+}
+
+a.workboard-session-pr {
+  cursor: pointer;
+  text-decoration: none;
+}
+
+a.workboard-session-pr:hover {
+  text-decoration: underline;
+}
+
+.workboard-session-pr[data-state="merged"] {
+  color: var(--accent);
+}
+
+.workboard-session-pr svg {
+  width: 14px;
+  height: 14px;
+}
+
+.workboard-session-tile__time,
+.workboard-sessions__empty,
+.workboard-sessions-editor__help {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.workboard-sessions__empty {
+  padding: 16px 0;
+}
+
+.workboard-sessions__warning {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  color: var(--warn);
+  overflow-wrap: anywhere;
+}
+
+.workboard-board-kind {
+  display: flex;
+  gap: 20px;
+  border: 0;
+  margin: 0;
+  padding: 0;
+}
+
+.workboard-board-kind legend,
+.workboard-sessions-editor legend {
+  padding: 0 0 8px;
+  font-weight: 600;
+}
+
+.workboard-sessions-editor {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  padding: 0;
+  border: 0;
+}
+
+.workboard-sessions-editor__column {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(100px, 0.5fr);
+  gap: 10px;
+  padding: 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+}
+
+.workboard-sessions-editor label {
+  display: grid;
+  gap: 6px;
+  font-size: 0.8rem;
+}
+
+.workboard-sessions-editor .settings-input {
+  width: 100%;
+  min-width: 0;
+}
+
+.workboard-sessions-editor__description,
+.workboard-sessions-editor__actions {
+  grid-column: 1 / -1;
+}
+
+.workboard-sessions-editor__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}

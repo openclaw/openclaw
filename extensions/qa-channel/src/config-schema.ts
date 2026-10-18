@@ -1,4 +1,3 @@
-// Qa Channel helper module supports config schema behavior.
 import {
   buildChannelConfigSchema,
   buildGroupEntrySchema,

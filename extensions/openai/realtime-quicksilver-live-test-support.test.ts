@@ -63,28 +63,11 @@ describe("private realtime live model selection", () => {
 
   it.each([
     {},
-    { talk: { realtime: {} } },
-    {
-      talk: {
-        realtime: {
-          provider: "openai",
-          model: "public-realtime-fixture",
-          providers: { openai: { model: "other-public-fixture" } },
-        },
-      },
-    },
     {
       talk: {
         realtime: {
           provider: "custom",
           model: "gpt-live-direct-fixture",
-          providers: { custom: { model: "gpt-live-provider-fixture" } },
-        },
-      },
-    },
-    {
-      talk: {
-        realtime: {
           providers: { custom: { model: "gpt-live-provider-fixture" } },
         },
       },

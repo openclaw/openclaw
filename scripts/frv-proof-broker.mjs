@@ -3,6 +3,7 @@ import { appendFileSync, readFileSync, writeFileSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 import { classifyReleaseGhTransportError } from "./full-release-validation-policy.mjs";
 import { isRecord } from "./lib/record-shared.mjs";
+import { sleep as defaultSleep } from "./lib/sleep.mjs";
 import { validateForwardAncestry } from "./pr-lib/crabbox-gate-contract.mjs";
 
 const REPOSITORY = "openclaw/openclaw";
@@ -140,14 +141,6 @@ function validatePullRequest(value, context) {
   }
 }
 
-function validateLandedAncestry(value, context) {
-  validateForwardAncestry(
-    value,
-    { baseSha: context.landedSha, headSha: context.workflowSha },
-    "landed controller ancestry",
-  );
-}
-
 function validateFixtureWorkflow(value) {
   const workflow = record(value, "fixture workflow");
   if (
@@ -171,7 +164,7 @@ function validateMainRef(value, workflowSha) {
   }
 }
 
-export function validateFixtureRun(value, expected) {
+function validateFixtureRun(value, expected) {
   const run = record(value, "fixture run");
   if (nestedRecord(run, "repository", "fixture run").full_name !== expected.repository) {
     throw new Error("fixture run repository does not match");
@@ -297,25 +290,18 @@ async function validateMutationAuthority(api, context) {
     context.actor,
   );
   validatePullRequest(await api.request("GET", `/pulls/${context.prNumber}`), context);
-  validateLandedAncestry(
+  validateForwardAncestry(
     await api.request("GET", `/compare/${context.landedSha}...${context.workflowSha}`),
-    context,
+    { baseSha: context.landedSha, headSha: context.workflowSha },
+    "landed controller ancestry",
   );
 }
 
-async function validateFixturePrerequisite(api) {
-  validateFixtureWorkflow(await api.request("GET", `/actions/workflows/${FIXTURE_WORKFLOW_ID}`));
-}
-
-async function validateTrustedMain(api, context) {
-  validateMainRef(await api.request("GET", "/git/ref/heads/main"), context.workflowSha);
-}
-
-export async function runProofBroker({ api, env, event, sleep = setTimeoutPromise }) {
+export async function runProofBroker({ api, env, event, sleep = defaultSleep }) {
   const context = validateBrokerRequest(event, env);
-  await validateFixturePrerequisite(api);
+  validateFixtureWorkflow(await api.request("GET", `/actions/workflows/${FIXTURE_WORKFLOW_ID}`));
   await validateMutationAuthority(api, context);
-  await validateTrustedMain(api, context);
+  validateMainRef(await api.request("GET", "/git/ref/heads/main"), context.workflowSha);
 
   await api.request("POST", `/actions/workflows/${FIXTURE_WORKFLOW_ID}/dispatches`, {
     inputs: {
@@ -370,12 +356,6 @@ export async function runProofBroker({ api, env, event, sleep = setTimeoutPromis
     sourceRef: "refs/heads/main",
     workflowSha: context.workflowSha,
   };
-}
-
-function setTimeoutPromise(milliseconds) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, milliseconds);
-  });
 }
 
 export function createGitHubApi({ repository, token, fetchImpl = fetch }) {

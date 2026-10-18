@@ -3,20 +3,45 @@ import {
   asOptionalRecord,
 } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { InternalSessionEntry as SessionEntry } from "../../config/sessions.js";
-import { isMainSessionRestartRecoveryInputProvenance } from "../../sessions/input-provenance.js";
+import type { InternalSessionEntry as SessionEntry } from "../../config/sessions/types.js";
+import {
+  isMainSessionRestartRecoveryInputProvenance,
+  type InputProvenance,
+} from "../../sessions/input-provenance.js";
+import { readTerminalSourceReplyDeliveryMirror } from "../../shared/chat-message-content.js";
 import { CODE_MODE_EXEC_TOOL_NAME, CODE_MODE_WAIT_TOOL_NAME } from "../code-mode-control-tools.js";
 import {
   getTranscriptMessageRole as getMessageRole,
   isIntermediateAssistantTranscriptMessage,
   isMeaningfulTranscriptMessage,
-  readTerminalSourceReplyDeliveryMirror,
 } from "../embedded-agent-runner/message-visibility.js";
 import {
   AGENT_RUN_RESTART_ABORT_ERROR,
   AGENT_RUN_RESTART_ABORT_ERROR_CODE,
 } from "../run-termination.js";
 import { isAgentToolReplaySafe } from "../tool-replay-safety.js";
+
+export function requiresDelegatedRecoverySource(
+  entry: SessionEntry,
+  source: InputProvenance["kind"] | "completion" | "harness_completion" | undefined,
+): boolean {
+  // Steering is context, not a new admission. A non-browser operator can have
+  // internal ingress too; its durable source goes through the Gateway's exact
+  // claim and current-policy restoration before any recovery turn executes.
+  if (
+    entry.restartRecoveryDeliverySourceRunId &&
+    (entry.restartRecoveryOperatorSource ||
+      entry.restartRecoverySourceIngress === "control-ui" ||
+      entry.restartRecoverySourceIngress === "channel")
+  ) {
+    return false;
+  }
+  return (
+    source === "inter_session" ||
+    (entry.restartRecoverySourceIngress === "internal" &&
+      (source === undefined || source === "internal_system" || source === "harness_completion"))
+  );
+}
 
 function readDeliveredTerminalSourceReplyToolCallId(
   messages: readonly unknown[],
@@ -157,18 +182,6 @@ function classifyDanglingToolCalls(content: unknown): DanglingToolCallClassifica
   return hasToolCall
     ? { kind: "resumable", forceRestartSafeTools: !allReplaySafe }
     : { kind: "none" };
-}
-
-// Unlike isPendingAssistantToolCall, visible text beside the call is fine —
-// the tail is not replayed, only continued past. Code Mode control calls are
-// excluded so their replay-safe checkpoint gating stays authoritative.
-function readResumablePendingToolCallTail(
-  message: unknown,
-): { forceRestartSafeTools: boolean } | undefined {
-  const classified = classifyDanglingToolCalls(readPendingAssistantContent(message));
-  return classified?.kind === "resumable"
-    ? { forceRestartSafeTools: classified.forceRestartSafeTools }
-    : undefined;
 }
 
 function readCodeModeCheckpoint(
@@ -423,22 +436,16 @@ export function resolveMainSessionResumePolicy(
     meaningfulMessages.shift();
   }
   const lastMeaningful = meaningfulMessages[0];
-  if (forceRestartSafeTools && isPendingAssistantToolCall(lastMeaningful)) {
-    return { action: "resume", forceRestartSafeTools: true };
-  }
-  if (isRestartAbortedWaitFailure(lastMeaningful)) {
+  if (
+    (forceRestartSafeTools && isPendingAssistantToolCall(lastMeaningful)) ||
+    isRestartAbortedWaitFailure(lastMeaningful)
+  ) {
     return { action: "resume", forceRestartSafeTools: true };
   }
   const waitCall = readCodeModeWaitCall(lastMeaningful);
-  if (waitCall) {
-    const checkpoint = readCodeModeCheckpoint(meaningfulMessages[1]);
-    return checkpoint?.replaySafe === true && checkpoint.runId === waitCall.runId
-      ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
-      : { action: "resume", forceRestartSafeTools: true };
-  }
-  const tailCheckpoint = readCodeModeCheckpoint(lastMeaningful);
-  if (tailCheckpoint) {
-    return tailCheckpoint.replaySafe
+  const checkpoint = readCodeModeCheckpoint(meaningfulMessages[waitCall ? 1 : 0]);
+  if (waitCall || checkpoint) {
+    return checkpoint?.replaySafe === true && (!waitCall || checkpoint.runId === waitCall.runId)
       ? { action: "resume", forceRestartSafeTools: true, forceCodeModeTools: true }
       : { action: "resume", forceRestartSafeTools: true };
   }
@@ -446,8 +453,10 @@ export function resolveMainSessionResumePolicy(
   // failure notice used to demand: the dangling call is dropped from the next
   // provider payload and the continuation prompt lets the model re-decide.
   // Code Mode control calls keep the stricter checkpoint gating above.
-  const pendingToolCallTail = readResumablePendingToolCallTail(lastMeaningful);
-  if (pendingToolCallTail) {
+  const pendingToolCallTail = classifyDanglingToolCalls(
+    readPendingAssistantContent(lastMeaningful),
+  );
+  if (pendingToolCallTail?.kind === "resumable") {
     return { action: "resume", forceRestartSafeTools: pendingToolCallTail.forceRestartSafeTools };
   }
   const danglingControlCalls =

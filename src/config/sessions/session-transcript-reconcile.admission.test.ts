@@ -4,16 +4,18 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import * as sqlite from "../../infra/node-sqlite.js";
-import * as integrity from "../../infra/sqlite-integrity-worker.js";
+import { revokeSqliteDatabaseAdmissionsForPath } from "../../infra/sqlite-database-admission.js";
+import * as admission from "../../infra/sqlite-worker-operation-admission.js";
+import { sqliteWorkerOwnerProbe as probe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { withOpenClawAgentDatabaseReadOnly } from "../../state/openclaw-agent-db-readonly.js";
 import {
-  closeOpenClawAgentDatabaseByPath,
+  closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
   openOpenClawAgentDatabase,
 } from "../../state/openclaw-agent-db.js";
-import { clearOpenClawAgentIntegrityVerification } from "../../state/openclaw-quarantine-store.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
+import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { persistSessionTranscriptTurn } from "./session-accessor.js";
 import {
   reconcileSessionTranscriptIndexes,
@@ -41,16 +43,19 @@ afterEach(async () => {
   await closeOpenClawAgentDatabasesAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   for (const root of roots.splice(0)) {
     fs.rmSync(root, { recursive: true, force: true });
   }
+  clearRuntimeConfigSnapshot();
 });
 
 async function fixture() {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "reconcile-admission-"));
   roots.push(root);
   vi.stubEnv("OPENCLAW_STATE_DIR", root);
+  setRuntimeConfigSnapshot({});
   const options = { agentId: "main", env: { ...process.env, OPENCLAW_STATE_DIR: root } };
   const scope = { ...options, sessionId: "cold", sessionKey: "agent:main:cold" };
   await persistSessionTranscriptTurn(scope, {
@@ -60,7 +65,7 @@ async function fixture() {
   await waitForSessionTranscriptIndexReconcile(options);
   const database = openOpenClawAgentDatabase(options);
   database.db.prepare("UPDATE session_transcript_index_state SET needs_rebuild = 1").run();
-  closeOpenClawAgentDatabaseByPath(database.path);
+  await closeOpenClawAgentDatabaseByPathAsync(database.path);
   return {
     root,
     options: { ...options, path: database.path },
@@ -71,7 +76,7 @@ async function fixture() {
 it("waits for a cold projection without superseding its native integrity admission", async () => {
   const { root, options, scope } = await fixture();
   closeOpenClawAgentDatabasesForTest(root);
-  clearOpenClawAgentIntegrityVerification(options.path, options.env);
+  revokeSqliteDatabaseAdmissionsForPath(options.path);
   let parentChecks = 0;
   vi.spyOn(sqlite, "openNodeSqliteDatabase").mockImplementation((pathname, openOptions) => {
     const database = realOpen(pathname, openOptions);
@@ -79,7 +84,10 @@ it("waits for a cold projection without superseding its native integrity admissi
       const prepare = database.prepare.bind(database);
       database.prepare = (sql) => {
         const statement = prepare(sql);
-        if (sql === "PRAGMA integrity_check;") {
+        if (
+          sql === "PRAGMA integrity_check;" ||
+          sql === "PRAGMA integrity_check('sqlite_schema');"
+        ) {
           const all = statement.all.bind(statement);
           statement.all = () => {
             parentChecks += 1;
@@ -92,11 +100,11 @@ it("waits for a cold projection without superseding its native integrity admissi
     return database;
   });
   const entered = createDeferred();
-  const check = integrity.assertSqliteIntegrityInWorker;
-  vi.spyOn(integrity, "assertSqliteIntegrityInWorker").mockImplementation((...args) => {
-    const result = check(...args);
-    entered.resolve();
-    return result;
+  probe.admission(admission, (request, grant, admit) => {
+    if (request.stage === "open") {
+      entered.resolve();
+    }
+    admit(request, grant);
   });
   startSessionTranscriptIndexReconcile(options);
   await entered.promise;

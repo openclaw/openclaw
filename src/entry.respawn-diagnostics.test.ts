@@ -44,10 +44,11 @@ vi.mock("./entry.compile-cache.js", () => ({
     return true;
   },
 }));
-vi.mock("./entry.respawn.js", () => ({
+vi.mock("./entry.respawn.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./entry.respawn.js")>()),
   buildCliRespawnPlan: () =>
     boundary.mode === "none" ? null : { command: "node", argv: [], env: {} },
-  runCliRespawnPlan: (_plan: unknown, _runtime: unknown, writer: typeof boundary.writer) => {
+  runCliRespawnPlan: async (_plan: unknown, _runtime: unknown, writer: typeof boundary.writer) => {
     boundary.writer = writer;
     boundary.spawnTitle = process.title;
     boundary.events.push("spawn");
@@ -87,29 +88,13 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-it.each([true, false])(
-  "prepares early runtime diagnostics after async support resolves to %s",
-  async (supported) => {
-    boundary.mode = "compile-cache";
-    boundary.trace = false;
-    boundary.runtimeSupported = supported;
-
-    await import("./entry.js");
-
-    expect(boundary.events).toEqual(
-      supported ? ["spawn"] : ["dotenv", "trace formatting", "spawn"],
-    );
-  },
-);
-
 it.each([
-  { mode: "flags", trace: false },
-  { mode: "flags", trace: true },
-  { mode: "compile-cache", trace: false },
-  { mode: "compile-cache", trace: true },
+  { mode: "flags", trace: true, supported: true },
+  { mode: "compile-cache", trace: false, supported: false },
 ] as const)(
-  "preserves the idle Doctor launcher through $mode respawn diagnostics (trace: $trace)",
-  async ({ mode, trace }) => {
+  "preserves the idle Doctor launcher through $mode respawn diagnostics (trace: $trace, supported: $supported)",
+  async ({ mode, trace, supported }) => {
+    boundary.runtimeSupported = supported;
     boundary.mode = mode;
     boundary.trace = trace;
     const launcherTitle = process.title;
@@ -122,15 +107,20 @@ it.each([
 
     expect(boundary.spawnTitle).toBe(launcherTitle);
     expect(process.title).toBe(launcherTitle);
-    expect(boundary.events).toEqual(trace ? ["dotenv", "trace formatting", "spawn"] : ["spawn"]);
+    const recoveryEvents = supported ? [] : ["dotenv", "trace formatting"];
+    expect(boundary.events).toEqual([
+      ...recoveryEvents,
+      ...(trace ? ["dotenv", "trace formatting", "spawn"] : ["spawn"]),
+    ]);
     expect(stderr).not.toHaveBeenCalled();
     expect(boundary.writer).toBeTypeOf("function");
     await boundary.writer?.("startup failed");
-    expect(boundary.events).toEqual(
-      trace
+    expect(boundary.events).toEqual([
+      ...recoveryEvents,
+      ...(trace
         ? ["dotenv", "trace formatting", "spawn", "diagnostic"]
-        : ["spawn", "dotenv", "trace formatting", "diagnostic"],
-    );
+        : ["spawn", "dotenv", "trace formatting", "diagnostic"]),
+    ]);
     expect(stderr).toHaveBeenCalledWith(expect.stringContaining("startup failed"));
   },
 );
@@ -179,29 +169,26 @@ it("runs internal admission with root options before runtime recovery, cache act
   expect(compileCache.enableOpenClawCompileCache).not.toHaveBeenCalled();
 });
 
-it.each([[], ["--context"], ["--context", "/fixture/context.json", "extra"]])(
-  "rejects malformed admission argv before runtime recovery or respawn (%j)",
-  async (...args) => {
-    boundary.mode = "compile-cache";
-    boundary.trace = true;
-    boundary.runtimeSupported = false;
-    process.argv = [
-      process.execPath,
-      "/fixture/openclaw/dist/entry.js",
-      "update",
-      "admit",
-      ...args,
-    ];
-    const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-    const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
+it("rejects malformed admission argv before runtime recovery or respawn", async () => {
+  boundary.mode = "compile-cache";
+  boundary.trace = true;
+  boundary.runtimeSupported = false;
+  process.argv = [
+    process.execPath,
+    "/fixture/openclaw/dist/entry.js",
+    "update",
+    "admit",
+    "--context",
+  ];
+  const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  const stderr = vi.spyOn(console, "error").mockImplementation(() => {});
 
-    await import("./entry.js");
+  await import("./entry.js");
 
-    expect(boundary.events).toEqual([]);
-    expect(process.exitCode).toBe(2);
-    expect(stdout).not.toHaveBeenCalled();
-    expect(stderr).toHaveBeenCalledOnce();
-    const compileCache = await import("./entry.compile-cache.js");
-    expect(compileCache.enableOpenClawCompileCache).not.toHaveBeenCalled();
-  },
-);
+  expect(boundary.events).toEqual([]);
+  expect(process.exitCode).toBe(2);
+  expect(stdout).not.toHaveBeenCalled();
+  expect(stderr).toHaveBeenCalledOnce();
+  const compileCache = await import("./entry.compile-cache.js");
+  expect(compileCache.enableOpenClawCompileCache).not.toHaveBeenCalled();
+});

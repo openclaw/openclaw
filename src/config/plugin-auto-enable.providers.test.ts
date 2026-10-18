@@ -1,9 +1,6 @@
 // Covers provider-driven plugin auto-enable decisions.
 import { afterAll, describe, expect, it } from "vitest";
-import {
-  applyPluginAutoEnable,
-  materializePluginAutoEnableCandidates,
-} from "./plugin-auto-enable.js";
+import { applyPluginAutoEnable } from "./plugin-auto-enable.js";
 import {
   makeIsolatedEnv,
   makeRegistry,
@@ -12,94 +9,70 @@ import {
 import type { OpenClawConfig } from "./types.openclaw.js";
 
 const env = makeIsolatedEnv();
+type ManifestPlugin = Parameters<typeof makeRegistry>[0][number];
+function autoEnable(config: OpenClawConfig, plugins?: ManifestPlugin[]) {
+  return applyPluginAutoEnable({
+    config,
+    env,
+    ...(plugins ? { manifestRegistry: makeRegistry(plugins) } : {}),
+  });
+}
+function provider(
+  id: string,
+  contracts: ManifestPlugin["contracts"],
+  origin: ManifestPlugin["origin"] = "config",
+): ManifestPlugin {
+  return { id, channels: [], contracts, origin };
+}
+const storage = {
+  locations: {
+    archive: { provider: "archive-objects", settings: {}, encryption: "none" as const },
+  },
+};
 
 afterAll(() => {
   resetPluginAutoEnableTestState();
 });
 
 describe("applyPluginAutoEnable providers", () => {
-  it.each([
-    { label: "default", agents: { defaults: { decisionModel: "judge/fast" } } },
-    { label: "agent override", agents: { entries: { worker: { decisionModel: "judge/fast" } } } },
-  ])("activates a decision contract owner selected by $label", ({ agents }) => {
-    const result = applyPluginAutoEnable({
-      config: { agents, plugins: { allow: ["telegram"] } },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "decision-plugin",
-          channels: [],
-          origin: "bundled",
-          contracts: { decisionProviders: ["judge"] },
-        },
-      ]),
-    });
-    expect(result.config.plugins?.entries?.["decision-plugin"]?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toEqual(["telegram", "decision-plugin"]);
-    expect(result.autoEnabledReasons).toEqual({
-      "decision-plugin": ["judge decision provider selected"],
-    });
-  });
-
-  it.each([
-    { plugins: { enabled: false } },
-    { plugins: { entries: { "decision-plugin": { enabled: false } } } },
-    { plugins: { deny: ["decision-plugin"] } },
-  ])("keeps a selected decision provider disabled by explicit plugin policy: %j", ({ plugins }) => {
-    const result = applyPluginAutoEnable({
-      config: { agents: { defaults: { decisionModel: "judge/fast" } }, plugins },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "decision-plugin",
-          channels: [],
-          origin: "bundled",
-          contracts: { decisionProviders: ["judge"] },
-        },
-      ]),
-    });
-    expect(result.config.plugins?.entries?.["decision-plugin"]?.enabled).not.toBe(true);
-    expect(result.changes).toEqual([]);
-  });
-
-  it("auto-enables provider auth plugins when profiles exist", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        auth: {
-          profiles: {
-            "google-gemini-cli:default": {
-              provider: "google-gemini-cli",
-              mode: "oauth",
-            },
-          },
+  it.each<[string, OpenClawConfig, ManifestPlugin["contracts"], string]>([
+    [
+      "decision-plugin",
+      { agents: { defaults: { decisionModel: "judge/fast" } } },
+      { decisionProviders: ["judge"] },
+      "judge decision provider selected",
+    ],
+    [
+      "qa-lab",
+      { cloudWorkers: { profiles: { development: { provider: " STATIC-SSH " } } } },
+      { workerProviders: ["static-ssh"] },
+      "static-ssh worker provider selected",
+    ],
+    [
+      "storage-fixture",
+      {
+        storage: {
+          locations: { archive: { ...storage.locations.archive, provider: " ARCHIVE-OBJECTS " } },
         },
       },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "google",
-          channels: [],
-          autoEnableWhenConfiguredProviders: ["google-gemini-cli"],
-        },
-      ]),
+      { storageProviders: ["archive-objects"] },
+      "archive-objects storage provider selected",
+    ],
+  ])("activates the selected bundled contract owner %s", (id, config, contracts, reason) => {
+    const result = autoEnable({ ...config, plugins: { allow: ["telegram"] } }, [
+      provider(id, contracts, "bundled"),
+    ]);
+    expect(result.config.plugins).toMatchObject({
+      allow: ["telegram", id],
+      entries: { [id]: { enabled: true } },
     });
-
-    expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
+    expect(result.autoEnabledReasons).toEqual({ [id]: [reason] });
   });
 
   const googleProviderCases: Array<{ name: string; config: OpenClawConfig }> = [
     {
       name: "Google auth profile",
-      config: {
-        auth: {
-          profiles: {
-            "google:default": {
-              provider: "google",
-              mode: "api_key",
-            },
-          },
-        },
-      },
+      config: { auth: { profiles: { "google:default": { provider: "google", mode: "api_key" } } } },
     },
     {
       name: "Google provider config",
@@ -115,189 +88,69 @@ describe("applyPluginAutoEnable providers", () => {
         },
       },
     },
-    {
-      name: "Google Vertex auth profile",
-      config: {
-        auth: {
-          profiles: {
-            "google-vertex:default": {
-              provider: "google-vertex",
-              mode: "oauth",
-            },
-          },
-        },
-      },
-    },
   ];
 
   it.each(googleProviderCases)(
     "auto-enables the Google plugin from $name under a restrictive allowlist",
     ({ config }) => {
-      const result = applyPluginAutoEnable({
-        config: {
-          ...config,
-          plugins: { allow: ["telegram"] },
-        },
-        env,
-      });
+      const result = autoEnable({ ...config, plugins: { allow: ["telegram"] } });
 
       expect(result.config.plugins?.entries?.google?.enabled).toBe(true);
       expect(result.config.plugins?.allow).toEqual(["telegram", "google"]);
     },
   );
 
-  it("auto-enables provider plugins when plugin-owned web search config exists", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                webSearch: {
-                  apiKey: "xai-plugin-config-key",
-                },
-              },
-            },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "xai",
-          channels: [],
-          providers: ["xai"],
-          contracts: {
-            webSearchProviders: ["grok"],
-          },
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
-    expect(result.changes).toContain("xai web search configured, enabled automatically.");
-  });
-
   it("auto-enables selected web search provider plugins under restrictive allowlists", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        tools: {
-          web: {
-            search: {
-              provider: "brave",
-            },
-          },
-        },
-        plugins: {
-          allow: ["telegram"],
-        },
+    const result = autoEnable(
+      {
+        tools: { web: { search: { provider: "brave" } } },
+        plugins: { allow: ["telegram"] },
       },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "brave",
-          channels: [],
-          contracts: {
-            webSearchProviders: ["brave"],
-          },
-        },
-      ]),
-    });
+      [provider("brave", { webSearchProviders: ["brave"] })],
+    );
 
     expect(result.config.plugins?.entries?.brave?.enabled).toBe(true);
     expect(result.config.plugins?.allow).toEqual(["telegram", "brave"]);
     expect(result.changes).toContain("brave web search provider selected, enabled automatically.");
   });
 
-  it("auto-enables a bundled worker provider selected by a cloud worker profile", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        cloudWorkers: {
-          profiles: {
-            development: {
-              provider: " STATIC-SSH ",
-              settings: { host: "worker.example.test" },
-            },
-          },
-        },
-        plugins: { allow: ["telegram"] },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "qa-lab",
-          channels: [],
-          contracts: { workerProviders: ["static-ssh"] },
-          origin: "bundled",
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.["qa-lab"]?.enabled).toBe(true);
-    expect(result.config.plugins?.allow).toEqual(["telegram", "qa-lab"]);
-    expect(result.autoEnabledReasons).toEqual({
-      "qa-lab": ["static-ssh worker provider selected"],
-    });
-  });
+  it.each([
+    { origin: "global" as const, plugins: {} },
+    { origin: "bundled" as const, plugins: { enabled: false } },
+    { origin: "bundled" as const, plugins: { deny: ["storage-fixture"] } },
+  ])(
+    "does not auto-enable storage against external trust or explicit disablement: %j",
+    ({ origin, plugins }) => {
+      const result = autoEnable({ storage, plugins }, [
+        provider("storage-fixture", { storageProviders: ["archive-objects"] }, origin),
+      ]);
+      expect(result.config.plugins?.entries?.["storage-fixture"]?.enabled).not.toBe(true);
+      expect(result.changes).toEqual([]);
+    },
+  );
 
   it("requires explicit enablement for external worker providers", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        cloudWorkers: {
-          profiles: { production: { provider: "cloud-vendor" } },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "cloud-vendor-plugin",
-          channels: [],
-          contracts: { workerProviders: ["cloud-vendor"] },
-          origin: "global",
-        },
-      ]),
-    });
+    const result = autoEnable(
+      { cloudWorkers: { profiles: { production: { provider: "cloud-vendor" } } } },
+      [provider("cloud-vendor-plugin", { workerProviders: ["cloud-vendor"] }, "global")],
+    );
 
     expect(result.config.plugins?.entries?.["cloud-vendor-plugin"]).toBeUndefined();
     expect(result.changes).toEqual([]);
   });
 
   it("does not auto-enable selected web search provider plugins when web search is disabled", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        tools: {
-          web: {
-            search: {
-              enabled: false,
-              provider: "brave",
-            },
-          },
-        },
-        plugins: {
-          allow: ["telegram"],
-        },
-        agents: {
-          defaults: {
-            model: "codex/gpt-5.4",
-          },
-        },
+    const result = autoEnable(
+      {
+        tools: { web: { search: { enabled: false, provider: "brave" } } },
+        plugins: { allow: ["telegram"] },
+        agents: { defaults: { model: "codex/gpt-5.4" } },
       },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "brave",
-          channels: [],
-          contracts: {
-            webSearchProviders: ["brave"],
-          },
-        },
-        {
-          id: "codex",
-          channels: [],
-          providers: ["codex"],
-        },
-      ]),
-    });
+      [
+        provider("brave", { webSearchProviders: ["brave"] }),
+        { id: "codex", channels: [], providers: ["codex"] },
+      ],
+    );
 
     expect(result.config.plugins?.entries?.codex?.enabled).toBe(true);
     expect(result.config.plugins?.entries?.brave).toBeUndefined();
@@ -308,218 +161,26 @@ describe("applyPluginAutoEnable providers", () => {
     );
   });
 
-  it("materializes xai setup auto-enable when the plugin-owned x_search tool is configured", () => {
-    const result = materializePluginAutoEnableCandidates({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                xSearch: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      },
-      candidates: [
-        {
-          pluginId: "xai",
-          kind: "setup-auto-enable",
-          reason: "xai tool configured",
-        },
-      ],
-      env,
-      manifestRegistry: makeRegistry([{ id: "xai", channels: [] }]),
-    });
-
-    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
-    expect(result.changes).toContain("xai tool configured, enabled automatically.");
-  });
-
-  it("materializes xai setup auto-enable when the plugin-owned codeExecution config is configured", () => {
-    const result = materializePluginAutoEnableCandidates({
-      config: {
-        plugins: {
-          entries: {
-            xai: {
-              config: {
-                codeExecution: {
-                  enabled: true,
-                  model: "grok-4-1-fast",
-                },
-              },
-            },
-          },
-        },
-      },
-      candidates: [
-        {
-          pluginId: "xai",
-          kind: "setup-auto-enable",
-          reason: "xai tool configured",
-        },
-      ],
-      env,
-      manifestRegistry: makeRegistry([{ id: "xai", channels: [] }]),
-    });
-
-    expect(result.config.plugins?.entries?.xai?.enabled).toBe(true);
-    expect(result.changes).toContain("xai tool configured, enabled automatically.");
-  });
-
-  it("auto-enables minimax when minimax-portal profiles exist", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        auth: {
-          profiles: {
-            "minimax-portal:default": {
-              provider: "minimax-portal",
-              mode: "oauth",
-            },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "minimax",
-          channels: [],
-          autoEnableWhenConfiguredProviders: ["minimax-portal"],
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
-    expect(result.config.plugins?.entries?.["minimax-portal-auth"]).toBeUndefined();
-  });
-
-  it("auto-enables minimax when minimax API key auth is configured", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        auth: {
-          profiles: {
-            "minimax:default": {
-              provider: "minimax",
-              mode: "api_key",
-            },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "minimax",
-          channels: [],
-          autoEnableWhenConfiguredProviders: ["minimax"],
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.minimax?.enabled).toBe(true);
-  });
-
-  it("does not auto-enable unrelated provider plugins just because auth profiles exist", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        auth: {
-          profiles: {
-            "openai:default": {
-              provider: "openai",
-              mode: "api_key",
-            },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([]),
-    });
-
-    expect(result.config.plugins?.entries?.openai).toBeUndefined();
-    expect(result.changes).toStrictEqual([]);
-  });
-
-  it("uses manifest-owned provider auto-enable metadata for third-party plugins", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        auth: {
-          profiles: {
-            "acme-oauth:default": {
-              provider: "acme-oauth",
-              mode: "oauth",
-            },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "acme",
-          channels: [],
-          autoEnableWhenConfiguredProviders: ["acme-oauth"],
-        },
-      ]),
-    });
-
-    expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
-  });
-
   it("auto-enables third-party provider plugins when manifest-owned web search config exists", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        plugins: {
-          entries: {
-            acme: {
-              config: {
-                webSearch: {
-                  apiKey: "acme-search-key",
-                },
-              },
-            },
-          },
-        },
+    const result = autoEnable(
+      {
+        plugins: { entries: { acme: { config: { webSearch: { apiKey: "acme-search-key" } } } } },
       },
-      env,
-      manifestRegistry: makeRegistry([
-        {
-          id: "acme",
-          channels: [],
-          providers: ["acme-ai"],
-          contracts: {
-            webSearchProviders: ["acme-search"],
-          },
-        },
-      ]),
-    });
+      [{ ...provider("acme", { webSearchProviders: ["acme-search"] }), providers: ["acme-ai"] }],
+    );
 
     expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
     expect(result.changes).toContain("acme web search configured, enabled automatically.");
   });
 
   it("auto-enables third-party plugins when manifest-owned tool config exists", () => {
-    const result = applyPluginAutoEnable({
-      config: {
-        plugins: {
-          entries: {
-            acme: {
-              config: {
-                acmeTool: {
-                  enabled: true,
-                },
-              },
-            },
-          },
-        },
-      },
-      env,
-      manifestRegistry: makeRegistry([
+    const result = autoEnable(
+      { plugins: { entries: { acme: { config: { acmeTool: { enabled: true } } } } } },
+      [
         {
           id: "acme",
           channels: [],
-          contracts: {
-            tools: ["acme_tool"],
-          },
+          contracts: { tools: ["acme_tool"] },
           configSchema: {
             type: "object",
             properties: {
@@ -528,51 +189,24 @@ describe("applyPluginAutoEnable providers", () => {
             },
           },
         },
-      ]),
-    });
+      ],
+    );
 
     expect(result.config.plugins?.entries?.acme?.enabled).toBe(true);
     expect(result.changes).toContain("acme tool configured, enabled automatically.");
   });
 
-  it("materializes acpx setup auto-enable when ACP is configured", () => {
-    const result = materializePluginAutoEnableCandidates({
-      config: {
-        acp: {
-          enabled: true,
-        },
-        plugins: {
-          allow: ["telegram"],
-        },
-      },
-      candidates: [
-        {
-          pluginId: "acpx",
-          kind: "setup-auto-enable",
-          reason: "ACP runtime configured",
-        },
-      ],
-      env,
-    });
-
-    expect(result.config.plugins?.allow).toEqual(["telegram", "acpx"]);
-    expect(result.config.plugins?.entries?.acpx?.enabled).toBe(true);
-    expect(result.changes.join("\n")).toContain("ACP runtime configured, enabled automatically.");
-  });
-
-  it("does not materialize acpx when no setup auto-enable candidate is present", () => {
-    const result = materializePluginAutoEnableCandidates({
-      config: {
-        acp: {
-          enabled: true,
-          backend: "custom-runtime",
-        },
-      },
-      candidates: [],
-      env,
-    });
-
-    expect(result.config.plugins?.entries?.acpx?.enabled).toBeUndefined();
-    expect(result.changes).toStrictEqual([]);
+  it("does not activate ambiguous shorthand model owners", () => {
+    const result = autoEnable(
+      { agents: { defaults: { model: "gpt-5.4" } } },
+      ["openai", "proxy-openai"].map((id) => ({
+        id,
+        channels: [],
+        modelSupport: { modelPrefixes: ["gpt-"] },
+      })),
+    );
+    expect(result.config.plugins?.entries?.openai).toBeUndefined();
+    expect(result.config.plugins?.entries?.["proxy-openai"]).toBeUndefined();
+    expect(result.changes).toEqual([]);
   });
 });

@@ -137,8 +137,6 @@ describe("plugin release cohort package reconciliation", () => {
     expect(collectMissingPluginInstallPayloadsMock).toHaveBeenNthCalledWith(2, {
       records,
       config: updatedConfig,
-      skipDisabledPlugins: true,
-      syncOfficialPluginInstalls: true,
       env: undefined,
     });
     expect(result.config).toEqual(updatedConfig);

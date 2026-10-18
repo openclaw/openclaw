@@ -31,7 +31,7 @@ async function expectNoMigrationStaging(sourcePath: string) {
 
 async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey = "global") {
   const directory = directories.make("acpx-owner-migration-");
-  const stateDir = path.join(directory, "state");
+  const stateDir = path.join(directory, "acpx");
   const peer = path.join(directory, "peer");
   await fs.mkdir(peer);
   const store = createFileSessionStore({ stateDir });
@@ -139,7 +139,7 @@ async function fixture(mode: "persistent" | "oneshot" = "persistent", sessionKey
   };
 }
 
-it.each(["none", "publication", "canonical"])(
+it.each(["publication", "canonical"])(
   "preserves raw history and resumes idempotently after interruption=%s",
   async (interrupted) => {
     const f = await fixture();
@@ -147,7 +147,7 @@ it.each(["none", "publication", "canonical"])(
     if (interrupted === "canonical") {
       f.setVerificationInterrupted(true);
       expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([
-        expect.stringContaining("canonical metadata verification failed"),
+        expect.stringContaining("stored metadata verification failed"),
       ]);
       await expectNoMigrationStaging(f.sourcePath);
       expect(JSON.parse(await fs.readFile(f.sourcePath, "utf8"))).toEqual(f.raw);
@@ -262,7 +262,7 @@ it.each(["runtime", "doctor"])(
     if (boundary === "doctor") {
       expect(await acpxSessionOwnerMigration.detectLegacyState(f.input)).not.toBeNull();
       expect((await acpxSessionOwnerMigration.migrateLegacyState(f.input)).warnings).toEqual([
-        expect.stringContaining("exactly one current canonical owner claim is required"),
+        expect.stringContaining("exactly one current owner claim is required"),
       ]);
     } else {
       const runtime = new AcpxRuntime({

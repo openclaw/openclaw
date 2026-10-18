@@ -14,6 +14,7 @@ import {
   writeOpenAiResponsesSse,
   writeOpenAiResponsesText,
 } from "../test/helpers/openai-responses-sse.ts";
+import { createBuildSmokeEnv } from "./lib/build-smoke-env.mts";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
 import {
   hashFile,
@@ -22,7 +23,7 @@ import {
   prepareInstalledPackage,
 } from "./lib/gateway-bench-installed-package.ts";
 import { spawnWindowsJobChild } from "./lib/managed-windows-job.mts";
-import { loadPackagedOwner, verifyPackageMember } from "./lib/windows-repair-package.mts";
+import { createPackagedOwnerLoader, verifyPackageMember } from "./lib/windows-repair-package.mts";
 
 const fixture = fileURLToPath(import.meta.url);
 const deferredReason =
@@ -105,17 +106,12 @@ function isolatedEnvironment(root) {
     }
   }
   return {
-    ...env,
+    ...createBuildSmokeEnv(home, env),
     CI: "1",
-    HOME: home,
-    USERPROFILE: home,
     APPDATA: path.join(home, "AppData", "Roaming"),
     LOCALAPPDATA: path.join(home, "AppData", "Local"),
     TMP: path.join(root, "tmp"),
     TEMP: path.join(root, "tmp"),
-    OPENCLAW_HOME: home,
-    OPENCLAW_STATE_DIR: path.join(home, ".openclaw"),
-    OPENCLAW_CONFIG_PATH: path.join(home, ".openclaw", "openclaw.json"),
     NODE_DISABLE_COMPILE_CACHE: "1",
   };
 }
@@ -197,6 +193,7 @@ async function observer(spec) {
   assert.equal(process.platform, "win32");
   assert.ok(process.connected, "Repair observer requires its outer Job control channel");
   const packageRoot = path.join(spec.input.installRoot, "node_modules", "openclaw");
+  const loadPackagedOwner = await createPackagedOwnerLoader(packageRoot, spec.input.tarball);
   // Repair tools are scoped to the real installation. Only these owned fixture
   // artifacts are added there; successful cleanup restores its original hash.
   const workspace = path.join(packageRoot, `.openclaw-repair-proof-${randomUUID()}`);
@@ -351,22 +348,16 @@ async function observer(spec) {
       assert.deepEqual(await hashInstall(workspace), workspaceBefore);
     } else {
       const executor = await loadPackagedOwner(
-        packageRoot,
-        spec.input.tarball,
         "update-command-executor",
         ["withUpdateCommandExecutor", "withUpdateCommandExecutorChild"],
         owners,
       );
       const ledger = await loadPackagedOwner(
-        packageRoot,
-        spec.input.tarball,
         "update-run-ledger",
         ["createUpdateRun", "recordUpdateRunPhase", "finishUpdateRun"],
         owners,
       );
       const database = await loadPackagedOwner(
-        packageRoot,
-        spec.input.tarball,
         "update-managed-service-handoff-lease",
         ["createManagedHandoffLeaseDatabase", "captureManagedUpdateLeaseDatabaseIdentity"],
         owners,
@@ -530,6 +521,7 @@ async function observer(spec) {
     await acknowledged;
     await fs.rm(workspace, { recursive: true });
   } finally {
+    loadPackagedOwner[Symbol.dispose]();
     server.closeAllConnections();
     await new Promise((resolve) => {
       server.close(resolve);

@@ -1,8 +1,3 @@
-import { normalizeAccountId } from "openclaw/plugin-sdk/account-id";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/account-resolution";
-import { resolveAccountEntry } from "openclaw/plugin-sdk/account-resolution";
-import type { LineConfig, LineGroupConfig } from "./types.js";
-
 export function resolveLineGroupLookupIds(groupId?: string | null): string[] {
   const normalized = groupId?.trim();
   if (!normalized) {
@@ -37,19 +32,6 @@ export function resolveLineGroupConfigEntry<T extends object>(
     }
   }
   return defaults;
-}
-
-export function resolveLineGroupsConfig(
-  cfg: OpenClawConfig,
-  accountId?: string | null,
-): Record<string, LineGroupConfig | undefined> | undefined {
-  const lineConfig = cfg.channels?.line as LineConfig | undefined;
-  if (!lineConfig) {
-    return undefined;
-  }
-  const normalizedAccountId = normalizeAccountId(accountId);
-  const accountGroups = resolveAccountEntry(lineConfig.accounts, normalizedAccountId)?.groups;
-  return accountGroups ?? lineConfig.groups;
 }
 
 export function resolveExactLineGroupConfigKey(params: {

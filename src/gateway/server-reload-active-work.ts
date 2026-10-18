@@ -1,27 +1,19 @@
-import { getActiveBackgroundExecSessionCount } from "../agents/bash-process-registry.js";
-import { getActiveEmbeddedRunCount } from "../agents/embedded-agent-runner/active-run-projections.js";
-import { getTotalPendingReplies } from "../auto-reply/reply/dispatcher-registry.js";
+import { sleepWithAbort } from "@openclaw/retry";
+import { createGatewayActiveWorkSnapshot } from "../infra/gateway-active-work.js";
 import { resolveGatewayRestartDeferralTimeoutMs } from "../infra/restart-budget.js";
-import { getTotalQueueSize } from "../process/command-queue.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
-import { getInspectableActiveTaskRestartBlockers } from "../tasks/task-registry.maintenance.js";
-import { formatActiveTaskRestartBlocker } from "../tasks/task-restart-blocker.js";
+import { hasPluginLifecycleLeaseDemand } from "../plugins/plugin-lifecycle-lease.js";
 import type { ChannelKind } from "./config-reload-plan.js";
 import type { GatewayDeferredChannelReload } from "./config-reload-status.types.js";
 import type { GatewayReloadHandlerParams } from "./server-reload-contracts.js";
-import {
-  isCurrentGatewayReloadGeneration,
-  isGatewayReloadGenerationAborted,
-} from "./server-reload-generation.js";
 
 const CHANNEL_RELOAD_DEFERRAL_POLL_MS = 500;
 const CHANNEL_RELOAD_STILL_PENDING_WARN_MS = 30_000;
 
 export function createGatewayActiveWorkTracker(options: {
   params: Pick<GatewayReloadHandlerParams, "logReload">;
-  myGeneration: number;
+  reloadSignal: AbortSignal;
 }) {
-  const { params, myGeneration } = options;
+  const { params, reloadSignal } = options;
   let deferredChannelReload:
     | {
         channels: ChannelKind[];
@@ -30,76 +22,31 @@ export function createGatewayActiveWorkTracker(options: {
       }
     | undefined;
   const getDeferredChannelReloads = (): readonly GatewayDeferredChannelReload[] => {
-    if (
-      !deferredChannelReload ||
-      !isCurrentGatewayReloadGeneration(myGeneration) ||
-      isGatewayReloadGenerationAborted(myGeneration) ||
-      !deferredChannelReload.isCurrent()
-    ) {
+    if (!deferredChannelReload || reloadSignal.aborted || !deferredChannelReload.isCurrent()) {
       return [];
     }
     const { channels, publicationPending } = deferredChannelReload;
     return channels.map((channel) => ({ channel, publicationPending }));
   };
-  const getActiveCounts = () => {
-    const queueSize = getTotalQueueSize();
-    const pendingReplies = getTotalPendingReplies();
-    const embeddedRuns = getActiveEmbeddedRunCount();
-    const backgroundExecSessions = getActiveBackgroundExecSessionCount();
-    const rootRequests = getActiveGatewayRootWorkCount({ excludeCurrent: true });
-    const activeTasks = getInspectableActiveTaskRestartBlockers().length;
-    return {
-      queueSize,
-      pendingReplies,
-      embeddedRuns,
-      backgroundExecSessions,
-      rootRequests,
-      activeTasks,
-      totalActive:
-        queueSize +
-        pendingReplies +
-        embeddedRuns +
-        backgroundExecSessions +
-        rootRequests +
-        activeTasks,
-    };
-  };
+  const getActiveCounts = () => createGatewayActiveWorkSnapshot().counts;
   const formatActiveDetails = (counts: ReturnType<typeof getActiveCounts>) => {
-    const details = [];
-    if (counts.queueSize > 0) {
-      details.push(`${counts.queueSize} operation(s)`);
-    }
-    if (counts.pendingReplies > 0) {
-      details.push(`${counts.pendingReplies} reply(ies)`);
-    }
-    if (counts.embeddedRuns > 0) {
-      details.push(`${counts.embeddedRuns} embedded run(s)`);
-    }
-    if (counts.backgroundExecSessions > 0) {
-      details.push(`${counts.backgroundExecSessions} background exec session(s)`);
-    }
-    if (counts.rootRequests > 0) {
-      details.push(`${counts.rootRequests} gateway request(s)`);
-    }
-    if (counts.activeTasks > 0) {
-      details.push(`${counts.activeTasks} background task run(s)`);
-    }
-    return details;
-  };
-  const formatTaskBlockers = () => {
-    const blockers = getInspectableActiveTaskRestartBlockers();
-    if (blockers.length === 0) {
-      return null;
-    }
-    const shown = blockers.slice(0, 8).map(formatActiveTaskRestartBlocker);
-    const omitted = blockers.length - shown.length;
-    return omitted > 0 ? `${shown.join("; ")}; +${omitted} more` : shown.join("; ");
+    const details = [
+      [counts.queueSize, "operation(s)"],
+      [counts.pendingReplies, "reply(ies)"],
+      [counts.embeddedRuns, "embedded run(s)"],
+      [counts.backgroundExecSessions, "background exec session(s)"],
+      [counts.rootRequests, "gateway request(s)"],
+      [counts.agentRuns, "admitted agent run(s)"],
+      [counts.acpRuns, "ACP turn(s)"],
+      [counts.mediaRuns, "media generation(s)"],
+      [counts.cronRuns, "cron run(s)"],
+    ] as const;
+    return details.filter(([count]) => count > 0).map(([count, label]) => `${count} ${label}`);
   };
   const formatDeferredWorkStatus = (status: "active" | "still active") => {
     try {
       const details = formatActiveDetails(getActiveCounts()).join(", ");
-      const taskBlockers = formatTaskBlockers();
-      return `${details} ${status}${taskBlockers ? ` (${taskBlockers})` : ""}`;
+      return `${details} ${status}`;
     } catch (err) {
       // Diagnostics must not prevent the existing timeout from forcing a restart.
       return `pending work unknown (${String(err)})`;
@@ -121,6 +68,20 @@ export function createGatewayActiveWorkTracker(options: {
     }
     const channelIds = [...new Set(channels)];
     const channelNames = channelIds.join(", ");
+    const shouldProceedForLeaseDemand = (counts: ReturnType<typeof getActiveCounts>) => {
+      // Watcher, plugin application, and managed secrets hold the process lease here;
+      // work queued behind that lease cannot finish until this reload returns.
+      if (!hasPluginLifecycleLeaseDemand()) {
+        return false;
+      }
+      params.logReload.warn(
+        `channel reload proceeding (${channelNames}) with ${formatActiveDetails(counts).join(", ")} still active: caller(s) waiting for the plugin lifecycle lease held by this reload`,
+      );
+      return true;
+    };
+    if (shouldProceedForLeaseDemand(initial)) {
+      return false;
+    }
     const initialDetails = formatActiveDetails(initial);
     params.logReload.warn(
       `config change requires channel reload (${channelNames}) — deferring until ${initialDetails.join(
@@ -138,18 +99,18 @@ export function createGatewayActiveWorkTracker(options: {
     deferredChannelReload = deferred;
     try {
       while (true) {
-        if (!isTransactionCurrent() || isGatewayReloadGenerationAborted(myGeneration)) {
+        if (!isTransactionCurrent() || reloadSignal.aborted) {
           return true;
         }
-        await new Promise<void>((resolve) => {
-          const timer = setTimeout(resolve, CHANNEL_RELOAD_DEFERRAL_POLL_MS);
-          timer.unref?.();
-        });
-        if (!isTransactionCurrent() || isGatewayReloadGenerationAborted(myGeneration)) {
+        await sleepWithAbort(CHANNEL_RELOAD_DEFERRAL_POLL_MS, undefined, { ref: false });
+        if (!isTransactionCurrent() || reloadSignal.aborted) {
           return true;
         }
         const current = getActiveCounts();
         if (current.totalActive <= 0) {
+          return false;
+        }
+        if (shouldProceedForLeaseDemand(current)) {
           return false;
         }
         const elapsedMs = Date.now() - startedAt;
@@ -181,7 +142,6 @@ export function createGatewayActiveWorkTracker(options: {
   return {
     formatActiveDetails,
     formatDeferredWorkStatus,
-    formatTaskBlockers,
     getActiveCounts,
     getDeferredChannelReloads,
     waitForActiveWorkBeforeChannelReload,

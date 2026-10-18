@@ -1,7 +1,7 @@
 import OpenAI from "openai";
 import type { ChatCompletionCreateParamsNonStreaming } from "openai/resources/chat/completions.js";
 import type { ResponseCreateParamsNonStreaming } from "openai/resources/responses/responses.js";
-import { describe, expect, it } from "vitest";
+import { beforeAll, describe, expect, it } from "vitest";
 import { createCodexNativeWebSearchWrapper } from "../llm/providers/stream-wrappers/openai.js";
 import type { Context, Model } from "../llm/types.js";
 import { isLiveTestEnabled } from "./live-test-helpers.js";
@@ -54,7 +54,10 @@ const context = {
 
 describeLive("OpenAI tool projection live", () => {
   const modelId = process.env.OPENCLAW_LIVE_OPENAI_TOOL_MODEL || "gpt-5.6-luna";
-  const client = new OpenAI({ apiKey: OPENAI_KEY });
+  let client: OpenAI;
+  beforeAll(() => {
+    client = new OpenAI({ apiKey: OPENAI_KEY });
+  });
 
   it("calls a healthy Responses function after quarantining an unreadable sibling", async () => {
     const model = {

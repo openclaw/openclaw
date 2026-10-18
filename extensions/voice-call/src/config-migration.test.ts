@@ -2,7 +2,7 @@
 import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { migrateVoiceCallLegacyConfigInput } from "./config-migration.js";
-import { VoiceCallConfigSchema } from "./config.js";
+import { normalizeVoiceCallConfig } from "./config.js";
 
 describe("voice-call config migration", () => {
   it("declares the setup entry needed to migrate installed packages", () => {
@@ -27,86 +27,56 @@ describe("voice-call config migration", () => {
     expect(migration.config.fromNumber).toBe("+15550001234");
   });
 
-  it.each([
-    { label: "legacy-only", current: undefined },
-    {
-      label: "all canonical fields",
-      current: {
-        apiKey: "synthetic-current-key",
-        model: "synthetic-current-model",
-        silenceDurationMs: 900,
-        vadThreshold: 0.8,
-        keep: { setting: "current" },
-      },
-    },
-    {
-      label: "partial canonical fields and a SecretRef",
-      current: {
-        apiKey: { source: "env", provider: "default", id: "SYNTHETIC_VOICE_KEY" },
-        vadThreshold: 0,
-        keep: "current",
-      },
-    },
-    {
-      label: "explicit empty and zero canonical fields",
-      current: { apiKey: "", model: "", silenceDurationMs: 0, vadThreshold: 0 },
-    },
-  ] satisfies Array<{ label: string; current: Record<string, unknown> | undefined }>)(
-    "fills only missing streaming provider fields with $label",
-    ({ current }) => {
-      const value = {
-        streaming: {
-          enabled: true,
-          sttProvider: "openai",
-          openaiApiKey: "synthetic-legacy-key",
-          sttModel: "synthetic-legacy-model",
-          silenceDurationMs: 700,
-          vadThreshold: 0.4,
-          providers: { openai: current, other: { keep: "other-provider" } },
-        },
-      };
-      const before = structuredClone(value);
-      const migration = migrateVoiceCallLegacyConfigInput({ value });
-
-      expect(migration.config.streaming).toEqual({
+  it("fills only missing streaming provider fields while preserving canonical values", () => {
+    const current = {
+      apiKey: { source: "env", provider: "default", id: "SYNTHETIC_VOICE_KEY" },
+      model: "",
+      vadThreshold: 0,
+      keep: "current",
+    };
+    const value = {
+      streaming: {
         enabled: true,
-        provider: "openai",
-        providers: {
-          other: { keep: "other-provider" },
-          openai: {
-            apiKey: "synthetic-legacy-key",
-            model: "synthetic-legacy-model",
-            silenceDurationMs: 700,
-            vadThreshold: 0.4,
-            ...current,
-          },
+        sttProvider: "openai",
+        openaiApiKey: "synthetic-legacy-key",
+        sttModel: "synthetic-legacy-model",
+        silenceDurationMs: 700,
+        vadThreshold: 0.4,
+        providers: { openai: current, other: { keep: "other-provider" } },
+      },
+    };
+    const before = structuredClone(value);
+    const migration = migrateVoiceCallLegacyConfigInput({ value });
+
+    expect(migration.config.streaming).toEqual({
+      enabled: true,
+      provider: "openai",
+      providers: {
+        other: { keep: "other-provider" },
+        openai: {
+          apiKey: { source: "env", provider: "default", id: "SYNTHETIC_VOICE_KEY" },
+          model: "",
+          silenceDurationMs: 700,
+          vadThreshold: 0,
+          keep: "current",
         },
-      });
-      const prefix = "plugins.entries.voice-call.config.streaming";
-      expect(migration.changes).toEqual([
-        `Moved ${prefix}.sttProvider → ${prefix}.provider.`,
-        ...(
-          [
-            ["openaiApiKey", "apiKey"],
-            ["sttModel", "model"],
-            ["silenceDurationMs", "silenceDurationMs"],
-            ["vadThreshold", "vadThreshold"],
-          ] as const
-        ).map(([legacy, canonical]) => {
-          const target = `${prefix}.providers.openai.${canonical}`;
-          return current?.[canonical] !== undefined
-            ? `Removed ${prefix}.${legacy} (kept ${target}).`
-            : `Moved ${prefix}.${legacy} → ${target}.`;
-        }),
-      ]);
-      expect(value).toEqual(before);
-      expect(VoiceCallConfigSchema.safeParse(migration.config).success).toBe(true);
-      expect(migrateVoiceCallLegacyConfigInput({ value: migration.config })).toEqual({
-        config: migration.config,
-        changes: [],
-      });
-    },
-  );
+      },
+    });
+    const prefix = "plugins.entries.voice-call.config.streaming";
+    expect(migration.changes).toEqual([
+      `Moved ${prefix}.sttProvider → ${prefix}.provider.`,
+      `Removed ${prefix}.openaiApiKey (kept ${prefix}.providers.openai.apiKey).`,
+      `Removed ${prefix}.sttModel (kept ${prefix}.providers.openai.model).`,
+      `Moved ${prefix}.silenceDurationMs → ${prefix}.providers.openai.silenceDurationMs.`,
+      `Removed ${prefix}.vadThreshold (kept ${prefix}.providers.openai.vadThreshold).`,
+    ]);
+    expect(value).toEqual(before);
+    expect(() => normalizeVoiceCallConfig(migration.config)).not.toThrow();
+    expect(migrateVoiceCallLegacyConfigInput({ value: migration.config })).toEqual({
+      config: migration.config,
+      changes: [],
+    });
+  });
 
   it("reports removal of legacy selectors while retaining canonical settings", () => {
     const migration = migrateVoiceCallLegacyConfigInput({
@@ -131,37 +101,6 @@ describe("voice-call config migration", () => {
     ]);
   });
 
-  it("removes legacy realtime agentContext system prompt toggle", () => {
-    const migration = migrateVoiceCallLegacyConfigInput({
-      value: {
-        realtime: {
-          agentContext: {
-            enabled: true,
-            includeSystemPrompt: false,
-            includeWorkspaceFiles: true,
-          },
-        },
-      },
-    });
-
-    const agentContext = (
-      migration.config.realtime as
-        | {
-            agentContext?: {
-              enabled?: boolean;
-              includeSystemPrompt?: unknown;
-              includeWorkspaceFiles?: boolean;
-            };
-          }
-        | undefined
-    )?.agentContext;
-
-    expect(agentContext).toEqual({
-      enabled: true,
-      includeWorkspaceFiles: true,
-    });
-  });
-
   it("does not migrate non-finite legacy streaming numbers", () => {
     const migration = migrateVoiceCallLegacyConfigInput({
       value: {
@@ -172,18 +111,7 @@ describe("voice-call config migration", () => {
       },
       configPathPrefix: "plugins.entries.voice-call.config",
     });
-    const streaming = migration.config.streaming as
-      | {
-          providers?: {
-            openai?: {
-              silenceDurationMs?: number;
-              vadThreshold?: number;
-            };
-          };
-        }
-      | undefined;
-
-    expect(streaming?.providers?.openai).toBeUndefined();
+    expect(migration.config.streaming).not.toHaveProperty("providers.openai");
     expect(migration.changes).toEqual([
       "Removed invalid plugins.entries.voice-call.config.streaming.silenceDurationMs.",
       "Removed invalid plugins.entries.voice-call.config.streaming.vadThreshold.",

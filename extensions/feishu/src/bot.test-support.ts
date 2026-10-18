@@ -10,9 +10,7 @@ import type { FeishuMessageEvent } from "./bot.js";
 type FeishuConfig = NonNullable<NonNullable<ClawdbotConfig["channels"]>["feishu"]>;
 type FeishuMessage = FeishuMessageEvent["message"];
 type FeishuSender = FeishuMessageEvent["sender"];
-type TestConfigBase = Record<string, unknown> & {
-  channels?: Record<string, unknown>;
-};
+type TestConfigBase = Record<string, unknown> & { channels?: Record<string, unknown> };
 type FeishuSecretRefPolicyCase = {
   name: string;
   provider: string;
@@ -23,71 +21,42 @@ type FeishuSecretRefPolicyCase = {
 
 export const FEISHU_SELECTED_SECRET_ENV = "FEISHU_SECRET_REF_SELECTED_TEST";
 export const FEISHU_SIBLING_SECRET_ENV = "FEISHU_SECRET_REF_SIBLING_TEST";
+const selected = FEISHU_SELECTED_SECRET_ENV;
+const sibling = FEISHU_SIBLING_SECRET_ENV;
+const env = (id: string) => ({ source: "env" as const, allowlist: [id] });
+function policyCase(
+  name: string,
+  source?: FeishuSecretRefPolicyCase["providers"][string],
+  configured = false,
+  useDefault = false,
+): FeishuSecretRefPolicyCase {
+  return {
+    name,
+    configured,
+    provider: source ? "corp-env" : "unconfigured",
+    providers: source ? { "corp-env": source } : {},
+    ...(useDefault ? { defaultEnv: "corp-env" } : {}),
+  };
+}
 
 export const feishuSecretRefPolicyCases: FeishuSecretRefPolicyCase[] = [
-  {
-    name: "unconfigured provider alias",
-    provider: "unconfigured",
-    providers: {},
-    configured: false,
-  },
-  {
-    name: "provider configured with a non-env source",
-    provider: "corp-env",
-    providers: { "corp-env": { source: "file", path: "/unused" } },
-    configured: false,
-  },
-  {
-    name: "provider allowlist excluding the selected credential",
-    provider: "corp-env",
-    defaultEnv: "corp-env",
-    providers: { "corp-env": { source: "env", allowlist: [FEISHU_SIBLING_SECRET_ENV] } },
-    configured: false,
-  },
-  {
-    name: "configured env provider allowing the selected credential",
-    provider: "corp-env",
-    defaultEnv: "corp-env",
-    providers: { "corp-env": { source: "env", allowlist: [FEISHU_SELECTED_SECRET_ENV] } },
-    configured: true,
-  },
-  {
-    name: "selected env provider with an empty allowlist",
-    provider: "corp-env",
-    defaultEnv: "corp-env",
-    providers: { "corp-env": { source: "env", allowlist: [] } },
-    configured: false,
-  },
-  {
-    name: "literal env default shadowing a file provider",
-    provider: "default",
-    providers: { default: { source: "file", path: "/unused" } },
-    configured: true,
-  },
-  {
-    name: "selected env default shadowing an exec provider",
-    provider: "corp-env",
-    defaultEnv: "corp-env",
-    providers: { "corp-env": { source: "exec", command: "/unused" } },
-    configured: true,
-  },
-  {
-    name: "selected env default shadowing a store provider",
-    provider: "corp-env",
-    defaultEnv: "corp-env",
-    providers: { "corp-env": { source: "store" } },
-    configured: true,
-  },
+  policyCase("unconfigured provider alias"),
+  policyCase("provider configured with a non-env source", { source: "file", path: "/unused" }),
+  policyCase("provider allowlist excluding the selected credential", env(sibling), false, true),
+  policyCase("configured env provider allowing the selected credential", env(selected), true, true),
+  policyCase(
+    "selected env default shadowing an exec provider",
+    { source: "exec", command: "/unused" },
+    true,
+    true,
+  ),
 ];
 
 export function createFeishuTestConfig(
   feishu: FeishuConfig,
   base: TestConfigBase = {},
 ): ClawdbotConfig {
-  return {
-    ...base,
-    channels: { ...base.channels, feishu },
-  } as ClawdbotConfig;
+  return { ...base, channels: { ...base.channels, feishu } } as ClawdbotConfig;
 }
 
 export function createFeishuSecretRefPolicyConfig({
@@ -95,17 +64,15 @@ export function createFeishuSecretRefPolicyConfig({
   providers,
   defaultEnv,
 }: FeishuSecretRefPolicyCase): ClawdbotConfig {
+  const account = (appId: string, id: string, providerAlias: string) => ({
+    appId,
+    appSecret: { source: "env" as const, provider: providerAlias, id },
+  });
   return createFeishuTestConfig(
     {
       accounts: {
-        selected: {
-          appId: "selected-app",
-          appSecret: { source: "env", provider, id: FEISHU_SELECTED_SECRET_ENV },
-        },
-        sibling: {
-          appId: "sibling-app",
-          appSecret: { source: "env", provider: "sibling-env", id: FEISHU_SIBLING_SECRET_ENV },
-        },
+        selected: account("selected-app", selected, provider),
+        sibling: account("sibling-app", sibling, "sibling-env"),
       },
     },
     {
@@ -113,7 +80,7 @@ export function createFeishuSecretRefPolicyConfig({
         defaults: defaultEnv ? { env: defaultEnv } : undefined,
         providers: {
           ...providers,
-          "sibling-env": { source: "env", allowlist: [FEISHU_SIBLING_SECRET_ENV] },
+          "sibling-env": env(sibling),
         },
       },
     },
@@ -133,34 +100,24 @@ export function createFeishuTestEvent(params: {
   content?: string;
   message?: Partial<FeishuMessage>;
 }): FeishuMessageEvent {
-  const {
-    messageId,
-    sender,
-    senderOpenId = "ou-attacker",
-    senderUserId,
-    senderType,
-    chatId = "oc-dm",
-    chatType = "p2p",
-    messageType = "text",
-    text = "hello",
-    content,
-    message,
-  } = params;
   return {
-    sender: sender ?? {
+    sender: params.sender ?? {
       sender_id: {
-        open_id: senderOpenId,
-        ...(senderUserId ? { user_id: senderUserId } : {}),
+        open_id: params.senderOpenId ?? "ou-attacker",
+        ...(params.senderUserId ? { user_id: params.senderUserId } : {}),
       },
-      ...(senderType ? { sender_type: senderType } : {}),
+      ...(params.senderType ? { sender_type: params.senderType } : {}),
     },
     message: {
-      message_id: messageId,
-      chat_id: chatId,
-      chat_type: chatType,
-      message_type: messageType,
-      ...message,
-      content: content ?? message?.content ?? JSON.stringify({ text }),
+      message_id: params.messageId,
+      chat_id: params.chatId ?? "oc-dm",
+      chat_type: params.chatType ?? "p2p",
+      message_type: params.messageType ?? "text",
+      ...params.message,
+      content:
+        params.content ??
+        params.message?.content ??
+        JSON.stringify({ text: params.text ?? "hello" }),
     },
   };
 }
@@ -187,13 +144,28 @@ type BoundConversation = ReturnType<
 type BindingReadiness = Awaited<ReturnType<typeof ensureConfiguredBindingRouteReady>>;
 
 export function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRoute> {
+  type Resolution = NonNullable<ConfiguredBindingRoute["bindingResolution"]>;
+  const conversationId = "ou_sender_1";
+  const sessionKey = "agent:codex:acp:binding:feishu:default:abc123";
+  const conversation = () => ({ channel: "feishu", accountId: "default", conversationId });
+  const target = () => ({ conversationId });
+  const record = (): Resolution["record"] => ({
+    ...createBoundConversation(),
+    bindingId: "config:acp:feishu:default:ou_sender_1",
+    targetSessionKey: sessionKey,
+    conversation: conversation(),
+    metadata: { source: "config" },
+  });
+  const statefulTarget = (): Resolution["statefulTarget"] => ({
+    kind: "stateful",
+    driverId: "acp",
+    sessionKey,
+    agentId: "codex",
+  });
+  const materialize = () => ({ record: record(), statefulTarget: statefulTarget() });
   return {
     bindingResolution: {
-      conversation: {
-        channel: "feishu",
-        accountId: "default",
-        conversationId: "ou_sender_1",
-      },
+      conversation: conversation(),
       compiledBinding: {
         channel: "feishu",
         accountPattern: "default",
@@ -203,75 +175,27 @@ export function createConfiguredFeishuRoute(): NonNullable<ConfiguredBindingRout
           match: {
             channel: "feishu",
             accountId: "default",
-            peer: { kind: "direct", id: "ou_sender_1" },
+            peer: { kind: "direct", id: conversationId },
           },
         },
-        bindingConversationId: "ou_sender_1",
-        target: {
-          conversationId: "ou_sender_1",
-        },
+        bindingConversationId: conversationId,
+        target: target(),
         agentId: "codex",
         provider: {
-          compileConfiguredBinding: () => ({ conversationId: "ou_sender_1" }),
-          matchInboundConversation: () => ({ conversationId: "ou_sender_1" }),
+          compileConfiguredBinding: target,
+          matchInboundConversation: target,
         },
-        targetFactory: {
-          driverId: "acp",
-          materialize: () => ({
-            record: {
-              bindingId: "config:acp:feishu:default:ou_sender_1",
-              targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-              targetKind: "session",
-              conversation: {
-                channel: "feishu",
-                accountId: "default",
-                conversationId: "ou_sender_1",
-              },
-              status: "active",
-              boundAt: 0,
-              metadata: { source: "config" },
-            },
-            statefulTarget: {
-              kind: "stateful",
-              driverId: "acp",
-              sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-              agentId: "codex",
-            },
-          }),
-        },
+        targetFactory: { driverId: "acp", materialize },
       },
-      match: {
-        conversationId: "ou_sender_1",
-      },
-      record: {
-        bindingId: "config:acp:feishu:default:ou_sender_1",
-        targetSessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-        targetKind: "session",
-        conversation: {
-          channel: "feishu",
-          accountId: "default",
-          conversationId: "ou_sender_1",
-        },
-        status: "active",
-        boundAt: 0,
-        metadata: { source: "config" },
-      },
-      statefulTarget: {
-        kind: "stateful",
-        driverId: "acp",
-        sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
-        agentId: "codex",
-      },
+      match: target(),
+      ...materialize(),
     },
-    route: {
+    route: createFeishuTestRoute({
       agentId: "codex",
-      channel: "feishu",
-      accountId: "default",
-      sessionKey: "agent:codex:acp:binding:feishu:default:abc123",
+      sessionKey,
       mainSessionKey: "agent:codex:main",
-      lastRoutePolicy: "session",
       matchedBy: "binding.channel",
-    } as ResolvedAgentRoute,
+    }),
   };
 }
 

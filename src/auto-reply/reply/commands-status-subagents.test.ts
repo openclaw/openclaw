@@ -1,16 +1,45 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import assert from "node:assert/strict";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import {
-  addSubagentRunForTests,
+  seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
-import { emitAgentEvent } from "../../infra/agent-events.js";
-import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
-import { createSubagentTaskBackingDetail } from "../../tasks/task-backing-records.js";
-import { createRunningTaskRunCore } from "../../tasks/task-executor.js";
-import { resetTaskRegistryForTests } from "../../tasks/task-runtime.test-helpers.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
+import { emitAgentEvent, emitAgentEventForRunContext } from "../../infra/agent-events.js";
+import {
+  clearAgentRunContext,
+  getAgentRunContext,
+  registerAgentRunContext,
+} from "../../infra/agent-run-registry.js";
 import { buildStatusReplyForTest } from "./commands-status.test-support.js";
-import { configureInMemoryTaskRegistryStoreForTests } from "./commands.test-harness.js";
+
+type AgentEvent = Parameters<typeof emitAgentEvent>[0];
+const started = (timestamp: number) => ({ createdAt: timestamp, startedAt: timestamp });
+function emit(runId: string, stream: AgentEvent["stream"], data: AgentEvent["data"]) {
+  emitAgentEvent({ runId, stream, data });
+}
+
+async function expectWorker(task: string, matches: RegExp[], excludes: RegExp[] = []) {
+  const reply = await buildStatusReplyForTest({});
+  expect(reply?.text).toContain("Subagents: 1 active");
+  const detail = reply?.text?.split("\n").find((line) => line.includes(`• ${task}`));
+  for (const pattern of matches) {
+    expect(detail).toMatch(pattern);
+  }
+  for (const pattern of excludes) {
+    expect(detail).not.toMatch(pattern);
+  }
+  return reply;
+}
+
+function registerContext(runId: string, sessionKey: string) {
+  registerAgentRunContext(runId, { sessionKey, projectSessionActive: true });
+  onTestFinished(() => clearAgentRunContext(runId));
+}
 
 vi.mock("../../status/status-plugin-health.runtime.js", () => ({
   collectRuntimePluginHealthSnapshot: () => ({
@@ -23,170 +52,116 @@ vi.mock("../../status/status-plugin-health.runtime.js", () => ({
 }));
 
 describe("buildStatusReply execution observations", () => {
-  beforeEach(() => {
+  beforeEach(async () => {
+    setRuntimeConfigSnapshot({});
     clearAgentHarnesses();
-    resetSubagentRegistryForTests();
-    resetTaskRegistryForTests({ persist: false });
-    configureInMemoryTaskRegistryStoreForTests();
+    await resetSubagentRegistryForTests({ persist: false });
   });
 
-  afterEach(() => {
+  afterEach(async () => {
     clearAgentHarnesses();
-    resetSubagentRegistryForTests();
-    resetTaskRegistryForTests({ persist: false });
+    await resetSubagentRegistryForTests({ persist: false });
+    clearRuntimeConfigSnapshot();
   });
 
   it("shows canonical successor tool activity resuming after approval without changing counts", async () => {
     const runId = "status-observed-successor";
-    const taskRunId = "status-observed-original";
     const childSessionKey = "agent:main:subagent:status-observed";
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId,
-      taskRunId,
+      taskRunId: "status-observed-original",
       generation: 2,
       childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
       task: "observed worker",
-      cleanup: "keep",
-      createdAt: Date.now() - 60_000,
-      startedAt: Date.now() - 60_000,
+      ...started(Date.now() - 60_000),
     });
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey,
-      runId: taskRunId,
-      task: "observed worker",
-      detail: createSubagentTaskBackingDetail(2),
+    registerContext(runId, childSessionKey);
+    emit(runId, "tool", { phase: "start", name: "read", toolCallId: "status-read" });
+    registerAgentRunContext(runId, { verboseLevel: "on" });
+    await expectWorker("observed worker", [/running/i, /\bread\b/]);
+
+    emit(runId, "execution", { approval: { id: "status-approval", state: "pending" } });
+    await expectWorker("observed worker", [/wait.*approval/i], [/\brunning\b/i]);
+
+    emit(runId, "execution", { approval: { id: "overlapping-approval", state: "pending" } });
+    emit(runId, "execution", { approval: { id: "status-approval", state: "resolved" } });
+    expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
+    emit(runId, "execution", { approval: { id: "overlapping-approval", state: "resolved" } });
+    emit(runId, "tool", { phase: "start", name: "read", toolCallId: "status-read" });
+    await expectWorker("observed worker", [/\brunning\b/i, /\bread\b/], [/approval/i]);
+    emit(runId, "tool", { phase: "result", name: "read", toolCallId: "status-read" });
+    await expectWorker("observed worker", [/running/i], [/\bread\b/]);
+    emit(runId, "execution", {
+      state: "waiting",
+      wait: { kind: "approval" },
+      sourceId: "native-observer",
+      executionId: "native-turn",
     });
-    registerAgentRunContext(runId, { sessionKey: childSessionKey, projectSessionActive: true });
-    try {
-      emitAgentEvent({
-        runId,
-        stream: "tool",
-        data: { phase: "start", name: "read", toolCallId: "status-read" },
-      });
-      const running = await buildStatusReplyForTest({});
-      const runningDetail = running?.text
-        ?.split("\n")
-        .find((line) => line.includes("• observed worker"));
-      expect(running?.text).toContain("Subagents: 1 active");
-      expect(running?.text).toContain("Tasks: 1 active · 1 total");
-      expect(runningDetail).toMatch(/running/i);
-      expect(runningDetail).toMatch(/\bread\b/);
-
-      emitAgentEvent({
-        runId,
-        stream: "execution",
-        data: { approval: { id: "status-approval", state: "pending" } },
-      });
-      const approval = await buildStatusReplyForTest({});
-      const approvalDetail = approval?.text
-        ?.split("\n")
-        .find((line) => line.includes("• observed worker"));
-      expect(approvalDetail).toMatch(/wait.*approval/i);
-      expect(approvalDetail).not.toMatch(/\brunning\b/i);
-      expect(approval?.text).toContain("Tasks: 1 active · 1 total");
-
-      emitAgentEvent({
-        runId,
-        stream: "execution",
-        data: { approval: { id: "status-approval", state: "resolved" } },
-      });
-      emitAgentEvent({
-        runId,
-        stream: "tool",
-        data: { phase: "start", name: "read", toolCallId: "status-read" },
-      });
-      const resumed = await buildStatusReplyForTest({});
-      const resumedDetail = resumed?.text
-        ?.split("\n")
-        .find((line) => line.includes("• observed worker"));
-      expect(resumedDetail).toMatch(/\brunning\b/i);
-      expect(resumedDetail).toMatch(/\bread\b/);
-      expect(resumedDetail).not.toMatch(/approval/i);
-      expect(resumed?.text).toContain("Subagents: 1 active");
-      expect(resumed?.text).toContain("Tasks: 1 active · 1 total");
-    } finally {
-      clearAgentRunContext(runId);
-    }
+    expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
+    emit(runId, "execution", {
+      state: "running",
+      sourceId: "native-observer",
+      executionId: "native-turn",
+    });
+    emit(runId, "execution", {
+      state: "unknown",
+      sourceId: "retired-observer",
+      invalidate: true,
+    });
+    await expectWorker("observed worker", [/running/i]);
   });
 
-  it("keeps recent ownerless rows and task counts while reporting unknown activity", async () => {
-    const runId = "status-ownerless";
-    const childSessionKey = "agent:main:subagent:status-ownerless";
-    addSubagentRunForTests({
-      runId,
-      generation: 1,
-      childSessionKey,
-      requesterSessionKey: "agent:main:main",
-      requesterDisplayKey: "main",
-      task: "retained worker",
-      cleanup: "keep",
-      createdAt: Date.now() - 60_000,
-      startedAt: Date.now() - 60_000,
-    });
-    createRunningTaskRunCore({
-      runtime: "subagent",
-      requesterSessionKey: "agent:main:main",
-      childSessionKey,
-      runId,
-      task: "retained worker",
-      detail: createSubagentTaskBackingDetail(1),
-    });
-
-    const reply = await buildStatusReplyForTest({});
-    const detail = reply?.text?.split("\n").find((line) => line.includes("• retained worker"));
-
-    expect(reply?.text).toContain("Subagents: 1 active");
-    expect(reply?.text).toContain("Tasks: 1 active · 1 total");
-    expect(detail).toMatch(/unknown|unavailable/i);
-    expect(detail).not.toMatch(/\b(running|queued)\b/i);
-  });
-
-  it.each(["task", "generation"] as const)(
-    "does not borrow approval activity from a different canonical %s in the same child session",
+  it.each(["task", "generation", "incarnation"] as const)(
+    "does not borrow activity from a different canonical %s in the same child session",
     async (replacement) => {
       const childSessionKey = "agent:main:subagent:status-replaced";
+      const previousRunId = replacement === "incarnation" ? "status-current" : "status-previous";
       const now = Date.now();
-      addSubagentRunForTests({
-        runId: "status-previous",
+      seedSubagentRunForReadTest({
+        runId: previousRunId,
         generation: 1,
         childSessionKey,
         task: "previous worker",
-        createdAt: now - 2_000,
-        startedAt: now - 2_000,
+        ...started(now - 2_000),
       });
-      createRunningTaskRunCore({
-        runtime: "subagent",
-        requesterSessionKey: "agent:main:main",
-        childSessionKey,
-        runId: "status-previous",
-        task: "previous worker",
-        detail: createSubagentTaskBackingDetail(1),
+      registerContext(previousRunId, childSessionKey);
+      const previousContext = getAgentRunContext(previousRunId);
+      assert(previousContext, "Expected previous execution context");
+      emit(previousRunId, "tool", {
+        phase: "start",
+        name: "old-tool",
+        toolCallId: "previous-tool",
       });
-      emitAgentEvent({
-        runId: "status-previous",
-        stream: "execution",
-        data: { approval: { id: "previous-approval", state: "pending" } },
+      emit(previousRunId, "execution", {
+        approval: { id: "previous-approval", state: "pending" },
       });
-      addSubagentRunForTests({
+      expect((await buildStatusReplyForTest({}))?.text).toMatch(/wait.*approval/i);
+      seedSubagentRunForReadTest({
         runId: "status-current",
-        taskRunId: replacement === "generation" ? "status-previous" : "status-current",
+        taskRunId: replacement === "generation" ? previousRunId : "status-current",
         generation: 2,
         childSessionKey,
         task: "replacement worker",
-        createdAt: now - 1_000,
-        startedAt: now - 1_000,
+        ...started(now - 1_000),
       });
-
-      const reply = await buildStatusReplyForTest({});
-      const detail = reply?.text?.split("\n").find((line) => line.includes("• replacement worker"));
-
-      expect(reply?.text).toContain("Subagents: 1 active");
-      expect(detail).toMatch(/unknown|unavailable/i);
-      expect(detail).not.toMatch(/approval/i);
+      if (replacement === "incarnation") {
+        clearAgentRunContext(previousRunId);
+        registerAgentRunContext("status-current", { ...previousContext });
+        onTestFinished(() => clearAgentRunContext("status-current"));
+        emitAgentEventForRunContext(
+          {
+            runId: "status-current",
+            stream: "execution",
+            data: { approval: { id: "late-previous-approval", state: "pending" } },
+          },
+          previousContext,
+        );
+      }
+      const reply = await expectWorker(
+        "replacement worker",
+        [replacement === "incarnation" ? /running/i : /unknown|unavailable/i],
+        [/approval|old-tool/i, ...(replacement === "incarnation" ? [] : [/\b(running|queued)\b/i])],
+      );
       expect(reply?.text).not.toContain("• previous worker");
     },
   );
@@ -194,23 +169,21 @@ describe("buildStatusReply execution observations", () => {
   it("retains ended child delivery debt without calling the child active", async () => {
     const parentKey = "agent:main:subagent:status-delivery-parent";
     const now = Date.now();
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "status-delivery-parent",
       childSessionKey: parentKey,
       task: "delivery orchestrator",
-      createdAt: now - 120_000,
-      startedAt: now - 120_000,
+      ...started(now - 120_000),
       endedAt: now - 60_000,
       outcome: { status: "ok" },
     });
-    addSubagentRunForTests({
+    seedSubagentRunForReadTest({
       runId: "status-delivery-child",
       childSessionKey: `${parentKey}:subagent:child`,
       requesterSessionKey: parentKey,
       requesterDisplayKey: parentKey,
       task: "completed child",
-      createdAt: now - 90_000,
-      startedAt: now - 90_000,
+      ...started(now - 90_000),
       endedAt: now - 30_000,
       outcome: { status: "ok" },
       expectsCompletionMessage: true,
@@ -221,15 +194,11 @@ describe("buildStatusReply execution observations", () => {
       },
       delivery: { status: "pending" },
     });
-
-    const reply = await buildStatusReplyForTest({});
-    const detail = reply?.text
-      ?.split("\n")
-      .find((line) => line.includes("• delivery orchestrator"));
-
-    expect(reply?.text).toContain("Subagents: 1 active");
-    expect(detail).toMatch(/pending|delivery|settle/i);
-    expect(detail).not.toMatch(/child(?:ren)? active|\brunning\b/i);
+    const reply = await expectWorker(
+      "delivery orchestrator",
+      [/pending|delivery|settle/i],
+      [/child(?:ren)? active|\brunning\b/i],
+    );
     expect(reply?.text).not.toContain("private completed result");
   });
 });

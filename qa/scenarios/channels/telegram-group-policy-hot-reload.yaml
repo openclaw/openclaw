@@ -57,7 +57,11 @@ flow:
                   groupPolicy: 'allowlist', groupAllowFrom: allowed,
                   accounts: { [accountId]: { groupPolicy: null, groupAllowFrom: null,
                     groups: { [groupId]: { groupPolicy: null, allowFrom: null } } } }
-                } } }, replacePaths: [`channels.telegram.accounts.${accountId}.groups.${groupId}.allowFrom`] });
+                } } }, replacePaths: [
+                  'channels.telegram.groupAllowFrom',
+                  `channels.telegram.accounts.${accountId}.groupAllowFrom`,
+                  `channels.telegram.accounts.${accountId}.groups.${groupId}.allowFrom`,
+                ] });
                 await waitForTransportReady(env, 60000);
                 const identity = async () => {
                   const system = await env.gateway.call('system.info', {});

@@ -22,11 +22,14 @@ it.each(["renewed", "replaced", "expired", "refused"] as const)(
     const db = new DatabaseSync(databasePath);
     const peer = new DatabaseSync(databasePath);
     const identity = { scope: "synthetic", key: "verify", owner: "original" };
-    const observation = new BigInt64Array(new SharedArrayBuffer(48));
+    const observation = new BigInt64Array(
+      new SharedArrayBuffer((leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT),
+    );
     const database: OpenClawStateDatabase = {
       db,
       path: databasePath,
       walMaintenance: {
+        stop: async () => {},
         checkpoint: vi.fn(() => false),
         close: vi.fn(() => false),
         reclaimFreePages: vi.fn(() => {
@@ -70,7 +73,7 @@ it.each(["renewed", "replaced", "expired", "refused"] as const)(
       return "ok";
     });
     const verify = () =>
-      withSqliteWorkerOperationAdmission({ port: admission.port }, () =>
+      withSqliteWorkerOperationAdmission(admission, () =>
         executeOpenClawStateLeaseCommand(
           { type: "stateLease.verify", input: { identity } },
           database,

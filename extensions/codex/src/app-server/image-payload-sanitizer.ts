@@ -10,8 +10,6 @@ import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 const IMAGE_OMITTED_TEXT = "omitted image payload: invalid inline image data";
 
-export { sanitizeInlineImageDataUrl };
-
 /** Builds the replacement text inserted when an inline image payload is invalid. */
 export function invalidInlineImageText(label: string): string {
   return `[${label}] ${IMAGE_OMITTED_TEXT}`;
@@ -36,20 +34,20 @@ function sanitizeImageContentRecord(
       : { ...record, mimeType: mime, data };
   }
 
-  if (record.type === "inputImage" && typeof record.imageUrl === "string") {
-    const imageUrl = sanitizeInlineImageDataUrl(record.imageUrl);
-    if (!imageUrl) {
-      return { type: "inputText", text: invalidInlineImageText(label) };
-    }
-    return imageUrl === record.imageUrl ? record : { ...record, imageUrl };
-  }
-
-  if (record.type === "input_image" && typeof record.image_url === "string") {
-    const imageUrl = sanitizeInlineImageDataUrl(record.image_url);
-    if (!imageUrl) {
-      return { type: "input_text", text: invalidInlineImageText(label) };
-    }
-    return imageUrl === record.image_url ? record : { ...record, image_url: imageUrl };
+  const urlKey = record.type === "inputImage" ? "imageUrl" : "image_url";
+  if (
+    (record.type === "inputImage" || record.type === "input_image") &&
+    typeof record[urlKey] === "string"
+  ) {
+    const imageUrl = sanitizeInlineImageDataUrl(record[urlKey]);
+    return imageUrl
+      ? imageUrl === record[urlKey]
+        ? record
+        : { ...record, [urlKey]: imageUrl }
+      : {
+          type: record.type === "inputImage" ? "inputText" : "input_text",
+          text: invalidInlineImageText(label),
+        };
   }
 
   return undefined;

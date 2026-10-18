@@ -1,4 +1,7 @@
-import { findServiceOwnershipRefusal, ServiceInspectionError } from "./service-inspection-error.js";
+import {
+  assertServiceInspectionFallbackAllowed,
+  ServiceInspectionError,
+} from "./service-inspection-error.js";
 import type {
   GatewayServiceEnvArgs,
   GatewayServiceLoadState,
@@ -12,10 +15,7 @@ export async function readGatewayServiceLoadState(
   try {
     return { status: (await service.isLoaded(args)) ? "loaded" : "not-loaded" };
   } catch (error) {
-    const refusal = findServiceOwnershipRefusal(error);
-    if (refusal) {
-      throw refusal;
-    }
+    assertServiceInspectionFallbackAllowed(error);
     return {
       status: "unknown",
       detail: String(error),

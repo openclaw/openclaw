@@ -42,6 +42,7 @@ function resolveBundledPluginConfigEnablement(params: {
 
 export async function installBundledPluginSource(params: {
   snapshot: ConfigSnapshotForInstallPersist;
+  env?: NodeJS.ProcessEnv;
   rawSpec: string;
   bundledSource: BundledPluginSource;
   warning?: string;

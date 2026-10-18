@@ -11,17 +11,15 @@ import { parseAcpElicitationRequest } from "./acp-elicitation.js";
 const DEFAULT_ELICITATION_TIMEOUT_MS = 15 * 60_000;
 const MAX_REQUEST_ID_TEXT = 128;
 
-type AcpElicitationDelivery = {
-  deliver: (kind: "block", payload: ReplyPayload) => Promise<boolean>;
-};
-
 export type AcpElicitationHandlerParams = {
   sourceSessionKey: string;
   targetSessionKey: string;
   outerRequestId: string;
   agentId: string;
   runId: string;
-  delivery: AcpElicitationDelivery;
+  delivery: {
+    deliver: (kind: "block", payload: ReplyPayload) => Promise<boolean>;
+  };
   isActive: () => boolean;
 };
 
@@ -39,10 +37,6 @@ function questionId(params: {
 
 function cancellation(message: string): AcpElicitationResponse {
   return { action: "cancel", _meta: { message } };
-}
-
-function decline(message?: string): AcpElicitationResponse {
-  return { action: "decline", ...(message ? { _meta: { message } } : {}) };
 }
 
 function isContextRequestIdValid(value: AcpJsonRpcId): boolean {
@@ -100,7 +94,10 @@ export function createAcpElicitationHandler(
         : { action: "accept", content: result.content };
     }
     if (result.status === "declined" || result.status === "unsupported") {
-      return decline(result.message);
+      return {
+        action: "decline",
+        ...(result.message ? { _meta: { message: result.message } } : {}),
+      };
     }
     return cancellation(result.message ?? "ACP input request was cancelled.");
   };

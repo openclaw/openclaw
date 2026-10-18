@@ -93,7 +93,7 @@ function expectAckReactionRuntimeOptions(
   }
 }
 
-export function requireReactionCall(
+function requireReactionCall(
   mock: typeof sendMocks.reactMessageDiscord | typeof sendMocks.removeReactionDiscord,
   index: number,
 ) {
@@ -200,9 +200,7 @@ export async function runSingleChunkFinalScenario(discordConfig: Record<string, 
   await runProcessDiscordMessage(ctx);
 }
 
-export async function createBlockModeContext(
-  discordConfig: Record<string, unknown> = { streaming: { mode: "block" } },
-) {
+export async function createBlockModeContext() {
   return await createAutomaticDraftContext({
     cfg: {
       messages: { ackReaction: "👀" },
@@ -215,6 +213,6 @@ export async function createBlockModeContext(
         },
       },
     },
-    discordConfig,
+    discordConfig: { streaming: { mode: "block" } },
   });
 }

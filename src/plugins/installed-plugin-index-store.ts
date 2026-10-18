@@ -1,9 +1,6 @@
 /** Reads and parses the installed plugin index in the state database. */
 import { z } from "zod";
-import {
-  parsePluginInstallRecordMap,
-  PluginInstallRecordSchema,
-} from "../config/plugin-install-record-map.js";
+import { parsePluginInstallRecordMap } from "../config/plugin-install-record-map.js";
 import { safeParseWithSchema } from "../utils/zod-parse.js";
 import { recordInstalledPluginIndexInstallOwner } from "./installed-plugin-index-install-owner.js";
 import {
@@ -12,16 +9,15 @@ import {
 } from "./installed-plugin-index-record-state.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store-path.js";
 import {
-  extractPluginInstallRecordsFromInstalledPluginIndex,
   INSTALLED_PLUGIN_INDEX_VERSION,
   INSTALLED_PLUGIN_INDEX_MIGRATION_VERSION,
   type InstalledPluginIndex,
 } from "./installed-plugin-index.js";
 import type { PersistedInstalledPluginIndexCacheEntry } from "./plugin-cache-management.js";
+import { SourceAdmissionReceiptSchema } from "./plugin-source-admission.types.js";
 
 export {
   resolveInstalledPluginIndexStorePath,
-  resolveLegacyInstalledPluginIndexStorePath,
   type InstalledPluginIndexStoreOptions,
 } from "./installed-plugin-index-store-path.js";
 
@@ -58,8 +54,9 @@ const InstalledPluginIndexRecordSchema = z.object({
   installOwnerAmbiguous: z.literal(true).optional(),
   packageName: z.string().optional(),
   packageVersion: z.string().optional(),
-  installRecord: PluginInstallRecordSchema.optional(),
   installRecordHash: z.string().optional(),
+  // Derived receipts may be discarded without invalidating the canonical install ledger.
+  sourceAdmissions: z.record(z.string(), SourceAdmissionReceiptSchema).optional().catch(undefined),
   packageInstall: z.unknown().optional(),
   packageChannel: z.unknown().optional(),
   packageBuild: z
@@ -135,9 +132,7 @@ export function parseInstalledPluginIndex(value: unknown): InstalledPluginIndex 
   if (!parsed) {
     return null;
   }
-  const installRecords = Object.hasOwn(parsed, "installRecords")
-    ? parsePluginInstallRecordMap(parsed.installRecords)
-    : extractPluginInstallRecordsFromInstalledPluginIndex(parsed as InstalledPluginIndex);
+  const installRecords = parsePluginInstallRecordMap(parsed.installRecords);
   if (!installRecords) {
     return null;
   }

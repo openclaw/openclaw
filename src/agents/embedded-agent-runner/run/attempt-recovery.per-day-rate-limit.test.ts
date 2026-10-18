@@ -7,6 +7,7 @@ import { sleepWithAbort } from "../../../infra/backoff.js";
 import { loadBundledPluginFacade } from "../../../test-utils/bundled-plugin-public-surface.js";
 import { registerSingleProviderPlugin } from "../../../test-utils/plugin-registration.js";
 import { buildAssistantFailoverSignal } from "../../embedded-agent-helpers/assistant-message-failures.js";
+import { coerceToFailoverError } from "../../failover-error.js";
 import { recoverAfterTransportDrop } from "./attempt-recovery.test-support.js";
 
 vi.mock("../../../infra/backoff.js", async (importOriginal) => ({
@@ -64,6 +65,43 @@ async function fetchRealPerDayCapErrorMessage(): Promise<string | undefined> {
 }
 
 describe("recoverEmbeddedRunAttempt", () => {
+  it.each(["assistant", "prompt", "coerced"] as const)(
+    "does not retry a code-only HTTP 400 rejection from %s",
+    async (source) => {
+      const message = "400 This prompt is longer than the free tier allows for a single request.";
+      const code = "rate_limit_exceeded";
+      const error = Object.assign(new Error(message), { status: 400, code });
+      vi.mocked(sleepWithAbort).mockClear();
+      const recovery = recoverAfterTransportDrop({
+        errorMessage: message,
+        errorCode: code,
+        diagnostics: [],
+        content: [],
+        replaySafe: true,
+        fallbackConfigured: true,
+        ...(source === "assistant"
+          ? {}
+          : {
+              terminal: {
+                kind: "failed",
+                source: "prompt",
+                error: source === "coerced" ? coerceToFailoverError(error) : error,
+              },
+            }),
+      });
+      if (source === "assistant") {
+        await expect(recovery).resolves.toMatchObject({ recovery: { action: "proceed" } });
+      } else {
+        await expect(recovery).rejects.toMatchObject({
+          name: "FailoverError",
+          reason: "rate_limit",
+          status: 400,
+        });
+      }
+      expect(sleepWithAbort).not.toHaveBeenCalled();
+    },
+  );
+
   it("routes a real HTTP per-day 429 straight to fallback with zero same-model retries", async () => {
     // Message text comes from a real local HTTP 429 response round-tripped through
     // the real OpenRouter transport (streamOpenAICompletions) and the real
@@ -89,4 +127,37 @@ describe("recoverEmbeddedRunAttempt", () => {
     expect(sleepWithAbort).not.toHaveBeenCalled();
     expect(fixture.failoverRetryController.transientRetryCount).toBe(0);
   });
+
+  it.each<[string, "proceed" | "retry", number]>([
+    // MiniMax Token Plan 2056 from #172165, without Retry-After.
+    [
+      '429: {"error":{"message":"已达到 Token Plan 用量上限：请升级 Token Plan 套餐或购买积分补充用量。 (2056)","type":"rate_limit_error"},"type":"error"}',
+      "proceed",
+      0,
+    ],
+    // z.ai weekly/monthly quota from #173436.
+    ["429 您已达到每周/每月使用上限，您的限额将在 2026-10-20 00:00:00 重置。", "proceed", 0],
+    ["429 您已达到每周使用上限，请等待限额重置。", "proceed", 0],
+    ["429 您已达到每月使用上限，请等待限额重置。", "proceed", 0],
+    ["429 额度已用尽", "proceed", 0],
+    ["429 配额已用尽", "proceed", 0],
+    ["429 您已达到每分钟使用上限，请稍后重试。", "retry", 1],
+    ["429 请求过于频繁，请稍后重试", "retry", 1],
+    ["429 请求过于频繁; please retry later", "retry", 1],
+  ])(
+    "recovers Chinese rate limits without retrying exhausted quotas: %s",
+    async (errorMessage, action, retries) => {
+      vi.mocked(sleepWithAbort).mockClear();
+      const fixture = await recoverAfterTransportDrop({
+        errorMessage,
+        diagnostics: [],
+        content: [],
+        replaySafe: true,
+      });
+
+      expect(fixture.recovery.action).toBe(action);
+      expect(sleepWithAbort).toHaveBeenCalledTimes(retries);
+      expect(fixture.failoverRetryController.transientRetryCount).toBe(retries);
+    },
+  );
 });

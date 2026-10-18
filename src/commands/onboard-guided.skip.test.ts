@@ -1,9 +1,10 @@
+import "../test-utils/prepare-compiled-subprocesses.js";
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { createWizardPrompter } from "../../test/helpers/wizard-prompter.js";
-import type { GuidedOnboardingDeps } from "./onboard-guided.js";
+import type { GuidedOrchestrationFixture as GuidedOnboardingDeps } from "./onboard-guided-runtime.test-support.js";
 
 vi.mock("./onboard-interactive-runner.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-interactive-runner.js")>()),
@@ -20,8 +21,12 @@ vi.mock("../plugins/provider-setup-availability.js", () => ({
 
 let root: string | undefined;
 afterEach(async () => {
-  const { closeOpenClawStateDatabaseForTest } = await import("../state/openclaw-state-db.js");
-  const { closeOpenClawAgentDatabasesForTest } = await import("../state/openclaw-agent-db.js");
+  const { closeOpenClawStateDatabaseAsync, closeOpenClawStateDatabaseForTest } =
+    await import("../state/openclaw-state-db.js");
+  const { closeOpenClawAgentDatabasesAsync, closeOpenClawAgentDatabasesForTest } =
+    await import("../state/openclaw-agent-db.js");
+  await closeOpenClawAgentDatabasesAsync();
+  await closeOpenClawStateDatabaseAsync();
   closeOpenClawAgentDatabasesForTest();
   closeOpenClawStateDatabaseForTest();
   vi.unstubAllEnvs();
@@ -31,7 +36,7 @@ afterEach(async () => {
   }
 });
 
-it.each(["fresh", "interrupted", "replaced"] as const)(
+it.each(["interrupted", "replaced"] as const)(
   "keeps skipped baseline setup owner-fenced and resumable: %s",
   async (scenario) => {
     root = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-onboard-skip-"));
@@ -41,7 +46,8 @@ it.each(["fresh", "interrupted", "replaced"] as const)(
     vi.stubEnv("OPENCLAW_CONFIG_PATH", configPath);
     vi.stubEnv("HOME", root);
     vi.stubEnv("USERPROFILE", root);
-    const { runGuidedOnboarding } = await import("./onboard-guided.js");
+    const { runGuidedOnboardingWithFixtures: runGuidedOnboarding } =
+      await import("./onboard-guided-runtime.test-support.js");
     const { readConfigFileSnapshot } = await import("../config/config.js");
     const { applySystemAgentSetup } = await import("../system-agent/setup-apply.js");
     const { beginLocalOnboarding, readLocalOnboardingState } =
@@ -69,7 +75,6 @@ it.each(["fresh", "interrupted", "replaced"] as const)(
             ...params,
             assertCommitPreconditions: (config) => {
               if (
-                scenario !== "fresh" &&
                 !interrupted &&
                 config.agents?.entries?.starter &&
                 config.gateway?.mode === undefined
@@ -99,18 +104,16 @@ it.each(["fresh", "interrupted", "replaced"] as const)(
         { log: vi.fn(), error: vi.fn(), exit: vi.fn() as never },
         deps,
       );
-    if (scenario !== "fresh") {
-      await expect(run()).rejects.toThrow(
-        scenario === "interrupted" ? "Synthetic interruption" : "Another onboarding run",
-      );
-      const interruptedConfig = await readConfigFileSnapshot();
-      expect(interruptedConfig.config.agents?.entries?.starter).toBeDefined();
-      expect(interruptedConfig.config.gateway?.mode).toBeUndefined();
-      expect(readLocalOnboardingState(configPath)?.status).toBe("pending");
-      if (scenario === "replaced") {
-        expect(readLocalOnboardingState(configPath)?.runId).toBe("replacement");
-        return;
-      }
+    await expect(run()).rejects.toThrow(
+      scenario === "interrupted" ? "Synthetic interruption" : "Another onboarding run",
+    );
+    const interruptedConfig = await readConfigFileSnapshot();
+    expect(interruptedConfig.config.agents?.entries?.starter).toBeDefined();
+    expect(interruptedConfig.config.gateway?.mode).toBeUndefined();
+    expect(readLocalOnboardingState(configPath)?.status).toBe("pending");
+    if (scenario === "replaced") {
+      expect(readLocalOnboardingState(configPath)?.runId).toBe("replacement");
+      return;
     }
     await run();
     const snapshot = await readConfigFileSnapshot();

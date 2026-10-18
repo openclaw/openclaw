@@ -1,25 +1,19 @@
 import { mkdir, readdir, readFile } from "node:fs/promises";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  closeAdmittedRunDelegatedAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../../agents/admitted-run-context.js";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   installSessionPlacementAdmissionProvider,
   withSessionPlacementTurnAdmission,
 } from "../../agents/session-placement-admission.js";
 import { saveMediaBuffer } from "../../media/store.js";
 import { runCommandWithTimeout } from "../../process/exec.js";
+import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { placementTurnOwner } from "./placement-record.js";
 import type { WorkerTunnelHandle } from "./tunnel-contract.js";
+import { remoteExecEnvironment, revocableTurn } from "./worker-turn-launcher-flow.test-support.js";
 import {
-  ENVIRONMENT_ID,
   MANIFEST_REF,
-  OWNER_EPOCH,
   SESSION_ID,
-  attachedEnvironment,
   cleanupWorkerTurnLauncherTest,
   createWorkerSessionTurnPlacementProvider,
   placements,
@@ -27,14 +21,14 @@ import {
   seedActivePlacement,
   sessionTarget,
   setupWorkerTurnLauncherTest,
-  turn,
-  unusedEnvironments,
 } from "./worker-turn-launcher.test-support.js";
 import { WORKER_ATTACHMENT_DIRECTORY_PREFIX } from "./workspace-path-exclusions.js";
 
+afterAll(closeStateDatabaseForTest);
+
 describe("reconciliation continuation authority", () => {
   beforeEach(setupWorkerTurnLauncherTest);
-  afterEach(cleanupWorkerTurnLauncherTest);
+  afterEach(() => cleanupWorkerTurnLauncherTest({ reuseReadWorkers: true }));
 
   it.each([
     { mode: "remote-exec", authority: "source", revokeAt: "wait" },
@@ -57,49 +51,32 @@ describe("reconciliation continuation authority", () => {
     async ({ mode, authority, revokeAt }) => {
       const remote = path.join(root, "remote-attachments");
       await mkdir(remote);
-      seedActivePlacement(mode, remote);
+      await seedActivePlacement(mode, remote);
       const active = placements.get(SESSION_ID);
       if (active?.state !== "active") {
         throw new Error("expected active placement");
       }
-      const prior = placements.claimTurn({
+      const prior = await placements.claimTurn({
         ...sessionTarget,
         claimId: "prior-result",
         runId: "prior-run",
         owner: placementTurnOwner(active),
       });
-      placements.markWorkspaceResultPending(prior);
+      await placements.markWorkspaceResultPending(prior);
       const waiting = vi.spyOn(placements, "waitForTurnClaimRelease");
       const bytes = Buffer.from("authorized attachment original");
       const saved = await saveMediaBuffer(bytes, "text/plain", "inbound", bytes.length, "note.txt");
       const abort = new AbortController();
-      const base = {
-        ...turn("followup"),
+      const authorityTurn = await revocableTurn(
+        "followup",
+        authority,
+        "test.reconciliation-source",
+      );
+      const { revoke } = authorityTurn;
+      const input = {
+        ...authorityTurn.input,
         abortSignal: abort.signal,
         media: [{ path: saved.path, contentType: "text/plain" }],
-      };
-      let sourceLive = true;
-      const admission = prepareAgentRunAdmission({
-        cfg: base.config,
-        operationalRunInstance: createOperationalRunInstanceRef(base.runId),
-        facts: {
-          runId: base.runId,
-          agentId: sessionTarget.agentId,
-          ingress: { kind: "worker", boundary: "test.reconciliation-source", state: "present" },
-        },
-        assertSourceCurrent: () => {
-          if (!sourceLive) {
-            throw new Error("source authority revoked");
-          }
-        },
-      });
-      const admitted = authority === "admitted" ? await admission.admit("embedded") : undefined;
-      const revoke = () => {
-        if (admitted) {
-          closeAdmittedRunDelegatedAuthority(admitted);
-        } else {
-          sourceLive = false;
-        }
       };
       // Real attachment commands write to an isolated workspace; only transport is synthetic.
       const executedCommands: string[][] = [];
@@ -123,36 +100,11 @@ describe("reconciliation continuation authority", () => {
           return result;
         },
       );
-      const tunnel: WorkerTunnelHandle = {
-        environmentId: ENVIRONMENT_ID,
-        ownerEpoch: OWNER_EPOCH,
-        runWorkspaceCommand,
-        quiesceWorkspace: async () => ({ assertActive: async () => {}, resume: async () => {} }),
-        reconcileWorkspace: async (request) => {
-          if (request.source.kind !== "local") {
-            throw new Error("expected local source");
-          }
-          request.source.journal.commit(MANIFEST_REF);
-          return {
-            manifestRef: MANIFEST_REF,
-            changed: false,
-            verifyStable: async () => {},
-            verifyLocalStable: async () => {},
-          };
-        },
-        syncWorkspace: vi.fn(),
-        stop: async () => {},
-      };
-      const environments = {
-        ...unusedEnvironments(),
-        get: vi.fn(attachedEnvironment),
-        startTunnel: vi.fn(async () => {
-          if (revokeAt === "tunnel") {
-            revoke();
-          }
-          return tunnel;
-        }),
-      };
+      const environments = remoteExecEnvironment(runWorkspaceCommand, () => {
+        if (revokeAt === "tunnel") {
+          revoke();
+        }
+      });
       const resolveWorkspace = vi.fn(async () => {
         if (revokeAt === "workspace") {
           revoke();
@@ -164,30 +116,18 @@ describe("reconciliation continuation authority", () => {
           name.startsWith(WORKER_ATTACHMENT_DIRECTORY_PREFIX),
         );
         expect(directories).toHaveLength(1);
-        const directoryName = directories[0];
-        if (!directoryName) {
-          throw new Error("attachment directory was not created");
-        }
-        const directory = path.join(remote, directoryName);
+        const directory = path.join(remote, directories[0]!);
         const files = await readdir(directory);
         expect(files).toHaveLength(1);
-        const fileName = files[0];
-        if (!fileName) {
-          throw new Error("attachment file was not created");
-        }
-        expect(await readFile(path.join(directory, fileName))).toEqual(bytes);
+        expect(await readFile(path.join(directory, files[0]!))).toEqual(bytes);
         return { meta: { durationMs: 1 } };
       });
       const uninstall = installSessionPlacementAdmissionProvider(
         createWorkerSessionTurnPlacementProvider({ environments, placements, resolveWorkspace }),
       );
       const run = withSessionPlacementTurnAdmission(
-        { ...sessionTarget, runId: base.runId },
-        {
-          ...base,
-          preparedRunAdmission: admitted ? undefined : admission,
-          admittedRunContext: admitted,
-        },
+        { ...sessionTarget, runId: input.runId },
+        input,
         runLocal,
       );
       void run.catch(() => undefined);
@@ -197,9 +137,9 @@ describe("reconciliation continuation authority", () => {
         if (revokeAt === "wait") {
           revoke();
         }
-        placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
-        placements.acceptWorkspaceResult(prior);
-        placements.completeWorkspaceResultAndReleaseTurn(prior);
+        await placements.updateWorkspaceBaseManifest({ claim: prior, manifestRef: MANIFEST_REF });
+        await placements.acceptWorkspaceResult(prior);
+        await placements.completeWorkspaceResultAndReleaseTurn(prior);
         if (revokeAt === "never") {
           await expect(run).resolves.toMatchObject({ meta: { durationMs: 1 } });
           expect(runLocal).toHaveBeenCalledOnce();
@@ -226,7 +166,7 @@ describe("reconciliation continuation authority", () => {
       } finally {
         abort.abort();
         await run.catch(() => undefined);
-        admission.close();
+        authorityTurn.close();
         uninstall();
       }
     },

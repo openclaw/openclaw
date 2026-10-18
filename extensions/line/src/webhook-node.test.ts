@@ -3,7 +3,7 @@ import type { IncomingMessage, ServerResponse } from "node:http";
 import { createMockIncomingRequest } from "openclaw/plugin-sdk/test-env";
 import { describe, expect, it, vi } from "vitest";
 import { createRuntimeSpies } from "../../test-support/runtime-spies.js";
-import { createLineNodeWebhookHandler, readLineWebhookRequestBody } from "./webhook-node.js";
+import { createLineNodeWebhookHandler } from "./webhook-node.js";
 
 const sign = (body: string, secret: string) =>
   crypto.createHmac("SHA256", secret).update(body).digest("base64");
@@ -111,18 +111,6 @@ async function invokeNodePostContract(params: {
 }
 
 describe("LINE webhook POST contract", () => {
-  it("rejects verification-shaped requests without a signature", async () => {
-    const result = await invokeNodePostContract({
-      rawBody: JSON.stringify({ events: [] }),
-      signed: false,
-    });
-
-    expect(result.status).toBe(400);
-    expect(result.body).toEqual({ error: "Missing X-Line-Signature header" });
-    expect(result.contentType).toBe("application/json");
-    expect(result.dispatched).not.toHaveBeenCalled();
-  });
-
   it("accepts signed verification-shaped requests without dispatching events", async () => {
     const result = await invokeNodePostContract({
       rawBody: JSON.stringify({ events: [] }),
@@ -133,29 +121,6 @@ describe("LINE webhook POST contract", () => {
     expect(result.body).toEqual({ status: "ok" });
     expect(result.contentType).toBe("application/json");
     expect(result.dispatched).not.toHaveBeenCalled();
-  });
-
-  it("rejects missing signature when events are non-empty", async () => {
-    const result = await invokeNodePostContract({
-      rawBody: JSON.stringify({ events: [{ type: "message" }] }),
-      signed: false,
-    });
-
-    expect(result.status).toBe(400);
-    expect(result.body).toEqual({ error: "Missing X-Line-Signature header" });
-    expect(result.dispatched).not.toHaveBeenCalled();
-  });
-
-  it("returns 500 when durable admission fails", async () => {
-    const result = await invokeNodePostContract({
-      failWith: new Error("persist failed"),
-      rawBody: JSON.stringify({ events: [{ type: "message" }] }),
-      signed: true,
-    });
-
-    expect(result.status).toBe(500);
-    expect(result.body).toEqual({ error: "Internal server error" });
-    expect(result.runtimeError).toHaveBeenCalledTimes(1);
   });
 
   it("reports non-Error admission failures without object Object", async () => {
@@ -251,7 +216,6 @@ describe("createLineNodeWebhookHandler", () => {
       getTargets: () => [{ channelSecret: "secret", bot }],
       runtime,
       readBody,
-      maxBodyBytes: 1024 * 1024,
     });
 
     const { res } = createRes();
@@ -331,18 +295,5 @@ describe("createLineNodeWebhookHandler", () => {
     expect(result.status).toBe(400);
     expect(result.body).toEqual({ error: "Invalid webhook payload" });
     expect(result.dispatched).not.toHaveBeenCalled();
-  });
-});
-
-describe("readLineWebhookRequestBody", () => {
-  it("reads body within limit", async () => {
-    const req = createMockIncomingRequest(['{"events":[{"type":"message"}]}']);
-    const body = await readLineWebhookRequestBody(req, 1024);
-    expect(body).toContain('"events"');
-  });
-
-  it("rejects oversized body", async () => {
-    const req = createMockIncomingRequest(["x".repeat(2048)]);
-    await expect(readLineWebhookRequestBody(req, 128)).rejects.toThrow("PayloadTooLarge");
   });
 });

@@ -1,22 +1,22 @@
-import type { DatabaseSync } from "node:sqlite";
 import { isDeepStrictEqual } from "node:util";
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
-import {
-  assertTransactionUsable,
-  runSqliteDeferredTransactionSync,
-} from "../../infra/sqlite-transaction.js";
+import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
+import { bindSqliteWorkerDatabase } from "../../infra/sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "../../infra/sqlite-worker-contract.js";
+import { readDatabasePathIdentitySync } from "../../infra/sqlite-worker-identity.js";
 import { getSqliteWorkerStateContext } from "../../infra/sqlite-worker-state-context.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
+  resolveOpenClawAgentSqlitePath,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
-import {
-  advanceCliHistoryBoundaryRangeInTransaction,
-  type CliHistoryWriterFacts,
-} from "./session-accessor.sqlite-cli-history-boundary.js";
+import type { AgentDatabaseAdmissionRestriction } from "../../state/openclaw-agent-execution-domain.js";
+import type { CliHistoryWriterFacts } from "./cli-history-boundary.js";
+import { advanceCliHistoryBoundaryRangeInTransaction } from "./session-accessor.sqlite-cli-history-boundary.js";
 import type {
   SessionTranscriptWriteScope,
+  SessionTranscriptContextVersion,
   TranscriptAppendRefusal,
 } from "./session-accessor.sqlite-contract.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-store.js";
@@ -24,105 +24,89 @@ import {
   toDatabaseOptions,
   type ResolvedTranscriptScope,
 } from "./session-accessor.sqlite-scope.js";
-import type { PreparedTranscriptMessageAppend } from "./session-accessor.sqlite-transcript-message-append.js";
 import {
   appendAbortedSessionTranscriptPartialInTransaction,
   appendSelectedTranscriptReportInTransaction,
   prepareTranscriptReportSelection,
-  type AbortedSessionTranscriptPartial,
-  type AbortedSessionTranscriptPartialResult,
-  type SelectedTranscriptReport,
-  type TranscriptReport,
-  type TranscriptReportSelection,
 } from "./session-accessor.sqlite-transcript-reports.kernel.js";
+import type {
+  AbortedSessionTranscriptPartialResult,
+  PreparedTranscriptReport,
+  TranscriptReportCommit,
+  TranscriptReportWorkerOperations,
+} from "./session-accessor.sqlite-transcript-reports.types.js";
 import { readTranscriptContextVersionInTransaction } from "./session-accessor.sqlite-transcript-state.js";
 import { resolveTranscriptAppendRefusal } from "./session-accessor.sqlite-transcript-write-guard.js";
+import { requestSessionEntryCurrentAdmission } from "./session-entry-current-admission.worker.js";
+import type { SessionEntryCurrentSource } from "./session-entry-current.types.js";
 import { SessionTranscriptWriterClaimReboundError } from "./transcript-write-context.js";
 
 export type TranscriptReportWorkerTarget = {
   resolved: Omit<ResolvedTranscriptScope, "env">;
   cliWriter?: CliHistoryWriterFacts;
+  sessionEntryCurrentSource?: SessionEntryCurrentSource;
   fence: Pick<SessionTranscriptWriteScope, "expectedLifecycleRevision" | "expectedWriterRunId">;
-};
-type PreparedReport = ReturnType<typeof prepareTranscriptReportSelection>;
-type ReportCommit = {
-  committed: boolean;
-  projectionNeedsReconcile: boolean;
-  cliHistoryChanged?: boolean;
-  abortedPartial?: AbortedSessionTranscriptPartialResult;
-  sessionEntryChanged?: boolean;
-};
-export type TranscriptReportWorkerOperations = {
-  abortedPartial: {
-    input: AbortedSessionTranscriptPartial & {
-      preparedMessage: PreparedTranscriptMessageAppend<Record<string, unknown>>;
-    };
-    output: Result<ReportCommit, TranscriptAppendRefusal>;
-  };
-  prepare: {
-    input: TranscriptReportSelection;
-    output: Result<PreparedReport, TranscriptAppendRefusal>;
-  };
-  append: {
-    input: Extract<SelectedTranscriptReport, { kind: "custom" }>;
-    output: Result<ReportCommit, TranscriptAppendRefusal>;
-  };
-  assistant: {
-    input: Extract<TranscriptReport, { kind: "assistant" }> & {
-      preparedMessage: PreparedTranscriptMessageAppend<
-        Extract<TranscriptReport, { kind: "assistant" }>["message"]
-      >;
-    };
-    output: Result<ReportCommit, TranscriptAppendRefusal>;
-  };
 };
 
 /** Domain binding borrows the existing SQLite broker's canonical writer. */
 export function bindSqliteWorkerBackend(
   target: TranscriptReportWorkerTarget,
   context: {
-    database: DatabaseSync;
+    database: EngineConnection;
     databasePath: string;
-    admit(stage: "transaction" | "commit"): void;
+    admit(
+      stage: "transaction" | "commit",
+      requestAdmission?: AgentDatabaseAdmissionRestriction,
+    ): void;
   },
 ): SqliteWorkerBackend<TranscriptReportWorkerOperations> {
   const { fence } = target;
   const resolved = { ...target.resolved, env: getSqliteWorkerStateContext().environment };
   const options = toDatabaseOptions(resolved);
+  const pathname = resolveOpenClawAgentSqlitePath(options);
+  const sameOwner = sqlPublicationAnchor(context.database).location()
+    ? readDatabasePathIdentitySync(pathname).canonicalPath === context.databasePath
+    : pathname === context.databasePath &&
+      getOpenClawAgentDatabaseIfOpen(options)?.db === context.database;
+  if (!sameOwner) {
+    throw new Error("Transcript report target changed its database owner");
+  }
+  resolved.path = context.databasePath;
+  options.path = context.databasePath;
   const database = getOpenClawAgentDatabaseIfOpen(options);
   if (!database || database.db !== context.database || database.path !== context.databasePath) {
     throw new Error("Transcript report lost its canonical database owner");
   }
-  let closed = false;
-  const assertOpen = () => {
-    if (closed || !database.db.isOpen) {
-      throw new Error("Transcript report domain is closed");
-    }
-    assertTransactionUsable(database.db);
-  };
-  const readRefusal = () => {
-    const refusal = resolveTranscriptAppendRefusal(
-      readSessionEntryRow(database, resolved.sessionKey, "list")?.entry,
-      resolved,
-      { ...resolved, ...fence },
+  const admit = (stage: "transaction" | "commit") =>
+    context.admit(stage, (request, dispatch) =>
+      requestSessionEntryCurrentAdmission(
+        target.sessionEntryCurrentSource,
+        request,
+        { database },
+        dispatch,
+      ),
     );
-    return refusal;
+  const readCurrentEntry = () => {
+    const entry = readSessionEntryRow(database, resolved.sessionKey, "list")?.entry;
+    return {
+      entry,
+      refusal: resolveTranscriptAppendRefusal(entry, resolved, { ...resolved, ...fence }),
+    };
   };
   let prepared:
     | {
-        facts: PreparedReport;
-        version: ReturnType<typeof readTranscriptContextVersionInTransaction>;
+        facts: PreparedTranscriptReport;
+        version: SessionTranscriptContextVersion;
       }
     | undefined;
-  return {
+  return bindSqliteWorkerDatabase<TranscriptReportWorkerOperations>(database.db, {
     execute(command) {
-      assertOpen();
       if (command.type === "prepare") {
-        return runSqliteDeferredTransactionSync<Result<PreparedReport, TranscriptAppendRefusal>>(
+        return runSqliteReadSnapshotSync<Result<PreparedTranscriptReport, TranscriptAppendRefusal>>(
           database.db,
           () => {
             prepared = undefined;
-            const refusal = readRefusal();
+            const { refusal } = readCurrentEntry();
             if (refusal) {
               return err(refusal);
             }
@@ -134,15 +118,17 @@ export function bindSqliteWorkerBackend(
           },
         );
       }
-      return runOpenClawAgentWriteTransaction<Result<ReportCommit, TranscriptAppendRefusal>>(
+      return runOpenClawAgentWriteTransaction<
+        Result<TranscriptReportCommit, TranscriptAppendRefusal>
+      >(
         (current) => {
           if (current.db !== database.db) {
             throw new Error("Transcript report lost its canonical database owner");
           }
-          context.admit("transaction");
-          const refusal = readRefusal();
+          admit("transaction");
+          const { refusal } = readCurrentEntry();
           if (refusal) {
-            context.admit("commit");
+            admit("commit");
             return err(refusal);
           }
           const firstSeq = target.cliWriter
@@ -191,7 +177,7 @@ export function bindSqliteWorkerBackend(
               resolved.sessionId,
             );
             if (!isDeepStrictEqual(currentVersion, plan.version)) {
-              context.admit("commit");
+              admit("commit");
               return ok({ committed: false, projectionNeedsReconcile: false });
             }
             appendSelectedTranscriptReportInTransaction(
@@ -205,7 +191,7 @@ export function bindSqliteWorkerBackend(
           let commitGranted = false;
           const authorizeCommit = () => {
             if (!commitGranted) {
-              context.admit("commit");
+              admit("commit");
               commitGranted = true;
             }
           };
@@ -224,7 +210,7 @@ export function bindSqliteWorkerBackend(
                   authorizeCommit,
                 )
               : false;
-          const rebound = readRefusal();
+          const { entry, refusal: rebound } = readCurrentEntry();
           if (rebound) {
             throw new SessionTranscriptWriterClaimReboundError(rebound);
           }
@@ -233,6 +219,10 @@ export function bindSqliteWorkerBackend(
             committed: true,
             projectionNeedsReconcile,
             cliHistoryChanged,
+            ...((cliHistoryChanged ||
+              (abortedPartial && !abortedPartial.skipped && abortedPartial.append.appended)) && {
+              entry,
+            }),
             ...(abortedPartial
               ? {
                   abortedPartial,
@@ -245,15 +235,8 @@ export function bindSqliteWorkerBackend(
         { operationLabel: "session.transcript.report" },
       );
     },
-    assertSettled() {
-      assertOpen();
-      if (database.db.isTransaction) {
-        throw new Error("Transcript report command left a transaction open");
-      }
-    },
     close() {
-      closed = true;
       prepared = undefined;
     },
-  };
+  });
 }

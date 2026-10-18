@@ -60,7 +60,6 @@ describe("requester MCP status read batching", () => {
       const sql = observeMainThreadSql();
       const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
       try {
-        const started = performance.now();
         const connected = await createRequesterMcpConnect({
           serverNames: new Set(["foxtrot", "delta", "alpha", "echo", "charlie", "bravo"]),
           mcpServers,
@@ -70,7 +69,6 @@ describe("requester MCP status read batching", () => {
           configFingerprint: "fixture-config",
         });
         await closeOpenClawStateDatabaseAsync();
-        const elapsedMs = performance.now() - started;
 
         assert(connected, "Expected requester connect catalog");
         expect(Object.keys(connected.catalog.servers)).toEqual(names);
@@ -89,11 +87,6 @@ describe("requester MCP status read batching", () => {
           publicOrigin,
         });
         sql.expectIdle();
-        console.info("MCP_REQUESTER_READ_TIMING", {
-          servers: names.length,
-          commonReads: reads.mock.calls.length,
-          elapsedMs,
-        });
         expect(reads).toHaveBeenCalledTimes(1);
       } finally {
         try {

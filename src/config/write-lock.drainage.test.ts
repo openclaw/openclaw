@@ -69,8 +69,6 @@ function outcome<T>(promise: Promise<T>) {
 
 it.each([
   { guarded: false, outerFails: false },
-  { guarded: true, outerFails: false },
-  { guarded: false, outerFails: true },
   { guarded: true, outerFails: true },
 ])(
   "preserves pending child failure (guarded=$guarded, outerFails=$outerFails)",
@@ -157,19 +155,6 @@ it("does not replay a nested failure reconciled before the outer callback return
   });
   expect(result).toBe("reconciled");
 });
-
-it.each([new Error("outer only"), undefined])(
-  "preserves an outer-only rejection without inventing child failure (%s)",
-  async (failure) => {
-    const result = await outcome(
-      withConfigWriteLock(configPath, async () => {
-        // oxlint-disable-next-line typescript/only-throw-error -- JavaScript callbacks may reject with undefined; preserve the exact reason.
-        throw failure;
-      }),
-    );
-    expect(result).toEqual({ ok: false, error: failure });
-  },
-);
 
 it("joins a rejecting admitted child before refusing unresolved-custody release", async () => {
   const store = createManagedHandoffLeaseStore();

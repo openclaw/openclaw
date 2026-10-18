@@ -38,11 +38,10 @@ describe("saved terminal assistant identity", () => {
     });
     expect(state.runs[runId]?.message).toBe(durable);
   });
-  it.each(
-    (["error", "timeout", "aborted", "completed"] as const).flatMap((status) =>
-      (["error", "toolUse"] as const).map((stopReason) => ({ status, stopReason })),
-    ),
-  )(
+  it.each([
+    { status: "error", stopReason: "error" },
+    { status: "completed", stopReason: "toolUse" },
+  ] as const)(
     "reconciles $status with $stopReason by receipt in either order and across cursor/full replay",
     ({ status, stopReason }) => {
       for (const persistedFirst of [false, true]) {

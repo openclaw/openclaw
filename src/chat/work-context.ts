@@ -1,28 +1,49 @@
 import { isRecord, asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import {
+  CHAT_WORK_CONTEXT_DETAIL_LIMITS,
   CHAT_WORK_CONTEXT_LIMITS,
   type ChatWorkContext,
 } from "../../packages/gateway-protocol/src/chat-work-context.js";
 
 export type AttachedChatWorkContext = { snapshot: ChatWorkContext; text: string };
+type WorkContextField = keyof typeof CHAT_WORK_CONTEXT_LIMITS;
+
+function captureText(text: string, limit: number): string {
+  let value = truncateUtf16Safe(text.trim(), limit);
+  while (JSON.stringify(value).length > limit) {
+    value = truncateUtf16Safe(
+      value,
+      Math.max(0, value.length - (JSON.stringify(value).length - limit)),
+    );
+  }
+  return value;
+}
 
 /** Freeze the same ordered and escaped-byte-bounded snapshot used by the model. */
 export function captureChatWorkContext(context: ChatWorkContext): ChatWorkContext {
   const snapshot: ChatWorkContext = { page: "" };
-  // SAFETY: the immutable limits record declares exactly the ChatWorkContext keys.
-  for (const key of Object.keys(CHAT_WORK_CONTEXT_LIMITS) as (keyof ChatWorkContext)[]) {
-    const limit = CHAT_WORK_CONTEXT_LIMITS[key];
-    let value = truncateUtf16Safe(context[key]?.trim() ?? "", limit);
-    while (JSON.stringify(value).length > limit) {
-      value = truncateUtf16Safe(
-        value,
-        Math.max(0, value.length - (JSON.stringify(value).length - limit)),
-      );
-    }
+  // SAFETY: the immutable limits record declares exactly the scalar reference fields.
+  for (const key of Object.keys(CHAT_WORK_CONTEXT_LIMITS) as WorkContextField[]) {
+    const value = captureText(context[key] ?? "", CHAT_WORK_CONTEXT_LIMITS[key]);
     if (value) {
       snapshot[key] = value;
     }
+  }
+  const detail = context.detail;
+  if (detail) {
+    // Preserve names instead of truncating them into collisions; order and escaped
+    // limits keep retries deterministic and plugin data within the prompt budget.
+    snapshot.detail = Object.fromEntries(
+      Object.keys(detail)
+        .filter(
+          (key) =>
+            key.length > 0 && JSON.stringify(key).length <= CHAT_WORK_CONTEXT_DETAIL_LIMITS.key + 2,
+        )
+        .toSorted()
+        .slice(0, CHAT_WORK_CONTEXT_DETAIL_LIMITS.fields)
+        .map((key) => [key, captureText(detail[key] ?? "", CHAT_WORK_CONTEXT_DETAIL_LIMITS.value)]),
+    );
   }
   return snapshot;
 }
@@ -31,18 +52,39 @@ export function readChatWorkContext(value: unknown): ChatWorkContext | undefined
   if (!isRecord(value) || typeof value.page !== "string" || !value.page) {
     return undefined;
   }
+  const snapshot: ChatWorkContext = { page: value.page };
   for (const [key, field] of Object.entries(value)) {
+    if (key === "detail") {
+      if (!isRecord(field) || Object.keys(field).length > CHAT_WORK_CONTEXT_DETAIL_LIMITS.fields) {
+        return undefined;
+      }
+      const entries: [string, string][] = [];
+      for (const [name, text] of Object.entries(field)) {
+        if (
+          !name ||
+          name.length > CHAT_WORK_CONTEXT_DETAIL_LIMITS.key ||
+          typeof text !== "string" ||
+          text.length > CHAT_WORK_CONTEXT_DETAIL_LIMITS.value
+        ) {
+          return undefined;
+        }
+        entries.push([name, text]);
+      }
+      snapshot.detail = Object.fromEntries(entries);
+      continue;
+    }
     if (
       !Object.hasOwn(CHAT_WORK_CONTEXT_LIMITS, key) ||
       typeof field !== "string" ||
       // SAFETY: the short-circuit own-key check above confines key to the limits record.
-      field.length > CHAT_WORK_CONTEXT_LIMITS[key as keyof ChatWorkContext]
+      field.length > CHAT_WORK_CONTEXT_LIMITS[key as WorkContextField]
     ) {
       return undefined;
     }
+    // SAFETY: the closed scalar key and its bounded string value were checked above.
+    snapshot[key as WorkContextField] = field;
   }
-  // SAFETY: the closed key set, required page, and every bounded string field were checked above.
-  return { ...value } as ChatWorkContext;
+  return snapshot;
 }
 
 export function formatChatWorkContext(context: ChatWorkContext): string {

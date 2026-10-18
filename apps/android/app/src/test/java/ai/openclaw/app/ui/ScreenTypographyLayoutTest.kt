@@ -391,7 +391,7 @@ class ScreenTypographyLayoutTest {
     show { ShellScreen(model) }
     capture("settings-dark")
     assertTextStyle("Settings", type.display)
-    assertTextStyle("OpenClaw mobile", type.caption)
+    assertTextStyle("Device name and identity", type.caption.copy(fontSize = 13.sp, lineHeight = 18.sp))
     composeRule.onNodeWithContentDescription("Open profile").performClick()
     capture("profile-dark")
     assertTextStyle("Profile", type.display)

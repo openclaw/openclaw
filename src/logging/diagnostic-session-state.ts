@@ -1,9 +1,7 @@
-// Process-local session-state tracker used by diagnostic stuck-session detection.
 import { isIncognitoSessionKey } from "../shared/incognito-session-key.js";
 
 export type SessionStateValue = "idle" | "processing" | "waiting";
 
-/** Mutable diagnostic state for one session key or id. */
 export type SessionState = {
   sessionId?: string;
   sessionKey?: string;
@@ -20,13 +18,12 @@ export type SessionState = {
   commandPollCounts?: Map<string, { count: number; lastPollAt: number }>;
 };
 
-/** Compact record of a recent tool call used for loop diagnostics. */
 export type ToolCallRecord = {
   toolName: string;
   argsHash: string;
   toolCallId?: string;
   runId?: string;
-  outcomeKind?: "tool-loop-veto" | "terminal-exec-failure";
+  outcomeKind?: "tool-loop-veto" | "terminal-exec-failure" | "argument-validation";
   resultHash?: string;
   // Keep the raw result identity while this bounded identity survives alias
   // merges and lets the no-progress owner ignore diagnostic drift.
@@ -36,14 +33,12 @@ export type ToolCallRecord = {
   timestamp: number;
 };
 
-/** Partial session identity accepted by diagnostic helpers. */
 export type SessionRef = {
   sessionId?: string;
   sessionKey?: string;
   sessionFile?: string;
 };
 
-/** Shared in-memory diagnostic session state map. */
 export const diagnosticSessionStates = new Map<string, SessionState>();
 
 const SESSION_STATE_TTL_MS = 30 * 60 * 1000;
@@ -52,7 +47,6 @@ const SESSION_STATE_MAX_ENTRIES = 2000;
 
 let lastSessionPruneAt = 0;
 
-/** Prunes stale idle session states and caps the process-local state map. */
 export function pruneDiagnosticSessionStates(now = Date.now(), force = false): void {
   const shouldPruneForSize = diagnosticSessionStates.size > SESSION_STATE_MAX_ENTRIES;
   if (!force && !shouldPruneForSize && now - lastSessionPruneAt < SESSION_STATE_PRUNE_INTERVAL_MS) {
@@ -207,7 +201,6 @@ export function getDiagnosticSessionState(ref: SessionRef): SessionState {
   return created;
 }
 
-/** Looks up diagnostic state without creating a new entry. */
 export function peekDiagnosticSessionState(ref: SessionRef): SessionState | undefined {
   const key = resolveSessionKey(ref);
   return (
@@ -228,6 +221,14 @@ export function isIncognitoDiagnosticSession(ref: SessionRef): boolean {
   );
 }
 
+/** Renews this observation and invalidates recovery captured before the progress. */
+export function touchDiagnosticSessionState(state: SessionState): void {
+  state.lastActivity = Date.now();
+  state.generation = (state.generation ?? 0) + 1;
+  state.lastStuckWarnAgeMs = undefined;
+  state.lastLongRunningWarnAgeMs = undefined;
+}
+
 /** Retires collector observations without resetting independent tool-loop or poll policy. */
 export function retireDiagnosticSessionObservations(): void {
   for (const state of diagnosticSessionStates.values()) {
@@ -243,13 +244,11 @@ export function retireDiagnosticSessionObservations(): void {
   }
 }
 
-/** Clears all process-local diagnostic session state for tests. */
 export function resetDiagnosticSessionStateForTest(): void {
   diagnosticSessionStates.clear();
   lastSessionPruneAt = 0;
 }
 
-/** Checks whether a generation/state snapshot still matches current diagnostic state. */
 export function isDiagnosticSessionStateCurrent(params: {
   sessionId?: string;
   sessionKey?: string;

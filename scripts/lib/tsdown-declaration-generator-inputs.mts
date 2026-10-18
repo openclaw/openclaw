@@ -3,9 +3,10 @@ import { builtinModules, createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import * as ts from "typescript/unstable/ast";
+import { API } from "typescript/unstable/sync";
 import { collectModuleReferencesFromSource } from "./guard-inventory-utils.mjs";
-import { createNativeTypeScriptParser } from "./native-typescript.mts";
 import { createRuntimeImportGraph } from "./runtime-import-closure.mts";
+import { resolveSqliteSchemaAssetInputs } from "./sqlite-schema-assets.mts";
 import { STATE_SCHEMA_GENERATOR_INPUTS } from "./state-schema-inline-plugin.mts";
 import { resolveTsxImport } from "./tsx-cli-shim.mjs";
 import { resolveWorkerDeployGeneratorInputs } from "./worker-deploy-build-plugin.mts";
@@ -39,17 +40,20 @@ function dynamicEdgeExpressions(sourceFile: ts.SourceFile) {
   return expressions;
 }
 
-/** Resolve the complete executable and non-module input graph for one declaration writer. */
-export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generatorEntry: string) {
+/** Resolve the complete executable and non-module input graph for one declaration producer. */
+export function resolveTsdownDeclarationGeneratorInputs(
+  rootDir: string,
+  generatorEntry: string,
+  configEntry = "tsdown.config.ts",
+) {
   const root = fs.realpathSync(rootDir);
   const nativeManifest = createRequire(path.join(root, "package.json")).resolve(
     "typescript/package.json",
   );
+  // Producers traverse only their own reachable owners. Every reached computed
+  // import must still match its exact expression and declared targets.
   const dynamicOwners = new Map<string, { expressions: string[]; targets: string[] }>([
-    [
-      "scripts/lib/dist-artifact-ownership.mts",
-      { expressions: ["script"], targets: [generatorEntry] },
-    ],
+    ["scripts/lib/dist-artifact-lock.mts", { expressions: ["script"], targets: [generatorEntry] }],
     [
       "scripts/lib/local-check-runtime.mts",
       {
@@ -61,6 +65,13 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       "scripts/lib/native-typescript.mts",
       {
         expressions: ['path.join(path.dirname(packageJson), "lib/getExePath.js")'],
+        targets: [nativeManifest, path.join(path.dirname(nativeManifest), "lib/getExePath.js")],
+      },
+    ],
+    [
+      "scripts/lib/native-typescript-toolchain.mts",
+      {
+        expressions: ["executableResolver"],
         targets: [nativeManifest, path.join(path.dirname(nativeManifest), "lib/getExePath.js")],
       },
     ],
@@ -78,10 +89,27 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
         targets: [fileURLToPath(resolveTsxImport(root))],
       },
     ],
+    [
+      "scripts/tsdown-build.mts",
+      {
+        // Runtime-only live Gateway dist fence. Declaration writers import this
+        // file for constants/plan helpers and must not walk daemon service-layout.
+        expressions: ["liveGatewayDistFenceHref"],
+        targets: [generatorEntry],
+      },
+    ],
   ]);
-  const observedDynamicOwners = new Set<string>();
-  using parser = createNativeTypeScriptParser({ cwd: root });
-  const entryFiles = [generatorEntry, "scripts/tsx.mjs", "tsdown.config.ts"];
+  using parser: { api?: API; [Symbol.dispose](): void } = {
+    [Symbol.dispose]() {
+      this.api?.close();
+    },
+  };
+  const entryFiles = [
+    generatorEntry,
+    "scripts/tsx.mjs",
+    "scripts/lib/tsdown-declaration-generator-inputs.mts",
+    configEntry,
+  ];
   const explicitSources = [...dynamicOwners.values()]
     .flatMap((owner) => owner.targets)
     .filter((file) => !file.includes("node_modules") && sourceFilePattern.test(file));
@@ -110,7 +138,11 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
     }
     visited.add(id);
     const source = fs.readFileSync(absolute, "utf8");
-    const sourceFile = parser.parseSourceFile(absolute, source);
+    using retainedSource = (parser.api ??= new API({ cwd: root })).createSourceFile(
+      absolute,
+      source,
+    );
+    const sourceFile = retainedSource.sourceFile;
     const expressions = dynamicEdgeExpressions(sourceFile);
     const owner = dynamicOwners.get(id);
     if (
@@ -120,7 +152,6 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       throw new Error(`Unresolved dynamic module edges in ${id}: ${JSON.stringify(expressions)}`);
     }
     if (owner) {
-      observedDynamicOwners.add(id);
       owner.targets.forEach((target) => visit(target));
     }
     for (const reference of collectModuleReferencesFromSource(sourceFile)) {
@@ -139,6 +170,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
             [
               "../../src/shared/freebsd-process-identity.ts",
               "../../src/infra/update-managed-service-handoff-native-loader.ts",
+              "../../src/infra/package-update-activation-native-loader.ts",
             ].includes(reference.specifier);
           visit(target, targetIsCompilerSource);
         }
@@ -175,11 +207,6 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
   };
 
   entryFiles.forEach((entry) => visit(entry));
-  for (const owner of dynamicOwners.keys()) {
-    if (!observedDynamicOwners.has(owner)) {
-      throw new Error(`Dynamic module owner is outside the generator closure: ${owner}`);
-    }
-  }
   return [
     "package.json",
     "pnpm-lock.yaml",
@@ -188,6 +215,7 @@ export function resolveTsdownDeclarationGeneratorInputs(rootDir: string, generat
       .toSorted(([left], [right]) => left.localeCompare(right))
       .map(([, file]) => file),
     ...STATE_SCHEMA_GENERATOR_INPUTS,
+    ...resolveSqliteSchemaAssetInputs(root),
     ...resolveWorkerDeployGeneratorInputs(root),
     fs.realpathSync(path.resolve(root, "node_modules/tree-sitter-bash/LICENSE")),
   ];

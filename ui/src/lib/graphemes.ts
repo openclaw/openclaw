@@ -1,12 +1,7 @@
-const graphemeSegmenter =
-  typeof Intl.Segmenter === "function"
-    ? new Intl.Segmenter(undefined, { granularity: "grapheme" })
-    : null;
+// The supported browser floor includes Segmenter; don't split emoji into code points.
+const graphemeSegmenter = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 export function takeGraphemes(input: string, limit: number): string {
-  if (!graphemeSegmenter) {
-    return Array.from(input).slice(0, limit).join("");
-  }
   let result = "";
   let count = 0;
   for (const { segment } of graphemeSegmenter.segment(input)) {

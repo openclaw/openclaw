@@ -6,7 +6,7 @@ import type {
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
 import type { CodexAsyncQuestion } from "./async-questions.js";
 import {
-  codexProviderRefusalDetails,
+  codexProviderRefusalDiagnostics,
   type CodexProviderRefusal,
 } from "./event-projector-values.js";
 import {
@@ -61,17 +61,7 @@ export function createAttributedCodexAssistantMessage(
       aborted: options.aborted,
       promptError: options.promptError,
       errorMessage: refusal?.message,
-      ...(refusal
-        ? {
-            diagnostics: [
-              {
-                type: "provider_refusal",
-                timestamp: Date.now(),
-                details: codexProviderRefusalDetails(refusal),
-              },
-            ],
-          }
-        : {}),
+      ...(refusal ? codexProviderRefusalDiagnostics(refusal, Date.now()) : {}),
     },
   );
 }
@@ -97,16 +87,23 @@ export function createAssistantCommentaryMessage(
   return message;
 }
 
-export function createAssistantAsyncMessage(
+export function createAssistantAsyncDelivery(
   params: CodexAssistantMessageParams,
-  text: string,
+  text: string | undefined,
   itemId: string,
-  timestamp: number,
+  timestamp: number | undefined,
   questions?: CodexAsyncQuestion[],
-): CodexAsyncAssistantMessage {
+): { itemId: string; message: CodexAsyncAssistantMessage; text: string } | undefined {
+  if (!text?.trim() || timestamp === undefined) {
+    return undefined;
+  }
   return {
-    ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
-    openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) },
+    itemId,
+    message: {
+      ...createNonterminalAssistantMessage(params, [{ type: "text", text }], timestamp),
+      openclawAsyncDelivery: { itemId, ...(questions ? { questions } : {}) },
+    },
+    text,
   };
 }
 

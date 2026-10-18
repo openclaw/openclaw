@@ -1,13 +1,16 @@
 // Shared CLI catalog contracts are independent of catalog entries and policy values.
-export type CliCommandPluginLoadPolicy =
+type CliCommandPluginLoadPolicy =
   | "never"
   | "always"
-  | "text-only"
   | ((ctx: { argv: string[]; commandPath: string[]; jsonOutputMode: boolean }) => boolean);
-type CliConfigGuardMode = "run" | "skip" | "validate" | "defer" | "when-suppressed";
+type CliConfigGuardMode = "run" | "skip" | "validate" | "defer";
 type CliConfigGuardPolicy =
   | CliConfigGuardMode
-  | ((ctx: { argv: string[]; commandPath: string[] }) => CliConfigGuardMode);
+  | ((ctx: {
+      argv: string[];
+      commandPath: string[];
+      options?: Readonly<Record<string, unknown>>;
+    }) => CliConfigGuardMode);
 export type CliPluginRegistryScope =
   | "all"
   | "channels"
@@ -30,8 +33,6 @@ type CliRoutedCommandId =
   | "config-unset"
   | "models-list"
   | "models-status"
-  | "tasks-list"
-  | "tasks-audit"
   | "channels-list"
   | "channels-status"
   | "plugins-list";

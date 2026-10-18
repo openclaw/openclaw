@@ -77,9 +77,24 @@ describe("telegramPlugin reply threading", () => {
       expected: true,
     },
     {
+      target: "1234:topic:77",
+      currentChannelId: "telegram:1234:topic:77",
+      expected: true,
+    },
+    {
+      target: "1234:topic:77",
+      currentChannelId: "telegram:1234:topic:78",
+      expected: false,
+    },
+    {
       target: "-100123:direct-topic:77",
       currentChannelId: "telegram:-100123:direct-topic:77",
       expected: true,
+    },
+    {
+      target: "-100123:direct-topic:77",
+      currentChannelId: "telegram:-100123:direct-topic:78",
+      expected: false,
     },
     {
       target: "-100123:topic:77",

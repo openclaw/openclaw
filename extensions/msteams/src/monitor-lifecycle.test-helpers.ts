@@ -3,7 +3,7 @@ import type { OpenClawConfig, RuntimeEnv } from "../runtime-api.js";
 import type { MSTeamsConversationStore } from "./conversation-store.js";
 import type { MSTeamsPollStore } from "./polls.js";
 
-export function createConfig(port: number): OpenClawConfig {
+export function createConfig(): OpenClawConfig {
   return {
     channels: {
       msteams: {
@@ -11,8 +11,8 @@ export function createConfig(port: number): OpenClawConfig {
         appId: "app-id",
         appPassword: "app-password", // pragma: allowlist secret
         tenantId: "tenant-id",
+        legacyWebhook: false,
         webhook: {
-          port,
           path: "/api/messages",
         },
       },

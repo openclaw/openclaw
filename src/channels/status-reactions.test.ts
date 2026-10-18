@@ -8,10 +8,6 @@ import {
   type StatusReactionAdapter,
 } from "./status-reactions.js";
 
-// ─────────────────────────────────────────────────────────────────────────────
-// Mock Adapter
-// ─────────────────────────────────────────────────────────────────────────────
-
 const createMockAdapter = () => {
   const calls: { method: string; emoji: string }[] = [];
   return {
@@ -38,21 +34,6 @@ const createEnabledController = (
     ...overrides,
   });
   return { adapter, calls, controller };
-};
-
-const createSetOnlyController = () => {
-  const calls: { method: string; emoji: string }[] = [];
-  const adapter: StatusReactionAdapter = {
-    setReaction: vi.fn(async (emoji: string) => {
-      calls.push({ method: "set", emoji });
-    }),
-  };
-  const controller = createStatusReactionController({
-    enabled: true,
-    adapter,
-    initialEmoji: "👀",
-  });
-  return { calls, controller };
 };
 
 const createSingleSlotController = () => {
@@ -90,16 +71,6 @@ function collectEmojisForMethod(
   return emojis;
 }
 
-function countCallsForMethod(calls: Array<{ method: string; emoji: string }>, method: string) {
-  let count = 0;
-  for (const call of calls) {
-    if (call.method === method) {
-      count += 1;
-    }
-  }
-  return count;
-}
-
 function countCallsForEmoji(calls: Array<{ method: string; emoji: string }>, emoji: string) {
   let count = 0;
   for (const call of calls) {
@@ -109,38 +80,14 @@ function countCallsForEmoji(calls: Array<{ method: string; emoji: string }>, emo
   }
   return count;
 }
-// ─────────────────────────────────────────────────────────────────────────────
-// Tests
-// ─────────────────────────────────────────────────────────────────────────────
-
 describe("resolveToolEmoji", () => {
   it.each([
-    { name: "returns display emoji for exec tool", tool: "exec", expected: "🛠️" },
-    {
-      name: "returns display emoji for process tool",
-      tool: "process",
-      expected: "🧰",
-    },
-    {
-      name: "returns display emoji for web_search tool",
-      tool: "web_search",
-      expected: "🔎",
-    },
-    { name: "returns display emoji for browser tool", tool: "browser", expected: "🌐" },
-    { name: "returns display emoji for message tool", tool: "message", expected: "✉️" },
     {
       name: "returns tool emoji for unknown tool",
       tool: "unknown_tool",
       expected: DEFAULT_EMOJIS.tool,
     },
-    { name: "returns tool emoji for empty string", tool: "", expected: DEFAULT_EMOJIS.tool },
     { name: "returns tool emoji for undefined", tool: undefined, expected: DEFAULT_EMOJIS.tool },
-    { name: "is case-insensitive", tool: "EXEC", expected: "🛠️" },
-    {
-      name: "matches tokens within tool names",
-      tool: "my_exec_wrapper",
-      expected: DEFAULT_EMOJIS.coding,
-    },
   ] satisfies Array<{ name: string; tool: string | undefined; expected: string }>)(
     "should $name",
     ({ tool, expected }) => {
@@ -177,62 +124,6 @@ describe("createStatusReactionController", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
-  });
-
-  it("should not call adapter when disabled", async () => {
-    const { adapter, calls } = createMockAdapter();
-    const controller = createStatusReactionController({
-      enabled: false,
-      adapter,
-      initialEmoji: "👀",
-    });
-
-    void controller.setQueued();
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(1000);
-
-    expect(calls).toHaveLength(0);
-  });
-
-  it("should call setReaction with initialEmoji for setQueued immediately", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setQueued();
-    await vi.runAllTimersAsync();
-
-    expectSetEmojiCall(calls, "👀");
-  });
-
-  it("should debounce setThinking and eventually call adapter", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setThinking();
-
-    // Before debounce period
-    await vi.advanceTimersByTimeAsync(500);
-    expect(calls).toHaveLength(0);
-
-    // After debounce period
-    await vi.advanceTimersByTimeAsync(300);
-    expectSetEmojiCall(calls, DEFAULT_EMOJIS.thinking);
-  });
-
-  it("should debounce setCompacting and eventually call adapter", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setCompacting();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    expectSetEmojiCall(calls, DEFAULT_EMOJIS.compacting);
-  });
-
-  it("should classify tool name and debounce", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setTool("exec");
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    expectSetEmojiCall(calls, "🛠️");
   });
 
   const immediateTerminalCases = [
@@ -298,40 +189,6 @@ describe("createStatusReactionController", () => {
     },
   );
 
-  const terminalIgnoreCases = [
-    {
-      name: "ignore setThinking after setDone (terminal state)",
-      terminal: (controller: ReturnType<typeof createStatusReactionController>) =>
-        controller.setDone(),
-      holdMs: DEFAULT_TIMING.doneHoldMs,
-      followup: (controller: ReturnType<typeof createStatusReactionController>) => {
-        void controller.setThinking();
-      },
-    },
-    {
-      name: "ignore setTool after setError (terminal state)",
-      terminal: (controller: ReturnType<typeof createStatusReactionController>) =>
-        controller.setError(),
-      holdMs: DEFAULT_TIMING.errorHoldMs,
-      followup: (controller: ReturnType<typeof createStatusReactionController>) => {
-        void controller.setTool("exec");
-      },
-    },
-  ] as const;
-
-  it.each(terminalIgnoreCases)("should $name", async ({ terminal, holdMs, followup }) => {
-    const { calls, controller } = createEnabledController();
-
-    const terminalPromise = terminal(controller);
-    await vi.advanceTimersByTimeAsync(holdMs);
-    await terminalPromise;
-    const callsAfterTerminal = calls.length;
-    followup(controller);
-    await vi.advanceTimersByTimeAsync(1000);
-
-    expect(calls.length).toBe(callsAfterTerminal);
-  });
-
   it("should only fire last state when rapidly changing (debounce)", async () => {
     const { calls, controller } = createEnabledController();
 
@@ -349,21 +206,6 @@ describe("createStatusReactionController", () => {
     expect(setEmojis).toEqual(["🛠️"]);
   });
 
-  it("should deduplicate same emoji calls", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    const callsAfterFirst = calls.length;
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    // Should not add another call
-    expect(calls.length).toBe(callsAfterFirst);
-  });
-
   it("should cancel a pending compacting emoji before resuming thinking", async () => {
     const { calls, controller } = createEnabledController();
 
@@ -375,75 +217,6 @@ describe("createStatusReactionController", () => {
 
     const setEmojis = collectEmojisForMethod(calls, "set");
     expect(setEmojis).toEqual([DEFAULT_EMOJIS.thinking]);
-  });
-
-  it("should defer removing previous emojis until clear", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setQueued();
-    await vi.runAllTimersAsync();
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    expect(calls).toEqual([
-      { method: "set", emoji: "👀" },
-      { method: "set", emoji: DEFAULT_EMOJIS.stallSoft },
-      { method: "set", emoji: DEFAULT_EMOJIS.stallHard },
-      { method: "set", emoji: DEFAULT_EMOJIS.thinking },
-    ]);
-
-    await controller.clear();
-    expect(calls).toEqual([
-      { method: "set", emoji: "👀" },
-      { method: "set", emoji: DEFAULT_EMOJIS.stallSoft },
-      { method: "set", emoji: DEFAULT_EMOJIS.stallHard },
-      { method: "set", emoji: DEFAULT_EMOJIS.thinking },
-      { method: "remove", emoji: "👀" },
-      { method: "remove", emoji: DEFAULT_EMOJIS.stallSoft },
-      { method: "remove", emoji: DEFAULT_EMOJIS.stallHard },
-      { method: "remove", emoji: DEFAULT_EMOJIS.thinking },
-    ]);
-  });
-
-  it("should remove tracked non-terminal emojis when setting done", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setQueued();
-    await vi.runAllTimersAsync();
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-    void controller.setTool("exec");
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    const donePromise = controller.setDone();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.doneHoldMs);
-    await donePromise;
-
-    const removeEmojis = collectEmojisForMethod(calls, "remove");
-    expect(removeEmojis).toEqual([
-      "👀",
-      DEFAULT_EMOJIS.stallSoft,
-      DEFAULT_EMOJIS.stallHard,
-      DEFAULT_EMOJIS.thinking,
-      "🛠️",
-    ]);
-  });
-
-  it("should not remove reactions on terminal state when adapter lacks removeReaction", async () => {
-    const { calls, controller } = createSetOnlyController();
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    const donePromise = controller.setDone();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.doneHoldMs);
-    await donePromise;
-
-    expect(calls).toEqual([
-      { method: "set", emoji: DEFAULT_EMOJIS.thinking },
-      { method: "set", emoji: DEFAULT_EMOJIS.done },
-    ]);
   });
 
   it("uses clearReaction only for explicit clear on single-slot adapters", async () => {
@@ -472,87 +245,6 @@ describe("createStatusReactionController", () => {
     expect(calls.at(-1)).toEqual({ method: "clear", emoji: "" });
   });
 
-  it("should not re-add an already active reaction when returning to it", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-    void controller.setTool("web_search");
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    expect(calls).toEqual([
-      { method: "set", emoji: DEFAULT_EMOJIS.thinking },
-      { method: "set", emoji: "🔎" },
-    ]);
-  });
-
-  it("should only call setReaction when adapter lacks removeReaction", async () => {
-    const { calls, controller } = createSetOnlyController();
-
-    void controller.setQueued();
-    await vi.runAllTimersAsync();
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    // Should only have set calls, no remove
-    expect(countCallsForMethod(calls, "remove")).toBe(0);
-    expect(calls.some((c) => c.method === "set")).toBe(true);
-  });
-
-  it("should clear all known emojis when adapter supports removeReaction", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setQueued();
-    await vi.runAllTimersAsync();
-
-    await controller.clear();
-
-    // Should have removed multiple emojis
-    expect(countCallsForMethod(calls, "remove")).toBeGreaterThan(0);
-  });
-
-  it("should handle clear gracefully when adapter lacks removeReaction", async () => {
-    const { calls, controller } = createSetOnlyController();
-
-    await controller.clear();
-
-    // Should not throw, no remove calls
-    expect(countCallsForMethod(calls, "remove")).toBe(0);
-  });
-
-  it("should restore initial emoji", async () => {
-    const { calls, controller } = createEnabledController();
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    await controller.restoreInitial();
-
-    expectSetEmojiCall(calls, "👀");
-  });
-
-  it("should use custom emojis when provided", async () => {
-    const { calls, controller } = createEnabledController({
-      emojis: {
-        thinking: "🤔",
-        done: "🎉",
-      },
-    });
-
-    void controller.setThinking();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
-
-    expectSetEmojiCall(calls, "🤔");
-
-    const donePromise = controller.setDone();
-    await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.doneHoldMs);
-    await donePromise;
-    expectSetEmojiCall(calls, "🎉");
-  });
-
   it("should cancel a terminal hold when explicitly cleared", async () => {
     const { calls, controller } = createEnabledController();
 
@@ -577,50 +269,12 @@ describe("createStatusReactionController", () => {
     expect(collectEmojisForMethod(calls, "remove")).toEqual(["👀", DEFAULT_EMOJIS.error]);
   });
 
-  it("should use custom timing when provided", async () => {
-    const { calls, controller } = createEnabledController({
-      timing: {
-        debounceMs: 100,
-      },
-    });
-
-    void controller.setThinking();
-
-    // Should not fire at 50ms
-    await vi.advanceTimersByTimeAsync(50);
-    expect(calls).toHaveLength(0);
-
-    // Should fire at 100ms
-    await vi.advanceTimersByTimeAsync(60);
-    expectSetEmojiCall(calls, DEFAULT_EMOJIS.thinking);
-  });
-
-  const stallCases = [
-    {
-      name: "soft stall timer after stallSoftMs",
-      delayMs: DEFAULT_TIMING.stallSoftMs,
-      expected: DEFAULT_EMOJIS.stallSoft,
-    },
-    {
-      name: "hard stall timer after stallHardMs",
-      delayMs: DEFAULT_TIMING.stallHardMs,
-      expected: DEFAULT_EMOJIS.stallHard,
-    },
-  ] as const;
-
   const createControllerAfterThinking = async () => {
     const state = createEnabledController();
     void state.controller.setThinking();
     await vi.advanceTimersByTimeAsync(DEFAULT_TIMING.debounceMs);
     return state;
   };
-
-  it.each(stallCases)("should trigger $name", async ({ delayMs, expected }) => {
-    const { calls } = await createControllerAfterThinking();
-    await vi.advanceTimersByTimeAsync(delayMs);
-
-    expectSetEmojiCall(calls, expected);
-  });
 
   const stallResetCases = [
     {

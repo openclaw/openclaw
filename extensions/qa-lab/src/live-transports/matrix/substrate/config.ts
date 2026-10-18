@@ -1,5 +1,9 @@
-// Qa Lab Matrix helper module supports config behavior.
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type {
+  DmPolicy,
+  GroupPolicy,
+  OpenClawConfig,
+  ReplyToMode,
+} from "openclaw/plugin-sdk/config-contracts";
 import {
   isRecord,
   normalizeStringEntries,
@@ -7,10 +11,7 @@ import {
 } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { MatrixQaProvisionedTopology } from "./topology.js";
 
-type MatrixQaReplyToMode = "off" | "first" | "all" | "batched";
 type MatrixQaThreadRepliesMode = "off" | "inbound" | "always";
-type MatrixQaDmPolicy = "allowlist" | "disabled" | "open" | "pairing";
-type MatrixQaGroupPolicy = "allowlist" | "disabled" | "open";
 type MatrixQaAutoJoinMode = "allowlist" | "always" | "off";
 type MatrixQaStreamingMode = "off" | "partial" | "quiet";
 type MatrixQaActorRole = "driver" | "observer" | "sut";
@@ -27,18 +28,10 @@ type MatrixQaStreamingConfig = {
     toolProgress?: boolean;
   };
 };
-type MatrixQaAgentDefaultsOverrides = {
-  blockStreamingChunk?: {
-    breakPreference?: "newline" | "paragraph" | "sentence";
-    maxChars?: number;
-    minChars?: number;
-  };
-  blockStreamingCoalesce?: {
-    idleMs?: number;
-    maxChars?: number;
-    minChars?: number;
-  };
-};
+type MatrixQaAgentDefaultsOverrides = Pick<
+  NonNullable<NonNullable<OpenClawConfig["agents"]>["defaults"]>,
+  "blockStreamingChunk" | "blockStreamingCoalesce"
+>;
 type MatrixQaToolConfigOverrides = {
   allow?: string[];
   deny?: string[];
@@ -58,16 +51,9 @@ type MatrixQaGroupConfigOverrides = {
 type MatrixQaDmConfigOverrides = {
   allowFrom?: string[];
   enabled?: boolean;
-  policy?: MatrixQaDmPolicy;
+  policy?: DmPolicy;
   sessionScope?: "per-room" | "per-user";
   threadReplies?: MatrixQaThreadRepliesMode;
-};
-type MatrixQaThreadBindingsConfigOverrides = {
-  enabled?: boolean;
-  idleHours?: number;
-  maxAgeHours?: number;
-  spawnSessions?: boolean;
-  defaultSpawnContext?: "isolated" | "fork";
 };
 type MatrixQaExecApprovalsConfigOverrides = {
   agentFilter?: string[];
@@ -93,63 +79,27 @@ export type MatrixQaConfigOverrides = {
   groupAllowFrom?: string[];
   groupAllowRoles?: MatrixQaActorRole[];
   groupMentionPatterns?: string[];
-  groupPolicy?: MatrixQaGroupPolicy;
+  groupPolicy?: GroupPolicy;
   configuredBotRoles?: MatrixQaActorRole[];
   groupsByKey?: Record<string, MatrixQaGroupConfigOverrides>;
-  replyToMode?: MatrixQaReplyToMode;
+  replyToMode?: ReplyToMode;
   startupVerification?: "if-unverified" | "off";
   streaming?: MatrixQaStreamingMode | MatrixQaStreamingConfig | boolean;
   textChunkLimit?: number;
-  threadBindings?: MatrixQaThreadBindingsConfigOverrides;
+  threadBindings?: NonNullable<OpenClawConfig["session"]>["threadBindings"];
   threadReplies?: MatrixQaThreadRepliesMode;
   audio?: MatrixQaAudioConfigOverrides;
   mediaModels?: MatrixQaMediaModelsOverrides;
   toolProfile?: "coding" | "messaging" | "minimal";
 };
 
-type MatrixQaConfigSnapshot = {
-  approvalForwarding: {
-    exec: boolean;
-    plugin: boolean;
-  };
-  autoJoin: MatrixQaAutoJoinMode;
-  autoJoinAllowlist: string[];
-  allowBots?: MatrixQaAllowBotsMode;
-  blockStreaming: boolean;
-  chunkMode?: MatrixQaChunkMode;
-  dm: {
-    allowFrom: string[];
-    enabled: boolean;
-    policy: MatrixQaDmPolicy;
-    sessionScope: "per-room" | "per-user";
-    threadReplies: MatrixQaThreadRepliesMode;
-  };
-  encryption: boolean;
-  execApprovals?: MatrixQaExecApprovalsConfigOverrides;
-  configuredBotRoles: MatrixQaActorRole[];
-  groupAllowFrom: string[];
-  groupMentionPatterns: string[];
-  groupPolicy: MatrixQaGroupPolicy;
-  groupsByKey: Record<string, MatrixQaGroupSnapshot>;
-  replyToMode: MatrixQaReplyToMode;
-  startupVerification?: "if-unverified" | "off";
-  streaming: MatrixQaStreamingMode;
-  streamingProgressCommandText?: "raw" | "status";
-  streamingPreviewToolProgress: boolean;
-  textChunkLimit?: number;
-  threadBindings: MatrixQaThreadBindingsConfigOverrides;
-  threadReplies: MatrixQaThreadRepliesMode;
-};
-
-type MatrixQaGroupSnapshot = {
+type MatrixQaGroupEntry = {
   allowBots?: MatrixQaAllowBotsMode;
   enabled: boolean;
   requireMention: boolean;
-  roomId: string;
   tools?: MatrixQaToolConfigOverrides;
 };
 
-type MatrixQaGroupEntry = Omit<MatrixQaGroupSnapshot, "roomId">;
 type MatrixQaChannelAccountConfig = Record<string, unknown> & {
   groups?: Record<string, MatrixQaGroupEntry & Record<string, unknown>>;
   network?: Record<string, unknown>;
@@ -177,62 +127,42 @@ function normalizeMatrixQaAllowlist(entries?: string[]) {
   return uniqueStrings(normalizeStringEntries(entries ?? []));
 }
 
-function resolveMatrixQaGroupSnapshots(params: {
-  overrides?: MatrixQaConfigOverrides;
-  topology: MatrixQaProvisionedTopology;
-}) {
-  const groupRooms = params.topology.rooms.filter((room) => room.kind === "group");
-  const groupsByKey = params.overrides?.groupsByKey ?? {};
-  const knownGroupKeys = new Set(groupRooms.map((room) => room.key));
-
-  for (const key of Object.keys(groupsByKey)) {
-    if (!knownGroupKeys.has(key)) {
-      throw new Error(`Matrix QA group override references unknown room key "${key}"`);
-    }
-  }
-
-  return Object.fromEntries(
-    groupRooms.map((room) => {
-      const override = groupsByKey[room.key];
-      return [
-        room.key,
-        {
-          roomId: room.roomId,
-          enabled: override?.enabled ?? true,
-          ...(override && Object.hasOwn(override, "allowBots")
-            ? { allowBots: override.allowBots }
-            : {}),
-          requireMention: override?.requireMention ?? room.requireMention,
-          ...(override?.tools ? { tools: override.tools } : {}),
-        },
-      ];
-    }),
-  );
-}
-
 function buildMatrixQaGroupEntries(
-  groupsByKey: MatrixQaConfigSnapshot["groupsByKey"],
+  params: { overrides?: MatrixQaConfigOverrides; topology: MatrixQaProvisionedTopology },
   currentGroups: MatrixQaChannelAccountConfig["groups"],
   baselineGroups: MatrixQaChannelAccountConfig["groups"],
 ): Record<string, MatrixQaGroupEntry> {
+  const roomsByKey = Object.fromEntries(
+    params.topology.rooms.filter((room) => room.kind === "group").map((room) => [room.key, room]),
+  );
+  const groupsByKey = params.overrides?.groupsByKey ?? {};
+  for (const key of Object.keys(groupsByKey)) {
+    if (!Object.hasOwn(roomsByKey, key)) {
+      throw new Error(`Matrix QA group override references unknown room key "${key}"`);
+    }
+  }
   const result = structuredClone(currentGroups ?? {}) as Record<string, MatrixQaGroupEntry>;
-  for (const group of Object.values(groupsByKey)) {
-    const current = currentGroups?.[group.roomId];
-    const baseline = baselineGroups?.[group.roomId];
+  for (const room of Object.values(roomsByKey)) {
+    const override = groupsByKey[room.key];
+    const current = currentGroups?.[room.roomId];
+    const baseline = baselineGroups?.[room.roomId];
     const entry = restoreOwnedFields(current, baseline, ["allowBots", "enabled", "requireMention"]);
     const tools = restoreOwnedFields(current?.tools, baseline?.tools, ["allow", "deny"]);
-    Object.assign(entry, { enabled: group.enabled, requireMention: group.requireMention });
-    if (group.allowBots !== undefined) {
-      entry.allowBots = group.allowBots;
+    Object.assign(entry, {
+      enabled: override?.enabled ?? true,
+      requireMention: override?.requireMention ?? room.requireMention,
+    });
+    if (override && Object.hasOwn(override, "allowBots") && override.allowBots !== undefined) {
+      entry.allowBots = override.allowBots;
     }
-    if (group.tools) {
-      Object.assign(tools, group.tools);
+    if (override?.tools) {
+      Object.assign(tools, override.tools);
     }
     delete entry.tools;
     if (Object.keys(tools).length > 0) {
       entry.tools = tools;
     }
-    result[group.roomId] = entry as MatrixQaGroupEntry;
+    result[room.roomId] = entry as MatrixQaGroupEntry;
   }
   return result;
 }
@@ -280,39 +210,10 @@ function resolveMatrixQaStreamingMode(
   if (value === "quiet") {
     return "quiet";
   }
-  if (isMatrixQaStreamingConfig(value)) {
-    if (value.mode === "partial" || value.mode === "quiet") {
-      return value.mode;
-    }
+  if (isRecord(value) && (value.mode === "partial" || value.mode === "quiet")) {
+    return value.mode;
   }
   return "off";
-}
-
-function isMatrixQaStreamingConfig(
-  value: MatrixQaConfigOverrides["streaming"],
-): value is MatrixQaStreamingConfig {
-  return isRecord(value);
-}
-
-function resolveMatrixQaAutoJoinAllowlist(params: { overrides?: MatrixQaConfigOverrides }) {
-  if (params.overrides?.autoJoin !== "allowlist") {
-    return [];
-  }
-  return normalizeMatrixQaAllowlist(params.overrides.autoJoinAllowlist);
-}
-
-function resolveMatrixQaRoleAllowlist(params: {
-  roles?: MatrixQaActorRole[];
-  driverUserId: string;
-  observerUserId: string;
-  sutUserId: string;
-}) {
-  const roleToUserId = {
-    driver: params.driverUserId,
-    observer: params.observerUserId,
-    sut: params.sutUserId,
-  } satisfies Record<MatrixQaActorRole, string>;
-  return (params.roles ?? []).map((role) => roleToUserId[role]);
 }
 
 function resolveMatrixQaGroupAllowFrom(params: {
@@ -322,12 +223,9 @@ function resolveMatrixQaGroupAllowFrom(params: {
   sutUserId: string;
 }) {
   const explicitAllowFrom = params.overrides?.groupAllowFrom;
-  const roleAllowFrom = resolveMatrixQaRoleAllowlist({
-    roles: params.overrides?.groupAllowRoles,
-    driverUserId: params.driverUserId,
-    observerUserId: params.observerUserId,
-    sutUserId: params.sutUserId,
-  });
+  const roleAllowFrom = (params.overrides?.groupAllowRoles ?? []).map(
+    (role) => params[`${role}UserId`],
+  );
   if (explicitAllowFrom !== undefined || params.overrides?.groupAllowRoles !== undefined) {
     return normalizeMatrixQaAllowlist([...(explicitAllowFrom ?? []), ...roleAllowFrom]);
   }
@@ -386,12 +284,14 @@ function buildMatrixQaChannelAccountConfig(params: {
   groups: Record<string, MatrixQaGroupEntry>;
   homeserver: string;
   overrides?: MatrixQaConfigOverrides;
-  snapshot: MatrixQaConfigSnapshot;
+  dmSnapshot: ReturnType<typeof resolveMatrixQaDmConfigSnapshot>;
+  groupAllowFrom: string[];
   sutAccessToken: string;
   sutDeviceId?: string;
   sutUserId: string;
 }): MatrixQaChannelAccountConfig {
-  const { currentAccount: current, baselineAccount: baseline } = params;
+  const { currentAccount: current, baselineAccount: baseline, overrides, dmSnapshot } = params;
+  const streamingOverride = isRecord(overrides?.streaming) ? overrides.streaming : undefined;
   const account = restoreOwnedFields(
     current,
     baseline,
@@ -402,21 +302,21 @@ function buildMatrixQaChannelAccountConfig(params: {
   }
   const dm = restoreOwnedFields(
     current?.dm,
-    params.snapshot.dm.enabled ? baseline?.dm : undefined,
+    dmSnapshot.enabled ? baseline?.dm : undefined,
     "allowFrom enabled policy sessionScope threadReplies".split(" "),
   );
-  if (!params.snapshot.dm.enabled) {
+  if (!dmSnapshot.enabled) {
     dm.enabled = false;
   } else {
     Object.assign(dm, {
-      allowFrom: params.snapshot.dm.allowFrom,
+      allowFrom: dmSnapshot.allowFrom,
       enabled: true,
-      policy: params.snapshot.dm.policy,
-      ...(params.overrides?.dm?.sessionScope !== undefined
-        ? { sessionScope: params.snapshot.dm.sessionScope }
+      policy: dmSnapshot.policy,
+      ...(overrides?.dm?.sessionScope !== undefined
+        ? { sessionScope: dmSnapshot.sessionScope }
         : {}),
-      ...(params.overrides?.dm?.threadReplies !== undefined
-        ? { threadReplies: params.snapshot.dm.threadReplies }
+      ...(overrides?.dm?.threadReplies !== undefined
+        ? { threadReplies: dmSnapshot.threadReplies }
         : {}),
     });
   }
@@ -425,7 +325,7 @@ function buildMatrixQaChannelAccountConfig(params: {
     baseline?.execApprovals,
     "agentFilter approvers enabled sessionFilter target".split(" "),
   );
-  const execOverrides = params.snapshot.execApprovals;
+  const execOverrides = overrides?.execApprovals;
   Object.assign(execApprovals, {
     ...(execOverrides?.agentFilter ? { agentFilter: execOverrides.agentFilter } : {}),
     ...(execOverrides?.approvers
@@ -448,110 +348,68 @@ function buildMatrixQaChannelAccountConfig(params: {
   const preview = restoreOwnedFields(current?.streaming?.preview, baseline?.streaming?.preview, [
     "toolProgress",
   ]);
-  if (params.snapshot.streamingProgressCommandText) {
-    progress.commandText = params.snapshot.streamingProgressCommandText;
+  if (streamingOverride?.progress?.commandText) {
+    progress.commandText = streamingOverride.progress.commandText;
   }
   Object.assign(streaming, { progress });
   if (Object.keys(progress).length === 0) {
     delete streaming.progress;
   }
   Object.assign(streaming, {
-    block: { ...block, enabled: params.snapshot.blockStreaming },
-    chunkMode: params.snapshot.chunkMode ?? "length",
-    mode: params.snapshot.streaming,
-    preview: { ...preview, toolProgress: params.snapshot.streamingPreviewToolProgress },
+    block: { ...block, enabled: overrides?.blockStreaming ?? false },
+    chunkMode: overrides?.chunkMode ?? "length",
+    mode: resolveMatrixQaStreamingMode(overrides?.streaming),
+    preview: { ...preview, toolProgress: streamingOverride?.preview?.toolProgress ?? true },
   });
   const threadBindings = restoreOwnedFields(
     current?.threadBindings,
     baseline?.threadBindings,
     "enabled idleHours maxAgeHours spawnSessions defaultSpawnContext".split(" "),
   );
-  Object.assign(threadBindings, params.overrides?.threadBindings);
+  Object.assign(threadBindings, overrides?.threadBindings);
   Object.assign(account, {
     accessToken: params.sutAccessToken,
     ...(params.sutDeviceId ? { deviceId: params.sutDeviceId } : {}),
     dm,
     enabled: true,
-    encryption: params.snapshot.encryption,
-    groupAllowFrom: params.snapshot.groupAllowFrom,
-    groupPolicy: params.snapshot.groupPolicy,
+    encryption: overrides?.encryption ?? false,
+    groupAllowFrom: params.groupAllowFrom,
+    groupPolicy: overrides?.groupPolicy ?? "allowlist",
     ...(Object.keys(params.groups).length > 0 ? { groups: params.groups } : {}),
     homeserver: params.homeserver,
     network: {
       ...current?.network,
       dangerouslyAllowPrivateNetwork: true,
     },
-    replyToMode: params.snapshot.replyToMode,
+    replyToMode: overrides?.replyToMode ?? "off",
     ...(Object.keys(execApprovals).length > 0 ? { execApprovals } : {}),
-    ...(params.overrides?.startupVerification !== undefined
-      ? { startupVerification: params.snapshot.startupVerification }
+    ...(overrides?.startupVerification !== undefined
+      ? { startupVerification: overrides.startupVerification }
       : {}),
     streaming,
     ...(Object.keys(threadBindings).length > 0 ? { threadBindings } : {}),
-    threadReplies: params.snapshot.threadReplies,
+    threadReplies: overrides?.threadReplies ?? "inbound",
     userId: params.sutUserId,
-    textChunkLimit: params.snapshot.textChunkLimit ?? 4000,
+    textChunkLimit: overrides?.textChunkLimit ?? 4000,
   });
-  if (params.overrides?.allowBots !== undefined) {
-    account.allowBots = params.snapshot.allowBots;
+  if (overrides?.allowBots !== undefined) {
+    account.allowBots = overrides.allowBots;
   }
-  if (params.overrides?.autoJoin !== undefined) {
-    if (params.snapshot.autoJoin === "off") {
+  if (overrides?.autoJoin !== undefined) {
+    const autoJoin = overrides.autoJoin ?? "off";
+    if (autoJoin === "off") {
       delete account.autoJoin;
       delete account.autoJoinAllowlist;
     } else {
-      account.autoJoin = params.snapshot.autoJoin;
-      if (params.snapshot.autoJoin === "allowlist") {
-        account.autoJoinAllowlist = params.snapshot.autoJoinAllowlist;
+      account.autoJoin = autoJoin;
+      if (autoJoin === "allowlist") {
+        account.autoJoinAllowlist = normalizeMatrixQaAllowlist(overrides.autoJoinAllowlist);
       } else {
         delete account.autoJoinAllowlist;
       }
     }
   }
   return account as MatrixQaChannelAccountConfig;
-}
-
-function buildMatrixQaConfigSnapshot(params: {
-  driverUserId: string;
-  observerUserId: string;
-  overrides?: MatrixQaConfigOverrides;
-  sutUserId: string;
-  topology: MatrixQaProvisionedTopology;
-}): MatrixQaConfigSnapshot {
-  const streaming = isMatrixQaStreamingConfig(params.overrides?.streaming)
-    ? params.overrides.streaming
-    : undefined;
-  return {
-    allowBots: params.overrides?.allowBots,
-    autoJoin: params.overrides?.autoJoin ?? "off",
-    autoJoinAllowlist: resolveMatrixQaAutoJoinAllowlist(params),
-    blockStreaming: params.overrides?.blockStreaming ?? false,
-    chunkMode: params.overrides?.chunkMode,
-    dm: resolveMatrixQaDmConfigSnapshot(params),
-    encryption: params.overrides?.encryption ?? false,
-    execApprovals: params.overrides?.execApprovals,
-    configuredBotRoles: [...(params.overrides?.configuredBotRoles ?? [])],
-    groupAllowFrom: resolveMatrixQaGroupAllowFrom(params),
-    groupMentionPatterns: normalizeMatrixQaAllowlist(params.overrides?.groupMentionPatterns),
-    groupPolicy: params.overrides?.groupPolicy ?? "allowlist",
-    groupsByKey: resolveMatrixQaGroupSnapshots({
-      overrides: params.overrides,
-      topology: params.topology,
-    }),
-    replyToMode: params.overrides?.replyToMode ?? "off",
-    startupVerification: params.overrides?.startupVerification,
-    streaming: resolveMatrixQaStreamingMode(params.overrides?.streaming),
-    streamingProgressCommandText: streaming?.progress?.commandText,
-    streamingPreviewToolProgress: streaming?.preview?.toolProgress ?? true,
-    threadBindings: { ...params.overrides?.threadBindings },
-    textChunkLimit: params.overrides?.textChunkLimit,
-    threadReplies: params.overrides?.threadReplies ?? "inbound",
-    approvalForwarding: {
-      exec:
-        params.overrides?.approvalForwarding?.exec ?? params.overrides?.execApprovals !== undefined,
-      plugin: params.overrides?.approvalForwarding?.plugin ?? false,
-    },
-  };
 }
 
 export function buildMatrixQaConfig(
@@ -573,27 +431,16 @@ export function buildMatrixQaConfig(
 ): OpenClawConfig {
   const currentCfg = params.currentConfig ?? baselineCfg;
   const pluginAllow = uniqueStrings([...(currentCfg.plugins?.allow ?? []), "matrix"]);
-  const snapshot = buildMatrixQaConfigSnapshot({
-    driverUserId: params.driverUserId,
-    observerUserId: params.observerUserId,
-    overrides: params.overrides,
-    sutUserId: params.sutUserId,
-    topology: params.topology,
-  });
   const currentAccount = currentCfg.channels?.matrix?.accounts?.[params.sutAccountId];
   const baselineAccount = baselineCfg.channels?.matrix?.accounts?.[params.sutAccountId];
-  const groups = buildMatrixQaGroupEntries(
-    snapshot.groupsByKey,
-    currentAccount?.groups,
-    baselineAccount?.groups,
-  );
+  const groups = buildMatrixQaGroupEntries(params, currentAccount?.groups, baselineAccount?.groups);
   const configuredBotAccounts = buildMatrixQaConfiguredBotAccounts({
     driverAccessToken: params.driverAccessToken,
     driverUserId: params.driverUserId,
     homeserver: params.homeserver,
     observerAccessToken: params.observerAccessToken,
     observerUserId: params.observerUserId,
-    roles: snapshot.configuredBotRoles,
+    roles: params.overrides?.configuredBotRoles ?? [],
   });
   const matrixAccounts = { ...currentCfg.channels?.matrix?.accounts };
   for (const accountId of Object.values(MATRIX_QA_BOT_SOURCE_ACCOUNT_IDS)) {
@@ -606,7 +453,10 @@ export function buildMatrixQaConfig(
       baselineCfg.approvals?.[kind],
       ["enabled", "mode"],
     );
-    if (snapshot.approvalForwarding[kind]) {
+    if (
+      params.overrides?.approvalForwarding?.[kind] ??
+      (kind === "exec" && params.overrides?.execApprovals !== undefined)
+    ) {
       Object.assign(approval, { enabled: true, mode: "session" });
     }
     if (Object.keys(approval).length > 0) {
@@ -673,7 +523,7 @@ export function buildMatrixQaConfig(
     ["mentionPatterns", "visibleReplies"],
   );
   if (params.overrides?.groupMentionPatterns !== undefined) {
-    groupChat.mentionPatterns = snapshot.groupMentionPatterns;
+    groupChat.mentionPatterns = normalizeMatrixQaAllowlist(params.overrides.groupMentionPatterns);
   }
   groupChat.visibleReplies = "automatic";
   matrixAccounts[params.sutAccountId] = buildMatrixQaChannelAccountConfig({
@@ -682,7 +532,8 @@ export function buildMatrixQaConfig(
     groups,
     homeserver: params.homeserver,
     overrides: params.overrides,
-    snapshot,
+    dmSnapshot: resolveMatrixQaDmConfigSnapshot(params),
+    groupAllowFrom: resolveMatrixQaGroupAllowFrom(params),
     sutAccessToken: params.sutAccessToken,
     sutDeviceId: params.sutDeviceId,
     sutUserId: params.sutUserId,

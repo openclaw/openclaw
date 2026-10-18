@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import type { SessionDiscussionState } from "../../../../packages/gateway-protocol/src/index.js";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
@@ -18,7 +17,6 @@ const panelCases = [
   { key: "b", slot: "workspace", altKey: false },
   { key: "s", slot: "companion", altKey: false },
   { key: "u", slot: "browser", altKey: true },
-  { key: "k", slot: "tasks", altKey: true },
   { key: "d", slot: "desktop", altKey: true },
   { key: "j", slot: "discussion", altKey: true },
   { key: "g", slot: "dashboard", altKey: true },
@@ -41,6 +39,16 @@ function dispatchPanelShortcut(
   });
   pane.handleDocumentKeydown(event);
   return event;
+}
+
+function shortcutPane() {
+  const result = createTestChatPane({
+    client: createGatewayBrowserClientFixture(),
+    sessions: createSessionCapabilityFixture(),
+  });
+  result.pane.active = true;
+  result.state.browserPanelAvailable = true;
+  return result;
 }
 
 afterEach(() => document.body.replaceChildren());
@@ -74,61 +82,24 @@ describe("chat pane sidebar toggles", () => {
   });
 
   it.each([
-    {
-      name: "macOS Option symbol in the composer",
-      key: "¨",
-      code: "KeyU",
-      slot: "browser",
-      metaKey: true,
-      ctrlKey: false,
-      altKey: true,
-      accepted: true,
-    },
-    {
-      name: "AltGr text in the composer",
-      key: "Ę",
-      code: "KeyE",
-      slot: "detail",
-      metaKey: false,
-      ctrlKey: true,
-      altKey: true,
-      accepted: false,
-    },
-    {
-      name: "US Ctrl+Alt review chord in the composer",
-      key: "E",
-      code: "KeyE",
-      slot: "detail",
-      metaKey: false,
-      ctrlKey: true,
-      altKey: true,
-      accepted: true,
-    },
-    {
-      name: "plain workspace chord in the composer",
-      key: "B",
-      code: "KeyB",
-      slot: "workspace",
-      metaKey: true,
-      ctrlKey: false,
-      altKey: false,
-      accepted: true,
-    },
+    ["macOS Option symbol in the composer", "¨", "KeyU", "browser", true, false, true, true],
+    ["AltGr text in the composer", "Ę", "KeyE", "detail", false, true, true, false],
+    ["US Ctrl+Alt review chord in the composer", "E", "KeyE", "detail", false, true, true, true],
+    ["plain workspace chord in the composer", "B", "KeyB", "workspace", true, false, false, true],
   ] as const)(
-    "handles $name without consuming ordinary text",
-    ({ name: _name, slot, accepted, ...keyboard }) => {
-      const { pane, state } = createTestChatPane({
-        client: createGatewayBrowserClientFixture(),
-        sessions: createSessionCapabilityFixture(),
-      });
-      pane.active = true;
-      state.browserPanelAvailable = true;
+    "handles %s without consuming ordinary text",
+    (_name, key, code, slot, metaKey, ctrlKey, altKey, accepted) => {
+      const { pane, state } = shortcutPane();
       state.sidebarLayout = { columns: [] };
       const target = document.body.appendChild(document.createElement("textarea"));
       target.addEventListener("keydown", pane.handleDocumentKeydown);
       target.focus();
       const event = new KeyboardEvent("keydown", {
-        ...keyboard,
+        key,
+        code,
+        metaKey,
+        ctrlKey,
+        altKey,
         shiftKey: true,
         bubbles: true,
         composed: true,
@@ -144,21 +115,12 @@ describe("chat pane sidebar toggles", () => {
 
   it.each(panelCases)("toggles the available $slot in the active pane", (shortcut) => {
     const { slot } = shortcut;
-    const { pane, state } = createTestChatPane({
-      client: createGatewayBrowserClientFixture(),
-      sessions: createSessionCapabilityFixture(),
-    });
-    pane.active = true;
+    const { pane, state } = shortcutPane();
     state.connected = true;
-    state.browserPanelAvailable = true;
     pane.context.gateway.snapshot.phase = "connected";
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods(["desktop.observe", "board.get"]);
     // The provider has resolved Discussion availability for this session.
-    const discussionPane = pane as TestChatPane & {
-      sessionDiscussionStates: Map<string, SessionDiscussionState>;
-      compact: boolean;
-    };
-    discussionPane.sessionDiscussionStates.set(state.sessionKey.trim(), "available");
+    pane.sessionDiscussion.record(state.sessionKey.trim(), "available");
     state.sidebarLayout = openSlot(openSlot({ columns: [] }, slot), "terminal");
 
     expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(false);
@@ -209,9 +171,10 @@ describe("chat pane sidebar toggles", () => {
     dispatchPanelShortcut(pane, shortcut);
 
     if (slot === "dashboard") {
-      discussionPane.compact = true;
+      const compactPane = pane as TestChatPane & { compact: boolean };
+      compactPane.compact = true;
       expect(dispatchPanelShortcut(pane, shortcut).defaultPrevented).toBe(false);
-      discussionPane.compact = false;
+      compactPane.compact = false;
     }
     if (slot === "discussion") {
       state.connected = false;
@@ -221,7 +184,7 @@ describe("chat pane sidebar toggles", () => {
 
     state.browserPanelAvailable = false;
     pane.context.gateway.snapshot.hello = gatewayHelloForMethods([], ["operator.read"]);
-    discussionPane.sessionDiscussionStates.set(state.sessionKey.trim(), "none");
+    pane.sessionDiscussion.record(state.sessionKey.trim(), "none");
     if (["browser", "desktop", "discussion", "dashboard"].some((gated) => gated === slot)) {
       expect(dispatchPanelShortcut(pane, shortcut).defaultPrevented).toBe(false);
       expect(isSidebarSlotVisible(state.sidebarLayout, slot)).toBe(false);

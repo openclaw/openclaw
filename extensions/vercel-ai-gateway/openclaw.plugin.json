@@ -6,6 +6,12 @@
   },
   "enabledByDefault": true,
   "providers": ["vercel-ai-gateway"],
+  "providerEndpoints": [
+    {
+      "endpointClass": "vercel-ai-gateway",
+      "hosts": ["ai-gateway.vercel.sh"]
+    }
+  ],
   "modelCatalog": {
     "discovery": {
       "vercel-ai-gateway": "refreshable"

@@ -5,15 +5,11 @@ export function createIndependentPrFixtureEnv(
   parentEnv: NodeJS.ProcessEnv = process.env,
 ): NodeJS.ProcessEnv {
   const env = { ...parentEnv };
-  // Independent fixtures own their Git selection and create fresh supervisor bindings.
-  for (const key of [
-    "OPENCLAW_PR_GIT",
-    "GIT_EXEC",
-    "OPENCLAW_PR_GITHUB_SNAPSHOT_ROOT",
-    "OPENCLAW_PR_LOCK_NOTIFY_FD",
-    "OPENCLAW_PR_LOCK_SUPERVISOR_PID",
-  ]) {
-    delete env[key];
+  // Independent fixtures own wrapper routing, Git selection, and supervisor bindings.
+  for (const key of Object.keys(env)) {
+    if (key === "GIT_EXEC" || key.startsWith("OPENCLAW_PR_")) {
+      delete env[key];
+    }
   }
   return env;
 }
@@ -41,6 +37,7 @@ export function linkPrWrapperDependencies(destination: string): void {
   // Use installed third-party packages only, never workspace source or loader mocks.
   for (const dependency of [
     "@openclaw/fs-safe",
+    "@openclaw/proc-safe",
     "@openclaw/proxyline",
     "acorn",
     "chalk",
@@ -52,11 +49,10 @@ export function linkPrWrapperDependencies(destination: string): void {
     "ipaddr.js",
     "jiti",
     "json5",
-    "koffi",
     "kysely",
     "minimatch",
-    "ms",
     "p-map",
+    "partial-json",
     "semver",
     "string-width",
     "tsdown",
@@ -78,5 +74,20 @@ export function linkPrWrapperDependencies(destination: string): void {
       linkedDependency,
       process.platform === "win32" ? "junction" : "dir",
     );
+  }
+  for (const dependency of [
+    "mdast-util-from-markdown",
+    "mdast-util-gfm-table",
+    "micromark-extension-gfm-table",
+  ]) {
+    const linkedDependency = join(destination, "packages/markdown-core/node_modules", dependency);
+    mkdirSync(dirname(linkedDependency), { recursive: true });
+    if (!lstatSync(linkedDependency, { throwIfNoEntry: false })) {
+      symlinkSync(
+        realpathSync(join("packages/markdown-core/node_modules", dependency)),
+        linkedDependency,
+        process.platform === "win32" ? "junction" : "dir",
+      );
+    }
   }
 }

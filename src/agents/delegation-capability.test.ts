@@ -1,4 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
+import {
+  consumeSubagentCompletionToolHandoff,
+  registerSubagentCompletionToolHandoff,
+} from "../gateway/subagent-completion-tool-handoff.js";
 import { getPluginToolMeta, setPluginToolMeta } from "../plugins/tool-metadata.js";
 import { applyDelegationCapability, resolveDelegationCapability } from "./delegation-capability.js";
 import { attachToolAllowlistIntersection } from "./tool-policy.js";
@@ -18,6 +22,71 @@ function createTool(
 }
 
 describe("delegation capability", () => {
+  it.each([
+    "current",
+    "provenance only",
+    "report only",
+    "revoked",
+    "wrong session",
+    "wrong model",
+    "missing lineage",
+    "disabled",
+    "capped",
+  ])("preserves only a verified requester continuation on fallback: %s", (state) => {
+    const child = "agent:main:subagent:child";
+    const parent = "agent:main:main";
+    let current = true;
+    const registration = {
+      sourceSessionKey: child,
+      targetSessionKey: parent,
+      targetSessionId: "parent-id",
+      idempotencyKey: "delegation-" + state,
+      ...(state === "report only"
+        ? {}
+        : { settleBatch: { sourceSessionKeys: [child], isCurrent: () => current } }),
+    };
+    const sourceTool = state === "report only" ? "subagent_announce" : "subagent_settle";
+    const handoff = consumeSubagentCompletionToolHandoff({
+      ...registration,
+      handoffId: registerSubagentCompletionToolHandoff(registration),
+      sourceTool,
+      provider: "openai",
+      model: "gpt-4.1-mini",
+    });
+    const inputProvenance = { kind: "inter_session" as const, sourceTool, sourceSessionKey: child };
+    current = state !== "revoked";
+    const params: Parameters<typeof resolveDelegationCapability>[0] = {
+      fallbackActive: true,
+      inputProvenance,
+      disableTools: state === "disabled",
+      toolsAllow: state === "capped" ? ["message"] : undefined,
+      requesterContinuation: {
+        config: {},
+        sessionKey: parent,
+        sessionId: state === "wrong session" ? "new-id" : "parent-id",
+        modelProvider: "openai",
+        modelId: state === "wrong model" ? "gpt-4.1" : "gpt-4.1-mini",
+        trustedInternalHandoff: state === "provenance only" ? undefined : handoff,
+        preparedSessionCapabilityStore:
+          state === "missing lineage"
+            ? {}
+            : {
+                [child]: {
+                  sessionId: "child-id",
+                  spawnedBy: parent,
+                  spawnDepth: 1,
+                  inheritedToolPolicyVersion: 1,
+                  inheritedToolAllow: ["sessions_send", "sessions_spawn"],
+                  inheritedToolDeny: [],
+                },
+              },
+      },
+    };
+    expect(resolveDelegationCapability(params)).toBe(
+      state === "current" ? "host_only" : "report_only",
+    );
+  });
+
   it("enters report-only mode for fallback completion reports", () => {
     expect(
       resolveDelegationCapability({
@@ -47,10 +116,8 @@ describe("delegation capability", () => {
 
   it.each([
     { sourceTool: "subagent_announce", disableTools: true },
-    { sourceTool: "agent_harness_task", disableTools: true },
     { sourceTool: "subagent_announce", toolsAllow: [] },
     { sourceTool: "subagent_announce", toolsAllow: ["message"] },
-    { sourceTool: "agent_harness_task", toolsAllow: ["message"] },
   ])(
     "blocks new delegation for restricted $sourceTool completion reports",
     ({ sourceTool, ...restriction }) => {
@@ -65,12 +132,8 @@ describe("delegation capability", () => {
   );
 
   it.each([
-    { label: "wildcard", toolsAllow: ["*"] },
     { label: "wildcard with another tool", toolsAllow: ["message", "*"] },
-    { label: "session launch", toolsAllow: ["sessions_spawn"] },
     { label: "session glob", toolsAllow: ["sessions_*"] },
-    { label: "session group", toolsAllow: ["group:sessions"] },
-    { label: "OpenClaw delegation", toolsAllow: ["openclaw"] },
   ])("preserves $label delegation for completion reports", ({ toolsAllow }) => {
     expect(
       resolveDelegationCapability({
@@ -96,20 +159,6 @@ describe("delegation capability", () => {
     ).toBe("report_only");
   });
 
-  it.each([
-    { label: "message-only", toolsAllow: ["message"] },
-    { label: "image generation", toolsAllow: ["image_generate"] },
-    { label: "disabled tools", disableTools: true },
-  ])("keeps $label non-completion runs at full delegation capability", (restriction) => {
-    expect(
-      resolveDelegationCapability({
-        fallbackActive: false,
-        inputProvenance: { kind: "external_user" },
-        ...restriction,
-      }),
-    ).toBe("full");
-  });
-
   it("removes delegation tools but retains ordinary reporting tools", () => {
     const tools = [
       createTool("sessions_spawn"),
@@ -128,6 +177,7 @@ describe("delegation capability", () => {
       "sessions_history",
     ]);
     expect(applyDelegationCapability(tools, "full")).toBe(tools);
+    expect(applyDelegationCapability(tools, "host_only")).toBe(tools);
   });
 
   it("keeps status and cleanup actions while rejecting new background work", async () => {

@@ -5,6 +5,10 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeEach, vi } from "vitest";
 import { createOperationalRunInstanceRef } from "../../agents/admitted-run-context.js";
 import type { BoundAgentRunSessionTarget } from "../../agents/run-session-target.types.js";
+import {
+  clearRuntimeConfigSnapshot,
+  setRuntimeConfigSnapshot,
+} from "../../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../../config/types.js";
 import {
   claimAgentRunDelegatedAuthority,
@@ -24,15 +28,19 @@ import {
   openOpenClawStateDatabase,
   type OpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { WorkerInstallationArtifact } from "./bundle.js";
-import type { WorkerConnectionIdentity } from "./connection-identity.js";
+import type { WorkerConnectionIdentity, WorkerInferenceExecutor } from "./connection-identity.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerInferenceStore } from "./inference-store.js";
+import * as inferenceManager from "./inference.js";
 import { sameWorkerSessionTurnClaim, type WorkerSessionTurnClaim } from "./placement-record.js";
 import type { PlacementTurnClaimAuthority } from "./placement-turn-authority.js";
 import {
   attachWorkerTurnExecutionIdentityStore,
   bindWorkerTurnOwner,
+  bindWorkerTurnCapabilities,
+  bindWorkerTurnGitHubGrant,
   getWorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
@@ -50,7 +58,11 @@ export function waitForFast<T>(
 }
 
 const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
-export type WorkerEnvironmentServiceOptions = Parameters<typeof createWorkerEnvironmentService>[0];
+export type WorkerEnvironmentServiceOptions = Parameters<
+  typeof createWorkerEnvironmentService
+>[0] & {
+  executeInference: WorkerInferenceExecutor;
+};
 export type WorkerEnvironmentServiceError = Error & { code: string };
 export const SSH_ENDPOINT: WorkerSshEndpoint = {
   host: "worker.example.test",
@@ -127,15 +139,13 @@ export const testState = {} as {
   config: OpenClawConfig;
   nowMs: number;
   providersEnabled: boolean;
-  reuseReadWorkers: boolean;
-  releaseTurnOwners: Array<() => void>;
+  releaseTurnOwners: Array<() => void | Promise<void>>;
   prepareInstallation: WorkerEnvironmentServiceOptions["prepareInstallation"];
   bootstrapWorker: WorkerEnvironmentServiceOptions["bootstrapWorker"];
 };
 
-export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?: boolean } = {}) {
+export function setupWorkerEnvironmentServiceSuite() {
   beforeEach(async () => {
-    testState.reuseReadWorkers = options.reuseReadWorkers === true;
     testState.releaseTurnOwners = [];
     testState.root = await fs.mkdtemp(
       path.join(await fs.realpath(os.tmpdir()), "openclaw-worker-service-"),
@@ -160,6 +170,8 @@ export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?:
         },
       },
     };
+    // The Gateway publishes its runtime config at startup.
+    setRuntimeConfigSnapshot(testState.config);
     testState.prepareInstallation = vi.fn(async (install) =>
       install === "bundle" ? BUNDLE_ARTIFACT : NPM_ARTIFACT,
     );
@@ -177,28 +189,23 @@ export function setupWorkerEnvironmentServiceSuite(options: { reuseReadWorkers?:
       await testState.service?.stop();
     } finally {
       for (const release of testState.releaseTurnOwners) {
-        release();
+        await release();
       }
+      clearRuntimeConfigSnapshot();
     }
     await closeWorkerEnvironmentDatabase();
     await fs.rm(testState.root, { recursive: true, force: true });
   });
 
-  if (options.reuseReadWorkers) {
-    afterAll(async () => {
-      await closeOpenClawStateDatabaseAsync();
-      closeOpenClawStateDatabaseForTest();
-    });
-  }
+  afterAll(async () => {
+    await closeOpenClawStateDatabaseAsync();
+    closeOpenClawStateDatabaseForTest();
+  });
 }
 
 async function closeWorkerEnvironmentDatabase() {
-  if (testState.reuseReadWorkers) {
-    // Close native handles and admission for this case; retain only the reader worker code.
-    await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
-  } else {
-    await closeOpenClawStateDatabaseAsync();
-  }
+  // Close native handles and admission for this case; retain only the reader worker code.
+  await closeOpenClawStateDatabaseByPathAsync(testState.stateDb.path);
   closeOpenClawStateDatabaseForTest();
 }
 
@@ -232,8 +239,9 @@ export function createService(
       | "executeInference"
       | "inferenceStore"
       | "closeNodeBootstrapArtifacts"
-      | "executeSessionTool"
+      | "createGatewayTools"
       | "executeComputer"
+      | "closeEnvironmentComputers"
       | "providerCallTimeoutMs"
       | "projectNamespace"
       | "resolveSshIdentity"
@@ -251,6 +259,7 @@ export function createService(
       | "generateWorkerCredential"
       | "liveEvents"
       | "maintainProviders"
+      | "scheduler"
       | "logger"
       | "now"
       | "nodeTunnelManager"
@@ -261,7 +270,13 @@ export function createService(
     >
   > = {},
 ) {
+  const { executeInference, ...options } = serviceOptions;
+  vi.spyOn(inferenceManager, "executeWorkerInference").mockImplementation(
+    executeInference ??
+      (async () => ({ type: "error", reason: "cancelled", message: "Inference cancelled" })),
+  );
   testState.service = createWorkerEnvironmentService({
+    scheduler: createTestGatewayScheduler(),
     store: testState.store,
     getConfig: () => testState.config,
     resolveProvider: (providerId) =>
@@ -273,18 +288,13 @@ export function createService(
     bootstrapWorker: testState.bootstrapWorker,
     resolveSshIdentity: async () => ({ kind: "path", path: "/keys/worker" }),
     generateWorkerCredential: () => CREDENTIAL,
-    executeInference: async () => ({
-      type: "error",
-      reason: "cancelled",
-      message: "Inference cancelled",
-    }),
     inferenceStore: createWorkerInferenceStore({
       path: testState.stateDb.path,
       now: () => testState.nowMs,
     }),
     now: () => testState.nowMs,
     reconcileIntervalMs: 25,
-    ...serviceOptions,
+    ...options,
   });
   return testState.service;
 }
@@ -316,23 +326,33 @@ export async function seedBootstrapping(
   install?: WorkerInstallationArtifact["install"],
   sharedHost = false,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { ...(install ? { install } : {}), settings: { region: "test" } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    ...(install ? { install } : {}),
+    settings: { region: "test" },
   });
   return testState.store.transition({
     environmentId,
     from: provisioning.state,
     to: "bootstrapping",
     patch: { leaseId: `lease:${environmentId}`, sshEndpoint: SSH_ENDPOINT, sharedHost },
+  });
+}
+
+async function seedProvisioning(
+  environmentId: string,
+  profileSnapshot: Parameters<WorkerEnvironmentStore["createIntent"]>[0]["profileSnapshot"],
+) {
+  const intent = await testState.store.createIntent({
+    environmentId,
+    providerId: "fake",
+    profileId: "development",
+    profileSnapshot,
+    provisionOperationId: `provision:${environmentId}`,
+  });
+  return testState.store.transition({
+    environmentId,
+    from: intent.state,
+    to: "provisioning",
   });
 }
 
@@ -354,17 +374,8 @@ export async function seedReadyDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: { region: "test", desktop: true } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    settings: { region: "test", desktop: true },
   });
   const bootstrapping = await testState.store.transition({
     environmentId,
@@ -388,17 +399,8 @@ export async function seedReadyNodeDesktop(
   environmentId: string,
   desktop: WorkerDesktopEndpoint = DESKTOP,
 ) {
-  const intent = await testState.store.createIntent({
-    environmentId,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: { region: "test", desktop: true } },
-    provisionOperationId: `provision:${environmentId}`,
-  });
-  const provisioning = await testState.store.transition({
-    environmentId,
-    from: intent.state,
-    to: "provisioning",
+  const provisioning = await seedProvisioning(environmentId, {
+    settings: { region: "test", desktop: true },
   });
   return testState.store.transition({
     environmentId,
@@ -662,7 +664,8 @@ export async function bindPlacementHarness(
   const databasePath = testState.stateDb.path;
   attachWorkerTurnExecutionIdentityStore(executionStore, databasePath);
   const placementStore = {
-    assertWorkerRuntimeRefresh: vi.fn(() => {
+    fenceWorkerTurnForRecovery: vi.fn(),
+    prepareWorkerRuntimeRefresh: vi.fn(async () => {
       throw new Error("Cannot refresh a worker runtime while its turn is active");
     }),
     readWorkerTurnClaim: vi.fn(() => claim),
@@ -671,8 +674,8 @@ export async function bindPlacementHarness(
     getExecutionIdentityCapability: (current: WorkerSessionTurnClaim) =>
       getWorkerTurnExecutionIdentityCapability(executionStore, current),
     isWorkerTurnToolAuthorized: vi.fn(() => true),
-    updateAckCursors: vi.fn(),
-    prepareWorkspaceResultOwnerRevocation: vi.fn(),
+    updateAckCursors: vi.fn(async () => {}),
+    prepareWorkspaceResultOwnerRevocation: vi.fn(async () => {}),
     registerTurnClaimClosedHandler: vi.fn(() => () => {}),
   };
   const instance = createOperationalRunInstanceRef(claim.runId);
@@ -710,5 +713,15 @@ export async function bindPlacementHarness(
     },
   );
   const workerService = createService(createProvider(), { ...serviceOptions, placementStore });
-  return { identity, placementStore, workerService, source, releaseSource };
+  return {
+    identity,
+    placementStore,
+    workerService,
+    source,
+    releaseSource,
+    bindGitHubGrant: (grant: Parameters<typeof bindWorkerTurnGitHubGrant>[2]) =>
+      bindWorkerTurnGitHubGrant(executionStore, claim, grant),
+    bindToolSurface: (surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"]) =>
+      bindWorkerTurnCapabilities(executionStore, claim, { toolSurface: surface }),
+  };
 }

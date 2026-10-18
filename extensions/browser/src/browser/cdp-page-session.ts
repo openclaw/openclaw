@@ -1,7 +1,5 @@
-/**
- * CDP page-session preparation and committed-navigation observation.
- */
 import { createHash } from "node:crypto";
+import { sleepWithAbort } from "openclaw/plugin-sdk/retry-runtime";
 import type { SsrFPolicy } from "openclaw/plugin-sdk/security-runtime";
 import type { CdpProtocolSend } from "./cdp-ax.js";
 import { assertCdpEndpointAllowed, type CdpSendFn, withCdpSocket } from "./cdp.helpers.js";
@@ -130,9 +128,7 @@ async function waitForCdpNavigationResult(
     } else {
       stableCandidate = undefined;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, CDP_TARGET_NAVIGATION_RESULT_POLL_MS);
-    });
+    await sleepWithAbort(CDP_TARGET_NAVIGATION_RESULT_POLL_MS);
   }
   return undefined;
 }

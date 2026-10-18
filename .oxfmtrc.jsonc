@@ -25,7 +25,9 @@
   "trailingComma": "all",
   "useTabs": false,
   "ignorePatterns": [
-    "apps/",
+    // Preserve the imported controller closure and its exact-source fixtures.
+    ".agents/skills/update-team-server/controller/*.mjs",
+    "/apps/",
     "CHANGELOG.md",
     "CHANGELOG/**",
     "CLAUDE.md",

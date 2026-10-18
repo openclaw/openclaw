@@ -55,58 +55,20 @@ describe("createChannelApprovalAuth", () => {
 });
 
 describe("createResolvedApproverActionAuthAdapter", () => {
-  it.each([
-    {
-      name: "falls back to generic same-chat auth when no approvers resolve",
-      channelLabel: "Slack",
-      resolveApprovers: () => [],
-      normalizeSenderId: undefined,
-      cases: [
-        {
-          senderId: "U_OWNER",
-          approvalKind: "exec" as const,
-          expected: { authorized: true },
-        },
-      ],
-    },
-    {
-      name: "allows matching normalized approvers and rejects others",
+  it("allows matching normalized approvers and rejects others", () => {
+    const auth = createResolvedApproverActionAuthAdapter({
       channelLabel: "Signal",
       resolveApprovers: () => ["uuid:owner"],
-      normalizeSenderId: (value: string) => value.trim().toLowerCase(),
-      cases: [
-        {
-          senderId: " UUID:OWNER ",
-          approvalKind: "plugin" as const,
-          expected: { authorized: true },
-        },
-        {
-          senderId: "uuid:attacker",
-          approvalKind: "plugin" as const,
-          expected: {
-            authorized: false,
-            reason: "❌ You are not authorized to approve plugin requests on Signal.",
-          },
-        },
-      ],
-    },
-  ])("$name", ({ channelLabel, resolveApprovers, normalizeSenderId, cases }) => {
-    const auth = createResolvedApproverActionAuthAdapter({
-      channelLabel,
-      resolveApprovers,
-      normalizeSenderId,
+      normalizeSenderId: (value) => value.trim().toLowerCase(),
     });
+    const authorize = (senderId: string) =>
+      auth.authorizeActorAction({ cfg: {}, senderId, action: "approve", approvalKind: "plugin" });
 
-    for (const testCase of cases) {
-      expect(
-        auth.authorizeActorAction({
-          cfg: {},
-          senderId: testCase.senderId,
-          action: "approve",
-          approvalKind: testCase.approvalKind,
-        }),
-      ).toEqual(testCase.expected);
-    }
+    expect(authorize(" UUID:OWNER ")).toEqual({ authorized: true });
+    expect(authorize("uuid:attacker")).toEqual({
+      authorized: false,
+      reason: "❌ You are not authorized to approve plugin requests on Signal.",
+    });
   });
 
   it("marks empty-approver fallback auth as implicit", () => {

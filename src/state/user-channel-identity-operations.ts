@@ -11,13 +11,21 @@ import {
   UserChannelIdentityConflictError,
   userChannelIdentitySubject,
   resolveUserChannelAuthorizationPolicy,
+  configuredCommandOwnerPolicyFingerprint,
+  readConfiguredCommandOwnerPolicy,
 } from "./user-channel-identities.js";
 import {
   captureUserProfileAuthorityRead,
   emitUserProfilesChanged,
   fenceUserProfileMutationAuthority,
   publishUserProfileAliasChange,
+  readUserProfileVersion,
 } from "./user-profile-events.js";
+import {
+  isUserProfileCatalogReady,
+  prepareUserProfileCatalog,
+  readResidentUserProfileIdentity,
+} from "./user-profile-list.js";
 import { UserProfileNotFoundError, UserProfileOwnerError } from "./user-profiles-schema.js";
 import type {
   UserChannelIdentity,
@@ -63,9 +71,6 @@ export async function listCanonicalUserChannelIdentities(
   if (!reply) {
     return [];
   }
-  if (!reply.ok || reply.type !== "userProfiles.channelIdentity.list") {
-    throw new Error("Channel identity reader returned an unexpected result");
-  }
   return unwrapIdentityResult(reply.result, profileId);
 }
 
@@ -102,6 +107,10 @@ async function changeIdentity(
             !Array.isArray(request.facts.profiles) ||
             !request.facts.profiles.every(
               (profileId): profileId is string => typeof profileId === "string",
+            ) ||
+            !Array.isArray(request.facts.channels) ||
+            !request.facts.channels.every(
+              (channel): channel is string => typeof channel === "string",
             )
           ) {
             throw new Error("Channel identity mutation requires exact transaction admission");
@@ -109,13 +118,23 @@ async function changeIdentity(
           context.admission.assertCurrent();
           assertCurrent?.();
           if (request.stage === "commit" && captured.action !== "authorize") {
-            fence ??= fenceUserProfileMutationAuthority(context.admission, {
-              profiles: request.facts.profiles,
-              identities: [],
-              channels: subject === undefined ? [] : [subject],
-            });
+            const { profiles, channels } = request.facts;
+            if (
+              !grant(() => {
+                fence = fenceUserProfileMutationAuthority(context.admission, {
+                  profiles,
+                  identities: [],
+                  channels,
+                });
+              })
+            ) {
+              // An expired grant cannot commit; release its fence before another attempt.
+              fence?.settle(true);
+              fence = undefined;
+            }
+          } else {
+            grant();
           }
-          grant();
         });
         void operation.settled.then((settlement) => {
           const committed = admission.committed;
@@ -153,11 +172,44 @@ export async function changeCanonicalUserChannelIdentity(
 
 export async function publishCanonicalUserChannelPolicy(
   gateway: Parameters<typeof resolveUserChannelAuthorizationPolicy>[0],
+  configuredOwners?: readonly (string | number)[],
 ) {
   await changeIdentity({
     action: "policy",
     policy: resolveUserChannelAuthorizationPolicy(gateway),
+    configuredOwnersHash: configuredCommandOwnerPolicyFingerprint(configuredOwners),
   });
+}
+
+/** The existing policy publication fence qualifies this read without inventing a person link. */
+export async function prepareConfiguredCommandOwnerAuthority(
+  owners: readonly (string | number)[] | undefined,
+  options: IdentityOptions = {},
+) {
+  const fingerprint = configuredCommandOwnerPolicyFingerprint(owners);
+  if (!fingerprint) {
+    return undefined;
+  }
+  const context = captureAuthorityContext(options);
+  const read = await captureUserProfileAuthorityRead(context.admission, "operator.channelPolicy");
+  const reply = await executeExistingOpenClawStateRead(
+    { path: context.admission.databasePath, env: context.environment },
+    { type: "operator.channelPolicy" },
+  );
+  context.admission.assertCurrent();
+  if (!reply) {
+    return undefined;
+  }
+  const recoveryReference =
+    reply.row && readConfiguredCommandOwnerPolicy(JSON.parse(reply.row.value_json), fingerprint);
+  if (!recoveryReference) {
+    return undefined;
+  }
+  const isCurrent = read.bind([]);
+  if (!isCurrent) {
+    throw new Error("Configured command owner policy changed during preparation");
+  }
+  return { recoveryReference, isCurrent };
 }
 
 export async function authorizeCanonicalUserChannelIdentity(
@@ -195,9 +247,6 @@ export async function prepareUserChannelIdentityAuthority(
     if (!reply) {
       return undefined;
     }
-    if (!reply.ok || reply.type !== "userProfiles.channelIdentity.resolve") {
-      throw new Error("Channel authority reader returned an unexpected result");
-    }
     if (!reply.linked) {
       return undefined;
     }
@@ -214,9 +263,35 @@ export async function prepareUserChannelIdentityAuthority(
 
 export async function prepareUserProfileRoleAuthority(
   profileId: string,
+  options: IdentityOptions & { includeProfile?: boolean } = {},
+) {
+  return prepareUserProfileAuthority(profileId, options, "authority", options.includeProfile);
+}
+
+/** Reuse retained canonical role facts; standalone callers read existing storage off-thread. */
+export async function prepareUserProfileRolePolicyAuthority(
+  profileId: string,
   options: IdentityOptions = {},
 ) {
-  return prepareUserProfileAuthority(profileId, options, "authority");
+  return prepareUserProfileAuthorityRead(profileId, options, "authority", async (context) => {
+    const source = { path: context.admission.databasePath };
+    if (isUserProfileCatalogReady(source.path)) {
+      const profile = readResidentUserProfileIdentity(profileId, source);
+      return (
+        profile && {
+          profileId: profile.profileId,
+          role: profile.role,
+          githubLogin: profile.githubLogin ?? null,
+        }
+      );
+    }
+    return runOpenClawStateWorkerOperation(
+      context,
+      (scope) =>
+        scope.execute({ type: "userProfiles.roleAuthority.resolve", input: { profileId } }),
+      { existingOnly: true },
+    );
+  });
 }
 
 export async function prepareUserProfileSelectionAuthority(
@@ -231,30 +306,61 @@ async function prepareUserProfileAuthority(
   profileId: string,
   options: IdentityOptions,
   dependency: "authority" | "identity",
+  includeProfile?: boolean,
+) {
+  return prepareUserProfileAuthorityRead(
+    profileId,
+    options,
+    dependency,
+    async (context) => {
+      const catalog = await prepareUserProfileCatalog({
+        ...options,
+        path: context.admission.databasePath,
+      });
+      try {
+        return catalog.readCurrentAuthority(profileId, includeProfile);
+      } finally {
+        catalog.release();
+      }
+    },
+    includeProfile,
+  );
+}
+
+async function prepareUserProfileAuthorityRead<Profile extends { profileId: string }>(
+  profileId: string,
+  options: IdentityOptions,
+  dependency: "authority" | "identity",
+  readProfile: (
+    context: ReturnType<typeof captureAuthorityContext>,
+  ) => Promise<Profile | undefined>,
+  includeProfile?: boolean,
 ) {
   const context = captureAuthorityContext(options);
   for (let attempt = 0; attempt < 3; attempt += 1) {
     const read = await captureUserProfileAuthorityRead(context.admission, undefined, dependency);
-    const reply = await executeExistingOpenClawStateRead(
-      { path: context.admission.databasePath, env: context.environment },
-      {
-        type: "userProfiles.authority.resolve",
-        profileId,
-      },
-    );
+    const profileRevision = readUserProfileVersion();
+    const profile = await readProfile(context);
     context.admission.assertCurrent();
-    if (!reply) {
+    if (!profile) {
       return undefined;
     }
-    if (!reply.ok || reply.type !== "userProfiles.authority.resolve") {
-      throw new Error("Profile authority reader returned an unexpected result");
+    if (includeProfile && profileRevision !== readUserProfileVersion()) {
+      continue;
     }
-    if (!reply.profile) {
-      return undefined;
-    }
-    const isCurrent = read.bind([profileId, reply.profile.profileId]);
+    const sourceProfiles = [profileId, profile.profileId];
+    const isCurrent = read.bind(sourceProfiles);
     if (isCurrent) {
-      return { ...reply.profile, isCurrent };
+      return {
+        ...profile,
+        isCurrent: includeProfile
+          ? () => isCurrent() && profileRevision === readUserProfileVersion()
+          : isCurrent,
+        readSource: () => {
+          read.assertSettled(sourceProfiles);
+          return { path: context.admission.databasePath, env: context.environment };
+        },
+      };
     }
   }
   throw new Error("Profile authority changed while preparing the administrative request");

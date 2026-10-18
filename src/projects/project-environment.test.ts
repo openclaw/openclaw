@@ -3,6 +3,7 @@ import { expect, it, vi } from "vitest";
 
 const mocks = vi.hoisted(() => ({
   execute: vi.fn(),
+  read: vi.fn(),
   checkout: vi.fn(),
   lease: vi.fn(),
   resolveCheckout: vi.fn(),
@@ -50,7 +51,11 @@ vi.mock("../state/openclaw-state-lease.js", () => ({
 vi.mock("../state/openclaw-state-worker-store.js", () => ({
   executeOpenClawStateWorker: mocks.execute,
 }));
-vi.mock("../state/openclaw-state-lease-worker-storage.js", () => ({
+// mock-isolation: Capture Windows environment routing without opening SQLite or touching disk.
+vi.mock("../state/openclaw-state-db-readonly.js", () => ({
+  executeExistingOpenClawStateRead: mocks.read,
+}));
+vi.mock("../state/openclaw-state-lease-worker-operation.js", () => ({
   runWithOpenClawStateLeaseWorker: async (
     _lease: unknown,
     context: unknown,
@@ -72,12 +77,6 @@ vi.mock("../state/openclaw-state-db-cache.js", () => ({
 }));
 vi.mock("../state/openclaw-state-db-async-lifecycle.js", () => ({
   getOpenClawDatabaseMaintenanceScope: () => undefined,
-}));
-vi.mock("../infra/state-database-coordinator.js", () => ({
-  captureStateDatabaseCoordinatorRuntime: () => ({
-    directory: "/synthetic-coordinator",
-    keepAlive: false,
-  }),
 }));
 vi.mock("./project-checkout.js", () => ({
   ProjectCheckoutError: class extends Error {},
@@ -104,16 +103,11 @@ import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-
 import type { OpenClawStateWorkerOperations } from "../state/openclaw-state-worker-contract.js";
 import { withMockedPlatform } from "../test-utils/vitest-spies.js";
 import { materializeProjectClone, refreshProjectClone } from "./project-clone.js";
-import { registerResolvedProject } from "./project-registration.js";
-import { removeProjectRegistry } from "./project-registry.js";
-import type { ProjectRegistryRecord } from "./project-registry.kernel.js";
+import { registerProjectRegistry, removeProjectRegistry } from "./project-registry.js";
+import type { ProjectRegistryRecord } from "./project-registry.types.js";
 
 type ProjectOperation = "remove" | "register" | "materialize" | "refresh";
-type ProjectCommandName =
-  | "projects.list"
-  | "projects.insert"
-  | "projects.remove"
-  | "projects.resolveRefreshOwner";
+type ProjectCommandName = "projects.insert" | "projects.remove" | "projects.resolveRefreshOwner";
 type ProjectCommand = {
   [Name in ProjectCommandName]: { type: Name; input: OpenClawStateWorkerOperations[Name]["input"] };
 }[ProjectCommandName];
@@ -178,11 +172,10 @@ it.each(
       });
       mocks.clone.mockResolvedValue(undefined);
       mocks.refresh.mockResolvedValue(undefined);
+      mocks.read.mockResolvedValue({ ok: true, type: "projects.list", projects: [] });
       mocks.execute.mockImplementation(
         async (_context: OpenClawStateWorkerContext, command: ProjectCommand) => {
           switch (command.type) {
-            case "projects.list":
-              return [];
             case "projects.insert":
               return { id: project.id, ...command.input.project };
             case "projects.remove":
@@ -196,8 +189,7 @@ it.each(
       );
       const start: Record<ProjectOperation, () => Promise<unknown>> = {
         remove: () => removeProjectRegistry(project, options),
-        register: () =>
-          registerResolvedProject({ path: project.repoRoot, source: "registered" }, options),
+        register: () => registerProjectRegistry({ path: project.repoRoot }, options),
         materialize: () =>
           materializeProjectClone({ cfg: {}, gitUrl: originUrl, name: "Project" }, options),
         refresh: () => refreshProjectClone(project, options),
@@ -226,6 +218,13 @@ it.each(
             OPENCLAW_SUPERVISOR_MODE: "external",
           });
           expect(context.admission.databasePath).toBe(databasePath);
+        }
+        for (const [readOptions, , { context }] of mocks.read.mock.calls) {
+          expect(readOptions.path).toBe(databasePath);
+          expect(context.environment).toEqual({
+            OPENCLAW_STATE_DIR: root,
+            OPENCLAW_SUPERVISOR_MODE: "external",
+          });
         }
         for (const [, captured] of mocks.checkout.mock.calls) {
           expect(captured.path).toBe(databasePath);

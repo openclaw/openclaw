@@ -203,11 +203,7 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
     let hierarchyMetadataUnreadable = false;
     for (const mount of mounts) {
       const mountInitialPathCount = paths.length;
-      const mountRootSegments = mount.root.split("/").filter(Boolean);
-      if (mountRootSegments.length > 0 && mountRootSegments.every((segment) => segment === "..")) {
-        continue;
-      }
-      const relative = relativeCgroupPath(mount.root, cgroupPath ?? mount.root);
+      const relative = relativeCgroupPath(mount.root, cgroupPath);
       if (relative === null) {
         continue;
       }
@@ -252,7 +248,6 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
   let sawObservedV2Root = false;
   let sawUnreadableV1HierarchyMetadata = false;
   let sawV1MemoryRecord = false;
-  let sawRejectedCgroupMapping = false;
   let sawUnresolvedCgroupLimit = false;
   for (const line of rawCgroup.split("\n")) {
     const record = /^\d+:([^:]*):(.*)$/u.exec(line);
@@ -267,7 +262,6 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
         cgroupPath === "/" && mounts.unified.some((mount) => mount.observed && mount.root === "/");
       const resolved = addHierarchy(mounts.unified, CGROUP_V2_MEMORY_LIMIT_FILES, cgroupPath);
       sawObservedV2Mapping ||= resolved.addedObservedPath;
-      sawRejectedCgroupMapping ||= !resolved.added;
       sawUnresolvedCgroupLimit ||= !resolved.added;
     } else if (controllers.split(",").includes("memory")) {
       sawMemoryRecord = true;
@@ -279,7 +273,6 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
         "memory.use_hierarchy",
       );
       sawUnreadableV1HierarchyMetadata ||= resolved.hierarchyMetadataUnreadable;
-      sawRejectedCgroupMapping ||= !resolved.added;
       sawUnresolvedCgroupLimit ||= !resolved.added;
     }
   }
@@ -299,7 +292,6 @@ function resolveCgroupMemoryLimitPaths(params: MemoryLimitParams = {}) {
     sawMemoryRecord,
     sawObservedV2Mapping,
     sawObservedUnconstrainedV2Root: sawObservedV2Root && !sawV1MemoryRecord,
-    sawRejectedCgroupMapping,
     sawUnresolvedCgroupLimit,
     sawUnreadableV1HierarchyMetadata,
     sawV1MemoryRecord,
@@ -325,7 +317,6 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
         sawMemoryRecord: false,
         sawObservedV2Mapping: false,
         sawObservedUnconstrainedV2Root: false,
-        sawRejectedCgroupMapping: false,
         sawUnresolvedCgroupLimit: false,
         sawUnreadableV1HierarchyMetadata: false,
         sawV1MemoryRecord: false,
@@ -336,7 +327,6 @@ function readCgroupMemoryLimitBytes(params: MemoryLimitParams = {}) {
   const rlimitMemoryBytes = readProcessRlimitMemoryBytes(params);
   const constrainedMemoryBytes =
     resolvedPaths.sawV1MemoryRecord ||
-    resolvedPaths.sawRejectedCgroupMapping ||
     resolvedPaths.sawUnresolvedCgroupLimit ||
     resolvedPaths.sawUnreadableV1HierarchyMetadata
       ? 0
@@ -531,4 +521,45 @@ export function readProcessMemoryCapacity(params: MemoryLimitParams) {
       ? (cgroupMemory.limitBytes ?? physicalLimitBytes)
       : Math.min(cgroupMemory.limitBytes, physicalLimitBytes);
   return { ...cgroupMemory, capacityBytes, limitBytes, availableBytes: hostAvailableBytes };
+}
+
+/** Verify actual kernel containment, rather than accepting an environment or manager claim. */
+export function hasLinuxMemoryContainment(
+  maxBytes: number,
+  params: MemoryLimitParams = {},
+  scope?: string,
+) {
+  if ((params.platform ?? process.platform) !== "linux") {
+    return false;
+  }
+  const resolved = resolveCgroupMemoryLimitPaths(params);
+  if (
+    !resolved.sawObservedV2Mapping ||
+    resolved.cgroupRecordReadFailed ||
+    resolved.sawUnresolvedCgroupLimit
+  ) {
+    return false;
+  }
+  const files = params.fs ?? fs;
+  return resolved.paths.some((file) => {
+    if (path.basename(file) !== "memory.max") {
+      return false;
+    }
+    if (scope && path.basename(path.dirname(file)) !== scope) {
+      return false;
+    }
+    try {
+      const limit = parseCgroupMemoryLimitBytes(files.readFileSync(file, "utf8"));
+      const directory = path.dirname(file);
+      return (
+        limit !== null &&
+        limit > 0 &&
+        limit <= maxBytes &&
+        files.readFileSync(path.join(directory, "memory.swap.max"), "utf8").trim() === "0" &&
+        files.readFileSync(path.join(directory, "memory.oom.group"), "utf8").trim() === "1"
+      );
+    } catch {
+      return false;
+    }
+  });
 }

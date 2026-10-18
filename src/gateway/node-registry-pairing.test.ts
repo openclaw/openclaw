@@ -3,7 +3,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import {
   getCurrentActiveNodeContext,
   prepareActiveNodeContext,
-  setActiveNodeContext,
+  setActiveNodeContexts,
 } from "../infra/active-node-context.js";
 import { NodeRegistry } from "./node-registry.js";
 import { makeClient, registerNodeSession } from "./node-registry.test-helpers.js";
@@ -21,7 +21,7 @@ afterEach(() => {
     }
   }
   registries.clear();
-  setActiveNodeContext(null);
+  setActiveNodeContexts([]);
 });
 
 it.each(["current", "revoked", "unavailable"])(

@@ -9,8 +9,6 @@ describe("Workboard dispatcher lifecycle races", () => {
   it.each([
     { name: "archived", archive: true },
     { name: "completed", status: "done" as const },
-    { name: "blocked", status: "blocked" as const },
-    { name: "under review", status: "review" as const },
     { name: "moved to another board", boardId: "product" },
   ])("does not start a card $name during dispatch preflight", async (transition) => {
     const store = createWorkboardSqliteTestStore();

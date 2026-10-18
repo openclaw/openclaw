@@ -1,7 +1,6 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { createServer, type Server, type ServerResponse } from "node:http";
 import { Readable, Writable } from "node:stream";
-import { setTimeout as delay } from "node:timers/promises";
 import {
   ClientSideConnection,
   PROTOCOL_VERSION,
@@ -15,6 +14,7 @@ import {
   createOpenClawTestInstance,
   type OpenClawTestInstance,
 } from "../../test/helpers/openclaw-test-instance.js";
+import { withinTest } from "../../test/helpers/promise.js";
 import { GatewayClient } from "../gateway/client.js";
 
 const ABORT_CAUSE = "session_status tool validation failed: invalid arguments";
@@ -95,19 +95,26 @@ async function connectOperator(instance: OpenClawTestInstance): Promise<GatewayC
   });
 }
 
-async function stopChild(child: ChildProcessWithoutNullStreams | undefined): Promise<void> {
+async function stopChild(
+  child: ChildProcessWithoutNullStreams | undefined,
+  closed: Promise<void>,
+  signal: AbortSignal,
+): Promise<void> {
   if (!child || child.exitCode !== null || child.signalCode !== null) {
     return;
   }
   child.stdin.end();
-  const exited = await Promise.race([
-    new Promise<boolean>((resolve) => {
-      child.once("exit", () => resolve(true));
-    }),
-    delay(2_000).then(() => false),
-  ]);
-  if (!exited && child.exitCode === null && child.signalCode === null) {
-    child.kill("SIGKILL");
+  try {
+    await withinTest(closed, signal);
+  } catch (error) {
+    if (!signal.aborted) {
+      throw error;
+    }
+    // EOF owns normal shutdown; only an aborted test needs the cleanup rescue.
+    if (child.exitCode === null && child.signalCode === null) {
+      child.kill("SIGKILL");
+    }
+    await closed;
   }
 }
 
@@ -115,10 +122,11 @@ describe("openclaw acp abort causes", () => {
   it(
     "shows the carried tool-validation cause before cancelled settlement",
     { timeout: 120_000 },
-    async () => {
+    async ({ signal }) => {
       let instance: OpenClawTestInstance | undefined;
       let operator: GatewayClient | undefined;
       let acpProcess: ChildProcessWithoutNullStreams | undefined;
+      let acpClosed = Promise.resolve();
       const stalledResponses = new Set<ServerResponse>();
       let providerRequestCount = 0;
       let failedToolUpdate = false;
@@ -164,6 +172,11 @@ describe("openclaw acp abort causes", () => {
                 },
               },
             },
+            tools: {
+              codeMode: { enabled: false },
+              // This provider fixture emits a direct call, not a Tool Search lookup.
+              toolSearch: false,
+            },
             models: {
               mode: "replace",
               providers: {
@@ -197,11 +210,15 @@ describe("openclaw acp abort causes", () => {
         operator = await connectOperator(instance);
 
         const entrypoint = await instance.entrypoint();
-        acpProcess = spawn(
+        const child = spawn(
           process.execPath,
           [...entrypoint, "acp", "--url", instance.url, "--token", instance.gatewayToken],
           { cwd: process.cwd(), env: instance.env, stdio: ["pipe", "pipe", "pipe"] },
         );
+        acpProcess = child;
+        acpClosed = new Promise<void>((resolve) => {
+          child.once("close", () => resolve());
+        });
         const timeline: string[] = [];
         // SAFETY: Node and DOM ReadableStream types describe the same runtime object here.
         const output = Readable.toWeb(acpProcess.stdout) as Parameters<typeof ndJsonStream>[1];
@@ -258,7 +275,7 @@ describe("openclaw acp abort causes", () => {
         for (const response of stalledResponses) {
           response.destroy();
         }
-        await stopChild(acpProcess);
+        await stopChild(acpProcess, acpClosed, signal);
         await operator?.stopAndWait({ timeoutMs: 1_000 }).catch(() => operator?.stop());
         await instance?.cleanup();
         provider.closeAllConnections();

@@ -6,6 +6,10 @@ import { isRecord, normalizeOptionalString } from "openclaw/plugin-sdk/string-co
 import { resolveSignalAccountKey } from "./account-selection.js";
 import type { SignalTransportConfig } from "./account-types.js";
 import {
+  hasLegacySignalTransportFields,
+  LEGACY_SIGNAL_TRANSPORT_FIELDS,
+} from "./legacy-transport.js";
+import {
   allocateSignalManagedNativePort,
   assignSignalManagedNativePort,
   DEFAULT_SIGNAL_MANAGED_NATIVE_PORT,
@@ -18,18 +22,6 @@ import {
   buildSignalTransportHttpUrl,
   normalizeSignalTransportUrl,
 } from "./transport-url.js";
-
-const LEGACY_TRANSPORT_FIELDS = [
-  "configPath",
-  "httpUrl",
-  "httpHost",
-  "httpPort",
-  "cliPath",
-  "autoStart",
-  "startupTimeoutMs",
-  "receiveMode",
-  "ignoreStories",
-] as const;
 
 const PENDING_LEGACY_TRANSPORT_WARNING =
   "- channels.signal: legacy auto transport is ambiguous while its endpoint is unavailable; bring the endpoint online and rerun openclaw doctor --fix, or replace the retired fields with an explicit account-owned transport in openclaw.json.";
@@ -86,10 +78,6 @@ function legacyBaseUrl(entry: Record<string, unknown>, parent: Record<string, un
   const rawPort = inherited(entry, parent, "httpPort");
   const port = typeof rawPort === "number" ? rawPort : 8080;
   return buildSignalTransportHttpUrl(host, port);
-}
-
-function hasLegacyFields(entry: Record<string, unknown>): boolean {
-  return LEGACY_TRANSPORT_FIELDS.some((field) => Object.hasOwn(entry, field));
 }
 
 function wasLegacySignalAccountConfigured(
@@ -298,7 +286,7 @@ async function resolveLegacyTransport(params: {
 }
 
 function clearLegacyTransportFields(entry: Record<string, unknown>): void {
-  for (const field of LEGACY_TRANSPORT_FIELDS) {
+  for (const field of LEGACY_SIGNAL_TRANSPORT_FIELDS) {
     delete entry[field];
   }
 }
@@ -336,22 +324,21 @@ function nestedDefaultOwnsEffectiveTransport(entries: Record<string, unknown>[])
   const nestedDefault = nestedDefaultKey ? accounts[nestedDefaultKey] : undefined;
   return (
     isRecord(nestedDefault) &&
-    (isSignalTransportConfig(nestedDefault.transport) || hasLegacyFields(nestedDefault))
+    (isSignalTransportConfig(nestedDefault.transport) ||
+      hasLegacySignalTransportFields(nestedDefault))
   );
 }
 
 function isDiscardedTransportEntry(entries: Record<string, unknown>[], index: number): boolean {
-  if (index === 0) {
-    // Shipped account merging let accounts.default override root transport fields. Materialize
-    // that effective merged entry once; probing the shadowed root can block an otherwise valid
-    // migration when its retired endpoint is offline.
-    return !hasRootSignalAccount(entries) || nestedDefaultOwnsEffectiveTransport(entries);
+  if (isSignalTransportConfig(entries[0]?.transport)) {
+    // Canonical root transport owns the default account and must reserve its port;
+    // a nested default's retired endpoint fields are cleanup-only.
+    return index === resolveNestedDefaultEntryIndex(entries);
   }
-  // A canonical root transport owns the default account; a nested default's
-  // retired endpoint fields are cleanup-only and must not block migration.
+  // Shipped account merging let accounts.default override legacy root transport fields.
+  // Do not probe a shadowed root endpoint while migrating that effective entry.
   return (
-    index === resolveNestedDefaultEntryIndex(entries) &&
-    isSignalTransportConfig(entries[0]?.transport)
+    index === 0 && (!hasRootSignalAccount(entries) || nestedDefaultOwnsEffectiveTransport(entries))
   );
 }
 
@@ -570,8 +557,8 @@ function prepareLegacySignalTransportMigration(cfg: OpenClawConfig):
   const accounts = isRecord(signal.accounts) ? signal.accounts : {};
   const hasLegacy =
     Object.hasOwn(signal, "apiMode") ||
-    hasLegacyFields(signal) ||
-    Object.values(accounts).some((entry) => isRecord(entry) && hasLegacyFields(entry));
+    hasLegacySignalTransportFields(signal) ||
+    Object.values(accounts).some(hasLegacySignalTransportFields);
   if (!hasLegacy) {
     return { config: cfg, changes: [] };
   }

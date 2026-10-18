@@ -1,3 +1,4 @@
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import {
@@ -7,6 +8,7 @@ import {
   type ComputerActParams,
   type ComputerUseProvider,
 } from "openclaw/plugin-sdk/computer-use";
+import { KeyedAsyncQueue } from "openclaw/plugin-sdk/keyed-async-queue";
 import { canonicalizeBase64 } from "openclaw/plugin-sdk/media-runtime";
 import { resolvePreferredOpenClawTmpDir } from "openclaw/plugin-sdk/temp-path";
 import { createRastermill } from "rastermill";
@@ -22,6 +24,7 @@ import {
 } from "./driver-client.js";
 import { actionEnvelope, platformActions, projectedToolDetails } from "./driver-result.js";
 import { createLazyCuaExecutionResources } from "./execution-resources.js";
+import type { CuaExecutionState } from "./execution-state.js";
 import {
   adoptGeneration,
   issueFrame,
@@ -112,24 +115,6 @@ function resolveMacOsMcpEndpoint(
     return { socketPath, binaryPath };
   } catch {
     return undefined;
-  }
-}
-
-class PromiseQueue {
-  private tail: Promise<void> = Promise.resolve();
-
-  async run<T>(operation: () => Promise<T>): Promise<T> {
-    const previous = this.tail;
-    let release = () => {};
-    this.tail = new Promise<void>((resolve) => {
-      release = resolve;
-    });
-    await previous;
-    try {
-      return await operation();
-    } finally {
-      release();
-    }
   }
 }
 
@@ -411,6 +396,7 @@ export function createCuaComputerProvider(
   const platform = options.platform ?? process.platform;
   const env = options.env ?? process.env;
   const macOsEndpoint = platform === "darwin" ? resolveMacOsMcpEndpoint(env) : undefined;
+  const generation = `cua-computer-v2:${randomUUID()}`;
   let ownedAvailabilityDriver: CuaDriverSession | undefined;
   let availabilityDisposal: Promise<void> | undefined;
   let stopped = false;
@@ -452,9 +438,7 @@ export function createCuaComputerProvider(
       provider: {
         id: "cua-computer",
         label: "CUA Computer",
-        generation: isSupportedPlatform
-          ? `cua-computer-v2:${availabilityDriver().generation}`
-          : "cua-computer-v2:unsupported",
+        generation,
       },
       actions: platformActions(platform),
       targets: ["screen", "window", "element", "browser"],
@@ -490,9 +474,28 @@ export function createCuaComputerProvider(
       }
       const executionDriver = options.driver ?? createDriver();
       const resources = createLazyCuaExecutionResources();
-      const executionState = { resources, recording: {} };
-      const queue = new PromiseQueue();
+      const executionState: CuaExecutionState = { resources, recording: {} };
+      const queue = new KeyedAsyncQueue();
       const frameState: CuaFrameState = { generation: executionDriver.generation };
+      const prepareExecution = async (signal?: AbortSignal) => {
+        const assertAuthority = () => {
+          signal?.throwIfAborted();
+          assertOpen();
+        };
+        assertAuthority();
+        try {
+          await executionDriver.prepareExecution?.(signal, assertAuthority);
+        } finally {
+          // Released recording ownership must not survive an interrupted renewal.
+          if (frameState.generation !== executionDriver.generation) {
+            executionState.recording.active = undefined;
+          }
+        }
+        // Close/cancellation can arrive while the native health call is pending.
+        assertAuthority();
+        // Renewal revokes refs before action validation, not after dispatch.
+        adoptGeneration(frameState, executionDriver.generation);
+      };
       let closing = false;
       let closePromise: Promise<void> | undefined;
       const assertOpen = () => {
@@ -509,10 +512,11 @@ export function createCuaComputerProvider(
       };
       return {
         snapshot: async (paramsJSON, signal) =>
-          await queue.run(async () => {
+          await queue.enqueue("execution", async () => {
             assertOpen();
             const params = parseScreenSnapshotParamsJSON(paramsJSON);
             assertPrimaryDisplay(params.screenIndex);
+            await prepareExecution(signal);
             const format = params.format ?? "jpeg";
             const maxWidth = params.maxWidth ?? (format === "png" ? 900 : 1_600);
             const quality = Math.min(1, Math.max(0.05, params.quality ?? 0.72));
@@ -561,14 +565,16 @@ export function createCuaComputerProvider(
             });
           }),
         act: async (paramsJSON, signal) =>
-          await queue.run(async () => {
+          await queue.enqueue("execution", async () => {
             assertOpen();
+            const params = parseComputerActParamsJSON(paramsJSON);
+            await prepareExecution(signal);
             return await handleWindowAct(
               platform,
               executionDriver,
               frameState,
               executionState,
-              parseComputerActParamsJSON(paramsJSON),
+              params,
               handleDesktopAct,
               signal,
             );
@@ -578,7 +584,7 @@ export function createCuaComputerProvider(
             return await closePromise;
           }
           closing = true;
-          closePromise = queue.run(async () => {
+          closePromise = queue.enqueue("execution", async () => {
             let failure: unknown;
             try {
               await closeRecordingExecution({

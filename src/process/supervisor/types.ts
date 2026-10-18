@@ -1,5 +1,5 @@
-// Process supervisor types describe supervised runs and termination reasons.
 import type { WindowsJobExtinction } from "../../../scripts/lib/managed-windows-job.mts";
+import type { SpawnInitiation } from "../spawn-initiation.js";
 
 export type ProcessExtinctionResult = void | WindowsJobExtinction;
 
@@ -62,6 +62,7 @@ export type SpawnSecretInput = {
 
 export type ProcessAdapterConstruction = {
   assertCurrent?: () => void;
+  initiateSpawn?: SpawnInitiation;
   /** Synchronous launch admission; never recheck after the target command starts. */
   beforeSpawn?: () => void;
   abortSignal?: AbortSignal;
@@ -109,10 +110,13 @@ export type ProcessAdapterStartup<Adapter extends SpawnProcessAdapter> = {
 };
 
 type SpawnBaseInput = {
+  initiateSpawn?: SpawnInitiation;
   /** The local subprocess transports execution owned outside its local process tree. */
   cleanupOwnership?: "external";
   /** Revalidate the caller at deferred spawn and private-input delivery boundaries. */
   assertCurrent?: () => void;
+  /** Prepare async launch authority after queued scope admission and before replacing a live run. */
+  prepareSpawn?: () => void | Promise<void>;
   /** Revalidate launch policy at admission and immediately before each native launch attempt. */
   beforeSpawn?: () => void;
   runId?: string;
@@ -148,6 +152,8 @@ type SpawnChildInput = SpawnBaseInput & {
   exactEnv?: true;
   windowsVerbatimArguments?: boolean;
   input?: string;
+  /** Prepare input authority at the adapter's stdin delivery boundary. */
+  prepareInput?: () => void | Promise<void>;
   stdinMode?: "inherit" | "pipe-open" | "pipe-closed";
   secretInput?: SpawnSecretInput;
   onStdoutRaw?: (chunk: Buffer) => void;

@@ -73,8 +73,8 @@ suite.define(() => {
         const placement = await thread.evaluate(
           (element, { edge: placementEdge, sparse: isSparse }) => {
             const rows = [...element.querySelectorAll<HTMLElement>(".chat-virtual-row")];
-            const sizer = element
-              .querySelector<HTMLElement>(".chat-virtual-sizer")!
+            const range = element
+              .querySelector<HTMLElement>(".chat-thread-inner--virtual")!
               .getBoundingClientRect();
             const focused = document.activeElement?.closest<HTMLElement>(".chat-virtual-row");
             const edgeRow = placementEdge === "first" ? rows[0]! : rows.at(-1)!;
@@ -91,15 +91,15 @@ suite.define(() => {
               focusedRowKey: focused?.dataset.virtualRowKey,
               edgeDelta:
                 placementEdge === "first"
-                  ? edgeRow.getBoundingClientRect().top - sizer.top
-                  : sizer.bottom - edgeRow.getBoundingClientRect().bottom,
+                  ? edgeRow.getBoundingClientRect().top - range.top
+                  : range.bottom - edgeRow.getBoundingClientRect().bottom,
               scrollEdgeDelta: atStart
                 ? element.scrollTop
                 : element.scrollHeight - element.clientHeight - element.scrollTop,
               // Scroller padding is not missing transcript content.
               uncovered: [
-                normalRows[0]!.getBoundingClientRect().top - Math.max(viewportTop, sizer.top),
-                Math.min(viewportBottom, sizer.bottom) -
+                normalRows[0]!.getBoundingClientRect().top - Math.max(viewportTop, range.top),
+                Math.min(viewportBottom, range.bottom) -
                   normalRows.at(-1)!.getBoundingClientRect().bottom,
               ],
               gaps,

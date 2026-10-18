@@ -10,19 +10,6 @@ import type {
   EffectiveToolSource,
 } from "./tools-effective-inventory.types.js";
 
-function groupLabel(source: EffectiveToolSource): string {
-  switch (source) {
-    case "plugin":
-      return "Connected tools";
-    case "channel":
-      return "Channel tools";
-    case "mcp":
-      return "MCP server tools";
-    default:
-      return "Built-in tools";
-  }
-}
-
 /** Groups effective tool inventory entries by source in UI/report order. */
 export function buildEffectiveToolInventoryGroups(
   entries: readonly EffectiveToolInventoryEntry[],
@@ -34,18 +21,15 @@ export function buildEffectiveToolInventoryGroups(
     groupsBySource.set(entry.source, tools);
   }
 
-  return (["core", "plugin", "channel", "mcp"] as const)
-    .map((source) => {
-      const tools = groupsBySource.get(source);
-      if (!tools || tools.length === 0) {
-        return null;
-      }
-      return {
-        id: source,
-        label: groupLabel(source),
-        source,
-        tools,
-      } satisfies EffectiveToolInventoryGroup;
-    })
-    .filter((group): group is EffectiveToolInventoryGroup => group !== null);
+  return (
+    [
+      ["core", "Built-in tools"],
+      ["plugin", "Connected tools"],
+      ["channel", "Channel tools"],
+      ["mcp", "MCP server tools"],
+    ] as const
+  ).flatMap(([source, label]) => {
+    const tools = groupsBySource.get(source);
+    return tools ? [{ id: source, label, source, tools }] : [];
+  });
 }

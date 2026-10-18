@@ -81,11 +81,8 @@ export async function runDiscordListenerWithSlowLog(params: {
     throw err;
   } finally {
     logSlowDiscordListener({
-      logger: params.logger,
-      listener: params.listener,
-      event: params.event,
+      ...params,
       durationMs: Date.now() - startedAt,
-      context: params.context,
     });
   }
 }

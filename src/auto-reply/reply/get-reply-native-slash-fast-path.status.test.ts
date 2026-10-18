@@ -350,8 +350,6 @@ describe("native /status channel model routing", () => {
             statusChannel: "telegram",
             resolvedHarness: "openclaw",
             pluginHealthLineOverride: "",
-            taskLineOverride: "",
-            skipDefaultTaskLookup: true,
             modelAuthOverride: "api-key",
             activeModelAuthOverride: "api-key",
             includeTranscriptUsage: false,

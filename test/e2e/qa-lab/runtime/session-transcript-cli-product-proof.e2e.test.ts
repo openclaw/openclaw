@@ -2,6 +2,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
+import { captureRuntimeConfigAsyncReader } from "../../../../src/config/io.js";
 import { upsertSessionEntryCore } from "../../../../src/config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../../src/state/openclaw-agent-db.js";
 import {
@@ -115,6 +116,7 @@ describe("session and transcript child CLI product proof", () => {
         name: "qa-session-transcript-cli",
       });
       instance.state.applyEnv();
+      await captureRuntimeConfigAsyncReader()();
 
       await upsertSessionEntryCore(
         {

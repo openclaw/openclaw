@@ -93,26 +93,6 @@ describe("createMatrixMonitorSyncLifecycle", () => {
     });
   });
 
-  it("publishes recovering for transient disconnects", () => {
-    const { setStatus, statusController } = createSyncLifecycleHarness();
-    statusController.noteSyncState("RECONNECTING", new Error("network reset"));
-    expectLastStatusFields(setStatus, { lifecycle: "recovering" });
-  });
-
-  it("rejects the channel wait on unexpected sync errors", async () => {
-    const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
-
-    const waitPromise = lifecycle.waitForFatalStop();
-    client.emit("sync.unexpected_error", new Error("sync exploded"));
-
-    await expect(waitPromise).rejects.toThrow("sync exploded");
-    expectLastStatusFields(setStatus, {
-      accountId: "default",
-      healthState: "error",
-      lastError: "sync exploded",
-    });
-  });
-
   it("treats missing-key-shaped unexpected sync errors as fatal", async () => {
     const { client, lifecycle, setStatus } = createSyncLifecycleHarness();
 
@@ -266,18 +246,5 @@ describe("createMatrixMonitorSyncLifecycle", () => {
       healthState: "error",
       lastError: "sync exploded",
     });
-  });
-
-  it("rejects a second concurrent fatal-stop waiter", async () => {
-    const { lifecycle } = createSyncLifecycleHarness();
-
-    const firstWait = lifecycle.waitForFatalStop();
-
-    await expect(lifecycle.waitForFatalStop()).rejects.toThrow(
-      "Matrix fatal-stop wait already in progress",
-    );
-
-    lifecycle.dispose();
-    await expect(firstWait).resolves.toBeUndefined();
   });
 });

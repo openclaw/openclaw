@@ -5,6 +5,6 @@ export function matchesExactOrPrefix(id: string, values: readonly string[]): boo
   const normalizedId = normalizeLowercaseStringOrEmpty(id);
   return values.some((value) => {
     const normalizedValue = normalizeLowercaseStringOrEmpty(value);
-    return normalizedId === normalizedValue || normalizedId.startsWith(normalizedValue);
+    return normalizedId.startsWith(normalizedValue);
   });
 }

@@ -1,49 +1,42 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 /** Normalizes plugin config and resolves effective enablement, slots, and activation sources. */
-import { normalizeOptionalLowercaseString } from "@openclaw/normalization-core/string-coerce";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { freezeJsonSnapshot } from "../shared/immutable-data.js";
 import {
   resolveMemorySlotDecisionShared,
-  resolvePluginActivationDecisionShared,
-  toPluginActivationState,
+  resolvePluginActivationStateShared,
   type PluginActivationConfigSourceLike,
   type PluginActivationStateLike,
 } from "./config-activation-shared.js";
 import {
   normalizePluginsConfigWithResolverCore,
-  resolveChannelConfigEnablement,
   type NormalizedPluginsConfig as SharedNormalizedPluginsConfig,
 } from "./config-normalization-shared.js";
 import type { PluginOrigin } from "./plugin-origin.types.js";
+import { normalizePluginPolicyId } from "./plugin-policy-id.js";
 import { defaultSlotIdForKey } from "./slots.js";
 
 export type PluginActivationState = PluginActivationStateLike;
 
-export type PluginActivationConfigSource = {
-  plugins: NormalizedPluginsConfig;
-  rootConfig?: OpenClawConfig;
-} & PluginActivationConfigSourceLike<OpenClawConfig>;
+export type PluginActivationConfigSource = PluginActivationConfigSourceLike;
 
 export type NormalizedPluginsConfig = SharedNormalizedPluginsConfig;
 
-const BUILT_IN_PLUGIN_ALIAS_FALLBACKS: ReadonlyArray<readonly [alias: string, pluginId: string]> = [
+const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
   ["google-gemini-cli", "google"],
   ["minimax-portal", "minimax"],
   ["minimax-portal-auth", "minimax"],
-] as const;
-const BUILT_IN_PLUGIN_ALIAS_LOOKUP = new Map<string, string>([
-  ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS,
-  ...BUILT_IN_PLUGIN_ALIAS_FALLBACKS.map(([, pluginId]) => [pluginId, pluginId] as const),
 ]);
 const RETIRED_PLUGIN_IDS = new Set([
   "google-antigravity-auth",
   "google-gemini-cli-auth",
   "skill-workshop",
+  "webhooks",
 ]);
 
 /** Normalizes user/config plugin ids into the canonical lowercase key form. */
 export function normalizePluginId(id: string): string {
-  const normalized = normalizeOptionalLowercaseString(id) ?? "";
+  const normalized = normalizePluginPolicyId(id);
   return BUILT_IN_PLUGIN_ALIAS_LOOKUP.get(normalized) ?? normalized;
 }
 
@@ -56,11 +49,43 @@ export function isExplicitPluginDisableMarker(value: unknown): boolean {
   return isRecord(value) && value.enabled === false && Object.keys(value).length === 1;
 }
 
+/** Builds caller-owned policy without exposing the host's prepared objects. */
+export const createNormalizedPluginsConfig = (
+  config?: OpenClawConfig["plugins"],
+): NormalizedPluginsConfig => normalizePluginsConfigWithResolverCore(config, normalizePluginId);
+
 export const normalizePluginsConfig = (
   config?: OpenClawConfig["plugins"],
 ): NormalizedPluginsConfig => {
-  return normalizePluginsConfigWithResolverCore(config, normalizePluginId);
+  if (preparedRuntimePluginsConfig && preparedRuntimePluginsConfig.source === config) {
+    return preparedRuntimePluginsConfig.value;
+  }
+  return createNormalizedPluginsConfig(config);
 };
+
+let preparedRuntimePluginsConfig:
+  | { source: OpenClawConfig["plugins"]; value: NormalizedPluginsConfig }
+  | undefined;
+
+/** Runtime config publication owns replacement, including same-object refreshes and teardown. */
+export function prepareRuntimePluginsConfig(config: OpenClawConfig | null): void {
+  if (!config) {
+    preparedRuntimePluginsConfig = undefined;
+    return;
+  }
+  const value = createNormalizedPluginsConfig(config.plugins);
+  for (const entry of Object.values(value.entries)) {
+    // Plugin payloads retain their original owner; only normalized policy is shared and frozen.
+    const { config: _config, ...policy } = entry;
+    freezeJsonSnapshot(policy);
+    Object.freeze(entry);
+  }
+  Object.freeze(value.entries);
+  for (const field of [value.allow, value.deny, value.loadPaths, value.slots]) {
+    Object.freeze(field);
+  }
+  preparedRuntimePluginsConfig = { source: config.plugins, value: Object.freeze(value) };
+}
 
 /** Resolves the enabled plugin selected to own the context-engine slot. */
 export function resolveSelectedContextEnginePluginId(config?: OpenClawConfig): string | undefined {
@@ -76,8 +101,8 @@ export function resolveSelectedContextEnginePluginIdFromConfig(
     !plugins.enabled ||
     !pluginId ||
     pluginId === defaultSlotIdForKey("contextEngine") ||
-    plugins.deny.includes(pluginId) ||
-    plugins.entries[pluginId]?.enabled === false
+    plugins.deny.includes(normalizePluginPolicyId(pluginId)) ||
+    plugins.entries[normalizePluginPolicyId(pluginId)]?.enabled === false
   ) {
     return undefined;
   }
@@ -138,25 +163,14 @@ export function hasExplicitPluginConfig(plugins?: OpenClawConfig["plugins"]): bo
   if (!plugins) {
     return false;
   }
-  if (typeof plugins.enabled === "boolean") {
-    return true;
-  }
-  if (Array.isArray(plugins.allow) && plugins.allow.length > 0) {
-    return true;
-  }
-  if (Array.isArray(plugins.deny) && plugins.deny.length > 0) {
-    return true;
-  }
-  if (plugins.load?.paths && Array.isArray(plugins.load.paths) && plugins.load.paths.length > 0) {
-    return true;
-  }
-  if (plugins.slots && Object.keys(plugins.slots).length > 0) {
-    return true;
-  }
-  if (plugins.entries && Object.keys(plugins.entries).length > 0) {
-    return true;
-  }
-  return false;
+  return (
+    typeof plugins.enabled === "boolean" ||
+    (Array.isArray(plugins.allow) && plugins.allow.length > 0) ||
+    (Array.isArray(plugins.deny) && plugins.deny.length > 0) ||
+    (Array.isArray(plugins.load?.paths) && plugins.load.paths.length > 0) ||
+    Boolean(plugins.slots && Object.keys(plugins.slots).length > 0) ||
+    Boolean(plugins.entries && Object.keys(plugins.entries).length > 0)
+  );
 }
 
 export function applyTestPluginDefaults(
@@ -168,27 +182,14 @@ export function applyTestPluginDefaults(
   }
   const plugins = cfg.plugins;
   const explicitConfig = hasExplicitPluginConfig(plugins);
-  if (explicitConfig) {
-    if (hasExplicitMemorySlot(plugins) || hasExplicitMemoryEntry(plugins)) {
-      return cfg;
-    }
-    return {
-      ...cfg,
-      plugins: {
-        ...plugins,
-        slots: {
-          ...plugins?.slots,
-          memory: "none",
-        },
-      },
-    };
+  if (explicitConfig && (hasExplicitMemorySlot(plugins) || hasExplicitMemoryEntry(plugins))) {
+    return cfg;
   }
-
   return {
     ...cfg,
     plugins: {
       ...plugins,
-      enabled: false,
+      ...(!explicitConfig ? { enabled: false } : {}),
       slots: {
         ...plugins?.slots,
         memory: "none",
@@ -201,14 +202,11 @@ export function isTestDefaultMemorySlotDisabled(
   cfg: OpenClawConfig,
   env: NodeJS.ProcessEnv = process.env,
 ): boolean {
-  if (!env.VITEST) {
-    return false;
-  }
-  const plugins = cfg.plugins;
-  if (hasExplicitMemorySlot(plugins) || hasExplicitMemoryEntry(plugins)) {
-    return false;
-  }
-  return true;
+  return (
+    Boolean(env.VITEST) &&
+    !hasExplicitMemorySlot(cfg.plugins) &&
+    !hasExplicitMemoryEntry(cfg.plugins)
+  );
 }
 
 export function resolveEffectivePluginActivationState(params: {
@@ -221,19 +219,10 @@ export function resolveEffectivePluginActivationState(params: {
   autoEnabledReason?: string;
   channelIds?: readonly string[];
 }): PluginActivationState {
-  return toPluginActivationState(
-    resolvePluginActivationDecisionShared({
-      ...params,
-      activationSource:
-        params.activationSource ??
-        createPluginActivationSource({
-          config: params.rootConfig,
-          plugins: params.config,
-        }),
-      allowBundledChannelExplicitBypassesAllowlist: true,
-      resolveChannelConfigEnablement,
-    }),
-  );
+  return resolvePluginActivationStateShared({
+    ...params,
+    allowBundledChannelExplicitBypassesAllowlist: true,
+  });
 }
 
 function toEnableStateResult(state: PluginActivationState): { enabled: boolean; reason?: string } {
@@ -250,18 +239,8 @@ export const resolveEnableState = (
     resolveEffectivePluginActivationState({ id, origin, config, enabledByDefault }),
   );
 
-type EffectiveActivationParams = {
-  id: string;
-  origin: PluginOrigin;
-  config: NormalizedPluginsConfig;
-  rootConfig?: OpenClawConfig;
-  enabledByDefault?: boolean;
-  activationSource?: PluginActivationConfigSource;
-  channelIds?: readonly string[];
-};
-
 export const resolveEffectiveEnableState = (
-  params: EffectiveActivationParams,
+  params: Omit<Parameters<typeof resolveEffectivePluginActivationState>[0], "autoEnabledReason">,
 ): { enabled: boolean; reason?: string } =>
   toEnableStateResult(resolveEffectivePluginActivationState(params));
 

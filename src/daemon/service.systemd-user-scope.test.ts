@@ -106,6 +106,9 @@ it("keeps strict legacy-user inspection on one admitted unit until its operation
     StartLimitBurst: 5,
     ActiveEnterTimestampMonotonic: 100,
     InactiveEnterTimestampMonotonic: 0,
+    UnitFileState: "enabled",
+    RefuseManualStart: false,
+    CanStart: true,
     Result: "success",
     NRestarts: 0,
     MainPID: 5678,
@@ -114,6 +117,7 @@ it("keeps strict legacy-user inspection on one admitted unit until its operation
     KillMode: "control-group",
     TasksCurrent: 1,
     MemoryCurrent: 1024,
+    ControlGroup: `/user.slice/${unitName}`,
   };
   const query = vi.fn(async (args: string[]) => {
     if (args[0] === "call" && args[4] === "GetUnit") {

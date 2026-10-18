@@ -34,14 +34,6 @@ vi.mock("../plugins/status.js", () => ({
   },
 }));
 
-vi.mock("../tasks/task-flow-runtime-internal.js", () => ({
-  listTaskFlowRecords: () => [],
-}));
-
-vi.mock("../tasks/runtime-internal.js", () => ({
-  listTasksForFlowId: () => [],
-}));
-
 const config: OpenClawConfig = {
   plugins: {
     entries: {

@@ -2,8 +2,9 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { EventEmitter } from "node:events";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { emitChildProcessSpawnSample } from "../process/spawn-diagnostics.js";
+import { readChildRuntimeViability } from "./child-runtime-viability.js";
 import { onDiagnosticEvent, setDiagnosticsEnabledForProcess } from "./diagnostic-events.js";
 import { encodeSqliteAuthTransferFrame } from "./sqlite-readonly-auth-transfer.js";
 import { captureSqliteReadOnlyWorkerScope } from "./sqlite-readonly-worker-context.js";
@@ -18,6 +19,8 @@ import { createSqliteWorkerTransferOwner } from "./sqlite-worker-transfer.js";
 
 type Send = (message: unknown, callback: (error: Error | null) => void) => boolean;
 class MockChild extends EventEmitter {
+  ref = vi.fn();
+  unref = vi.fn();
   stdout = new EventEmitter();
   stderr = new EventEmitter();
   send = vi.fn<Send>((_message, callback) => {
@@ -26,7 +29,7 @@ class MockChild extends EventEmitter {
   });
   kill = vi.fn<(_signal?: NodeJS.Signals) => boolean>(() => true);
 }
-const mock = vi.hoisted(() => ({ spawn: vi.fn<() => MockChild>() }));
+const mock = vi.hoisted(() => ({ spawn: vi.fn<(executable: string) => MockChild>() }));
 vi.mock("node:child_process", async (importOriginal) => ({
   ...(await importOriginal<typeof import("node:child_process")>()),
   spawn: mock.spawn,
@@ -38,10 +41,7 @@ function createSession() {
   const child = new MockChild();
   mock.spawn.mockReturnValueOnce(child);
   const readBudget = vi.fn(() => ({ timeoutMs: 60_000, size: "fixture" }));
-  const requestArgs = vi.fn((pathname: string, options: { mode: string }) => [
-    options.mode,
-    pathname,
-  ]);
+  const requestArgs = vi.fn((file: string, { mode }: { mode: string }) => [mode, file]);
   const env = { OPENCLAW_STATE_DIR: "/fixture/state" };
   const session = createSqliteReadOnlyWorkerSession({
     env,
@@ -68,15 +68,38 @@ function requestId(child: MockChild): number {
 }
 function observeSettlement(promise: Promise<unknown>) {
   let settled = false;
-  void promise.then(
-    () => {
-      settled = true;
-    },
-    () => {
-      settled = true;
-    },
-  );
+  const mark = () => {
+    settled = true;
+  };
+  void promise.then(mark, mark);
   return () => settled;
+}
+
+function reply(child: MockChild, result: unknown) {
+  child.emit("message", { id: requestId(child), result });
+}
+
+async function expectRetirement(
+  session: Session,
+  child: MockChild,
+  result: Promise<unknown>,
+  message: string,
+) {
+  const settled = observeSettlement(result);
+  await nextTurn();
+  expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
+  expect(settled()).toBe(false);
+  const closing = session.close();
+  const closeSettled = observeSettlement(closing);
+  try {
+    await nextTurn();
+    expect([closeSettled(), settled()]).toEqual([false, false]);
+  } finally {
+    child.emit("close", null, "SIGKILL");
+    await closing;
+  }
+  await expect(result).rejects.toThrow(message);
+  expect(child.kill).toHaveBeenCalledOnce();
 }
 
 beforeEach(() => mock.spawn.mockReset());
@@ -88,173 +111,140 @@ afterEach(async () => {
   }
 });
 
-describe("SQLite read-only session operation custody", () => {
-  it.each([false, true])(
-    "attributes errors to startup only before the spawn event (spawned=%s)",
-    async (spawned) => {
-      const { session, child } = createSession();
-      const failure = Object.assign(new Error("fixture process refusal"), { code: "EACCES" });
-      const result = session.run("/fixture/snapshot", { mode: "staging-create" });
-      const observed = result.catch((error: unknown) => error);
-      const settled = observeSettlement(result);
-      if (spawned) {
-        child.emit("spawn");
-      }
-      child.emit("error", failure);
-      await nextTurn();
-      expect(settled()).toBe(false);
-      child.emit("close", -1, null);
-      const error = await observed;
-      if (spawned) {
-        expect(error).toBe(failure);
-      } else {
-        expect(error).toMatchObject({ code: "EACCES", cause: failure });
-        expect((error as Error).message).toContain(process.execPath);
-        expect((error as Error).message).toContain("/fixture/launch");
-        expect((error as Error).message).not.toContain("OPENCLAW_STATE_DIR");
-        expect((error as Error).message).not.toContain("--fixture-readonly-session");
-      }
-      await session.close();
-    },
-  );
-
-  it.each([
-    "staging-create",
-    "staging-create-legacy",
-    "staging-reconcile",
-    "staging-retire",
-  ] as const)("reuses its child after a well-formed %s refusal", async (mode) => {
+it.each([
+  { code: "EACCES", spawned: false },
+  { code: "EPERM", spawned: true },
+])(
+  "attributes $code to startup only before the spawn event (spawned=$spawned)",
+  async ({ code, spawned }) => {
     const { session, child } = createSession();
-    const first = session.run("/fixture/first.sqlite", { mode });
-    const observed = first.catch((error: unknown) => error);
-    const firstId = requestId(child);
-    child.emit("message", {
-      id: firstId,
-      result: { ok: false, message: "fixture staging refused" },
-    });
-    // An incorrect retirement must fail here, without waiting forever for a mock child close.
-    await nextTurn();
-    expect(child.kill).not.toHaveBeenCalled();
-    expect(await observed).toMatchObject({
-      message: expect.stringContaining("fixture staging refused"),
-    });
-
-    const second = session.run("/fixture/second.sqlite", { mode });
-    const secondId = requestId(child);
-    expect(secondId).not.toBe(firstId);
-    child.emit("message", { id: secondId, result: { ok: true, location: "/fixture/staged" } });
-    await expect(second).resolves.toBe("/fixture/staged");
-    expect(mock.spawn).toHaveBeenCalledOnce();
-    expect(child.kill).not.toHaveBeenCalled();
-  });
-
-  it("joins retirement for a malformed staging refusal instead of retaining its child", async () => {
-    const { session, child } = createSession();
-    const result = session.run("/fixture/source.sqlite", { mode: "staging-create" });
+    const failure = Object.assign(new Error("fixture process refusal"), { code });
+    const result = session.run("/fixture/snapshot", { mode: "staging-create" });
+    const observed = result.catch((error: unknown) => error);
     const settled = observeSettlement(result);
-    child.emit("message", {
-      id: requestId(child),
-      result: { ok: false, message: "fixture refusal", unexpected: true },
-    });
+    if (spawned) {
+      child.emit("spawn");
+    }
+    child.emit("error", failure);
     await nextTurn();
-    expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
     expect(settled()).toBe(false);
-    const closing = session.close();
-    const closeSettled = observeSettlement(closing);
-    try {
-      await nextTurn();
-      expect(closeSettled()).toBe(false);
-      expect(settled()).toBe(false);
-    } finally {
-      child.emit("close", null, "SIGKILL");
-      await closing;
-    }
-    await expect(result).rejects.toThrow("returned an invalid result");
-    expect(child.kill).toHaveBeenCalledOnce();
-  });
-
-  it("joins a framed auth operation failure even when staging refusals may retain the child", async () => {
-    const { session, child, env } = createSession();
-    const coordinatorRuntime = { directory: "/fixture/coordinator", keepAlive: false };
-    const result = session.run("/fixture/auth.sqlite", {
-      mode: "auth-profile-rows",
-      source: "canonical",
-      expectedIdentity: "file:fixture-auth",
-      env,
-      coordinatorRuntime,
-    });
-    const settled = observeSettlement(result);
-    const id = requestId(child);
-    expect(child.send.mock.calls[0]?.[0]).toMatchObject({
-      id,
-      auth: { expectedIdentity: "file:fixture-auth", coordinatorRuntime },
-    });
-    const transfer = createSqliteWorkerTransferOwner();
-    const handle = transfer.start(
-      [
-        { kind: "store", value: { status: "missing" } },
-        { kind: "state", value: { status: "missing" } },
-      ][Symbol.iterator](),
-      { kinds: ["store", "state"] },
-    );
-    try {
-      child.emit("message", {
-        id,
-        result: { type: "start", handle: { ...handle, cacheable: false } },
-      });
-      expect(child.send).toHaveBeenLastCalledWith(
-        { id, transfer: { type: "next", transferId: handle.id } },
-        expect.any(Function),
+    expect(session.notStarted).toBe(false);
+    child.emit("close", -1, null);
+    const error = await observed;
+    expect(session.notStarted).toBe(!spawned);
+    if (spawned) {
+      expect(error).toBe(failure);
+    } else {
+      expect(error).toMatchObject({ code, cause: failure });
+      expect((error as Error).message).toContain(
+        `runtime binary not executable: ${process.execPath}`,
       );
-      child.emit("message", {
-        id,
-        result: { type: "frame", frame: encodeSqliteAuthTransferFrame(transfer.next(handle.id)) },
-      });
-      expect(child.send).toHaveBeenCalledTimes(3);
-      expect(child.send).toHaveBeenLastCalledWith(
-        { id, transfer: { type: "next", transferId: handle.id } },
-        expect.any(Function),
+      expect((error as Error).message).toContain("/fixture/launch");
+      expect((error as Error).message).not.toMatch(
+        /disk space|XDG_CACHE_HOME|OPENCLAW_STATE_DIR|--fixture-readonly-session/,
       );
-      child.emit("message", { id, result: { ok: false, message: "fixture auth read refused" } });
-      await nextTurn();
-      expect(child.kill).toHaveBeenCalledExactlyOnceWith("SIGKILL");
-      expect(settled()).toBe(false);
-      const closing = session.close();
-      const closeSettled = observeSettlement(closing);
-      try {
-        await nextTurn();
-        expect(closeSettled()).toBe(false);
-      } finally {
-        child.emit("close", null, "SIGKILL");
-        await closing;
-      }
-      await expect(result).rejects.toThrow("fixture auth read refused");
-      expect(child.kill).toHaveBeenCalledOnce();
-    } finally {
-      transfer.cancel();
     }
-  });
+    await session.close();
+  },
+);
 
-  it("refuses a run after close without budgeting or sending another request", async () => {
-    const { session, child, readBudget, requestArgs } = createSession();
-    const closing = session.close();
-    expect(child.send).toHaveBeenLastCalledWith("close", expect.any(Function));
-    child.emit("close", 0, null);
-    await closing;
-    const sends = child.send.mock.calls.length;
-    const late = session.run("/fixture/late.sqlite", { mode: "staging-create" });
-    void late.catch(() => undefined);
-    await nextTurn();
-    // Check delivery before awaiting rejection so the original missing guard fails promptly.
-    expect(child.send).toHaveBeenCalledTimes(sends);
-    expect(readBudget).not.toHaveBeenCalled();
-    expect(requestArgs).not.toHaveBeenCalled();
-    await expect(late).rejects.toThrow("worker is closed");
-    expect(child.kill).not.toHaveBeenCalled();
-  });
+it("does not mark a runnable runtime unavailable after an ordinary worker abort", async () => {
+  const { session, child } = createSession();
+  const result = session.run("/fixture/snapshot", { mode: "staging-create" });
+  child.emit("spawn");
+  child.emit("close", null, "SIGABRT");
+  await expect(result).rejects.toThrow("SQLite read-only worker exited with signal SIGABRT");
+  expect(readChildRuntimeViability().available).toBe(true);
 });
 
-it("keeps a detached staging command budget inside a caller-owned deadline scope", async () => {
+it("reuses its child after a well-formed staging refusal", async () => {
+  const mode = "staging-create";
+  const { session, child } = createSession();
+  const first = session.run("/fixture/first.sqlite", { mode });
+  const observed = first.catch((error: unknown) => error);
+  const firstId = requestId(child);
+  reply(child, { ok: false, message: "fixture staging refused" });
+  // An incorrect retirement must fail here, without waiting forever for a mock child close.
+  await nextTurn();
+  expect(child.kill).not.toHaveBeenCalled();
+  expect(await observed).toMatchObject({
+    message: expect.stringContaining("fixture staging refused"),
+  });
+
+  const second = session.run("/fixture/second.sqlite", { mode });
+  const secondId = requestId(child);
+  expect(secondId).not.toBe(firstId);
+  reply(child, { ok: true, location: "/fixture/staged" });
+  await expect(second).resolves.toBe("/fixture/staged");
+  expect(mock.spawn).toHaveBeenCalledOnce();
+  expect(child.kill).not.toHaveBeenCalled();
+});
+
+it("joins retirement for malformed staging refusals", async () => {
+  const { session, child } = createSession();
+  const result = session.run("/fixture/source.sqlite", { mode: "staging-create" });
+  reply(child, { ok: false, message: "fixture refusal", unexpected: true });
+  await expectRetirement(session, child, result, "returned an invalid result");
+});
+
+it("joins retirement after framed auth failure", async () => {
+  const { session, child, env } = createSession();
+  const result = session.run("/fixture/auth.sqlite", {
+    mode: "auth-profile-rows",
+    source: "canonical",
+    expectedIdentity: "file:fixture-auth",
+    env,
+  });
+  const id = requestId(child);
+  expect(child.send.mock.calls[0]?.[0]).toMatchObject({
+    id,
+    auth: { expectedIdentity: "file:fixture-auth" },
+  });
+  const transfer = createSqliteWorkerTransferOwner();
+  const handle = transfer.start(
+    [{ kind: "fields", value: [{ kind: "object" }] }][Symbol.iterator](),
+    { kinds: ["fields"] },
+  );
+  try {
+    reply(child, { type: "start", handle });
+    expect(child.send).toHaveBeenLastCalledWith(
+      { id, transfer: { type: "next", transferId: handle.id } },
+      expect.any(Function),
+    );
+    reply(child, {
+      type: "frame",
+      frame: encodeSqliteAuthTransferFrame(transfer.next(handle.id)),
+    });
+    expect(child.send).toHaveBeenCalledTimes(3);
+    expect(child.send).toHaveBeenLastCalledWith(
+      { id, transfer: { type: "next", transferId: handle.id } },
+      expect.any(Function),
+    );
+    reply(child, { ok: false, message: "fixture auth read refused" });
+    await expectRetirement(session, child, result, "fixture auth read refused");
+  } finally {
+    transfer.cancel();
+  }
+});
+
+it("refuses a run after close without budgeting or sending another request", async () => {
+  const { session, child, readBudget, requestArgs } = createSession();
+  const closing = session.close();
+  expect(child.send).toHaveBeenLastCalledWith("close", expect.any(Function));
+  child.emit("close", 0, null);
+  await closing;
+  const sends = child.send.mock.calls.length;
+  const late = session.run("/fixture/late.sqlite", { mode: "staging-create" });
+  void late.catch(() => undefined);
+  await nextTurn();
+  // Check delivery before awaiting rejection so the original missing guard fails promptly.
+  expect(child.send).toHaveBeenCalledTimes(sends);
+  expect([readBudget.mock.calls, requestArgs.mock.calls]).toEqual([[], []]);
+  await expect(late).rejects.toThrow("worker is closed");
+  expect(child.kill).not.toHaveBeenCalled();
+});
+
+it("keeps detached staging budget inside a caller-owned deadline", async () => {
   const timer = vi.spyOn(globalThis, "setTimeout");
   try {
     await withSqliteReadOnlyWorkerScope(
@@ -274,10 +264,7 @@ it("keeps a detached staging command budget inside a caller-owned deadline scope
         const budgeted = timer.mock.calls.some(
           ([, delay]) => typeof delay === "number" && delay > 0,
         );
-        child.emit("message", {
-          id: requestId(child),
-          result: { ok: true, location: "/fixture/staged" },
-        });
+        reply(child, { ok: true, location: "/fixture/staged" });
         await expect(result).resolves.toBe("/fixture/staged");
         expect(budgeted).toBe(true);
         expect(child.kill).not.toHaveBeenCalled();
@@ -289,7 +276,7 @@ it("keeps a detached staging command budget inside a caller-owned deadline scope
   }
 });
 
-it("carries only its captured read scope and refuses callbacks after owner retirement", async () => {
+it("captures only read scope and refuses callbacks after owner retirement", async () => {
   const caller = new AsyncLocalStorage<string>();
   const withoutOwner = captureSqliteReadOnlyWorkerScope();
   const controller = new AbortController();
@@ -324,7 +311,11 @@ it("carries only its captured read scope and refuses callbacks after owner retir
   }
 });
 
-it("counts admitted read-only session children in node spawn diagnostics", () => {
+it.each([
+  { execPath: "/fixture/bin/node", family: "node" },
+  { execPath: "/fixture/bin/custom-runtime", family: "other" },
+])("counts admitted children as $family in spawn diagnostics", ({ execPath, family }) => {
+  const originalExecPath = process.execPath;
   let now = 0;
   const clock = vi.spyOn(performance, "now").mockImplementation(() => now);
   const events: unknown[] = [];
@@ -334,10 +325,16 @@ it("counts admitted read-only session children in node spawn diagnostics", () =>
     }
   });
   try {
+    process.execPath = execPath;
     setDiagnosticsEnabledForProcess(false);
     emitChildProcessSpawnSample();
     setDiagnosticsEnabledForProcess(true);
     const { child } = createSession();
+    expect(mock.spawn).toHaveBeenCalledWith(
+      execPath,
+      expect.any(Array),
+      expect.objectContaining({ windowsHide: true, stdio: ["ignore", "pipe", "pipe", "ipc"] }),
+    );
     now = 60_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([]);
@@ -345,9 +342,10 @@ it("counts admitted read-only session children in node spawn diagnostics", () =>
     now = 120_000;
     emitChildProcessSpawnSample();
     expect(events).toEqual([
-      expect.objectContaining({ family: process.versions.bun ? "other" : "node", count: 1 }),
+      expect.objectContaining({ family, operation: "sqlite.session.native", count: 1 }),
     ]);
   } finally {
+    process.execPath = originalExecPath;
     stop();
     setDiagnosticsEnabledForProcess(false);
     emitChildProcessSpawnSample();

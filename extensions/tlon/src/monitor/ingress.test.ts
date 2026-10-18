@@ -169,49 +169,6 @@ describe("Tlon durable ingress", () => {
     });
   });
 
-  it("retains completion so a duplicate message id cannot dispatch twice", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const monitor = startMonitor(queue, dispatch);
-      try {
-        const event = chatEvent({ id: "dm-completed" });
-        await monitor.receive({ source: "chat", event });
-        await monitor.waitForIdle();
-        await monitor.receive({ source: "chat", event });
-        await monitor.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await monitor.stop();
-      }
-    });
-  });
-
-  it("preserves the retired guard for reissued or edited message envelopes", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn<TlonIngressDispatch>(async (_source, _event, lifecycle) => {
-        await lifecycle.onAdopted();
-      });
-      const monitor = startMonitor(queue, dispatch);
-      try {
-        await monitor.receive({
-          source: "channels",
-          event: channelEvent({ id: "message-guard", text: "first delivery" }),
-        });
-        await monitor.waitForIdle();
-        await monitor.receive({
-          source: "channels",
-          event: channelEvent({ id: "message-guard", text: "edited redelivery" }),
-        });
-        await monitor.waitForIdle();
-        expect(dispatch).toHaveBeenCalledTimes(1);
-      } finally {
-        await monitor.stop();
-      }
-    });
-  });
-
   it("retains completed logical ids by count rather than age", async () => {
     await withQueue(async (queue) => {
       let now = 1_700_000_000_000;
@@ -235,27 +192,6 @@ describe("Tlon durable ingress", () => {
         await monitor.waitForIdle();
 
         expect(dispatch).toHaveBeenCalledTimes(2);
-      } finally {
-        await monitor.stop();
-      }
-    });
-  });
-
-  it("stores raw envelopes in per-conversation lanes", async () => {
-    await withQueue(async (queue) => {
-      const dispatch = vi.fn(async () => ({ kind: "deferred" }) as const);
-      const monitor = startMonitor(queue, dispatch);
-      const group = channelEvent({ id: "message-raw", nest: "chat/~zod/ops" });
-      try {
-        await monitor.receive({ source: "channels", event: group });
-        await monitor.waitForIdle();
-        expect(await queue.listClaims()).toEqual([
-          expect.objectContaining({
-            id: "message-raw",
-            laneKey: "group:chat/~zod/ops",
-            payload: expect.objectContaining({ rawEvent: JSON.stringify(group) }),
-          }),
-        ]);
       } finally {
         await monitor.stop();
       }

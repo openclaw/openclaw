@@ -1,4 +1,3 @@
-// Resolves image-capable model metadata and credential-bound runtime auth.
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
 import { resolveModelAsync } from "../agents/embedded-agent-runner/model.js";
 import { isMinimaxVlmModel } from "../agents/minimax-vlm.js";
@@ -21,6 +20,10 @@ import { getModelRegistryRuntime } from "../agents/sessions/model-registry-runti
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import type { Model } from "../llm/types.js";
 import {
+  attachProviderAuthAuthority,
+  getProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
+import {
   attachModelProviderRuntimePluginHandle,
   resolveProviderRuntimePluginHandle,
 } from "../plugins/provider-hook-runtime.js";
@@ -28,19 +31,10 @@ import { prepareProviderRuntimeAuth } from "../plugins/provider-runtime.runtime.
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ImageDescriptionRequest } from "./types.js";
 
-type ImageRuntimeParams = {
-  cfg: ImageDescriptionRequest["cfg"];
-  agentDir: string;
-  provider: string;
-  model: string;
-  profile?: string;
-  preferredProfile?: string;
-  signal?: AbortSignal;
-  authStore?: ImageDescriptionRequest["authStore"];
-  agentId?: string;
-  workspaceDir?: string;
-  preparedModelRuntime?: ImageDescriptionRequest["preparedModelRuntime"];
-};
+type ImageRuntimeParams = Omit<
+  ImageDescriptionRequest,
+  "buffer" | "fileName" | "mime" | "prompt" | "maxTokens" | "timeoutMs"
+>;
 
 type ResolvedImageRuntimeContext = {
   cfg: ImageRuntimeParams["cfg"];
@@ -189,6 +183,7 @@ async function prepareResolvedImageRuntime(
   ) {
     return bindResolvedImageRuntime(params, "", bindPreparedModel(model));
   }
+  model = attachProviderAuthAuthority(model, getProviderAuthAuthority(apiKeyInfo));
   let apiKey = requireApiKey(apiKeyInfo, model.provider);
   const runtimeAuth = await prepareProviderRuntimeAuth({
     provider: model.provider,

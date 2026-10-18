@@ -1,6 +1,12 @@
 import { afterEach, beforeEach, vi } from "vitest";
+import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
+import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import {
+  identifiedClient,
+  initializeSessionReadContext,
+} from "./sessions-read-cache.test-support.js";
 import { sessionSuggestionHandlers } from "./sessions-suggestions.js";
 import type { GatewayClient, GatewayRequestContext, RespondFn } from "./types.js";
 
@@ -13,29 +19,34 @@ const defaultSuggestionSession = {
   visibility: "suggest",
 } as const;
 
-export function upsertDefaultSuggestionSession() {
-  return upsertSessionEntryCore({ agentId: "main", sessionKey }, defaultSuggestionSession);
+export function upsertDefaultSuggestionSession(
+  patch: Parameters<typeof upsertSessionEntryCore>[1] = {},
+  key = sessionKey,
+) {
+  return upsertSessionEntryCore(
+    { agentId: "main", sessionKey: key },
+    { ...defaultSuggestionSession, ...patch },
+  );
+}
+
+export function withSuggestionState(
+  run: Parameters<typeof withOpenClawTestState>[1],
+  options: { prepareProfileCatalog?: boolean } = {},
+) {
+  return withOpenClawTestState({ scenario: "minimal", ...options }, async (state) => {
+    setRuntimeConfigSnapshot({});
+    await run(state);
+  });
 }
 
 export function client(profileId: string, displayName: string, admin = false): GatewayClient {
-  return {
-    connId: `conn-${profileId}`,
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: {
-        id: "openclaw-control-ui",
-        version: "test",
-        platform: "test",
-        mode: "webchat",
-        instanceId: `instance-${profileId}`,
-      },
-      role: "operator",
-      scopes: admin ? ["operator.admin"] : ["operator.read", "operator.write"],
-    },
-    authenticatedUserId: `${profileId}@example.com`,
-    authenticatedUserProfile: { profileId, displayName, hasAvatar: false, updatedAt: 1 },
-  };
+  const result = identifiedClient(profileId);
+  result.connId = `conn-${profileId}`;
+  result.connect.client.instanceId = `instance-${profileId}`;
+  result.connect.scopes = admin ? ["operator.admin"] : ["operator.read", "operator.write"];
+  result.authenticatedUserId = `${profileId}@example.com`;
+  result.authenticatedUserProfile = { profileId, displayName, hasAvatar: false, updatedAt: 1 };
+  return result;
 }
 
 export function context(
@@ -61,6 +72,7 @@ export async function call(
   requestClient: GatewayClient | null,
   requestContext = context(),
 ) {
+  await initializeSessionReadContext(requestContext);
   const responses: Parameters<RespondFn>[] = [];
   await sessionSuggestionHandlers[method]?.({
     req: { type: "req", id: "request-1", method, params },
@@ -71,6 +83,16 @@ export async function call(
     respond: (...response: Parameters<RespondFn>) => responses.push(response),
   });
   return { responses, context: requestContext };
+}
+
+export function requests(
+  key: string,
+  requester: Parameters<typeof call>[2],
+  requestContext = context(),
+  scope: Record<string, unknown> = {},
+) {
+  return (method: Parameters<typeof call>[0], params: Record<string, unknown> = {}) =>
+    call(method, { sessionKey: key, ...scope, ...params }, requester, requestContext);
 }
 
 export function responseSuggestionId(result: Awaited<ReturnType<typeof call>>): string {

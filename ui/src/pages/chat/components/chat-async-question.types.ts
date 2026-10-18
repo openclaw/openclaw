@@ -19,6 +19,7 @@ export type AsyncQuestionDraft = {
 };
 
 export type AsyncQuestionPresentation = {
+  connected?: boolean;
   scope: string;
   pending: AsyncQuestions[];
   archived: ReadonlyMap<string, string>;

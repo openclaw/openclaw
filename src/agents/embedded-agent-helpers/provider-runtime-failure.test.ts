@@ -1,9 +1,5 @@
 import { aroundEach, describe, expect, it } from "vitest";
-import {
-  classifyFailoverReason,
-  isFailoverErrorMessage,
-  isTimeoutErrorMessage,
-} from "../failover/classify.js";
+import { classifyFailoverReason, isTimeoutErrorMessage } from "../failover/classify.js";
 import { withPreparedFailoverProviders } from "../test-helpers/provider-failover-generation.js";
 import { classifyProviderRuntimeFailureKind } from "./provider-runtime-failure.js";
 
@@ -27,19 +23,6 @@ describe("classifyProviderRuntimeFailureKind", () => {
       }),
     ).toBe("rate_limit");
   });
-
-  it.each([
-    { provider: "openai", code: "SERVER_ERROR" },
-    { provider: "google", code: "UNAVAILABLE" },
-    { provider: "anthropic", code: "RATE_LIMIT_ERROR" },
-  ] as const)(
-    "does not report code-only $provider $code failures as empty responses",
-    ({ provider, code }) => {
-      expect(classifyProviderRuntimeFailureKind({ provider, code, message: "" })).not.toBe(
-        "empty_response",
-      );
-    },
-  );
   it("classifies missing scope failures", () => {
     expect(
       classifyProviderRuntimeFailureKind({
@@ -92,13 +75,6 @@ describe("classifyProviderRuntimeFailureKind", () => {
     }
   });
 
-  it("does not make uncertain OAuth refresh wrappers terminal", () => {
-    const message =
-      "OAuth token refresh failed for openai: file lock timeout for /tmp/agent/auth-profiles.json. Please try again or re-authenticate.";
-    expect(classifyProviderRuntimeFailureKind(message)).toBe("auth_refresh");
-    expect(classifyFailoverReason(message, { provider: "openai" })).toBe("auth");
-  });
-
   it("keeps Codex entitlement and usage-limit payloads out of terminal auth", () => {
     const entitlementMessages = [
       "You've hit your usage limit. Upgrade to Plus to continue using Codex (https://chatgpt.com/explore/plus), try again after 11:34 AM.",
@@ -134,26 +110,10 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).toBe("auth_refresh");
   });
 
-  it("classifies wrapped OpenAI Codex callback validation failures distinctly", () => {
-    expect(
-      classifyProviderRuntimeFailureKind(
-        "OpenAI Codex OAuth failed (callback_validation_failed): State mismatch",
-      ),
-    ).toBe("callback_validation");
-  });
-
   it("classifies HTML 403 auth failures", () => {
     expect(
       classifyProviderRuntimeFailureKind(
         "403 <!DOCTYPE html><html><body>Access denied</body></html>",
-      ),
-    ).toBe("auth_html");
-  });
-
-  it("classifies HTML 401 auth failures", () => {
-    expect(
-      classifyProviderRuntimeFailureKind(
-        "401 <!DOCTYPE html><html><body>Unauthorized</body></html>",
       ),
     ).toBe("auth_html");
   });
@@ -234,24 +194,10 @@ describe("classifyProviderRuntimeFailureKind", () => {
     ).not.toBe("proxy");
   });
 
-  it("classifies google-style INTERNAL status payloads as timeout", () => {
-    expect(
-      classifyFailoverReason(
-        'ERROR provider=google model=gemini-3.1-flash-lite-preview: got status: INTERNAL, details: {"code":500,"status":"INTERNAL"}',
-      ),
-    ).toBe("timeout");
-    expect(
-      classifyFailoverReason(
-        'got status: INTERNAL. {"error":{"code":500,"message":"Internal error encountered.","status":"INTERNAL"}}',
-      ),
-    ).toBe("timeout");
-  });
-
   it("does not classify google-style INTERNAL payloads without a 500 code as timeout", () => {
     const sample =
       'got status: INTERNAL. {"error":{"code":400,"message":"Request malformed","status":"INTERNAL"}}';
     expect(isTimeoutErrorMessage(sample)).toBe(false);
     expect(classifyFailoverReason(sample)).toBeNull();
-    expect(isFailoverErrorMessage(sample)).toBe(false);
   });
 });

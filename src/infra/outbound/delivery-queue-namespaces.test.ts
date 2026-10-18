@@ -6,17 +6,21 @@ import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
 } from "../../state/openclaw-state-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import { movePendingDeliveryQueueEntryNamespace } from "../delivery-queue-sqlite-namespace.js";
 import {
   commitStagedDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
   upsertDeliveryQueueEntryOnceAcrossNamespacesInDatabase,
 } from "../delivery-queue-sqlite-namespace.kernel.js";
-import { deleteDeliveryQueueEntry, getDeliveryQueueEntryStatus } from "../delivery-queue-sqlite.js";
 import {
+  deleteDeliveryQueueEntryInDatabase,
   prepareDeliveryQueueTerminalEntry,
   terminalizePendingDeliveryQueueEntryInDatabase,
 } from "../delivery-queue-sqlite.kernel.js";
-import { seedDeliveryQueueEntry } from "../delivery-queue-sqlite.test-support.js";
+import {
+  getDeliveryQueueEntryStatus,
+  seedDeliveryQueueEntry,
+} from "../delivery-queue-sqlite.test-support.js";
 import type { DeliveryQueueCompletionRetention } from "../delivery-queue-sqlite.types.js";
 import { resolvePreferredOpenClawTmpDir } from "../tmp-openclaw-dir.js";
 import {
@@ -26,11 +30,7 @@ import {
   OUTBOUND_DELIVERY_QUEUE_NAME,
 } from "./delivery-queue-media-staging.js";
 import { findDeliveryIntentOwnersInDatabase } from "./delivery-queue-ownership.kernel.js";
-import {
-  enqueueDeliveryOnce,
-  loadPendingDelivery,
-  findDeliveryIntentOwner,
-} from "./delivery-queue-storage.js";
+import { enqueueDeliveryOnce, loadPendingDelivery } from "./delivery-queue-storage.js";
 
 describe("outbound delivery namespace ownership", () => {
   let rootDir: string;
@@ -145,10 +145,13 @@ describe("outbound delivery namespace ownership", () => {
       env: { ...process.env, OPENCLAW_STATE_DIR: stateDir },
     });
     const readOwner = () => {
-      const reads = trackSqliteStatementExecutions(database.db, ["owners"], (sql) =>
-        sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
-          ? "owners"
-          : null,
+      const reads = trackSqliteStatementExecutions(
+        requireNativeSqliteDatabase(database.db),
+        ["owners"],
+        (sql) =>
+          sql.startsWith("select ") && sql.includes('from "delivery_queue_entries"')
+            ? "owners"
+            : null,
       );
       try {
         const [owner, missing, duplicate] = findDeliveryIntentOwnersInDatabase(database, {
@@ -170,42 +173,15 @@ describe("outbound delivery namespace ownership", () => {
       retired: false,
       status: "pending",
     });
-    deleteDeliveryQueueEntry(OUTBOUND_DELIVERY_QUEUE_NAME, id, stateDir);
+    deleteDeliveryQueueEntryInDatabase(
+      openOpenClawStateDatabase({ env: { ...process.env, OPENCLAW_STATE_DIR: stateDir } }),
+      OUTBOUND_DELIVERY_QUEUE_NAME,
+      id,
+    );
     expect(readOwner()).toEqual({
       queueName: LEGACY_OUTBOUND_DELIVERY_QUEUE_NAME,
       namespace: "legacy",
       retired: true,
-      status: "pending",
-    });
-  });
-
-  it("observes ownership before and after an atomic namespace move", async () => {
-    const id = "moving-delivery-intent";
-    const source = { id, enqueuedAt: 1, retryCount: 0 };
-    const destination = { ...source, enqueuedAt: 2 };
-    seedDeliveryQueueEntry({
-      queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-      entry: source,
-      stateDir,
-    });
-    expect(await findDeliveryIntentOwner(id, stateDir)).toMatchObject({
-      queueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-      namespace: "preparing",
-      status: "pending",
-    });
-
-    expect(
-      movePendingDeliveryQueueEntryNamespace({
-        sourceQueueName: OUTBOUND_DELIVERY_PREPARATION_QUEUE_NAME,
-        destinationQueueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-        expectedSourceEntry: source,
-        destinationEntry: destination,
-        stateDir,
-      }),
-    ).toBe("moved");
-    expect(await findDeliveryIntentOwner(id, stateDir)).toMatchObject({
-      queueName: OUTBOUND_DELIVERY_QUEUE_NAME,
-      namespace: "prepared",
       status: "pending",
     });
   });

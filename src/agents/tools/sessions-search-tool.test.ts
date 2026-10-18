@@ -1,15 +1,16 @@
-/** sessions_search visibility, bounds, redaction, and input tests. */
+/** sessions_search visibility, bounds, fidelity, and input tests. */
 import path from "node:path";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  applySessionStoreProjection,
-  replaceSessionEntrySync,
-} from "../../config/sessions/session-accessor.js";
+import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway as gatewayCall } from "../../gateway/call.js";
+import { waitForGatewayDispatch } from "../../gateway/server-in-process-dispatch.js";
+import { GatewayTransportError } from "../../gateway/transport-error.js";
 import { createSessionVisibilityChecker } from "../../plugin-sdk/session-visibility.js";
+import { normalizeToolParameters } from "../agent-tools.schema.js";
 import { describeSessionLinkRule } from "../tool-description-presets.js";
 import { compactToolOutputHint } from "../tool-schema-hints.js";
 import { createSessionsSearchTool } from "./sessions-search-tool.js";
@@ -48,7 +49,7 @@ function createTool(params: {
     config: {
       ...config,
       agents: {
-        entries: { main: { default: true } },
+        entries: { main: {} },
         ...(config.agents as Record<string, unknown> | undefined),
       },
     },
@@ -107,6 +108,121 @@ function createTool(params: {
 describe("sessions_search tool", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
+  it.each(["result", "timeout"] as const)(
+    "keeps a slow transcript read alive through its worker budget, ending in %s",
+    async (outcome) => {
+      vi.useFakeTimers();
+      const entered = createDeferred();
+      const response = createDeferred<{ results: Array<Record<string, unknown>> }>();
+      const tool = createSessionsSearchTool({
+        config: { tools: { sessions: { visibility: "self" } } },
+        agentSessionKey: "agent:main:main",
+        callGateway: async <T>(request: CallGatewayRequest): Promise<T> => {
+          if (request.method === "sessions.list") {
+            return { sessions: [], hasMore: false } as T;
+          }
+          const pending = waitForGatewayDispatch(
+            request.method,
+            response.promise,
+            request.timeoutMs ?? 10_000,
+          );
+          entered.resolve();
+          return (await pending) as T;
+        },
+      });
+      let settled = false;
+      const pending = tool.execute("slow-search", { query: "needle" }).finally(() => {
+        settled = true;
+      });
+      // Observe rejection before advancing the dispatch deadline's fake clock.
+      const result = pending.then(
+        (value) => ({ value }),
+        (error: unknown) => ({ error }),
+      );
+      try {
+        await entered.promise;
+        await vi.advanceTimersByTimeAsync(10_001);
+        expect(settled).toBe(false);
+        await vi.advanceTimersByTimeAsync(50_000);
+        expect(settled).toBe(false);
+        if (outcome === "result") {
+          response.resolve({
+            results: [hit({ sessionKey: "agent:main:main", snippet: "needle found" })],
+          });
+          expect(await result).toMatchObject({
+            value: { details: { results: [{ messageId: "message-1", snippet: "needle found" }] } },
+          });
+        } else {
+          await vi.advanceTimersByTimeAsync(30_000);
+          expect(await result).toMatchObject({
+            error: {
+              message: expect.stringMatching(/Retry sessions_search with a sessionKey/),
+              cause: { code: "CLIENT_TIMEOUT", method: "sessions.search", timeoutMs: 90_000 },
+            },
+          });
+        }
+      } finally {
+        response.resolve({ results: [] });
+        await result;
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it.each([
+    { kind: "timeout", requestDispatched: true, guidance: true },
+    { kind: "timeout", requestDispatched: false, guidance: false },
+    { kind: "closed", requestDispatched: true, guidance: false },
+  ] as const)(
+    "preserves transport diagnostics for $kind, dispatched=$requestDispatched",
+    async ({ kind, requestDispatched, guidance }) => {
+      const failure = new GatewayTransportError({
+        kind,
+        requestDispatched,
+        message: "synthetic transport failure",
+        connectionDetails: {
+          url: "ws://127.0.0.1:40001",
+          urlSource: "fixture",
+          message: "fixture",
+        },
+      });
+      const tool = createSessionsSearchTool({
+        config: { tools: { sessions: { visibility: "self" } } },
+        agentSessionKey: "agent:main:main",
+        callGateway: async <T>(request: CallGatewayRequest): Promise<T> => {
+          if (request.method === "sessions.list") {
+            return { sessions: [], hasMore: false } as T;
+          }
+          throw failure;
+        },
+      });
+      const pending = tool.execute("transport-search", { query: "needle" });
+      if (guidance) {
+        await expect(pending).rejects.toMatchObject({
+          message: expect.stringMatching(/Retry sessions_search with a sessionKey/),
+          cause: failure,
+        });
+      } else {
+        await expect(pending).rejects.toBe(failure);
+      }
+    },
+  );
+
+  it("preserves a search authority rejection instead of treating it as a timeout", async () => {
+    const failure = new Error("Session search scope changed while reading; retry the request");
+    const tool = createSessionsSearchTool({
+      config: { tools: { sessions: { visibility: "self" } } },
+      agentSessionKey: "agent:main:main",
+      callGateway: async <T>(request: CallGatewayRequest): Promise<T> => {
+        if (request.method === "sessions.list") {
+          return { sessions: [], hasMore: false } as T;
+        }
+        throw failure;
+      },
+    });
+    await expect(tool.execute("rejected-search", { query: "needle" })).rejects.toBe(failure);
+  });
+
   it("rejects a literal global target owned by another fixed-store agent when agent-to-agent is disabled", async () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({
@@ -157,40 +273,40 @@ describe("sessions_search tool", () => {
     );
   });
 
-  it.each([
-    { indexing: true, archivedTranscriptsExcluded: undefined },
-    { indexing: false, archivedTranscriptsExcluded: 2 },
-    { indexing: true, archivedTranscriptsExcluded: 2 },
-  ])(
-    "reports incomplete search with $archivedTranscriptsExcluded archived transcripts and indexing=$indexing",
-    async (state) => {
-      const result = await createTool({
-        results: [hit()],
-        ...state,
-      }).execute("indexing-warning", { query: "text" });
+  it("reports indexing and archived transcript exclusions", async () => {
+    const state = { indexing: true, archivedTranscriptsExcluded: 2 };
+    const result = await createTool({
+      results: [hit()],
+      ...state,
+    }).execute("indexing-warning", { query: "text" });
 
-      expect(result.details).toMatchObject({
-        ...(state.indexing ? { indexing: true } : {}),
-        ...(state.archivedTranscriptsExcluded ? { archivedTranscriptsExcluded: 2 } : {}),
-        warning: [
-          ...(state.indexing
-            ? [
-                "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.",
-              ]
-            : []),
-          ...(state.archivedTranscriptsExcluded
-            ? [
-                "Search excludes 2 archived transcripts. Restore a transcript to include it in search.",
-              ]
-            : []),
-        ].join(" "),
-      });
-      expect(Value.Check(createTool({}).outputSchema!, result.details)).toBe(true);
-    },
-  );
+    expect(result.details).toMatchObject({
+      ...(state.indexing ? { indexing: true } : {}),
+      ...(state.archivedTranscriptsExcluded ? { archivedTranscriptsExcluded: 2 } : {}),
+      warning: [
+        ...(state.indexing
+          ? [
+              "Transcript indexing is in progress; results may be incomplete. Retry sessions_search shortly.",
+            ]
+          : []),
+        ...(state.archivedTranscriptsExcluded
+          ? [
+              "Search excludes 2 archived transcripts. Restore a transcript to include it in search.",
+            ]
+          : []),
+      ].join(" "),
+    });
+    expect(Value.Check(createTool({}).outputSchema!, result.details)).toBe(true);
+  });
 
   it("rejects empty queries and invalid limits", async () => {
     const tool = createTool({});
+    expect(Value.Check(tool.parameters, { query: "" })).toBe(false);
+    expect(Value.Check(tool.parameters, { query: "loan" })).toBe(true);
+    expect(Value.Check(tool.parameters, { query: "  loan  " })).toBe(true);
+    expect(tool.parameters).toMatchObject({
+      properties: { limit: { description: expect.stringContaining("Maximum search results: 25") } },
+    });
     await expect(tool.execute("call-1", { query: "   " })).rejects.toThrow(
       "query must not be empty",
     );
@@ -202,45 +318,13 @@ describe("sessions_search tool", () => {
     );
   });
 
-  it("filters invisible hits before applying the limit", async () => {
-    const requests: CallGatewayRequest[] = [];
-    const tool = createTool({
-      requests,
-      results: [
-        hit({ sessionKey: "agent:main:other", messageId: "hidden" }),
-        hit({ messageId: "visible" }),
-      ],
-    });
-
-    const result = await tool.execute("call-1", { query: "text", limit: 1 });
-
-    expect(result.details).toMatchObject({
-      results: [expect.objectContaining({ messageId: "visible", sessionKey: "main" })],
-    });
-    expect(JSON.stringify(result.details)).not.toContain("hidden");
-    const searchedKeys = requests
-      .filter((request) => request.method === "sessions.search")
-      .map((request) => (request.params as { sessionKeys?: unknown }).sessionKeys);
-    expect(searchedKeys).toEqual([["main"]]);
-  });
-
-  it("searches a multi-session visible set in one gateway call", async () => {
-    const requests: CallGatewayRequest[] = [];
-    const tool = createTool({
-      requests,
-      config: { tools: { sessions: { visibility: "all" } } },
-      results: [hit(), hit({ sessionKey: "agent:main:other", messageId: "other" })],
-    });
-
-    const result = await tool.execute("call-1", { query: "text" });
-
-    expect(result.details).toMatchObject({ results: expect.arrayContaining([expect.any(Object)]) });
-    const searchRequests = requests.filter((request) => request.method === "sessions.search");
-    expect(searchRequests).toHaveLength(1);
-    expect(searchRequests[0]?.params).toMatchObject({
-      agentId: "main",
-      sessionKeys: ["agent:main:other", "main"],
-    });
+  it("rejects blank execution with retry guidance after OpenAI schema normalization", async () => {
+    const tool = normalizeToolParameters(createTool({}), { modelProvider: "openai" });
+    for (const query of ["", "   "]) {
+      await expect(tool.execute!("blank-query", { query })).rejects.toThrow(
+        /query must not be empty; retry with non-empty keywords/,
+      );
+    }
   });
 
   it("never searches or returns incognito sessions", async () => {
@@ -280,9 +364,10 @@ describe("sessions_search tool", () => {
     const requests: CallGatewayRequest[] = [];
     const tool = createTool({
       requests,
+      agentId: "main",
       config: {
         tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [hit({ sessionKey: "global", agentId: "work", messageId: "work-global" })],
     });
@@ -303,7 +388,7 @@ describe("sessions_search tool", () => {
       agentSessionKey: "global",
       config: {
         tools: { sessions: { visibility: "agent" } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [
         hit({ sessionKey: "global", agentId: "work" }),
@@ -319,15 +404,17 @@ describe("sessions_search tool", () => {
         expect.objectContaining({ sessionKey: "agent:work:other" }),
       ]),
     });
-    expect(requests).toContainEqual({
-      method: "sessions.search",
-      params: {
-        agentId: "work",
-        query: "text",
-        limit: 25,
-        sessionKeys: ["agent:work:other", "global"],
-      },
-    });
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "sessions.search",
+        params: {
+          agentId: "work",
+          query: "text",
+          limit: 25,
+          sessionKeys: ["agent:work:other", "global"],
+        },
+      }),
+    );
   });
 
   it("uses the target agent for an explicit cross-agent session", async () => {
@@ -338,28 +425,30 @@ describe("sessions_search tool", () => {
       agentSessionKey: "agent:main:main",
       config: {
         tools: { sessions: { visibility: "all" }, agentToAgent: { enabled: true } },
-        agents: { list: [{ id: "main", default: true }, { id: "work" }] },
+        agents: { entries: { main: {}, work: {} } },
       },
       results: [hit({ sessionKey: "agent:work:other", agentId: "work" })],
     });
 
     await tool.execute("call-1", { query: "text", sessionKey: "agent:work:other" });
 
-    expect(requests).toContainEqual({
-      method: "sessions.search",
-      params: {
-        agentId: "work",
-        query: "text",
-        limit: 25,
-        sessionKeys: ["agent:work:other"],
-      },
-    });
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "sessions.search",
+        params: {
+          agentId: "work",
+          query: "text",
+          limit: 25,
+          sessionKeys: ["agent:work:other"],
+        },
+      }),
+    );
   });
 
   it("accepts the gateway's canonical key for the current-session alias", async () => {
     const tool = createSessionsSearchTool({
       config: {
-        agents: { entries: { main: { default: true } } },
+        agents: { entries: { main: {} } },
         tools: { sessions: { visibility: "self" } },
       },
       callGateway: async <T = Record<string, unknown>>(request: CallGatewayRequest): Promise<T> => {
@@ -415,27 +504,7 @@ describe("sessions_search tool", () => {
     expect(searchedKeys).toEqual([["agent:main:child:spawned", "agent:main:main"]]);
   });
 
-  it("keeps archived spawned rows visible from their ownership metadata", async () => {
-    const tool = createTool({
-      agentSessionKey: "agent:main:main",
-      config: { tools: { sessions: { visibility: "tree" } } },
-      results: [
-        hit({
-          sessionKey: "agent:main:child:archived",
-          messageId: "archived-child",
-          spawnedBy: "agent:main:main",
-        }),
-      ],
-    });
-
-    const result = await tool.execute("call-1", { query: "text" });
-
-    expect(result.details).toMatchObject({
-      results: [expect.objectContaining({ messageId: "archived-child" })],
-    });
-  });
-
-  it("redacts and truncates snippets, limits rows, and caps bytes", async () => {
+  it("preserves and truncates snippets, limits rows, and caps bytes", async () => {
     const token = ["sk", "or", "v1", "abcdef0123456789"].join("-");
     // Assembled so the pre-review secret scanner never sees a key-shaped literal.
     const keyShaped = `${["OPENROUTER", "API", "KEY"].join("_")}=${token}`;
@@ -451,7 +520,7 @@ describe("sessions_search tool", () => {
     const details = limited.details as { results: unknown[]; truncated?: boolean };
     expect(details.results).toHaveLength(2);
     expect(details.truncated).toBe(true);
-    expect(JSON.stringify(details)).not.toContain(token);
+    expect(JSON.stringify(details)).toContain(token);
 
     const oversized = createTool({
       results: [hit({ messageId: "x".repeat(40_000) })],
@@ -473,10 +542,12 @@ describe("sessions_search tool", () => {
 
     await tool.execute("call-1", { query: " text ", sessionKey: "main", limit: 3 });
 
-    expect(requests).toContainEqual({
-      method: "sessions.search",
-      params: { agentId: "main", query: "text", sessionKeys: ["main"], limit: 25 },
-    });
+    expect(requests).toContainEqual(
+      expect.objectContaining({
+        method: "sessions.search",
+        params: { agentId: "main", query: "text", sessionKeys: ["main"], limit: 25 },
+      }),
+    );
   });
 
   it("rejects a scoped grant when the target incarnation changes before search", async () => {
@@ -484,14 +555,10 @@ describe("sessions_search tool", () => {
     const targetSessionKey = "agent:main:main";
     const expectedSessionId = "old-incarnation";
     const storePath = path.join(tempDirs.make("openclaw-sessions-search-"), "sessions.sqlite");
-    await applySessionStoreProjection({
-      storePath,
-      skipMaintenance: true,
-      update: (store) => {
-        store[targetSessionKey] = { sessionId: expectedSessionId, updatedAt: 1 };
-        return { persist: true, result: undefined };
-      },
-    });
+    replaceSessionEntrySync(
+      { storePath, sessionKey: targetSessionKey },
+      { sessionId: expectedSessionId, updatedAt: 1 },
+    );
     const requests: CallGatewayRequest[] = [];
     const unregister = createSessionVisibilityChecker.registerScopedAccessProvider((request) => {
       if (

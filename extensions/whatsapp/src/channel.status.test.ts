@@ -1,9 +1,10 @@
+import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import type { PluginRuntime } from "openclaw/plugin-sdk/core";
 // Whatsapp tests cover runtime-aware linked status projection.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const runtimeMocks = vi.hoisted(() => ({
-  monitorWebChannel: vi.fn(),
+  monitorWebChannel: vi.fn<typeof import("./auto-reply/monitor.js").monitorWebChannel>(),
   readWebAuthSnapshot: vi.fn(),
   readWebAuthState: vi.fn(),
   readWebSelfId: vi.fn(),
@@ -22,6 +23,8 @@ const account = {
   authDir: "/tmp/whatsapp-auth",
   enabled: true,
   name: "Default",
+  sendReadReceipts: true,
+  isLegacyAuthDir: false,
 };
 
 describe("WhatsApp channel status", () => {
@@ -40,6 +43,103 @@ describe("WhatsApp channel status", () => {
     runtimeMocks.readWebSelfId.mockReturnValue({ e164: "+15555550100", jid: null, lid: null });
     runtimeMocks.monitorWebChannel.mockResolvedValue(undefined);
   });
+
+  it("publishes identity with lifecycle updates and clears it after logout or stop", async () => {
+    const ctx = createStartAccountContext({ account });
+    runtimeMocks.monitorWebChannel.mockImplementation(async (...args) => {
+      const statusSink = args[6]?.statusSink;
+      statusSink?.({
+        running: true,
+        connected: true,
+        reconnectAttempts: 0,
+        healthState: "healthy",
+      });
+      expect(ctx.getStatus()).toMatchObject({
+        self: { e164: "+15555550100" },
+        authAgeMs: 10_000,
+      });
+      for (const authAgeMs of [60_000, 1000, null]) {
+        statusSink?.({ running: true, connected: true, reconnectAttempts: 0, authAgeMs });
+        expect(ctx.getStatus()).toMatchObject({ authAgeMs });
+      }
+      statusSink?.({
+        running: true,
+        connected: false,
+        reconnectAttempts: 0,
+        healthState: "logged-out",
+      });
+      expect(ctx.getStatus()).toMatchObject({ self: null, authAgeMs: null, linked: false });
+      statusSink?.({
+        running: false,
+        connected: false,
+        reconnectAttempts: 0,
+        healthState: "stopped",
+      });
+      expect(ctx.getStatus()).toMatchObject({ self: null, authAgeMs: null });
+    });
+    await whatsappPlugin.gateway?.startAccount?.(ctx);
+    expect(runtimeMocks.monitorWebChannel).toHaveBeenCalledOnce();
+    expect(runtimeMocks.readWebAuthSnapshot).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { state: "not-linked", message: "Not linked (no WhatsApp Web session)." },
+    { state: "unstable", message: "Auth state is still stabilizing." },
+  ])(
+    "reports only the auth issue for $state auth with the default runtime",
+    async ({ state, message }) => {
+      runtimeMocks.readWebAuthSnapshot.mockResolvedValue({
+        state,
+        authAgeMs: null,
+        selfId: { e164: null, jid: null, lid: null },
+      });
+      const status = whatsappPlugin.status;
+      if (!status?.defaultRuntime) {
+        throw new Error("Missing WhatsApp default runtime");
+      }
+      const summary = await status.buildChannelSummary?.({
+        account: account as never,
+        cfg: {},
+        defaultAccountId: account.accountId,
+        snapshot: status.defaultRuntime,
+      });
+
+      expect(summary).toMatchObject({
+        statusState: state,
+        healthState: "stopped",
+        reconnectAttempts: 0,
+        lastDisconnect: null,
+        lastError: null,
+      });
+      expect(
+        status.collectStatusIssues?.([{ ...summary, accountId: account.accountId, enabled: true }]),
+      ).toEqual([expect.objectContaining({ kind: "auth", message })]);
+    },
+  );
+
+  it.each([
+    { name: "an error", runtime: { lastError: "socket closed" } },
+    { name: "a disconnect", runtime: { lastDisconnect: { at: 1_000, status: 408 } } },
+    { name: "a retry", runtime: { reconnectAttempts: 1 } },
+  ])(
+    "preserves the stopped warning when an unlinked account records $name",
+    async ({ runtime }) => {
+      const status = whatsappPlugin.status;
+      const snapshot = await status?.buildAccountSnapshot?.({
+        account: account as never,
+        cfg: {},
+        runtime: { ...status.defaultRuntime, accountId: account.accountId, ...runtime },
+      });
+
+      if (!snapshot) {
+        throw new Error("Missing WhatsApp account snapshot");
+      }
+      expect(status?.collectStatusIssues?.([snapshot])).toEqual([
+        expect.objectContaining({ kind: "auth", message: "Not linked (no WhatsApp Web session)." }),
+        expect.objectContaining({ kind: "runtime", message: expect.stringContaining("stopped") }),
+      ]);
+    },
+  );
 
   it("does not project cached revoked auth as linked", async () => {
     const snapshot = {

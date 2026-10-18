@@ -1,15 +1,174 @@
+import assert from "node:assert/strict";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import {
+  Client as V2Client,
+  StreamableHTTPClientTransport as V2HttpTransport,
+} from "@modelcontextprotocol/client";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
+import { ErrorCode } from "@modelcontextprotocol/sdk/types.js";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resetLogger, setLoggerOverride } from "../logging/logger.js";
 import { loggingState } from "../logging/state.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import { loadWorkspaceSkills } from "../skills/loading/workspace-skill-loader.js";
 import { buildSkillSnapshot } from "../skills/loading/workspace-skill-prompt.js";
 import { prepareSkillResourceDelivery } from "../skills/runtime/resources.js";
 import { prepareNodeClaudeSkillSession } from "./claude-skill-session.js";
 
 const temps = useAutoCleanupTempDirTracker(afterEach);
+
+describe("node Claude Workshop result settlement", () => {
+  it.each(["v1", "v2"].flatMap((sdk) => [false, true].map((malformed) => ({ sdk, malformed }))))(
+    "$sdk settles the real MCP request (malformed result: $malformed)",
+    async ({ sdk, malformed }) => {
+      const sent = createDeferredCore<Uint8Array>();
+      let receive: ((bytes: Uint8Array) => void | Promise<void>) | undefined;
+      const session = await prepareNodeClaudeSkillSession({
+        signal: new AbortController().signal,
+        emitChunk: vi.fn(),
+        onInput: vi.fn(),
+        frames: {
+          send: async (bytes) => {
+            sent.resolve(bytes);
+          },
+          onMessage: (listener) => {
+            receive = listener;
+            void listener(
+              Buffer.from(
+                JSON.stringify({
+                  type: "init",
+                  workshop: { description: "Fixture", inputSchema: {} },
+                }),
+              ),
+            );
+            return vi.fn();
+          },
+        },
+      });
+      const client =
+        sdk === "v1"
+          ? new Client({ name: "workshop-result-fixture", version: "1" })
+          : new V2Client(
+              { name: "workshop-result-fixture", version: "1" },
+              { versionNegotiation: { mode: "legacy" } },
+            );
+      onTestFinished(async () => {
+        try {
+          await client.close();
+        } finally {
+          try {
+            await session.close();
+          } finally {
+            await session.cleanup();
+          }
+        }
+      });
+      const configPath = session.argv[session.argv.indexOf("--mcp-config") + 1];
+      assert(configPath);
+      const config: unknown = JSON.parse(await fs.readFile(configPath, "utf8"));
+      assert(isRecord(config) && isRecord(config.mcpServers));
+      const endpoint = config.mcpServers.openclaw;
+      assert(isRecord(endpoint) && typeof endpoint.url === "string");
+      await client.connect(
+        sdk === "v1"
+          ? new StreamableHTTPClientTransport(new URL(endpoint.url))
+          : new V2HttpTransport(new URL(endpoint.url)),
+      );
+      const result = client.callTool({ name: "skill_workshop", arguments: {} });
+      void result.catch(() => {});
+      const request: unknown = JSON.parse(Buffer.from(await sent.promise).toString("utf8"));
+      assert(isRecord(request) && request.type === "workshop" && typeof request.id === "string");
+      const response = Buffer.from(
+        JSON.stringify({
+          type: "result",
+          id: request.id,
+          result: { content: [{ type: "text", text: malformed ? 42 : "Workshop result" }] },
+        }),
+      );
+      const dispatch = receive;
+      assert(dispatch);
+      if (malformed) {
+        await expect(Promise.resolve().then(() => dispatch(response))).rejects.toMatchObject({
+          name: "ZodError",
+        });
+        await expect(result).rejects.toMatchObject({ code: ErrorCode.InternalError });
+      } else {
+        await dispatch(response);
+        await expect(result).resolves.toMatchObject({
+          content: [{ type: "text", text: "Workshop result" }],
+        });
+      }
+    },
+  );
+
+  it.each(["v1", "v2"])(
+    "%s preserves route authority and tears down pending HTTP calls",
+    async (sdk) => {
+      const sent = createDeferredCore();
+      const controller = new AbortController();
+      const session = await prepareNodeClaudeSkillSession({
+        signal: controller.signal,
+        emitChunk: vi.fn(),
+        onInput: vi.fn(),
+        frames: {
+          send: async () => sent.resolve(),
+          onMessage: (listener) => {
+            void listener(
+              Buffer.from(
+                JSON.stringify({
+                  type: "init",
+                  workshop: { description: "Fixture", inputSchema: {} },
+                }),
+              ),
+            );
+            return () => {};
+          },
+        },
+      });
+      const client =
+        sdk === "v1"
+          ? new Client({ name: "workshop-close-fixture", version: "1" })
+          : new V2Client(
+              { name: "workshop-close-fixture", version: "1" },
+              { versionNegotiation: { mode: "legacy" } },
+            );
+      onTestFinished(async () => {
+        await client.close();
+        await session.close();
+        await session.cleanup();
+      });
+      const configPath = session.argv[session.argv.indexOf("--mcp-config") + 1];
+      assert(configPath);
+      const config: unknown = JSON.parse(await fs.readFile(configPath, "utf8"));
+      assert(isRecord(config) && isRecord(config.mcpServers));
+      const endpoint = config.mcpServers.openclaw;
+      assert(isRecord(endpoint) && typeof endpoint.url === "string");
+      const url = new URL(endpoint.url);
+      expect((await fetch(new URL("/mcp/wrong-invocation", url), { method: "POST" })).status).toBe(
+        404,
+      );
+      expect(
+        (await fetch(url, { method: "POST", headers: { Origin: "https://unrelated.example" } }))
+          .status,
+      ).toBe(404);
+      expect((await fetch(url)).status).toBe(404);
+      await client.connect(
+        sdk === "v1" ? new StreamableHTTPClientTransport(url) : new V2HttpTransport(url),
+      );
+      const call = client.callTool({ name: "skill_workshop", arguments: {} });
+      const rejected = expect(call).rejects.toBeInstanceOf(Error);
+      await sent.promise;
+      await session.close();
+      await rejected;
+      await expect(session.writeStdout("late response")).rejects.toThrow("invocation closed");
+      await expect(fetch(url, { method: "POST" })).rejects.toBeInstanceOf(Error);
+    },
+  );
+});
 
 describe("node Claude skill artifact cleanup", () => {
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0).each([false, true])(

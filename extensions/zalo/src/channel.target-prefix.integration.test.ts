@@ -100,20 +100,21 @@ describe("configured Zalo outbound target delivery", () => {
   });
 
   it.each([
-    { target: "zalo:group:group-123", peer: "group-123", kind: "text" },
-    { target: "zl:user:direct-456", peer: "direct-456", kind: "text" },
-    { target: "group:group-789", peer: "group-789", kind: "media" },
-    { target: "zalo:dm:direct-987", peer: "direct-987", kind: "media" },
+    { target: "zalo:group:group-123", peer: "group-123", kind: "text", peerKind: "group" },
+    { target: "zl:user:direct-456", peer: "direct-456", kind: "text", peerKind: "direct" },
+    { target: "group:group-789", peer: "group-789", kind: "media", peerKind: "group" },
+    { target: "zalo:dm:direct-987", peer: "direct-987", kind: "media", peerKind: "direct" },
   ] as const)(
     "sends $kind to the same bare peer selected by the session route ($target)",
-    async ({ target, peer, kind }) => {
+    async ({ target, peer, kind, peerKind }) => {
       const route = await zaloPlugin.messaging?.resolveOutboundSessionRoute?.({
         cfg,
         agentId: "main",
         accountId: "default",
         target,
       });
-      expect(route?.peer.id).toBe(peer);
+      expect(route?.recipientSessionExact).toBe(true);
+      expect(route?.peer).toEqual({ id: peer, kind: peerKind });
 
       if (kind === "text") {
         const sendText = zaloPlugin.outbound?.sendText;

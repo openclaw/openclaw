@@ -7,6 +7,7 @@ import { readChatHistoryMessageId } from "../../gateway/session-history-tail.js"
 import type { SqliteWalReclamationResult } from "../../infra/sqlite-wal-reclamation.js";
 import * as tmpDirOwner from "../../infra/tmp-openclaw-dir.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import { measureSessionPhysicalDiskUsage } from "./disk-budget.js";
 import {
   loadSessionEntryReadOnly,
@@ -31,6 +32,7 @@ it("admits a session patch and cross-store cold history between page-reclamation
   await withOpenClawTestState(
     { prefix: "session-history-writer-fairness-", scenario: "minimal", layout: "state-only" },
     async (state) => {
+      setRuntimeConfigSnapshot({});
       fixtureRoot = state.root;
       const tempDir = state.sessionsDir();
       fs.mkdirSync(tempDir, { recursive: true });

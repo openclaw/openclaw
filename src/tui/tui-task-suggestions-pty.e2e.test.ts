@@ -12,9 +12,10 @@ const STARTUP_TIMEOUT_MS = 20_000;
 const TEST_TIMEOUT_MS = 25_000;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it.each(["accept", "dismiss"])(
+it.for(["accept", "dismiss"])(
   "does not reopen a task during pending %s after returning to its session",
-  async (action) => {
+  { timeout: TEST_TIMEOUT_MS },
+  async (action, { signal }) => {
     const tempDir = tempDirs.make("openclaw-tui-task-action-");
     const releasePath = path.join(tempDir, "release");
     const fixture = await startTuiFixture({
@@ -31,7 +32,7 @@ it.each(["accept", "dismiss"])(
         await fixture.run.waitForOutput("Press Enter again to start this task.");
       }
       await fixture.run.write("\r", { delay: false });
-      await fixture.waitForLogEntry((entry) => entry.method === `${action}TaskSuggestion`);
+      await fixture.waitForLogEntry((entry) => entry.method === `${action}TaskSuggestion`, signal);
 
       await fixture.run.write("/session pending-other\r");
       await fixture.run.waitForOutput("session agent:main:pending-other");
@@ -53,5 +54,4 @@ it.each(["accept", "dismiss"])(
       await fixture.cleanup();
     }
   },
-  TEST_TIMEOUT_MS,
 );

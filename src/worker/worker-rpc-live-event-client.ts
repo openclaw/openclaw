@@ -1,3 +1,4 @@
+import { toStringifiedError } from "@openclaw/normalization-core/error-coercion";
 import type { WorkerLiveEvent } from "../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
 import { type WorkerConnection, WorkerConnectionInterruptedError } from "./worker-connection.js";
@@ -60,16 +61,7 @@ export class WorkerLiveEventClient {
       this.degradePreviews();
       return false;
     }
-    try {
-      this.buffered.push({
-        seq: this.nextSeqValue,
-        runId,
-        event: structuredClone(event),
-      });
-    } catch {
-      this.degradePreviews();
-      return false;
-    }
+    this.buffered.push({ seq: this.nextSeqValue, runId, event });
     this.nextSeqValue += 1;
     this.pump();
     return true;
@@ -87,7 +79,7 @@ export class WorkerLiveEventClient {
     this.buffered.push({
       seq: this.nextSeqValue,
       runId,
-      event: structuredClone(event),
+      event,
       ...(terminalResyncFromSeq === undefined ? {} : { resyncFromSeq: terminalResyncFromSeq }),
       completion,
     });
@@ -142,7 +134,10 @@ export class WorkerLiveEventClient {
     this.maxSentSeqValue = Math.max(this.maxSentSeqValue, sentSeq);
     try {
       await this.connection.waitForReady();
-      const response = await this.connection.requestLiveEvent({
+      if (generation !== this.replayGeneration || !this.buffered.includes(entry)) {
+        return;
+      }
+      const response = await this.connection.rpc.request("live-event", {
         runEpoch: this.options.runEpoch,
         lastAckedSeq: entry.resyncFromSeq ?? this.ackedSeqValue,
         seq: sentSeq,
@@ -191,8 +186,7 @@ export class WorkerLiveEventClient {
       ) {
         return;
       }
-      const failure = error instanceof Error ? error : new Error(String(error));
-      this.handleFailure(entry, failure);
+      this.handleFailure(entry, toStringifiedError(error));
     } finally {
       this.inFlight.delete(entry);
       this.pump();

@@ -23,22 +23,6 @@ describe("transcript-tools", () => {
       expect(names).toEqual(["read", "exec", "write", "padded", "legacy"]);
     });
 
-    it.each([
-      ["distinct IDs", "call-1", "call-2"],
-      ["reused IDs", "call-1", "call-1"],
-      ["missing IDs", undefined, undefined],
-    ])("counts repeated names with %s after the top-level mirror", (_label, firstId, secondId) => {
-      const names = extractToolCallNames({
-        content: [
-          { type: " TOOL_CALL ", id: firstId, name: "  read " },
-          { type: "tool_call", id: secondId, name: "read" },
-          { type: "tool_call", name: "" },
-        ],
-        toolName: "read",
-      });
-      expect(names).toEqual(["read", "read"]);
-    });
-
     it("preserves top-level alias precedence and skips only its first matching block", () => {
       expect(
         extractToolCallNames({
@@ -48,6 +32,7 @@ describe("transcript-tools", () => {
             { type: "toolCall", name: "read" },
             { type: "toolUse", name: "write" },
             { type: "tooluse", name: "write" },
+            { type: "tool_call", name: "" },
           ],
         }),
       ).toEqual(["write", "read", "write"]);

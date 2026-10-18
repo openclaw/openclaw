@@ -6,25 +6,36 @@ type ModelTransportRoute = {
   baseUrl?: unknown;
 };
 
+export function isVllmQwenThinkingCompat(
+  providerId: string,
+  compat?: { thinkingFormat?: unknown } | null,
+): boolean {
+  return (
+    providerId === "vllm" &&
+    (compat?.thinkingFormat === "qwen" || compat?.thinkingFormat === "qwen-chat-template")
+  );
+}
+
 export function normalizeModelTransportBaseUrl(api: string, baseUrl: string): string {
   return api === "anthropic-messages" ? baseUrl.replace(/\/v1\/?$/, "") : baseUrl;
 }
 
+export function normalizeCatalogRouteBaseUrl(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const url = URL.parse(value);
+  if (!url) {
+    return value.replace(/\/+$/u, "");
+  }
+  url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
+  return url.toString();
+}
+
 function normalizeBaseUrl(value: unknown, api: string): string {
-  if (typeof value !== "string") {
-    return "";
-  }
-  const trimmed = normalizeModelTransportBaseUrl(api, value.trim());
-  if (!trimmed) {
-    return "";
-  }
-  try {
-    const url = new URL(trimmed);
-    url.pathname = url.pathname.replace(/\/+$/u, "") || "/";
-    return url.toString();
-  } catch {
-    return trimmed.replace(/\/+$/u, "");
-  }
+  return typeof value === "string"
+    ? (normalizeCatalogRouteBaseUrl(normalizeModelTransportBaseUrl(api, value.trim())) ?? "")
+    : "";
 }
 
 export function modelTransportRoutesMatch(

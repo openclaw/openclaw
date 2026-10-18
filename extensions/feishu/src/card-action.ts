@@ -1,14 +1,14 @@
+import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import {
   asDateTimestampMs,
   isFutureDateTimestampMs,
   resolveExpiresAtMsFromDurationMs,
 } from "openclaw/plugin-sdk/number-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../runtime-api.js";
 import { resolveFeishuRuntimeAccount } from "./accounts.js";
 import { handleFeishuMessage, type FeishuMessageEvent } from "./bot.js";
 import { processedCardActions, resolvedCardActionChatTypes } from "./card-action-state.js";
-import { decodeFeishuCardAction, buildFeishuCardActionTextFallback } from "./card-interaction.js";
+import { decodeFeishuCardAction } from "./card-interaction.js";
 import {
   createApprovalCard,
   FEISHU_APPROVAL_CANCEL_ACTION,
@@ -41,21 +41,17 @@ export type FeishuCardActionEvent = {
 
 const FEISHU_APPROVAL_CARD_TTL_MS = 5 * 60_000;
 const FEISHU_CARD_ACTION_TOKEN_TTL_MS = 15 * 60_000;
-function pruneProcessedCardActionTokens(now: number): void {
+function pruneExpiredCardEntries(cache: Map<string, { expiresAt: number }>, now: number): void {
   const validNow = asDateTimestampMs(now);
   if (validNow === undefined) {
-    processedCardActions.clear();
+    cache.clear();
     return;
   }
-  for (const [key, entry] of processedCardActions.entries()) {
+  for (const [key, entry] of cache) {
     if (!isFutureDateTimestampMs(entry.expiresAt, { nowMs: validNow })) {
-      processedCardActions.delete(key);
+      cache.delete(key);
     }
   }
-}
-
-function resolveProcessedCardActionTokenExpiresAt(now: number): number | undefined {
-  return resolveExpiresAtMsFromDurationMs(FEISHU_CARD_ACTION_TOKEN_TTL_MS, { nowMs: now });
 }
 
 function beginFeishuCardActionToken(params: {
@@ -64,42 +60,33 @@ function beginFeishuCardActionToken(params: {
   now?: number;
 }): boolean {
   const now = params.now ?? Date.now();
-  pruneProcessedCardActionTokens(now);
+  pruneExpiredCardEntries(processedCardActions, now);
   const normalizedToken = params.token.trim();
   if (!normalizedToken) {
     return false;
   }
   const key = `${params.accountId}:${normalizedToken}`;
-  const existing = processedCardActions.get(key);
-  if (existing && isFutureDateTimestampMs(existing.expiresAt, { nowMs: now })) {
+  if (processedCardActions.has(key)) {
     return false;
   }
-  processedCardActions.delete(key);
-  const expiresAt = resolveProcessedCardActionTokenExpiresAt(now);
-  if (expiresAt !== undefined) {
-    processedCardActions.set(key, {
-      status: "inflight",
-      expiresAt,
-    });
-  }
+  refreshFeishuCardActionToken(normalizedToken, params.accountId, now);
   return true;
 }
 
-function completeFeishuCardAction(actionId: string, accountId: string, now = Date.now()): void {
+function refreshFeishuCardActionToken(actionId: string, accountId: string, now = Date.now()): void {
   const normalizedActionId = actionId.trim();
   if (!normalizedActionId) {
     return;
   }
   const key = `${accountId}:${normalizedActionId}`;
-  const expiresAt = resolveProcessedCardActionTokenExpiresAt(now);
+  const expiresAt = resolveExpiresAtMsFromDurationMs(FEISHU_CARD_ACTION_TOKEN_TTL_MS, {
+    nowMs: now,
+  });
   if (expiresAt === undefined) {
     processedCardActions.delete(key);
     return;
   }
-  processedCardActions.set(key, {
-    status: "completed",
-    expiresAt,
-  });
+  processedCardActions.set(key, { expiresAt });
 }
 
 function buildSyntheticMessageEvent(
@@ -155,18 +142,13 @@ function resolveCallbackTarget(event: FeishuCardActionEvent): string {
   return `user:${event.operator.open_id}`;
 }
 
-async function dispatchSyntheticCommand(params: {
-  trackTask?: (task: Promise<void>) => void;
-  cfg: ClawdbotConfig;
-  event: FeishuCardActionEvent;
-  command: string;
-  account: ReturnType<typeof resolveFeishuRuntimeAccount>;
-  botOpenId?: string;
-  runtime?: RuntimeEnv;
-  channelRuntime?: PluginRuntime["channel"];
-  accountId?: string;
-  chatType?: "p2p" | "group";
-}): Promise<void> {
+async function dispatchSyntheticCommand(
+  params: Parameters<typeof handleFeishuCardAction>[0] & {
+    command: string;
+    account: ReturnType<typeof resolveFeishuRuntimeAccount>;
+    chatType?: "p2p" | "group";
+  },
+): Promise<void> {
   const resolvedChatType = await resolveCardActionChatType({
     event: params.event,
     account: params.account,
@@ -189,44 +171,8 @@ async function dispatchSyntheticCommand(params: {
   });
 }
 
-const resolvedChatTypeCache = resolvedCardActionChatTypes;
 const CHAT_TYPE_CACHE_TTL_MS = 30 * 60_000;
 const CHAT_TYPE_CACHE_MAX_SIZE = 5_000;
-
-function pruneChatTypeCache(now: number): void {
-  const validNow = asDateTimestampMs(now);
-  if (validNow === undefined) {
-    resolvedChatTypeCache.clear();
-    return;
-  }
-  for (const [key, entry] of resolvedChatTypeCache.entries()) {
-    const expiresAt = asDateTimestampMs(entry.expiresAt);
-    if (expiresAt === undefined || expiresAt <= validNow) {
-      resolvedChatTypeCache.delete(key);
-    }
-  }
-  if (resolvedChatTypeCache.size > CHAT_TYPE_CACHE_MAX_SIZE) {
-    const excess = resolvedChatTypeCache.size - CHAT_TYPE_CACHE_MAX_SIZE;
-    const iter = resolvedChatTypeCache.keys();
-    for (let i = 0; i < excess; i++) {
-      const key = iter.next().value;
-      if (key !== undefined) {
-        resolvedChatTypeCache.delete(key);
-      }
-    }
-  }
-}
-
-function sanitizeLogValue(v: string): string {
-  return truncateUtf16Safe(v.replace(/[\r\n]/g, " "), 500);
-}
-
-function resolveFeishuApprovalCardExpiresAt(nowRaw = Date.now()): number | undefined {
-  const now = asDateTimestampMs(nowRaw);
-  return now === undefined
-    ? undefined
-    : resolveExpiresAtMsFromDurationMs(FEISHU_APPROVAL_CARD_TTL_MS, { nowMs: now });
-}
 
 function cacheResolvedCardActionChatType(
   cacheKey: string,
@@ -234,9 +180,9 @@ function cacheResolvedCardActionChatType(
   now: number,
 ): void {
   const expiresAt = resolveExpiresAtMsFromDurationMs(CHAT_TYPE_CACHE_TTL_MS, { nowMs: now });
-  resolvedChatTypeCache.delete(cacheKey);
+  resolvedCardActionChatTypes.delete(cacheKey);
   if (expiresAt !== undefined) {
-    resolvedChatTypeCache.set(cacheKey, { value, expiresAt });
+    resolvedCardActionChatTypes.set(cacheKey, { value, expiresAt });
   }
 }
 
@@ -258,20 +204,17 @@ async function resolveCardActionChatType(params: {
 
   const cacheKey = `${params.account.accountId}:${chatId}`;
   const now = Date.now();
-  pruneChatTypeCache(now);
-  const cached = resolvedChatTypeCache.get(cacheKey);
-  const cachedExpiresAt = cached ? asDateTimestampMs(cached.expiresAt) : undefined;
-  if (cached && cachedExpiresAt !== undefined) {
-    return cached.value;
-  }
+  pruneExpiredCardEntries(resolvedCardActionChatTypes, now);
+  pruneMapToMaxSize(resolvedCardActionChatTypes, CHAT_TYPE_CACHE_MAX_SIZE);
+  const cached = resolvedCardActionChatTypes.get(cacheKey);
   if (cached) {
-    resolvedChatTypeCache.delete(cacheKey);
+    return cached.value;
   }
 
   try {
     const response = (await createFeishuClient(params.account).im.chat.get({
       path: { chat_id: chatId },
-    })) as { code?: number; msg?: string; data?: { chat_type?: unknown; chat_mode?: unknown } };
+    })) as { code?: number; data?: { chat_type?: unknown; chat_mode?: unknown } };
     if (response.code === 0) {
       const resolvedChatType = resolveFeishuChatType(response.data ?? {});
       if (resolvedChatType) {
@@ -283,40 +226,16 @@ async function resolveCardActionChatType(params: {
       );
     } else {
       params.log(
-        `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(response.msg ?? "unknown error")}; defaulting to p2p`,
+        `feishu[${params.account.accountId}]: failed to resolve chat type; defaulting to p2p`,
       );
     }
-  } catch (err) {
-    const message = err instanceof Error ? err.message : "unknown";
+  } catch {
     params.log(
-      `feishu[${params.account.accountId}]: failed to resolve chat type: ${sanitizeLogValue(message)}; defaulting to p2p`,
+      `feishu[${params.account.accountId}]: failed to resolve chat type; defaulting to p2p`,
     );
   }
 
   return "p2p";
-}
-
-async function sendInvalidInteractionNotice(params: {
-  cfg: ClawdbotConfig;
-  event: FeishuCardActionEvent;
-  reason: "malformed" | "stale" | "wrong_user" | "wrong_conversation";
-  accountId?: string;
-}): Promise<void> {
-  const reasonText =
-    params.reason === "stale"
-      ? "This card action has expired. Open a fresh launcher card and try again."
-      : params.reason === "wrong_user"
-        ? "This card action belongs to a different user."
-        : params.reason === "wrong_conversation"
-          ? "This card action belongs to a different conversation."
-          : "This card action payload is invalid.";
-
-  await sendMessageFeishu({
-    cfg: params.cfg,
-    to: resolveCallbackTarget(params.event),
-    text: `⚠️ ${reasonText}`,
-    accountId: params.accountId,
-  });
 }
 
 export async function handleFeishuCardAction(params: {
@@ -331,6 +250,25 @@ export async function handleFeishuCardAction(params: {
   const { cfg, event, runtime, accountId } = params;
   const account = resolveFeishuRuntimeAccount({ cfg, accountId });
   const log = runtime?.log ?? console.log;
+  const sendInvalidInteractionNotice = async (
+    reason: "malformed" | "stale" | "wrong_user" | "wrong_conversation",
+  ): Promise<void> => {
+    const reasonText =
+      reason === "stale"
+        ? "This card action has expired. Open a fresh launcher card and try again."
+        : reason === "wrong_user"
+          ? "This card action belongs to a different user."
+          : reason === "wrong_conversation"
+            ? "This card action belongs to a different conversation."
+            : "This card action payload is invalid.";
+
+    await sendMessageFeishu({
+      cfg,
+      to: resolveCallbackTarget(event),
+      text: `⚠️ ${reasonText}`,
+      accountId,
+    });
+  };
   if (!event.token.trim()) {
     log(
       `feishu[${account.accountId}]: rejected card action from ${event.operator.open_id}: missing token`,
@@ -352,12 +290,7 @@ export async function handleFeishuCardAction(params: {
       log(
         `feishu[${account.accountId}]: rejected card action from ${event.operator.open_id}: ${decoded.reason}`,
       );
-      await sendInvalidInteractionNotice({
-        cfg,
-        event,
-        reason: decoded.reason,
-        accountId,
-      });
+      await sendInvalidInteractionNotice(decoded.reason);
       return;
     }
 
@@ -370,26 +303,16 @@ export async function handleFeishuCardAction(params: {
       if (envelope.a === FEISHU_APPROVAL_REQUEST_ACTION) {
         const command = typeof envelope.m?.command === "string" ? envelope.m.command.trim() : "";
         if (!command) {
-          await sendInvalidInteractionNotice({
-            cfg,
-            event,
-            reason: "malformed",
-            accountId,
-          });
+          await sendInvalidInteractionNotice("malformed");
           return;
         }
         const prompt =
           typeof envelope.m?.prompt === "string" && envelope.m.prompt.trim()
             ? envelope.m.prompt
             : `Run \`${command}\` in this Feishu conversation?`;
-        const expiresAt = resolveFeishuApprovalCardExpiresAt();
+        const expiresAt = resolveExpiresAtMsFromDurationMs(FEISHU_APPROVAL_CARD_TTL_MS);
         if (expiresAt === undefined) {
-          await sendInvalidInteractionNotice({
-            cfg,
-            event,
-            reason: "malformed",
-            accountId,
-          });
+          await sendInvalidInteractionNotice("malformed");
           return;
         }
         await sendCardFeishu({
@@ -428,56 +351,28 @@ export async function handleFeishuCardAction(params: {
       if (envelope.a === FEISHU_APPROVAL_CONFIRM_ACTION || envelope.k === "quick") {
         const command = envelope.q?.trim();
         if (!command) {
-          await sendInvalidInteractionNotice({
-            cfg,
-            event,
-            reason: "malformed",
-            accountId,
-          });
+          await sendInvalidInteractionNotice("malformed");
           return;
         }
         await dispatchSyntheticCommand({
-          trackTask: params.trackTask,
-          cfg,
-          event,
+          ...params,
           command,
           account,
-          botOpenId: params.botOpenId,
-          runtime,
-          channelRuntime: params.channelRuntime,
-          accountId,
           chatType: envelope.c?.t,
         });
         return;
       }
 
-      await sendInvalidInteractionNotice({
-        cfg,
-        event,
-        reason: "malformed",
-        accountId,
-      });
+      await sendInvalidInteractionNotice("malformed");
       return;
     }
 
-    const content = buildFeishuCardActionTextFallback(event);
-
-    log(
-      `feishu[${account.accountId}]: handling card action from ${event.operator.open_id}: ${content}`,
-    );
-
     await dispatchSyntheticCommand({
-      trackTask: params.trackTask,
-      cfg,
-      event,
-      command: content,
+      ...params,
+      command: decoded.text,
       account,
-      botOpenId: params.botOpenId,
-      runtime,
-      channelRuntime: params.channelRuntime,
-      accountId,
     });
   } finally {
-    completeFeishuCardAction(event.token, account.accountId);
+    refreshFeishuCardActionToken(event.token, account.accountId);
   }
 }

@@ -1,4 +1,5 @@
 import { normalizeSortedUniqueTrimmedStringList } from "@openclaw/normalization-core/string-normalization";
+import { normalizeDeviceMetadataForAuth } from "../../../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_IDS,
   GATEWAY_CLIENT_MODES,
@@ -16,7 +17,6 @@ import {
 } from "../../../shared/device-bootstrap-profile.js";
 import { resolveGatewayClientPlatformIdentity } from "../../../shared/gateway-client-platform.js";
 import { roleScopesAllow } from "../../../shared/operator-scope-compat.js";
-import { normalizeDeviceMetadataForAuth } from "../../device-auth.js";
 
 export function resolvePairedAccessScopes(
   device: Pick<PairedDevice, "approvedScopes" | "scopes"> | null | undefined,
@@ -45,7 +45,6 @@ function isSetupCodeMobileBootstrapClient(client: {
   return false;
 }
 
-/** Embedded voice nodes must prove the canonical node-host and ESP32 metadata tuple. */
 function isSetupCodeVoiceNodeBootstrapClient(client: {
   id?: string;
   platform?: string;
@@ -60,7 +59,6 @@ function isSetupCodeVoiceNodeBootstrapClient(client: {
   );
 }
 
-/** Match a closed setup profile to the client metadata class allowed to redeem it silently. */
 export function isSetupCodeHandoffBootstrapClient(params: {
   profile: DeviceBootstrapProfile;
   client: { id?: string; platform?: string; deviceFamily?: string };
@@ -141,50 +139,31 @@ export function isMobileNodeBootstrapConnect(params: {
   );
 }
 
-function pairedDeviceAllowsBootstrapRole(params: {
-  device: PairedDevice;
-  profile: DeviceBootstrapProfile;
-  role: string;
-}): boolean {
-  return (
-    hasEffectivePairedDeviceRole(params.device, params.role) &&
-    roleScopesAllow({
-      role: params.role,
-      requestedScopes: resolveBootstrapProfileScopesForRole(
-        params.role,
-        params.profile.scopes,
-        params.profile.purpose,
-      ),
-      allowedScopes: resolvePairedAccessScopes(params.device),
-    })
-  );
-}
-
-export function pairedDeviceAllowsBootstrapProfile(params: {
-  device: PairedDevice | null | undefined;
-  devicePublicKey: string;
-  profile: DeviceBootstrapProfile;
-}): boolean {
+export function pairedDeviceAllowsBootstrapProfile(
+  params: {
+    device: PairedDevice | null | undefined;
+    devicePublicKey: string;
+    profile: DeviceBootstrapProfile;
+  },
+  roles: readonly string[] = params.profile.roles,
+): boolean {
   const device = params.device;
   return Boolean(
     device &&
     device.publicKey === params.devicePublicKey &&
-    params.profile.roles.every((role) =>
-      pairedDeviceAllowsBootstrapRole({ device, profile: params.profile, role }),
+    roles.every(
+      (role) =>
+        hasEffectivePairedDeviceRole(device, role) &&
+        roleScopesAllow({
+          role,
+          requestedScopes: resolveBootstrapProfileScopesForRole(
+            role,
+            params.profile.scopes,
+            params.profile.purpose,
+          ),
+          allowedScopes: resolvePairedAccessScopes(device),
+        }),
     ),
-  );
-}
-
-export function pairedDeviceAllowsBootstrapOperator(params: {
-  device: PairedDevice | null | undefined;
-  devicePublicKey: string;
-  profile: DeviceBootstrapProfile;
-}): boolean {
-  const device = params.device;
-  return Boolean(
-    device &&
-    device.publicKey === params.devicePublicKey &&
-    pairedDeviceAllowsBootstrapRole({ device, profile: params.profile, role: "operator" }),
   );
 }
 
@@ -274,13 +253,11 @@ export function resolvePinnedClientMetadata(params: {
   const deviceFamilyMismatch = hasPinnedDeviceFamily && claimedDeviceFamily !== pairedDeviceFamily;
   const pinnedPlatform = isRuntimePlatformPin
     ? pairedRuntimeIdentity.platform
-    : claimedPlatform === pairedPlatform
+    : claimedPlatform === pairedPlatform || isNodeHostUsingMacAppPlatformPin
       ? params.pairedPlatform
-      : isNodeHostUsingMacAppPlatformPin
-        ? params.pairedPlatform
-        : isNativeAppPlatformVersionRefresh
-          ? params.claimedPlatform
-          : undefined;
+      : isNativeAppPlatformVersionRefresh
+        ? params.claimedPlatform
+        : undefined;
   return {
     platformMismatch,
     deviceFamilyMismatch,

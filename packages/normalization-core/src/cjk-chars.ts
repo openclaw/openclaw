@@ -12,7 +12,6 @@ export const CHARS_PER_TOKEN_ESTIMATE = 4;
 export type StringCharBudgetOptions = { minimumRawWeight?: number };
 const DEFAULT_BUDGET_OPTIONS: StringCharBudgetOptions = {};
 const ASCII_RUN_OR_NON_ASCII_CODE_POINT_RE = /[\p{ASCII}]+|[^\p{ASCII}]/gu;
-const NON_ASCII_RE = /[\u0080-\u{10FFFF}]/u;
 
 const WEIGHTED_CJK_RANGES = [
   [
@@ -98,9 +97,6 @@ export function estimateStringCharsWithMinimumRawWeight(
           : Math.max(estimateStringChars(segment), minimumChars);
     }
     return chars;
-  }
-  if (!NON_ASCII_RE.test(text)) {
-    return text.length * minimumRawWeight;
   }
   const firstWeighted = text.search(WEIGHTED_CJK_RE);
   if (firstWeighted < 0) {

@@ -3,6 +3,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   acquireNativeOverlayOcclusion,
+  acquireNativeOverlaySurface,
   subscribeNativeOverlayOcclusion,
 } from "./native-overlay-occlusion.ts";
 
@@ -20,6 +21,23 @@ afterEach(() => {
 });
 
 describe("native overlay occlusion", () => {
+  it("holds only overlapping native surfaces until the lifecycle releases them", () => {
+    const near = vi.fn();
+    const far = vi.fn();
+    cleanups.push(subscribeNativeOverlayOcclusion(near, () => new DOMRect(0, 0, 100, 100)));
+    cleanups.push(subscribeNativeOverlayOcclusion(far, () => new DOMRect(300, 0, 100, 100)));
+    const surface = document.createElement("div");
+    surface.getBoundingClientRect = () => new DOMRect(20, 20, 50, 50);
+    document.body.append(surface);
+    const release = acquireNativeOverlaySurface(surface);
+    cleanups.push(release, () => surface.remove());
+    expect(near.mock.calls).toEqual([[false], [true]]);
+    expect(far.mock.calls).toEqual([[false]]);
+    release();
+    release();
+    expect(near.mock.calls).toEqual([[false], [true], [false]]);
+  });
+
   it("stays occluded until every overlay releases and tolerates repeated releases", () => {
     const changes = vi.fn();
     cleanups.push(subscribeNativeOverlayOcclusion(changes, () => null));

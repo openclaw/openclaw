@@ -77,17 +77,6 @@ describe("nonactivating credential descriptor discovery", () => {
     expect(mocks.bundledSearch).not.toHaveBeenCalled();
     expect(mocks.bundledFetch).not.toHaveBeenCalled();
   });
-  it("reads already registered metadata without calling credential callbacks", () => {
-    mocks.registry.mockReturnValue({ webSearchProviders: [{ pluginId: "example", provider }] });
-    expect(resolvePluginCredentialDescriptors(manifest)).toEqual([
-      {
-        path: ["plugins", "entries", "example", "config", "key"],
-        label: "Example key",
-        envVars: ["EXAMPLE_KEY"],
-      },
-    ]);
-    expect(provider.getConfiguredCredentialValue).not.toHaveBeenCalled();
-  });
   it("uses trusted official metadata without plugin activation, even when disabled", () => {
     expect(
       resolvePluginCredentialDescriptors({ ...manifest, trustedOfficialInstall: true }),

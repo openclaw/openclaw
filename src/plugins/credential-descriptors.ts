@@ -48,12 +48,9 @@ function projectPluginCredentialDescriptors(
     if (fields.has(key)) {
       continue;
     }
+    const signupProtocol = provider.signupUrl && URL.parse(provider.signupUrl)?.protocol;
     const signupUrl =
-      provider.signupUrl &&
-      URL.canParse(provider.signupUrl) &&
-      ["https:", "http:"].includes(new URL(provider.signupUrl).protocol)
-        ? provider.signupUrl
-        : undefined;
+      signupProtocol === "https:" || signupProtocol === "http:" ? provider.signupUrl : undefined;
     fields.set(key, {
       path,
       label: provider.credentialLabel,

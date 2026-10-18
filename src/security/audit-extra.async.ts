@@ -1,8 +1,3 @@
-/**
- * Asynchronous security audit collector functions.
- *
- * These functions perform I/O (filesystem, config reads) to detect security issues.
- */
 import path from "node:path";
 import { clearTimeout as clearNodeTimeout, setTimeout as setNodeTimeout } from "node:timers";
 import {
@@ -23,10 +18,12 @@ import { createLazyRuntimeModule, createLazyRuntimeNamedExport } from "../shared
 import type { SecurityAuditFinding } from "./audit.types.js";
 import type { ExecFn } from "./windows-acl.js";
 
-type ExecDockerRawFn = (
-  args: string[],
-  opts?: { allowFailure?: boolean; input?: Buffer | string; signal?: AbortSignal },
-) => Promise<import("../agents/sandbox/docker.js").ExecDockerRawResult>;
+type ExecDockerRawFn = typeof import("../agents/sandbox/docker.js").execDockerRaw;
+type DockerProbeOptions = {
+  execDockerRawFn: ExecDockerRawFn;
+  timeoutMs: number;
+  onTimeout?: () => void;
+};
 
 const DEFAULT_SANDBOX_BROWSER_DOCKER_PROBE_TIMEOUT_MS = 5000;
 
@@ -46,10 +43,6 @@ const loadSandboxBrowserSecurityHashEpoch = createLazyRuntimeNamedExport(
   "SANDBOX_BROWSER_SECURITY_HASH_EPOCH",
 );
 
-// --------------------------------------------------------------------------
-// Helpers
-// --------------------------------------------------------------------------
-
 function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   if (!p.startsWith("~")) {
     return p;
@@ -67,10 +60,6 @@ function expandTilde(p: string, env: NodeJS.ProcessEnv): string | null {
   return null;
 }
 
-// --------------------------------------------------------------------------
-// Exported collectors
-// --------------------------------------------------------------------------
-
 function normalizeDockerLabelValue(raw: string | undefined): string | null {
   const trimmed = normalizeOptionalString(raw) ?? "";
   if (!trimmed || trimmed === "<no value>") {
@@ -81,7 +70,7 @@ function normalizeDockerLabelValue(raw: string | undefined): string | null {
 
 class DockerProbeTimeoutError extends Error {
   constructor(timeoutMs: number) {
-    super(`Docker probe timed out after ${timeoutMs}ms`);
+    super(`Docker check timed out after ${timeoutMs}ms`);
     this.name = "DockerProbeTimeoutError";
   }
 }
@@ -99,10 +88,8 @@ async function withDockerProbeTimeout<T>(
 ): Promise<T> {
   const controller = new AbortController();
   let timeout: ReturnType<typeof setNodeTimeout> | undefined;
-  let timedOut = false;
   const timeoutPromise = new Promise<never>((_, reject) => {
     timeout = setNodeTimeout(() => {
-      timedOut = true;
       controller.abort();
       reject(new DockerProbeTimeoutError(timeoutMs));
     }, timeoutMs);
@@ -110,77 +97,38 @@ async function withDockerProbeTimeout<T>(
   try {
     return await Promise.race([run(controller.signal), timeoutPromise]);
   } catch (err) {
-    if (timedOut || controller.signal.aborted) {
+    if (controller.signal.aborted) {
       throw new DockerProbeTimeoutError(timeoutMs);
     }
     throw err;
   } finally {
-    if (timeout) {
-      clearNodeTimeout(timeout);
-    }
+    clearNodeTimeout(timeout);
   }
 }
 
-function isDockerProbeTimeoutError(error: unknown): boolean {
-  return error instanceof DockerProbeTimeoutError;
-}
-
-async function listSandboxBrowserContainers(params: {
-  execDockerRawFn: ExecDockerRawFn;
-  timeoutMs: number;
-  onTimeout?: () => void;
-}): Promise<string[] | null> {
+async function readSandboxBrowserDocker<T>(
+  params: DockerProbeOptions,
+  args: string[],
+  parse: (stdout: string) => T,
+): Promise<T | null> {
   try {
     const result = await withDockerProbeTimeout(params.timeoutMs, (signal) =>
-      params.execDockerRawFn(
-        ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
-        { allowFailure: true, signal },
-      ),
+      params.execDockerRawFn(args, { allowFailure: true, signal }),
     );
     if (result.code !== 0) {
       return null;
     }
-    return normalizeStringEntries(result.stdout.toString("utf8").split(/\r?\n/));
+    return parse(result.stdout.toString("utf8"));
   } catch (err) {
-    if (isDockerProbeTimeoutError(err)) {
+    if (err instanceof DockerProbeTimeoutError) {
       params.onTimeout?.();
     }
     return null;
   }
 }
 
-async function readSandboxBrowserHashLabels(params: {
-  containerName: string;
-  execDockerRawFn: ExecDockerRawFn;
-  timeoutMs: number;
-  onTimeout?: () => void;
-}): Promise<{ configHash: string | null; epoch: string | null } | null> {
-  try {
-    const result = await withDockerProbeTimeout(params.timeoutMs, (signal) =>
-      params.execDockerRawFn(
-        [
-          "inspect",
-          "-f",
-          '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
-          params.containerName,
-        ],
-        { allowFailure: true, signal },
-      ),
-    );
-    if (result.code !== 0) {
-      return null;
-    }
-    const [hashRaw, epochRaw] = result.stdout.toString("utf8").split("\t");
-    return {
-      configHash: normalizeDockerLabelValue(hashRaw),
-      epoch: normalizeDockerLabelValue(epochRaw),
-    };
-  } catch (err) {
-    if (isDockerProbeTimeoutError(err)) {
-      params.onTimeout?.();
-    }
-    return null;
-  }
+function readDockerOutputLines(stdout: string): string[] {
+  return normalizeStringEntries(stdout.split(/\r?\n/));
 }
 
 function parsePublishedHostFromDockerPortLine(line: string): string | null {
@@ -207,31 +155,6 @@ function isLoopbackPublishHost(host: string): boolean {
   return normalized === "127.0.0.1" || normalized === "::1" || normalized === "localhost";
 }
 
-async function readSandboxBrowserPortMappings(params: {
-  containerName: string;
-  execDockerRawFn: ExecDockerRawFn;
-  timeoutMs: number;
-  onTimeout?: () => void;
-}): Promise<string[] | null> {
-  try {
-    const result = await withDockerProbeTimeout(params.timeoutMs, (signal) =>
-      params.execDockerRawFn(["port", params.containerName], {
-        allowFailure: true,
-        signal,
-      }),
-    );
-    if (result.code !== 0) {
-      return null;
-    }
-    return normalizeStringEntries(result.stdout.toString("utf8").split(/\r?\n/));
-  } catch (err) {
-    if (isDockerProbeTimeoutError(err)) {
-      params.onTimeout?.();
-    }
-    return null;
-  }
-}
-
 export async function collectSandboxBrowserHashLabelFindings(params?: {
   execDockerRawFn?: ExecDockerRawFn;
   timeoutMs?: number;
@@ -246,11 +169,16 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
     params?.execDockerRawFn ? Promise.resolve(params.execDockerRawFn) : loadExecDockerRaw(),
     loadSandboxBrowserSecurityHashEpoch(),
   ]);
-  const containers = await listSandboxBrowserContainers({
+  const probeOptions: DockerProbeOptions = {
     execDockerRawFn: execFn,
     timeoutMs,
     onTimeout: markTimedOut,
-  });
+  };
+  const containers = await readSandboxBrowserDocker(
+    probeOptions,
+    ["ps", "-a", "--filter", "label=openclaw.sandboxBrowser=1", "--format", "{{.Names}}"],
+    readDockerOutputLines,
+  );
   if (!containers || containers.length === 0) {
     if (timedOut) {
       findings.push(buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs));
@@ -263,12 +191,22 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
   const nonLoopbackPublished: string[] = [];
 
   for (const containerName of containers) {
-    const labels = await readSandboxBrowserHashLabels({
-      containerName,
-      execDockerRawFn: execFn,
-      timeoutMs,
-      onTimeout: markTimedOut,
-    });
+    const labels = await readSandboxBrowserDocker(
+      probeOptions,
+      [
+        "inspect",
+        "-f",
+        '{{ index .Config.Labels "openclaw.configHash" }}\t{{ index .Config.Labels "openclaw.browserConfigEpoch" }}',
+        containerName,
+      ],
+      (stdout) => {
+        const [hashRaw, epochRaw] = stdout.split("\t");
+        return {
+          configHash: normalizeDockerLabelValue(hashRaw),
+          epoch: normalizeDockerLabelValue(epochRaw),
+        };
+      },
+    );
     if (timedOut) {
       break;
     }
@@ -281,12 +219,11 @@ export async function collectSandboxBrowserHashLabelFindings(params?: {
     if (labels.epoch !== browserHashEpoch) {
       staleEpoch.push(containerName);
     }
-    const portMappings = await readSandboxBrowserPortMappings({
-      containerName,
-      execDockerRawFn: execFn,
-      timeoutMs,
-      onTimeout: markTimedOut,
-    });
+    const portMappings = await readSandboxBrowserDocker(
+      probeOptions,
+      ["port", containerName],
+      readDockerOutputLines,
+    );
     if (timedOut) {
       break;
     }
@@ -351,7 +288,7 @@ function buildSandboxBrowserDockerProbeTimeoutFinding(timeoutMs: number): Securi
   return {
     checkId: "sandbox.browser_container.docker_probe_timeout",
     severity: "warn",
-    title: "Sandbox browser Docker audit probe timed out",
+    title: "Sandbox browser Docker audit check timed out",
     detail:
       `Docker did not answer within ${timeoutMs}ms while checking sandbox browser containers. ` +
       "OpenClaw skipped any remaining sandbox browser container drift checks for this status run.",
@@ -393,40 +330,32 @@ export async function collectIncludeFilePermFindings(params: {
     if (!perms.ok) {
       continue;
     }
+    let finding: SecurityAuditFinding | undefined;
     if (perms.worldWritable || perms.groupWritable) {
-      findings.push({
+      finding = {
         checkId: "fs.config_include.perms_writable",
         severity: "critical",
         title: "Config include file is writable by others",
         detail: `${formatPermissionDetail(p, perms)}; another user could influence your effective config.`,
-        remediation: formatPermissionRemediation({
-          targetPath: p,
-          perms,
-          isDir: false,
-          posixMode: 0o600,
-          env: params.env,
-        }),
-      });
+      };
     } else if (perms.worldReadable) {
-      findings.push({
+      finding = {
         checkId: "fs.config_include.perms_world_readable",
         severity: "critical",
         title: "Config include file is world-readable",
         detail: `${formatPermissionDetail(p, perms)}; include files can contain tokens and private settings.`,
-        remediation: formatPermissionRemediation({
-          targetPath: p,
-          perms,
-          isDir: false,
-          posixMode: 0o600,
-          env: params.env,
-        }),
-      });
+      };
     } else if (perms.groupReadable) {
-      findings.push({
+      finding = {
         checkId: "fs.config_include.perms_group_readable",
         severity: "warn",
         title: "Config include file is group-readable",
         detail: `${formatPermissionDetail(p, perms)}; include files can contain tokens and private settings.`,
+      };
+    }
+    if (finding) {
+      findings.push({
+        ...finding,
         remediation: formatPermissionRemediation({
           targetPath: p,
           perms,
@@ -459,26 +388,25 @@ export async function collectStateDeepFilesystemFindings(params: {
     exec: params.execIcacls,
   });
   if (oauthPerms.ok && oauthPerms.isDir) {
+    let finding: SecurityAuditFinding | undefined;
     if (oauthPerms.worldWritable || oauthPerms.groupWritable) {
-      findings.push({
+      finding = {
         checkId: "fs.credentials_dir.perms_writable",
         severity: "critical",
         title: "Credentials dir is writable by others",
         detail: `${formatPermissionDetail(oauthDir, oauthPerms)}; another user could drop/modify credential files.`,
-        remediation: formatPermissionRemediation({
-          targetPath: oauthDir,
-          perms: oauthPerms,
-          isDir: true,
-          posixMode: 0o700,
-          env: params.env,
-        }),
-      });
+      };
     } else if (oauthPerms.groupReadable || oauthPerms.worldReadable) {
-      findings.push({
+      finding = {
         checkId: "fs.credentials_dir.perms_readable",
         severity: "warn",
         title: "Credentials dir is readable by others",
         detail: `${formatPermissionDetail(oauthDir, oauthPerms)}; credentials and allowlists can be sensitive.`,
+      };
+    }
+    if (finding) {
+      findings.push({
+        ...finding,
         remediation: formatPermissionRemediation({
           targetPath: oauthDir,
           perms: oauthPerms,
@@ -523,26 +451,25 @@ export async function collectStateDeepFilesystemFindings(params: {
         exec: params.execIcacls,
       });
       if (authPerms.ok) {
+        let finding: SecurityAuditFinding | undefined;
         if (authPerms.worldWritable || authPerms.groupWritable) {
-          findings.push({
+          finding = {
             checkId: "fs.auth_profiles.perms_writable",
             severity: "critical",
             title: `${authTarget.label} is writable by others`,
             detail: `${formatPermissionDetail(authTarget.path, authPerms)}; another user could inject credentials.`,
-            remediation: formatPermissionRemediation({
-              targetPath: authTarget.path,
-              perms: authPerms,
-              isDir: false,
-              posixMode: 0o600,
-              env: params.env,
-            }),
-          });
+          };
         } else if (authPerms.worldReadable || authPerms.groupReadable) {
-          findings.push({
+          finding = {
             checkId: "fs.auth_profiles.perms_readable",
             severity: "warn",
             title: `${authTarget.label} is readable by others`,
             detail: `${formatPermissionDetail(authTarget.path, authPerms)}; auth profile storage contains API keys and OAuth tokens.`,
+          };
+        }
+        if (finding) {
+          findings.push({
+            ...finding,
             remediation: formatPermissionRemediation({
               targetPath: authTarget.path,
               perms: authPerms,

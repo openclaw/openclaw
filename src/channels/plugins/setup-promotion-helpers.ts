@@ -1,8 +1,3 @@
-/**
- * Channel setup promotion helpers.
- *
- * Moves legacy single-account channel config into account-scoped config records.
- */
 import { getLoadedChannelPluginForRead } from "./registry-loaded.js";
 import type { ChannelSetupAdapter } from "./setup-adapter.types.js";
 import {

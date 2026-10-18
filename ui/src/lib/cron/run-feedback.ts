@@ -1,21 +1,15 @@
 import type { CronRunResult } from "../../api/types.ts";
 import { t } from "../../i18n/index.ts";
 
+const NOT_STARTED_MESSAGES = new Map([
+  ["not-due", "cron.runNotStarted.notDue"],
+  ["already-running", "cron.runNotStarted.alreadyRunning"],
+  ["invalid-spec", "cron.runNotStarted.invalidSpec"],
+  ["stopped", "cron.runNotStarted.stopped"],
+]);
+
 export function cronRunNotStartedMessage(result: CronRunResult): string {
-  if (!("reason" in result)) {
-    return t("cron.runNotStarted.unknown");
-  }
-  switch (result.reason) {
-    case "not-due":
-      return t("cron.runNotStarted.notDue");
-    case "already-running":
-      return t("cron.runNotStarted.alreadyRunning");
-    case "restart-recovery-pending":
-      return t("cron.runNotStarted.recoveryPending");
-    case "invalid-spec":
-      return t("cron.runNotStarted.invalidSpec");
-    case "stopped":
-      return t("cron.runNotStarted.stopped");
-  }
-  return t("cron.runNotStarted.unknown");
+  return t(
+    ("reason" in result && NOT_STARTED_MESSAGES.get(result.reason)) || "cron.runNotStarted.unknown",
+  );
 }

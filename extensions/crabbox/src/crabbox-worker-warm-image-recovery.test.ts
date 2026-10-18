@@ -2,7 +2,8 @@ import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { describe, expect, it, vi } from "vitest";
-import { crabboxState } from "./crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./crabbox-state.test-support.js";
+import { destroyAndWait, commandResult } from "./crabbox-worker-provider.test-support.js";
 import {
   listCrabboxWarmImages,
   recoverCrabboxWarmImageCapture,
@@ -10,9 +11,7 @@ import {
 import {
   captureWarmImage,
   checkpointResult,
-  commandResult,
   createWarmProvider,
-  openWarmImageStore,
   provisionWarmProfile,
   CHECKPOINT_ID,
   PROFILE,
@@ -60,13 +59,16 @@ describe("Crabbox capture recovery", () => {
         image: { ...image.value.image!, createdAtMs: now - DAY_MS },
       });
       block = true;
-      const stopping = initial.provider.destroy({ leaseId: first.leaseId, profile: PROFILE });
+      const stopping = destroyAndWait(initial.provider, {
+        leaseId: first.leaseId,
+        profile: PROFILE,
+      });
       await entered.promise;
       const selector = (await listCrabboxWarmImages(crabboxState))[0]?.capture?.selector;
       try {
         // Neither the former stale threshold nor image retention transfers capture ownership.
         clock.mockReturnValue(now + 15 * DAY_MS);
-        await initial.provider.destroy({ leaseId: second.leaseId, profile: PROFILE });
+        await destroyAndWait(initial.provider, { leaseId: second.leaseId, profile: PROFILE });
         expect((await listCrabboxWarmImages(crabboxState))[0]?.capture).toMatchObject({
           selector,
           stale: true,
@@ -76,7 +78,7 @@ describe("Crabbox capture recovery", () => {
         expect(initial.calls.findLast(({ argv }) => argv[2] === "fork")?.argv[3]).toBe(
           CHECKPOINT_ID,
         );
-        await initial.provider.destroy({ leaseId: reused.leaseId, profile: PROFILE });
+        await destroyAndWait(initial.provider, { leaseId: reused.leaseId, profile: PROFILE });
         expect(initial.calls.filter(({ argv }) => argv[2] === "create")).toHaveLength(
           phase === "create" ? 2 : 1,
         );
@@ -149,7 +151,7 @@ describe("Crabbox capture recovery", () => {
       });
       const lease = await provisionWarmProfile(provider, PROFILE, "closed-scrub");
       block = true;
-      const stopping = provider.destroy({ leaseId: lease.leaseId, profile: PROFILE });
+      const stopping = destroyAndWait(provider, { leaseId: lease.leaseId, profile: PROFILE });
       await entered.promise;
       try {
         // Simulates the ownership handoff; a closed scrub must never issue create.

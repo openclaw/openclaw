@@ -1,8 +1,16 @@
+import { settlesWithin } from "../shared/settle-within.js";
+
 /** Only the live run owner can confirm that this interruption accepted a stop. */
 type SessionWorkAdmissionInterruptionReceipt = { runId: string };
 export type SessionWorkAdmissionInterrupt = (
   reason?: Error,
 ) => SessionWorkAdmissionInterruptionReceipt | void;
+
+export function sessionWorkAdmissionAbortError(signal: AbortSignal): Error {
+  return signal.reason instanceof Error
+    ? signal.reason
+    : new Error("session work admission aborted");
+}
 
 export async function waitForSessionWorkAdmissionRelease(
   released: Promise<void>,
@@ -12,18 +20,5 @@ export async function waitForSessionWorkAdmissionRelease(
     await released;
     return true;
   }
-  let timer: ReturnType<typeof setTimeout> | undefined;
-  try {
-    return await Promise.race([
-      released.then(() => true),
-      new Promise<false>((resolve) => {
-        timer = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
-        timer.unref?.();
-      }),
-    ]);
-  } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
-  }
+  return await settlesWithin(released, Math.max(0, timeoutMs));
 }

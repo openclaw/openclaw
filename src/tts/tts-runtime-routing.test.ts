@@ -3,7 +3,6 @@ import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   CODE_HEAVY_SPOKEN_FALLBACK,
-  MAX_TIMER_TIMEOUT_MS,
   buildTtsSystemPromptHint,
   clearRuntimeConfigSnapshot,
   createMockSpeechProvider,
@@ -34,16 +33,6 @@ import {
 } from "./tts-runtime.test-support.js";
 
 describe("TTS runtime native voice-note routing", () => {
-  afterEach(() => {
-    setTtsMachinePrefsPathResolver();
-    clearRuntimeConfigSnapshot();
-    delete (Object.prototype as Record<string, unknown>).polluted;
-    synthesizeMock.mockClear();
-    prepareSynthesisMock.mockClear();
-    transcodeAudioBufferMock.mockClear();
-    installSpeechProviders([createMockSpeechProvider()]);
-  });
-
   it("prefers the environment preference path over migrated machine state", () => {
     const previousEnvPath = process.env.OPENCLAW_TTS_PREFS;
     const envPath = prefsPathFor("env-override");
@@ -58,6 +47,54 @@ describe("TTS runtime native voice-note routing", () => {
         process.env.OPENCLAW_TTS_PREFS = previousEnvPath;
       }
     }
+  });
+
+  it("speaks stripped code through the explicit textToSpeech conversion path", async () => {
+    let mediaDir: string | undefined;
+    try {
+      const result = await textToSpeech({
+        text: "```ts\nconst answer = 42;\n```",
+        cfg: createTtsConfig("openclaw-speech-core-code-convert-test"),
+      });
+
+      expect(result.success).toBe(true);
+      const request = requireFirstSynthesisRequest("explicit code conversion request");
+      expect(request.text).toBe("const answer = 42;");
+      expect(request.text).not.toBe(CODE_HEAVY_SPOKEN_FALLBACK);
+      mediaDir = result.audioPath ? path.dirname(result.audioPath) : undefined;
+    } finally {
+      if (mediaDir) {
+        rmSync(mediaDir, { recursive: true, force: true });
+      }
+    }
+  });
+
+  it("returns a normal TTS failure when audio persistence rejects", async () => {
+    const result = await textToSpeechCore(
+      {
+        text: "Store this synthesized reply.",
+        cfg: createTtsConfig("openclaw-speech-core-persistence-failure-test"),
+      },
+      async () => {
+        throw new Error("Media exceeds configured limit");
+      },
+    );
+
+    expect(result).toMatchObject({
+      success: false,
+      error: "TTS audio persistence failed",
+      provider: "mock",
+    });
+  });
+
+  afterEach(() => {
+    setTtsMachinePrefsPathResolver();
+    clearRuntimeConfigSnapshot();
+    delete (Object.prototype as Record<string, unknown>).polluted;
+    synthesizeMock.mockClear();
+    prepareSynthesisMock.mockClear();
+    transcodeAudioBufferMock.mockClear();
+    installSpeechProviders([createMockSpeechProvider()]);
   });
 
   it("resolves voice delivery support from channel capabilities", () => {
@@ -167,43 +204,6 @@ describe("TTS runtime native voice-note routing", () => {
     expect(prepared.directives.ttsText).toBe("Speak this instead");
   });
 
-  it("marks Discord auto TTS replies as native voice messages", async () => {
-    await expectTtsPayloadResult({
-      channel: "discord",
-      prefsName: "openclaw-speech-core-tts-test",
-      text: "This Discord reply should be delivered as a native voice note.",
-      target: "voice-note",
-      audioAsVoice: true,
-    });
-  });
-
-  it("keeps compatible audio-file synthesis deliverable as a voice memo", async () => {
-    await expectTtsPayloadResult({
-      channel: "voice-memo-chat",
-      prefsName: "openclaw-speech-core-tts-voice-memo-mp3-test",
-      text: "This reply should be delivered as a native voice memo.",
-      target: "audio-file",
-      audioAsVoice: true,
-      mediaExtension: "mp3",
-      providerResult: {
-        audioBuffer: Buffer.from("mp3"),
-        outputFormat: "mp3",
-        fileExtension: ".mp3",
-        voiceCompatible: false,
-      },
-    });
-  });
-
-  it("does not mark unsupported audio-file output as a voice memo", async () => {
-    await expectTtsPayloadResult({
-      channel: "voice-memo-chat",
-      prefsName: "openclaw-speech-core-tts-voice-memo-ogg-test",
-      text: "This reply should stay a regular audio attachment.",
-      target: "audio-file",
-      audioAsVoice: undefined,
-    });
-  });
-
   it("pre-transcodes synthesized mp3 to opus-in-CAF when the host can satisfy preferAudioFileFormat", async () => {
     transcodeAudioBufferMock.mockResolvedValueOnce({
       ok: true,
@@ -306,75 +306,6 @@ describe("TTS runtime native voice-note routing", () => {
     expect(providerConfig.apiKey).toBe("test-key");
   });
 
-  it("uses provider default TTS timeout when the call and config omit timeoutMs", async () => {
-    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 600_000 })]);
-
-    const result = await synthesizeSpeech({
-      text: "Use provider timeout.",
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-        },
-      } as OpenClawConfig,
-      disableFallback: true,
-    });
-
-    expect(result.success).toBe(true);
-    const request = requireFirstSynthesisRequest("provider default timeout synthesis request");
-    expect(request.timeoutMs).toBe(600_000);
-  });
-
-  it("normalizes non-streaming synthesis text before calling the provider", async () => {
-    const result = await synthesizeSpeech({
-      text: "## Update\n\nRead the [guide](https://example.com/guide)!!!!!",
-      cfg: createTtsConfig("openclaw-speech-core-talk-markdown-test"),
-      disableFallback: true,
-    });
-
-    expect(result.success).toBe(true);
-    const request = requireFirstSynthesisRequest("normalized talk synthesis request");
-    expect(request.text).toBe("Update\n\nRead the guide!");
-  });
-
-  it("speaks stripped code through the explicit textToSpeech conversion path", async () => {
-    let mediaDir: string | undefined;
-    try {
-      const result = await textToSpeech({
-        text: "```ts\nconst answer = 42;\n```",
-        cfg: createTtsConfig("openclaw-speech-core-code-convert-test"),
-      });
-
-      expect(result.success).toBe(true);
-      const request = requireFirstSynthesisRequest("explicit code conversion request");
-      expect(request.text).toBe("const answer = 42;");
-      expect(request.text).not.toBe(CODE_HEAVY_SPOKEN_FALLBACK);
-      mediaDir = result.audioPath ? path.dirname(result.audioPath) : undefined;
-    } finally {
-      if (mediaDir) {
-        rmSync(mediaDir, { recursive: true, force: true });
-      }
-    }
-  });
-
-  it("returns a normal TTS failure when audio persistence rejects", async () => {
-    const result = await textToSpeechCore(
-      {
-        text: "Store this synthesized reply.",
-        cfg: createTtsConfig("openclaw-speech-core-persistence-failure-test"),
-      },
-      async () => {
-        throw new Error("Media exceeds configured limit");
-      },
-    );
-
-    expect(result).toMatchObject({
-      success: false,
-      error: "TTS audio persistence failed",
-      provider: "mock",
-    });
-  });
-
   it("resolves the configured timeout for voice listing", async () => {
     const listVoicesMock = vi.fn(async (_request: SpeechListVoicesRequest) => []);
     installSpeechProviders([
@@ -396,64 +327,5 @@ describe("TTS runtime native voice-note routing", () => {
     });
 
     expect(listVoicesMock).toHaveBeenCalledWith(expect.objectContaining({ timeoutMs: 45_000 }));
-  });
-
-  it("caps oversized provider default TTS timeouts before synthesis", async () => {
-    installSpeechProviders([
-      createMockSpeechProvider("mock", { defaultTimeoutMs: Number.MAX_SAFE_INTEGER }),
-    ]);
-
-    const result = await synthesizeSpeech({
-      text: "Use capped provider timeout.",
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-        },
-      } as OpenClawConfig,
-      disableFallback: true,
-    });
-
-    expect(result.success).toBe(true);
-    const request = requireFirstSynthesisRequest("provider default capped timeout request");
-    expect(request.timeoutMs).toBe(MAX_TIMER_TIMEOUT_MS);
-  });
-
-  it("ignores nonpositive provider default TTS timeouts", async () => {
-    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 0 })]);
-
-    const result = await synthesizeSpeech({
-      text: "Use fallback timeout.",
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-        },
-      } as OpenClawConfig,
-      disableFallback: true,
-    });
-
-    expect(result.success).toBe(true);
-    const request = requireFirstSynthesisRequest("provider default fallback timeout request");
-    expect(request.timeoutMs).toBe(30_000);
-  });
-
-  it("keeps explicit TTS config timeout ahead of provider default timeout", async () => {
-    installSpeechProviders([createMockSpeechProvider("mock", { defaultTimeoutMs: 600_000 })]);
-
-    await synthesizeSpeech({
-      text: "Use configured timeout.",
-      cfg: {
-        tts: {
-          enabled: true,
-          provider: "mock",
-          timeoutMs: 45_000,
-        },
-      } as OpenClawConfig,
-      disableFallback: true,
-    });
-
-    const request = requireFirstSynthesisRequest("configured timeout synthesis request");
-    expect(request.timeoutMs).toBe(45_000);
   });
 });

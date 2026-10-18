@@ -6,7 +6,6 @@ import {
   generateKeyPairSync,
   randomUUID,
   sign,
-  verify,
 } from "node:crypto";
 import fs from "node:fs";
 import { createRequire } from "node:module";
@@ -231,19 +230,6 @@ export function parseConnectChallengePayload(value: unknown): {
   return { nonce, issuedAtMs };
 }
 
-function protocolRangeForClient(
-  role: ConnectRole,
-  mode: ConnectMode,
-): { minProtocol: number; maxProtocol: number } {
-  return {
-    minProtocol:
-      role === "node" && mode === "node"
-        ? GATEWAY_MIN_NODE_PROTOCOL_VERSION
-        : GATEWAY_PROTOCOL_VERSION,
-    maxProtocol: GATEWAY_PROTOCOL_VERSION,
-  };
-}
-
 function publicKeyRawBase64Url(publicKeyPem: string): string {
   const der = createPublicKey(publicKeyPem).export({ type: "spki", format: "der" });
   return Buffer.from(der.subarray(-32)).toString("base64url");
@@ -262,19 +248,6 @@ export function createMobilePairingIdentity(): MobilePairingIdentity {
 
 function signDeviceAuthPayload(privateKeyPem: string, payload: string): string {
   return sign(null, Buffer.from(payload), createPrivateKey(privateKeyPem)).toString("base64url");
-}
-
-export function verifyDeviceAuthPayloadSignature(params: {
-  publicKeyPem: string;
-  payload: string;
-  signature: string;
-}): boolean {
-  return verify(
-    null,
-    Buffer.from(params.payload),
-    createPublicKey(params.publicKeyPem),
-    Buffer.from(params.signature, "base64url"),
-  );
 }
 
 export function parseQrBootstrapJson(value: unknown): { url: string; bootstrapToken: string } {
@@ -350,7 +323,6 @@ export function buildConnectRequest(params: {
   identity?: MobilePairingIdentity;
 }): JsonRecord {
   const challenge = parseConnectChallengePayload(params.challengePayload);
-  const protocolRange = protocolRangeForClient(params.role, params.mode);
   const signatureToken = params.auth?.token ?? params.auth?.bootstrapToken ?? null;
   const isNode = params.role === "node" && params.mode === "node";
   const device = params.identity
@@ -379,7 +351,8 @@ export function buildConnectRequest(params: {
     id: params.id ?? `connect-${randomUUID()}`,
     method: "connect",
     params: {
-      ...protocolRange,
+      minProtocol: isNode ? GATEWAY_MIN_NODE_PROTOCOL_VERSION : GATEWAY_PROTOCOL_VERSION,
+      maxProtocol: GATEWAY_PROTOCOL_VERSION,
       client: { ...params.client, mode: params.mode },
       caps: isNode ? [...MOBILE_PAIRING_NODE_CAPS] : [...MOBILE_PAIRING_OPERATOR_CAPS],
       locale: "en-US",
@@ -407,27 +380,33 @@ function parseFrame(value: unknown): JsonRecord | null {
   }
 }
 
-function receiveFrame(
+async function receiveFrame(
   socket: WebSocketLike,
   predicate: (frame: JsonRecord) => boolean,
+  trigger: () => void | Promise<void>,
   timeoutMs = RESPONSE_TIMEOUT_MS,
 ): Promise<JsonRecord> {
-  return new Promise((resolve, reject) => {
-    const timer = setTimeout(() => {
-      socket.off("message", onMessage);
-      reject(new Error("Gateway response timed out"));
-    }, timeoutMs);
-    const onMessage = (value: unknown) => {
-      const frame = parseFrame(value);
-      if (!frame || !predicate(frame)) {
-        return;
-      }
-      clearTimeout(timer);
-      socket.off("message", onMessage);
-      resolve(frame);
-    };
-    socket.on("message", onMessage);
-  });
+  let cleanup: (() => void) | undefined;
+  try {
+    const response = new Promise<JsonRecord>((resolve, reject) => {
+      const onMessage = (value: unknown) => {
+        const frame = parseFrame(value);
+        if (frame && predicate(frame)) {
+          resolve(frame);
+        }
+      };
+      const timer = setTimeout(() => reject(new Error("Gateway response timed out")), timeoutMs);
+      cleanup = () => {
+        clearTimeout(timer);
+        socket.off("message", onMessage);
+      };
+      socket.on("message", onMessage);
+    });
+    const [frame] = await Promise.all([response, trigger()]);
+    return frame;
+  } finally {
+    cleanup?.();
+  }
 }
 
 function waitForOpen(socket: WebSocketLike): Promise<void> {
@@ -451,12 +430,15 @@ async function closeSocket(socket: WebSocketLike, WebSocket: WebSocketConstructo
   }
   const closed = waitForClose(socket).then(() => undefined);
   socket.close();
-  await Promise.race([
-    closed,
-    new Promise<void>((resolve) => {
-      setTimeout(resolve, 1_000);
-    }),
-  ]);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<void>((resolve) => {
+    timer = setTimeout(resolve, 1_000);
+  });
+  try {
+    await Promise.race([closed, timeout]);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 function loadWebSocket(packageRoot: string): WebSocketConstructor {
@@ -489,15 +471,13 @@ export async function attemptConnect(params: {
   const socket = new params.WebSocket(params.url);
   const closeCode = waitForClose(socket);
   try {
-    const challenge = receiveFrame(
+    const challengeFrame = await receiveFrame(
       socket,
       (frame) => frame.type === "event" && frame.event === "connect.challenge",
+      () => waitForOpen(socket),
     );
-    await waitForOpen(socket);
-    const challengeFrame = await challenge;
-    const payload = isRecord(challengeFrame.payload) ? challengeFrame.payload : null;
     const connectRequest = buildConnectRequest({
-      challengePayload: payload,
+      challengePayload: challengeFrame.payload,
       client: params.client,
       mode: params.mode,
       role: params.role,
@@ -505,12 +485,11 @@ export async function attemptConnect(params: {
       auth: params.auth,
       identity: params.identity,
     });
-    const requestId = requireString(connectRequest.id, "connect request id");
     const response = receiveFrame(
       socket,
-      (frame) => frame.type === "res" && frame.id === requestId,
+      (frame) => frame.type === "res" && frame.id === connectRequest.id,
+      () => socket.send(JSON.stringify(connectRequest)),
     );
-    socket.send(JSON.stringify(connectRequest));
     return { socket, response: await response, closeCode };
   } catch (error) {
     await closeSocket(socket, params.WebSocket);
@@ -533,9 +512,11 @@ async function connect(params: Parameters<typeof attemptConnect>[0]): Promise<Co
 
 async function request(socket: WebSocketLike, method: string, params: JsonRecord = {}) {
   const id = `rpc-${randomUUID()}`;
-  const response = receiveFrame(socket, (frame) => frame.type === "res" && frame.id === id);
-  socket.send(JSON.stringify({ type: "req", id, method, params }));
-  const frame = await response;
+  const frame = await receiveFrame(
+    socket,
+    (candidate) => candidate.type === "res" && candidate.id === id,
+    () => socket.send(JSON.stringify({ type: "req", id, method, params })),
+  );
   if (frame.ok !== true) {
     throw new Error(`${method} failed`);
   }
@@ -623,34 +604,47 @@ async function assertMissingPassword(params: {
   }
 }
 
-async function auditPairingState(params: {
+type PairingBackendParams = {
   WebSocket: WebSocketConstructor;
   credentials: MobilePairingCredentials;
   password: string;
-  expectKnownNodeSurfaceUpgrade: boolean;
-}): Promise<MobilePairingAudit> {
+};
+
+async function withPairingBackend<T>(
+  params: PairingBackendParams,
+  scopes: string[],
+  run: (socket: WebSocketLike) => Promise<T>,
+): Promise<T> {
   // Match the node approval CLI's local backend shared-auth path. Keep this
-  // audit device-less so it cannot rotate mobile tokens.
-  const audit = await connect({
+  // device-less so it cannot rotate mobile tokens.
+  const operator = await connect({
     WebSocket: params.WebSocket,
     url: params.credentials.url,
     client: MOBILE_PAIRING_AUDIT_CLIENT,
     mode: "backend",
     role: "operator",
-    scopes: PAIRING_AUDIT_SCOPES,
+    scopes,
     auth: { password: params.password },
   });
   try {
-    readHelloAuth(audit.hello, "operator", PAIRING_AUDIT_SCOPES);
-    return validatePairingAudit({
-      devicePairing: await request(audit.socket, "device.pair.list"),
-      nodePairing: await request(audit.socket, "node.pair.list"),
+    readHelloAuth(operator.hello, "operator", scopes);
+    return await run(operator.socket);
+  } finally {
+    await closeSocket(operator.socket, params.WebSocket);
+  }
+}
+
+async function auditPairingState(
+  params: PairingBackendParams & { expectKnownNodeSurfaceUpgrade: boolean },
+): Promise<MobilePairingAudit> {
+  return withPairingBackend(params, PAIRING_AUDIT_SCOPES, async (socket) =>
+    validatePairingAudit({
+      devicePairing: await request(socket, "device.pair.list"),
+      nodePairing: await request(socket, "node.pair.list"),
       deviceId: params.credentials.identity.deviceId,
       expectKnownNodeSurfaceUpgrade: params.expectKnownNodeSurfaceUpgrade,
-    });
-  } finally {
-    await closeSocket(audit.socket, params.WebSocket);
-  }
+    }),
+  );
 }
 
 export function validatePairingAudit(params: {
@@ -685,59 +679,52 @@ export function validatePairingAudit(params: {
   if (!isRecord(pairedNode)) {
     throw new Error("paired mobile node missing");
   }
-  if (params.nodePairing.pending.length === 0) {
+  const pendingCount = params.nodePairing.pending.length;
+  let commandAdditions: string[] = [];
+  if (pendingCount === 0) {
     if (params.expectKnownNodeSurfaceUpgrade) {
       throw new Error("mobile node pairing omitted the expected command-surface reapproval");
     }
-    return {
-      pendingDevicePairingCount: 0,
-      pendingNodePairingCount: 0,
-      pairedDevicePresent: true,
-      pairedNodePresent: true,
-      nodeSurfaceReapprovalRequired: false,
-      nodeSurfaceCommandAdditions: [],
-    };
-  }
-  if (!params.expectKnownNodeSurfaceUpgrade || params.nodePairing.pending.length !== 1) {
-    throw new Error("mobile node pairing left an unexpected pending request");
-  }
-  const pendingNode = params.nodePairing.pending[0];
-  if (!isRecord(pendingNode) || pendingNode.nodeId !== params.deviceId) {
-    throw new Error("mobile node pairing pending identity changed");
-  }
-  const pairedCommands = new Set(
-    requireStringArray(pairedNode.commands ?? [], "paired node commands"),
-  );
-  const pendingCommands = requireStringArray(pendingNode.commands ?? [], "pending node commands");
-  const commandAdditions = pendingCommands
-    .filter((command) => !pairedCommands.has(command))
-    .toSorted();
-  if (JSON.stringify(commandAdditions) !== JSON.stringify(EXPECTED_UPGRADE_COMMAND_ADDITIONS)) {
-    throw new Error("mobile node pairing pending command expansion changed");
-  }
-  const pairedCaps = new Set(requireStringArray(pairedNode.caps ?? [], "paired node caps"));
-  const capabilityAdditions = requireStringArray(
-    pendingNode.caps ?? [],
-    "pending node caps",
-  ).filter((capability) => !pairedCaps.has(capability));
-  if (capabilityAdditions.length !== 0) {
-    throw new Error("mobile node pairing pending capability expansion changed");
-  }
-  const pairedPermissions = isRecord(pairedNode.permissions) ? pairedNode.permissions : {};
-  const pendingPermissions = isRecord(pendingNode.permissions) ? pendingNode.permissions : {};
-  if (
-    Object.entries(pendingPermissions).some(
-      ([permission, enabled]) => enabled === true && pairedPermissions[permission] !== true,
-    )
-  ) {
-    throw new Error("mobile node pairing pending permission expansion changed");
+  } else {
+    if (!params.expectKnownNodeSurfaceUpgrade || pendingCount !== 1) {
+      throw new Error("mobile node pairing left an unexpected pending request");
+    }
+    const pendingNode = params.nodePairing.pending[0];
+    if (!isRecord(pendingNode) || pendingNode.nodeId !== params.deviceId) {
+      throw new Error("mobile node pairing pending identity changed");
+    }
+    const pairedCommands = new Set(
+      requireStringArray(pairedNode.commands ?? [], "paired node commands"),
+    );
+    const pendingCommands = requireStringArray(pendingNode.commands ?? [], "pending node commands");
+    commandAdditions = pendingCommands.filter((command) => !pairedCommands.has(command)).toSorted();
+    if (JSON.stringify(commandAdditions) !== JSON.stringify(EXPECTED_UPGRADE_COMMAND_ADDITIONS)) {
+      throw new Error("mobile node pairing pending command expansion changed");
+    }
+    const pairedCaps = new Set(requireStringArray(pairedNode.caps ?? [], "paired node caps"));
+    const capabilityAdditions = requireStringArray(
+      pendingNode.caps ?? [],
+      "pending node caps",
+    ).filter((capability) => !pairedCaps.has(capability));
+    if (capabilityAdditions.length !== 0) {
+      throw new Error("mobile node pairing pending capability expansion changed");
+    }
+    const pairedPermissions = isRecord(pairedNode.permissions) ? pairedNode.permissions : {};
+    const pendingPermissions = isRecord(pendingNode.permissions) ? pendingNode.permissions : {};
+    if (
+      Object.entries(pendingPermissions).some(
+        ([permission, enabled]) => enabled === true && pairedPermissions[permission] !== true,
+      )
+    ) {
+      throw new Error("mobile node pairing pending permission expansion changed");
+    }
   }
   return {
     pendingDevicePairingCount: 0,
-    pendingNodePairingCount: 1,
+    pendingNodePairingCount: pendingCount,
     pairedDevicePresent: true,
     pairedNodePresent: true,
-    nodeSurfaceReapprovalRequired: true,
+    nodeSurfaceReapprovalRequired: pendingCount === 1,
     nodeSurfaceCommandAdditions: commandAdditions,
   };
 }
@@ -797,33 +784,14 @@ export async function approveBaselineNodePairing(params: {
   throw new Error("baseline node pairing did not complete");
 }
 
-async function completeBaselineNodePairing(params: {
-  WebSocket: WebSocketConstructor;
-  credentials: MobilePairingCredentials;
-  password: string;
-}): Promise<void> {
-  const operator = await connect({
-    WebSocket: params.WebSocket,
-    url: params.credentials.url,
-    client: MOBILE_PAIRING_AUDIT_CLIENT,
-    mode: "backend",
-    role: "operator",
-    scopes: [...MOBILE_PAIRING_APPROVAL_SCOPES],
-    auth: { password: params.password },
-  });
-  try {
-    readHelloAuth(operator.hello, "operator", [...MOBILE_PAIRING_APPROVAL_SCOPES]);
-    await approveBaselineNodePairing({
+async function completeBaselineNodePairing(params: PairingBackendParams): Promise<void> {
+  await withPairingBackend(params, [...MOBILE_PAIRING_APPROVAL_SCOPES], (socket) =>
+    approveBaselineNodePairing({
       deviceId: params.credentials.identity.deviceId,
-      listPairings: () => request(operator.socket, "node.pair.list"),
-      approvePairing: (requestId) =>
-        request(operator.socket, "node.pair.approve", {
-          requestId,
-        }),
-    });
-  } finally {
-    await closeSocket(operator.socket, params.WebSocket);
-  }
+      listPairings: () => request(socket, "node.pair.list"),
+      approvePairing: (requestId) => request(socket, "node.pair.approve", { requestId }),
+    }),
+  );
 }
 
 export function buildRedactedEvidence(params: {
@@ -858,30 +826,19 @@ export function buildRedactedEvidence(params: {
     nodeSurfaceReapprovalExpected: params.expectKnownNodeSurfaceUpgrade,
     missingPasswordReason: true,
     missingPasswordClose1008: true,
-    credentials: {
-      node: {
-        usedTokenHash: params.node.usedTokenHash,
-        storedTokenHash: params.node.storedTokenHash,
-        deviceTokenReturned: params.node.deviceTokenReturned,
-        tokenRotated: params.node.tokenRotated,
-      },
-      operator: {
-        usedTokenHash: params.operator.usedTokenHash,
-        storedTokenHash: params.operator.storedTokenHash,
-        deviceTokenReturned: params.operator.deviceTokenReturned,
-        tokenRotated: params.operator.tokenRotated,
-      },
-    },
+    credentials: Object.fromEntries(
+      (["node", "operator"] as const).map((role) => {
+        const { usedTokenHash, storedTokenHash, deviceTokenReturned, tokenRotated } = params[role];
+        return [role, { usedTokenHash, storedTokenHash, deviceTokenReturned, tokenRotated }];
+      }),
+    ),
   };
 }
 
-function ensurePrivateDirectory(directory: string): void {
+function writePrivateJson(file: string, value: unknown): void {
+  const directory = path.dirname(file);
   fs.mkdirSync(directory, { recursive: true, mode: 0o700 });
   fs.chmodSync(directory, 0o700);
-}
-
-function writePrivateJson(file: string, value: unknown): void {
-  ensurePrivateDirectory(path.dirname(file));
   fs.writeFileSync(file, `${JSON.stringify(value, null, 2)}\n`, { mode: 0o600 });
   fs.chmodSync(file, 0o600);
 }
@@ -928,16 +885,18 @@ async function verifyReconnect(params: {
 }): Promise<void> {
   const WebSocket = loadWebSocket(params.packageRoot);
   await assertMissingPassword({ WebSocket, credentials: params.credentials });
-  const node = await connect({
-    WebSocket,
-    url: params.credentials.url,
-    client: params.credentials.client,
-    mode: "node",
-    role: "node",
-    scopes: params.credentials.node.scopes,
-    auth: { token: params.credentials.node.token },
-    identity: params.credentials.identity,
-  });
+  const connectRole = (role: ConnectRole) =>
+    connect({
+      WebSocket,
+      url: params.credentials.url,
+      client: params.credentials.client,
+      mode: role === "node" ? "node" : "ui",
+      role,
+      scopes: params.credentials[role].scopes,
+      auth: { token: params.credentials[role].token },
+      identity: params.credentials.identity,
+    });
+  const node = await connectRole("node");
   let operator: ConnectResult | undefined;
   try {
     const nodeTransition = persistHelloCredential({
@@ -946,16 +905,7 @@ async function verifyReconnect(params: {
       hello: node.hello,
     });
     writePrivateJson(params.credentialsFile, params.credentials);
-    operator = await connect({
-      WebSocket,
-      url: params.credentials.url,
-      client: params.credentials.client,
-      mode: "ui",
-      role: "operator",
-      scopes: params.credentials.operator.scopes,
-      auth: { token: params.credentials.operator.token },
-      identity: params.credentials.identity,
-    });
+    operator = await connectRole("operator");
     const operatorTransition = persistHelloCredential({
       credentials: params.credentials,
       role: "operator",
@@ -1038,6 +988,9 @@ async function main(): Promise<void> {
   const credentialsFile = option(options, "--credentials");
   const evidenceFile = option(options, "--evidence");
   const password = requireString(process.env.GATEWAY_AUTH_PASSWORD_REF, "Gateway password env");
+  let credentials: MobilePairingCredentials;
+  let phase: string;
+  let expectKnownNodeSurfaceUpgrade: boolean;
   if (command === "bootstrap") {
     const qr = parseQrBootstrapJson(readJson(option(options, "--qr-json")));
     const identity = createMobilePairingIdentity();
@@ -1052,7 +1005,7 @@ async function main(): Promise<void> {
       auth: { bootstrapToken: qr.bootstrapToken },
       identity,
     });
-    const credentials = extractBootstrapCredentials({
+    credentials = extractBootstrapCredentials({
       url: qr.url,
       client: MOBILE_PAIRING_CLIENT,
       identity,
@@ -1065,32 +1018,27 @@ async function main(): Promise<void> {
       credentials,
       password,
     });
-    await verifyReconnect({
-      packageRoot,
-      credentials,
-      credentialsFile,
-      password,
-      phase: "baseline",
-      evidenceFile,
-      expectKnownNodeSurfaceUpgrade: false,
-    });
+    phase = "baseline";
+    expectKnownNodeSurfaceUpgrade = false;
   } else if (command === "verify") {
-    const credentials = validateCredentials(readJson(credentialsFile));
-    await verifyReconnect({
-      packageRoot,
-      credentials,
-      credentialsFile,
-      password,
-      phase: option(options, "--phase"),
-      evidenceFile,
-      expectKnownNodeSurfaceUpgrade: booleanOption(
-        options,
-        "--expect-known-node-surface-reapproval",
-      ),
-    });
+    credentials = validateCredentials(readJson(credentialsFile));
+    phase = option(options, "--phase");
+    expectKnownNodeSurfaceUpgrade = booleanOption(
+      options,
+      "--expect-known-node-surface-reapproval",
+    );
   } else {
     throw new Error("unknown mobile pairing client command");
   }
+  await verifyReconnect({
+    packageRoot,
+    credentials,
+    credentialsFile,
+    password,
+    phase,
+    evidenceFile,
+    expectKnownNodeSurfaceUpgrade,
+  });
   process.stdout.write(`${JSON.stringify({ phase: command, ok: true })}\n`);
 }
 

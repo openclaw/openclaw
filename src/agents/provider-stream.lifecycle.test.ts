@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { bindModelLlmRuntime } from "../llm/model-runtime-binding.js";
 import { createAssistantMessageEventStream } from "../llm/utils/event-stream.js";
 import { resolveProviderStreamFn } from "../plugins/provider-runtime.js";
-import { resolveCompactionProviderStream } from "./embedded-agent-runner/compaction-diagnostics.js";
 import { getModelProviderLocalServiceReconciler } from "./provider-local-service-reconcile.js";
 import {
   attachModelProviderLocalService,
@@ -42,7 +41,8 @@ const { fetchWithSsrFGuard, prepare, providerStream, reconcile, runtimeHandle } 
   };
 });
 
-vi.mock("../infra/net/fetch-guard.js", () => ({
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/fetch-guard.js")>()),
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode: vi.fn((params) => params),
 }));
@@ -170,10 +170,10 @@ describe("provider stream lifecycle registration", () => {
       },
     );
     expect(apiRegistry.getApiProvider("ollama")).toBeUndefined();
-    const streamFn = resolveCompactionProviderStream({
-      effectiveModel: model,
+    const streamFn = registerProviderStreamForModel({
+      model,
       agentDir: "/tmp/test-agent",
-      effectiveWorkspace: "/tmp/test-workspace",
+      workspaceDir: "/tmp/test-workspace",
       apiRegistry,
     });
 

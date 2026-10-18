@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
-import { afterEach, expect, it } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
+import * as onboardInference from "../commands/onboard-inference.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { waitForPluginCacheRetirement } from "../plugins/plugin-cache.js";
 import { withPluginLifecycleLease } from "../plugins/plugin-lifecycle-lease.js";
@@ -90,6 +91,7 @@ it.each([false, true])(
         },
       };
       await state.writeConfig(config);
+      const backend = vi.spyOn(onboardInference, "detectInferenceBackends").mockResolvedValue([]);
       try {
         for (let iteration = 0; iteration < 2; iteration++) {
           const started = createDeferredCore();
@@ -101,12 +103,7 @@ it.each([false, true])(
             }
           };
           process.on(observationEvent, observe);
-          const work = detectSetupInference(
-            {
-              detectInferenceBackends: async () => [],
-            },
-            "main",
-          );
+          const work = detectSetupInference("main");
           try {
             await Promise.race([started.promise, work]);
             expect(phases).toEqual(["detect"]);
@@ -146,6 +143,7 @@ it.each([false, true])(
         ).toEqual(new Set([id]));
         expect(process.listenerCount(nativeEvent)).toBe(nativeBefore);
       } finally {
+        backend.mockRestore();
         // Restore only this fixture's events when running the regression against its leaking predecessor.
         process.removeAllListeners(nativeEvent);
         process.removeAllListeners(releaseEvent);

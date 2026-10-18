@@ -1,3 +1,4 @@
+import { AsyncLocalStorage } from "node:async_hooks";
 import { coerceErrorMessage, extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
@@ -36,7 +37,6 @@ export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFai
 }
 
 const SQLITE_INSPECTION_OPERATIONS = {
-  coordinator: "acquiring its state-handles coordinator",
   source: "opening the source database",
   snapshot: "creating its private snapshot",
 } as const;
@@ -51,6 +51,33 @@ const nativeOpenFailures = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteNativeOpenFailures"),
   () => new WeakSet<object>(),
 );
+
+type SqliteSnapshotFailureScope = { failure?: { error: unknown } };
+const snapshotFailureScopes = resolveGlobalSingleton(
+  Symbol.for("openclaw.sqliteSnapshotFailureScopes"),
+  () => new AsyncLocalStorage<SqliteSnapshotFailureScope>(),
+);
+
+/** A failed native request stays an inspection failure if an optional consumer catches it. */
+export async function withSqliteSnapshotFailureScope<T>(operation: () => Promise<T>): Promise<T> {
+  if (snapshotFailureScopes.getStore()) {
+    return operation();
+  }
+  const scope: SqliteSnapshotFailureScope = {};
+  const result = await snapshotFailureScopes.run(scope, operation);
+  if (scope.failure) {
+    throw scope.failure.error;
+  }
+  return result;
+}
+
+/** Call after request cleanup settles, with the final error and its native cause intact. */
+export function recordSqliteSnapshotFailure(error: unknown): void {
+  const scope = snapshotFailureScopes.getStore();
+  if (scope) {
+    scope.failure ??= { error };
+  }
+}
 
 export function markSqliteNativeOpenFailure(error: unknown): void {
   if (error !== null && typeof error === "object") {

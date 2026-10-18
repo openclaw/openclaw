@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { WorkerSshEndpoint as WorkerEnvironmentSshEndpoint } from "../../plugins/types.js";
-import { normalizeWorkerSshEndpoint } from "./store.js";
+import { normalizeWorkerSshEndpoint } from "./store-validation.js";
 
 const HOST_KEY = ["ssh-ed25519", "AAAA"].join(" ");
 const SSH_ENDPOINT: WorkerEnvironmentSshEndpoint = {

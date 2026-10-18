@@ -53,13 +53,8 @@ class SocketTimeoutError extends Error {}
 
 function createSocketReader(socket: net.Socket) {
   let failure: Error | undefined;
-  const waiters = new Set<() => void>();
-  const wake = () => {
-    for (const waiter of waiters) {
-      waiter();
-    }
-    waiters.clear();
-  };
+  let resumeRead: (() => void) | undefined;
+  const wake = () => resumeRead?.();
   const onEnd = () => {
     failure ??= new SocketEndedError(socket.read() ?? Buffer.alloc(0));
     wake();
@@ -87,8 +82,9 @@ function createSocketReader(socket: net.Socket) {
           throw failure;
         }
         await new Promise<void>((resolve) => {
-          waiters.add(resolve);
+          resumeRead = resolve;
         });
+        resumeRead = undefined;
       }
     },
     detach(): void {

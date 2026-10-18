@@ -5,6 +5,7 @@ import {
   setSessionWorkspaceError,
   isCurrentSessionWorkspace,
   openSessionWorkspacePreview,
+  sessionWorkspaceForHost,
 } from "./chat-session-workspace-state.ts";
 import type {
   SessionWorkspaceHost,
@@ -30,6 +31,7 @@ export function openWorkspaceItem<T>(
     label: string;
     resolveLabel?: (result: T) => string | undefined;
     resolveKey?: (result: T) => string | undefined;
+    resolveError?: (error: unknown) => string | undefined;
   },
 ) {
   if (!state.client || !state.connected) {
@@ -60,6 +62,7 @@ export function openWorkspaceItem<T>(
     workspace.previews = [...workspace.previews];
   }
   state.handleOpenSidebar(request);
+  sessionWorkspaceForHost(state).publish();
   const previous = preview.content;
   if (
     previous !== request &&
@@ -91,8 +94,7 @@ export function openWorkspaceItem<T>(
       return;
     }
     setSessionWorkspaceError(workspace, message, read);
-    const unavailable = { kind: "unavailable" as const, message };
-    preview.content = unavailable;
+    preview.content = { kind: "unavailable", message };
     read.published = capturePreview(preview);
     workspace.previews = [...workspace.previews];
   };
@@ -165,9 +167,11 @@ export function openWorkspaceItem<T>(
         workspace.previews = [...workspace.previews];
       }
     } catch (error) {
-      fail(formatUiError(error));
+      fail(options.resolveError?.(error) ?? formatUiError(error));
     } finally {
-      state.requestUpdate?.();
+      if (isCurrentSessionWorkspace(state, workspace)) {
+        sessionWorkspaceForHost(state).publish();
+      }
     }
   })();
 }

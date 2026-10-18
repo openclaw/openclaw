@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/health";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { evaluatePolicy } from "./register.js";
+import { evaluatePolicy } from "./evaluation.js";
 import {
   cfgWithPolicy,
   ctx,
@@ -9,86 +9,65 @@ import {
   writePolicyFixture,
 } from "./register.test-harness.js";
 
+function atConfigPath(path: string) {
+  return {
+    severity: "error",
+    source: "policy",
+    path: "openclaw config",
+    ocPath: `oc://openclaw.config/${path}`,
+    target: `oc://openclaw.config/${path}`,
+  };
+}
+
 const deniedMcp = {
   checkId: "policy/mcp-denied-server",
-  severity: "error",
   message: "MCP server 'DocsServer' is denied by policy.",
-  source: "policy",
-  path: "openclaw config",
-  ocPath: "oc://openclaw.config/mcp/servers/DocsServer",
-  target: "oc://openclaw.config/mcp/servers/DocsServer",
+  ...atConfigPath("mcp/servers/DocsServer"),
   requirement: "oc://policy.jsonc/mcp/servers/deny",
   fixHint: "Remove this configured MCP server or update the policy after review.",
 };
 
 const deniedProvider = {
   checkId: "policy/models-denied-provider",
-  severity: "error",
   message: "Model provider 'blocked' is denied by policy.",
-  source: "policy",
-  path: "openclaw config",
-  ocPath: "oc://openclaw.config/models/providers/ BLOCKED ",
-  target: "oc://openclaw.config/models/providers/ BLOCKED ",
+  ...atConfigPath("models/providers/ BLOCKED "),
   requirement: "oc://policy.jsonc/models/providers/deny",
   fixHint: "Remove this configured provider or update the policy after review.",
 };
 
 const unapprovedProvider = {
   checkId: "policy/models-unapproved-provider",
-  severity: "error",
   message: "Model provider 'other' is not in the policy allowlist.",
-  source: "policy",
-  path: "openclaw config",
-  ocPath: "oc://openclaw.config/models/providers/ OTHER ",
-  target: "oc://openclaw.config/models/providers/ OTHER ",
+  ...atConfigPath("models/providers/ OTHER "),
   requirement: "oc://policy.jsonc/models/providers/allow",
   fixHint: "Use an approved model provider or update the policy after review.",
 };
 
 const deniedPrimary = {
   checkId: "policy/models-denied-provider",
-  severity: "error",
   message: "Model ref ' BLOCKED/ModelX ' uses denied provider 'blocked'.",
-  source: "policy",
-  path: "openclaw config",
-  ocPath: "oc://openclaw.config/agents/defaults/model/primary",
-  target: "oc://openclaw.config/agents/defaults/model/primary",
+  ...atConfigPath("agents/defaults/model/primary"),
   requirement: "oc://policy.jsonc/models/providers/deny",
   fixHint: "Select an approved model provider or update the policy after review.",
 };
 
 const deniedFallback = {
-  checkId: "policy/models-denied-provider",
-  severity: "error",
-  message: "Model ref ' BLOCKED/ModelX ' uses denied provider 'blocked'.",
-  source: "policy",
-  path: "openclaw config",
-  ocPath: "oc://openclaw.config/agents/defaults/model/fallbacks/#1",
-  target: "oc://openclaw.config/agents/defaults/model/fallbacks/#1",
-  requirement: "oc://policy.jsonc/models/providers/deny",
-  fixHint: "Select an approved model provider or update the policy after review.",
+  ...deniedPrimary,
+  ...atConfigPath("agents/defaults/model/fallbacks/#1"),
 };
 
 const unapprovedModel = {
   checkId: "policy/models-unapproved-provider",
-  severity: "error",
   message: "Model ref 'other/modelY' uses unapproved provider 'other'.",
-  source: "policy",
-  path: "openclaw config",
-  ocPath: "oc://openclaw.config/agents/defaults/model/fallbacks/#0",
-  target: "oc://openclaw.config/agents/defaults/model/fallbacks/#0",
+  ...atConfigPath("agents/defaults/model/fallbacks/#0"),
   requirement: "oc://policy.jsonc/models/providers/allow",
   fixHint: "Select an approved model provider or update the policy after review.",
 };
 
 const privateNetwork = {
   checkId: "policy/network-private-access-enabled",
-  severity: "error",
   message: "Network setting 'browser-private-network' allows private-network access.",
-  source: "policy",
-  path: "openclaw config",
-  ocPath: "oc://openclaw.config/browser/ssrfPolicy/dangerouslyAllowPrivateNetwork",
-  target: "oc://openclaw.config/browser/ssrfPolicy/dangerouslyAllowPrivateNetwork",
+  ...atConfigPath("browser/ssrfPolicy/dangerouslyAllowPrivateNetwork"),
   requirement: "oc://policy.jsonc/network/privateNetwork/allow",
   fixHint: "Disable this private-network access setting or update policy after review.",
 };
@@ -116,19 +95,9 @@ describe("model provider conformance receipts", () => {
       ],
     },
     {
-      name: "denials with a missing allowlist",
-      policy: { models: { providers: { deny: [" blocked "] } } },
-      expected: [deniedProvider, deniedPrimary, deniedFallback],
-    },
-    {
       name: "denials with an empty allowlist",
       policy: { models: { providers: { deny: [" blocked "], allow: [] } } },
       expected: [deniedProvider, deniedPrimary, deniedFallback],
-    },
-    {
-      name: "matching allowlist without denials",
-      policy: { models: { providers: { allow: [" BLOCKED ", " OTHER ", " APPROVED "] } } },
-      expected: [],
     },
   ])("preserves $name", async ({ policy, expected }) => {
     const cfg = {

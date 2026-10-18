@@ -19,6 +19,7 @@ import {
   clearSecretsRuntimeSnapshot,
   prepareSecretsRuntimeSnapshot,
 } from "../secrets/runtime.js";
+import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -160,6 +161,7 @@ function hotReloadRuntime() {
     createDefaultGatewayReloadState();
   const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
   const handlers = createGatewayReloadHandlers({
+    scheduler: createTestGatewayScheduler(),
     deps: {} as GatewayReloadHandlerParams["deps"],
     broadcast: vi.fn(),
     getState: () => runtimeState,

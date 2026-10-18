@@ -16,11 +16,6 @@ export class TranscriptPrependAnchor {
     return this.pending?.messageKey ?? null;
   }
 
-  /** Keep the retained row mounted while virtual and native offsets reconcile. */
-  get rowKey(): string | null {
-    return this.pending?.rowKey ?? null;
-  }
-
   /** Keep the retained bubble mounted against the committed, not candidate, row map. */
   extractRange(
     range: Range,
@@ -29,7 +24,9 @@ export class TranscriptPrependAnchor {
   ): number[] {
     const messageKey = this.messageKey;
     const rowKey =
-      (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ?? this.rowKey;
+      (messageKey === null ? null : this.committedMessageRows.get(messageKey)) ??
+      this.pending?.rowKey ??
+      null;
     return extractTranscriptRange(range, indexes, [focusedRowKey, rowKey]);
   }
 
@@ -136,11 +133,11 @@ function captureTranscriptPrependAnchor(
 
 /** Reconcile the inner-message anchor after the virtualizer commits its row anchor. */
 function restoreTranscriptPrependAnchor(
-  anchor: ChatTranscriptPrependAnchor | null,
+  anchor: ChatTranscriptPrependAnchor,
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
 ): boolean {
-  if (!anchor || !scrollElement) {
+  if (!scrollElement) {
     return false;
   }
   // Group renderers may replace the bubble at an array index during prepend;

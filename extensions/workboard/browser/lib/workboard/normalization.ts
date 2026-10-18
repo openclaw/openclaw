@@ -1,5 +1,4 @@
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { normalizeTaskSummary } from "../tasks/task-summary.ts";
 import {
   normalizeEvents,
   normalizeExecution,
@@ -7,13 +6,14 @@ import {
 } from "./metadata-normalization.ts";
 import {
   isValidWorkboardBoardId,
+  normalizeWorkboardSessionsBoardSpec,
   WORKBOARD_PRIORITIES,
   WORKBOARD_STATUSES,
   type WorkboardBoardSummary,
   type WorkboardCard,
+  type WorkboardCardCursor,
   type WorkboardPriority,
   type WorkboardStatus,
-  type WorkboardTaskSummary,
 } from "./types.ts";
 
 function normalizeCount(value: unknown): number {
@@ -40,6 +40,9 @@ function normalizeBoardSummary(value: unknown): WorkboardBoardSummary | null {
     typeof value.automationJobId === "string" ? value.automationJobId.trim() : "";
   return {
     id,
+    ...(value.kind === "sessions"
+      ? { kind: "sessions" as const, sessions: normalizeWorkboardSessionsBoardSpec(value.sessions) }
+      : {}),
     total: normalizeCount(value.total),
     active: normalizeCount(value.active),
     archived: normalizeCount(value.archived),
@@ -89,7 +92,6 @@ function normalizeCard(value: unknown): WorkboardCard | null {
     ...(typeof value.agentId === "string" ? { agentId: value.agentId } : {}),
     ...(typeof value.sessionKey === "string" ? { sessionKey: value.sessionKey } : {}),
     ...(typeof value.runId === "string" ? { runId: value.runId } : {}),
-    ...(typeof value.taskId === "string" ? { taskId: value.taskId } : {}),
     ...(typeof value.sourceUrl === "string" ? { sourceUrl: value.sourceUrl } : {}),
     ...(execution ? { execution } : {}),
     ...(typeof value.startedAt === "number" ? { startedAt: value.startedAt } : {}),
@@ -103,9 +105,10 @@ export function normalizeCardsPayload(payload: unknown): {
   cards: WorkboardCard[];
   boards: WorkboardBoardSummary[];
   statuses: readonly WorkboardStatus[];
+  nextCursor: WorkboardCardCursor | null;
 } {
   if (!isRecord(payload)) {
-    return { cards: [], boards: [], statuses: WORKBOARD_STATUSES };
+    return { cards: [], boards: [], statuses: WORKBOARD_STATUSES, nextCursor: null };
   }
   const cards = Array.isArray(payload.cards)
     ? payload.cards.map(normalizeCard).filter((card): card is WorkboardCard => card !== null)
@@ -120,7 +123,15 @@ export function normalizeCardsPayload(payload: unknown): {
         .map(normalizeBoardSummary)
         .filter((board): board is WorkboardBoardSummary => board !== null)
     : [];
-  return { cards, boards, statuses: statuses.length ? statuses : WORKBOARD_STATUSES };
+  const cursor = payload.nextCursor;
+  const nextCursor =
+    isRecord(cursor) &&
+    typeof cursor.position === "number" &&
+    typeof cursor.createdAt === "number" &&
+    typeof cursor.id === "string"
+      ? { position: cursor.position, createdAt: cursor.createdAt, id: cursor.id }
+      : null;
+  return { cards, boards, statuses: statuses.length ? statuses : WORKBOARD_STATUSES, nextCursor };
 }
 
 export function normalizeCardPayload(payload: unknown): WorkboardCard {
@@ -129,22 +140,4 @@ export function normalizeCardPayload(payload: unknown): WorkboardCard {
     throw new Error("workboard response did not include a card");
   }
   return card;
-}
-
-export function normalizeTasksPage(payload: unknown): {
-  tasks: WorkboardTaskSummary[];
-  nextCursor: string | null;
-} {
-  if (!isRecord(payload) || !Array.isArray(payload.tasks)) {
-    return { tasks: [], nextCursor: null };
-  }
-  return {
-    tasks: payload.tasks
-      .map(normalizeTaskSummary)
-      .filter((task): task is WorkboardTaskSummary => task !== null),
-    nextCursor:
-      typeof payload.nextCursor === "string" && payload.nextCursor.trim()
-        ? payload.nextCursor.trim()
-        : null,
-  };
 }

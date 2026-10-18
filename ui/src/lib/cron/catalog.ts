@@ -22,11 +22,8 @@ export function loadCronCatalog(
       compact: true,
     });
     catalogs.set(client, pending);
-    const request = pending;
-    void request.catch(() => {
-      if (catalogs.get(client) === request) {
-        catalogs.delete(client);
-      }
+    void pending.catch(() => {
+      catalogs.delete(client);
     });
   }
   return pending;

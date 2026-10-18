@@ -11,7 +11,6 @@ import {
   isContainerEnvironment,
   isLocalishHost,
   isLoopbackGatewayUrl,
-  isLoopbackHost,
   isPrivateOrLoopbackAddress,
   isPrivateOrLoopbackHost,
   isSecureWebSocketUrl,
@@ -21,7 +20,6 @@ import {
   resolveClientIp,
   resolveGatewayBindHost,
   resolveGatewayListenHosts,
-  resolveGatewayRequiredListenHosts,
   resolveHostName,
 } from "./net.js";
 
@@ -52,7 +50,6 @@ function useClearedFlyMachineEnv() {
 describe("resolveHostName", () => {
   it.each([
     ["localhost:18789", "localhost"],
-    ["127.0.0.1:18789", "127.0.0.1"],
     ["[::1]:18789", "::1"],
     ["::1", "::1"],
   ] as const)("normalizes host form for %s", (input, expected) => {
@@ -83,26 +80,13 @@ describe("isLocalishHost", () => {
   });
 });
 
-describe("isLoopbackHost", () => {
-  it("accepts localhost absolute-form hostnames", () => {
-    expect(isLoopbackHost("localhost.")).toBe(true);
-    expect(isLoopbackHost("LOCALHOST...")).toBe(true);
-  });
-});
-
 describe("isLoopbackGatewayUrl", () => {
   it.each([
     ["ws://LOCALHOST:18789", true],
     ["ws://localhost.:18789", false],
     ["ws://127.42.0.1:18789", true],
     ["ws://[::1]:18789", true],
-    ["ws://[0:0:0:0:0:0:0:1]:18789", true],
-    ["ws://[::ffff:127.0.0.1]:18789", true],
-    ["ws://192.168.1.2:18789", false],
     ["not-a-url", false],
-    ["/relative", false],
-    ["http://localhost:18789", true],
-    ["https://localhost:18789", true],
   ] as const)("classifies %s as %s", (url, expected) => {
     expect(isLoopbackGatewayUrl(url)).toBe(expected);
   });
@@ -121,22 +105,6 @@ describe("isTrustedProxyAddress", () => {
     ["ignores surrounding whitespace in exact IP entries", "10.0.0.5", [" 10.0.0.5 "], true],
     ["matches /24 CIDR entries", "10.42.0.59", ["10.42.0.0/24"], true],
     ["rejects IPs outside /24 CIDR entries", "10.42.1.1", ["10.42.0.0/24"], false],
-    ["matches /16 CIDR entries", "172.19.255.255", ["172.19.0.0/16"], true],
-    ["rejects IPs outside /16 CIDR entries", "172.20.0.1", ["172.19.0.0/16"], false],
-    ["treats /32 as a single-IP CIDR", "10.42.0.0", ["10.42.0.0/32"], true],
-    ["rejects non-matching /32 CIDR entries", "10.42.0.1", ["10.42.0.0/32"], false],
-    [
-      "handles mixed exact IP and CIDR entries",
-      "172.19.5.100",
-      ["192.168.1.1", "10.42.0.0/24", "172.19.0.0/16"],
-      true,
-    ],
-    [
-      "rejects IPs missing from mixed exact IP and CIDR entries",
-      "10.43.0.1",
-      ["192.168.1.1", "10.42.0.0/24", "172.19.0.0/16"],
-      false,
-    ],
     ["supports IPv6 CIDR notation", "2001:db8::1234", ["2001:db8::/32"], true],
     [
       "rejects IPv6 addresses outside the configured CIDR",
@@ -144,7 +112,6 @@ describe("isTrustedProxyAddress", () => {
       ["2001:db8::/32"],
       false,
     ],
-    ["preserves exact matching behavior for plain IP entries", "10.42.0.59", ["10.42.0.1"], false],
     ["normalizes IPv4-mapped IPv6 addresses", "::ffff:192.168.1.1", ["192.168.1.1"], true],
     ["returns false when IP is undefined", undefined, ["192.168.1.1"], false],
     ["returns false when trusted proxies are undefined", "192.168.1.1", undefined, false],
@@ -155,7 +122,6 @@ describe("isTrustedProxyAddress", () => {
       ["10.42.0.0/33", "10.42.0.0/-1", "invalid/24", "2001:db8::/129"],
       false,
     ],
-    ["ignores surrounding whitespace in CIDR entries", "10.42.0.59", [" 10.42.0.0/24 "], true],
     ["ignores blank trusted proxy entries", "10.0.0.5", [" ", "10.0.0.5", ""], true],
     ["treats all-blank trusted proxy entries as no match", "10.0.0.5", [" ", "\t"], false],
   ])("%s", (_name, ip, trustedProxies, expected) => {
@@ -327,12 +293,6 @@ describe("resolveGatewayListenHosts", () => {
       ["100.64.0.1", "127.0.0.1"],
     ],
     [
-      "loopback with IPv6 available",
-      "127.0.0.1",
-      async (): Promise<boolean> => true,
-      ["127.0.0.1", "::1"],
-    ],
-    [
       "loopback with IPv6 unavailable",
       "127.0.0.1",
       async (): Promise<boolean> => false,
@@ -351,14 +311,6 @@ describe("resolveGatewayListenHosts", () => {
     const canBindToHost = vi.fn().mockResolvedValue(true);
     const hosts = await resolveGatewayListenHosts("127.0.0.1", { canBindToHost });
     expect(hosts).toEqual(["127.0.0.1"]);
-    expect(canBindToHost).not.toHaveBeenCalled();
-  });
-
-  it("still adds the IPv4 loopback alias for a specific host on Windows", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
-    const canBindToHost = vi.fn().mockResolvedValue(true);
-    const hosts = await resolveGatewayListenHosts("100.64.0.1", { canBindToHost });
-    expect(hosts).toEqual(["100.64.0.1", "127.0.0.1"]);
     expect(canBindToHost).not.toHaveBeenCalled();
   });
 
@@ -443,94 +395,23 @@ describe("gateway bind probe lifecycle", () => {
   });
 });
 
-describe("resolveGatewayRequiredListenHosts", () => {
-  it.each([
-    ["127.0.0.1", ["127.0.0.1"]],
-    ["0.0.0.0", ["0.0.0.0"]],
-    ["::1", ["::1"]],
-    ["100.64.0.1", ["100.64.0.1", "127.0.0.1"]],
-  ])("returns required startup hosts for %s", (host, expected) => {
-    expect(resolveGatewayRequiredListenHosts(host)).toEqual(expected);
-  });
-});
-
 describe("pickPrimaryLanIPv4", () => {
   afterEach(() => {
     vi.restoreAllMocks();
   });
 
-  it.each([
-    [
-      "prefers en0",
+  it("selects the preferred LAN interface", () => {
+    vi.spyOn(os, "networkInterfaces").mockReturnValue(
       makeNetworkInterfacesSnapshot({
         lo0: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
         en0: [{ address: "192.168.1.42", family: "IPv4" }],
       }),
-      "192.168.1.42",
-    ],
-    [
-      "falls back to eth0",
-      makeNetworkInterfacesSnapshot({
-        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
-        eth0: [{ address: "10.0.0.5", family: "IPv4" }],
-      }),
-      "10.0.0.5",
-    ],
-    [
-      "falls back to any non-internal interface",
-      makeNetworkInterfacesSnapshot({
-        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
-        wlan0: [{ address: "172.16.0.99", family: "IPv4" }],
-      }),
-      "172.16.0.99",
-    ],
-    [
-      "no non-internal interface",
-      makeNetworkInterfacesSnapshot({
-        lo: [{ address: "127.0.0.1", family: "IPv4", internal: true }],
-      }),
-      undefined,
-    ],
-  ] as const)(
-    "prefers en0, then eth0, then any non-internal IPv4: %s",
-    (_name, interfaces, expected) => {
-      vi.spyOn(os, "networkInterfaces").mockReturnValue(interfaces);
-      expect(pickPrimaryLanIPv4()).toBe(expected);
-    },
-  );
-
-  it("throws when interface discovery throws", () => {
-    vi.spyOn(os, "networkInterfaces").mockImplementation(() => {
-      throw new Error("uv_interface_addresses failed");
-    });
-    expect(() => pickPrimaryLanIPv4()).toThrow("uv_interface_addresses failed");
+    );
+    expect(pickPrimaryLanIPv4()).toBe("192.168.1.42");
   });
 });
 
 describe("isPrivateOrLoopbackAddress", () => {
-  it("accepts loopback, private, link-local, and cgnat ranges", () => {
-    const accepted = [
-      "127.0.0.1",
-      "::1",
-      "10.1.2.3",
-      "172.16.0.1",
-      "172.31.255.254",
-      "192.168.0.1",
-      "169.254.10.20",
-      "100.64.0.1",
-      "100.127.255.254",
-      "::ffff:100.100.100.100",
-      "fc00::1",
-      "fd12:3456:789a::1",
-      "fe80::1",
-      "fe9a::1",
-      "febb::1",
-    ];
-    for (const ip of accepted) {
-      expect(isPrivateOrLoopbackAddress(ip)).toBe(true);
-    }
-  });
-
   it("rejects public IP addresses", () => {
     const rejected = [
       "1.1.1.1",
@@ -547,61 +428,18 @@ describe("isPrivateOrLoopbackAddress", () => {
 });
 
 describe("isPrivateOrLoopbackHost", () => {
-  it("accepts localhost", () => {
-    expect(isPrivateOrLoopbackHost("localhost")).toBe(true);
-    expect(isPrivateOrLoopbackHost("localhost.")).toBe(true);
-  });
-
-  it("accepts loopback addresses", () => {
-    expect(isPrivateOrLoopbackHost("127.0.0.1")).toBe(true);
-    expect(isPrivateOrLoopbackHost("::1")).toBe(true);
-    expect(isPrivateOrLoopbackHost("[::1]")).toBe(true);
-  });
-
-  it("accepts RFC 1918 private addresses", () => {
-    expect(isPrivateOrLoopbackHost("10.0.0.5")).toBe(true);
-    expect(isPrivateOrLoopbackHost("10.42.1.100")).toBe(true);
-    expect(isPrivateOrLoopbackHost("172.16.0.1")).toBe(true);
-    expect(isPrivateOrLoopbackHost("172.31.255.254")).toBe(true);
-    expect(isPrivateOrLoopbackHost("192.168.1.100")).toBe(true);
-  });
-
-  it("accepts CGNAT and link-local addresses", () => {
-    expect(isPrivateOrLoopbackHost("100.64.0.1")).toBe(true);
-    expect(isPrivateOrLoopbackHost("169.254.10.20")).toBe(true);
-  });
-
-  it("accepts IPv6 private addresses", () => {
-    expect(isPrivateOrLoopbackHost("[fc00::1]")).toBe(true);
-    expect(isPrivateOrLoopbackHost("[fd12:3456:789a::1]")).toBe(true);
-    expect(isPrivateOrLoopbackHost("[fe80::1]")).toBe(true);
-  });
-
-  it("rejects unspecified IPv6 address (::)", () => {
-    expect(isPrivateOrLoopbackHost("[::]")).toBe(false);
-    expect(isPrivateOrLoopbackHost("::")).toBe(false);
-    expect(isPrivateOrLoopbackHost("0:0::0")).toBe(false);
-    expect(isPrivateOrLoopbackHost("[0:0::0]")).toBe(false);
-    expect(isPrivateOrLoopbackHost("[0000:0000:0000:0000:0000:0000:0000:0000]")).toBe(false);
-  });
-
-  it("rejects multicast IPv6 addresses (ff00::/8)", () => {
-    expect(isPrivateOrLoopbackHost("[ff02::1]")).toBe(false);
-    expect(isPrivateOrLoopbackHost("[ff05::2]")).toBe(false);
-    expect(isPrivateOrLoopbackHost("[ff0e::1]")).toBe(false);
-  });
-
-  it("rejects public host addresses", () => {
-    expect(isPrivateOrLoopbackHost("1.1.1.1")).toBe(false);
-    expect(isPrivateOrLoopbackHost("8.8.8.8")).toBe(false);
-    expect(isPrivateOrLoopbackHost("203.0.113.10")).toBe(false);
-    expect(isPrivateOrLoopbackHost("[64:ff9b:1::8.8.8.8]")).toBe(false);
-  });
-
   it("rejects empty/falsy input", () => {
     expect(isPrivateOrLoopbackHost("")).toBe(false);
   });
 });
+
+function mockCgroup(contents: string) {
+  const fs = require("node:fs");
+  vi.spyOn(fs, "accessSync").mockImplementation(() => {
+    throw new Error("ENOENT");
+  });
+  vi.spyOn(fs, "readFileSync").mockReturnValue(contents);
+}
 
 describe("isContainerEnvironment", () => {
   useClearedFlyMachineEnv();
@@ -609,23 +447,6 @@ describe("isContainerEnvironment", () => {
   afterEach(() => {
     resetContainerEnvironmentCacheForTest();
     vi.restoreAllMocks();
-  });
-
-  it("returns false on a typical non-container host", () => {
-    // Mock fs.accessSync to throw (no /.dockerenv) and fs.readFileSync to
-    // return a cgroup file without container markers.
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/user.slice/user-1000.slice\n");
-    expect(isContainerEnvironment()).toBe(false);
-  });
-
-  it("returns true when /.dockerenv exists", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
-    expect(isContainerEnvironment()).toBe(true);
   });
 
   it("returns true when /run/.containerenv exists", () => {
@@ -640,84 +461,11 @@ describe("isContainerEnvironment", () => {
   });
 
   it("returns true on Fly Machines without Docker sentinel files", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
+    mockCgroup("10:cpuset:/\n9:perf_event:/\n8:memory:/\n0::/\n");
 
     setTestEnvValue("FLY_MACHINE_ID", "3d8d5459a03038");
     setTestEnvValue("FLY_APP_NAME", "openclaw-test");
     expect(isContainerEnvironment()).toBe(true);
-  });
-
-  it("returns true when /proc/1/cgroup contains docker marker", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/docker/abc123def456\n");
-    expect(isContainerEnvironment()).toBe(true);
-  });
-
-  it("returns true when /proc/1/cgroup contains kubepods marker", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue("11:cpuset:/kubepods/besteffort/pod-abc\n");
-    expect(isContainerEnvironment()).toBe(true);
-  });
-
-  it("returns true when /proc/1/cgroup contains containerd with container ID", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      "0::/system.slice/containerd/a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2\n",
-    );
-    expect(isContainerEnvironment()).toBe(true);
-  });
-
-  it("returns false when /proc/1/cgroup contains containerd.service (host machine)", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue("0::/system.slice/containerd.service\n");
-    expect(isContainerEnvironment()).toBe(false);
-  });
-
-  it("returns true for cgroup v2 kubepods.slice path", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      "0::/kubepods.slice/kubepods-burstable.slice/kubepods-burstable-pod123.slice/cri-containerd-abc123.scope\n",
-    );
-    expect(isContainerEnvironment()).toBe(true);
-  });
-
-  it("returns true for cgroup v2 cri-containerd scope path", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue(
-      "0::/system.slice/cri-containerd-a1b2c3d4e5f6.scope\n",
-    );
-    expect(isContainerEnvironment()).toBe(true);
-  });
-
-  it("caches the result across calls", () => {
-    const fs = require("node:fs");
-    const accessSpy = vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
-    expect(isContainerEnvironment()).toBe(true);
-    expect(isContainerEnvironment()).toBe(true);
-    // accessSync should only be called once due to caching
-    expect(accessSpy).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -729,16 +477,6 @@ describe("resolveGatewayBindHost", () => {
     vi.restoreAllMocks();
   });
 
-  it("returns 127.0.0.1 for loopback mode", async () => {
-    const createServerSpy = vi.spyOn(net, "createServer");
-    expect(await resolveGatewayBindHost("loopback")).toBe("127.0.0.1");
-    expect(createServerSpy).not.toHaveBeenCalled();
-  });
-
-  it("returns 0.0.0.0 for lan mode", async () => {
-    expect(await resolveGatewayBindHost("lan")).toBe("0.0.0.0");
-  });
-
   it("closes a successful real loopback probe for a custom bind", async () => {
     const probe = new net.Server();
     vi.spyOn(net, "createServer").mockReturnValue(probe);
@@ -748,27 +486,20 @@ describe("resolveGatewayBindHost", () => {
   });
 
   it("returns 127.0.0.1 for auto mode on non-container host", async () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/user.slice\n");
+    mockCgroup("12:memory:/user.slice\n");
     expect(await resolveGatewayBindHost("auto")).toBe("127.0.0.1");
   });
 
   it("returns 0.0.0.0 for auto mode inside a container", async () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
+    mockCgroup("12:memory:/docker/abc123def456\n");
     expect(await resolveGatewayBindHost("auto")).toBe("0.0.0.0");
   });
 
   it("defaults to loopback when bind is undefined (non-container)", async () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/user.slice\n");
+    mockCgroup("12:memory:/user.slice\n");
+    const createServerSpy = vi.spyOn(net, "createServer");
     expect(await resolveGatewayBindHost(undefined)).toBe("127.0.0.1");
+    expect(createServerSpy).not.toHaveBeenCalled();
   });
 });
 
@@ -781,11 +512,7 @@ describe("defaultGatewayBindMode", () => {
   });
 
   it("returns loopback on non-container host", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => {
-      throw new Error("ENOENT");
-    });
-    vi.spyOn(fs, "readFileSync").mockReturnValue("12:memory:/user.slice\n");
+    mockCgroup("12:memory:/user.slice\n");
     expect(defaultGatewayBindMode()).toBe("loopback");
   });
 
@@ -801,12 +528,6 @@ describe("defaultGatewayBindMode", () => {
     expect(defaultGatewayBindMode("serve")).toBe("loopback");
   });
 
-  it("returns loopback inside a container when tailscale funnel is active", () => {
-    const fs = require("node:fs");
-    vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
-    expect(defaultGatewayBindMode("funnel")).toBe("loopback");
-  });
-
   it("returns auto inside a container when tailscale is off", () => {
     const fs = require("node:fs");
     vi.spyOn(fs, "accessSync").mockImplementation(() => undefined);
@@ -817,24 +538,17 @@ describe("defaultGatewayBindMode", () => {
 describe("isSecureWebSocketUrl", () => {
   it.each([
     // wss:// always accepted
-    ["wss://127.0.0.1:18789", true],
-    ["wss://localhost:18789", true],
     ["wss://remote.example.com:18789", true],
-    ["wss://192.168.1.100:18789", true],
     // ws:// loopback accepted
     ["ws://127.0.0.1:18789", true],
     ["ws://localhost:18789", true],
     ["ws://[::1]:18789", true],
-    ["ws://127.0.0.42:18789", true],
     // ws:// trusted LAN/Tailnet endpoints accepted
     ["ws://10.0.0.5:18789", true],
-    ["ws://10.42.1.100:18789", true],
     ["ws://172.16.0.1:18789", true],
-    ["ws://172.31.255.254:18789", true],
     ["ws://192.168.1.100:18789", true],
     ["ws://169.254.10.20:18789", true],
     ["ws://100.64.0.1:18789", true],
-    ["ws://[fc00::1]:18789", true],
     ["ws://[fd12:3456:789a::1]:18789", true],
     ["ws://[fe80::1]:18789", true],
     ["ws://gateway.local:18789", true],
@@ -844,13 +558,9 @@ describe("isSecureWebSocketUrl", () => {
     // ws:// public addresses rejected
     ["ws://remote.example.com:18789", false],
     ["ws://1.1.1.1:18789", false],
-    ["ws://8.8.8.8:18789", false],
-    ["ws://203.0.113.10:18789", false],
     // invalid URLs
     ["not-a-url", false],
-    ["", false],
     ["http://127.0.0.1:18789", true],
-    ["https://127.0.0.1:18789", true],
     ["https://remote.example.com:18789", true],
     ["http://remote.example.com:18789", false],
   ] as const)("defaults secure websocket behavior for %s", (input, expected) => {

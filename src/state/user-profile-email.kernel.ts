@@ -1,14 +1,13 @@
-import type { DatabaseSync } from "node:sqlite";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
-import { executeSqliteQueryTakeFirstSync } from "../infra/kysely-sync.js";
+import type { EngineConnection } from "../infra/sql-connection.js";
 import { publishUserProfilesChange } from "./user-profile-list.js";
 import type { UserProfileMutationContext } from "./user-profile-mutation.js";
 import {
   insertUserProfile,
   requireResolvedUserProfileMetadataById,
+  selectUserProfileEmailAlias,
   setUserProfileEmailBinding,
   toUserProfile,
-  userProfilesDb,
 } from "./user-profiles-internal.js";
 import { MAX_USER_PROFILE_DISPLAY_NAME_LENGTH } from "./user-profiles.types.js";
 
@@ -22,17 +21,13 @@ export function normalizeProfileEmail(email: string): string {
 
 /** The caller owns the transaction; alias uniqueness and creation settle together. */
 export function ensureProfileForEmailInDatabase(
-  db: DatabaseSync,
+  db: EngineConnection,
   email: string,
   initialDisplayName: string | null,
   now: number,
   mutation?: UserProfileMutationContext,
 ) {
-  const kysely = userProfilesDb(db);
-  const existingAlias = executeSqliteQueryTakeFirstSync(
-    db,
-    kysely.selectFrom("user_profile_emails").select("profile_id").where("email", "=", email),
-  );
+  const existingAlias = selectUserProfileEmailAlias(db, email);
   if (existingAlias) {
     return toUserProfile(requireResolvedUserProfileMetadataById(db, existingAlias.profile_id));
   }

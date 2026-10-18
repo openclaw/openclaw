@@ -1,43 +1,21 @@
 // Protects provider auth exchange output before it enters retained runtime state.
+import type { ProviderPreparedRuntimeAuth } from "../plugins/provider-runtime.types.js";
 import { looksLikeSecretSentinel, mintSecretSentinel } from "../secrets/sentinel.js";
 import { isNonSecretApiKeyMarker } from "./model-auth-markers.js";
-import type { ModelProviderRequestTransportOverrides } from "./provider-request-config.js";
-
-type PreparedProviderRuntimeAuth = {
-  apiKey: string;
-  baseUrl?: string;
-  request?: ModelProviderRequestTransportOverrides;
-  expiresAt?: number;
-};
-
-function protectRuntimeAuthValue(params: {
-  value: string;
-  provider: string;
-  label: string;
-}): string {
-  if (!params.value) {
-    return params.value;
-  }
-  return looksLikeSecretSentinel(params.value)
-    ? params.value
-    : mintSecretSentinel(params.value, {
-        label: `model-auth:${params.provider}:${params.label}`,
-      });
-}
 
 /** Re-sentinels credentials returned by a provider auth exchange. */
 export function protectPreparedProviderRuntimeAuth(params: {
   provider: string;
-  preparedAuth: PreparedProviderRuntimeAuth | null | undefined;
-}): PreparedProviderRuntimeAuth | undefined {
+  preparedAuth: ProviderPreparedRuntimeAuth | null | undefined;
+}): ProviderPreparedRuntimeAuth | undefined {
   const { preparedAuth } = params;
   if (!preparedAuth) {
     return undefined;
   }
   const protect = (value: string, label: string): string =>
-    !value || isNonSecretApiKeyMarker(value)
+    !value || isNonSecretApiKeyMarker(value) || looksLikeSecretSentinel(value)
       ? value
-      : protectRuntimeAuthValue({ value, provider: params.provider, label });
+      : mintSecretSentinel(value, { label: `model-auth:${params.provider}:${label}` });
   const request = preparedAuth.request;
   const headers = request?.headers
     ? Object.fromEntries(

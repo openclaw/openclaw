@@ -1,8 +1,11 @@
-import { randomUUID } from "node:crypto";
+import assert from "node:assert/strict";
+import fs from "node:fs";
 import { expectDefined } from "@openclaw/normalization-core";
 import { describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../test/helpers/promise.js";
-import { PreparedModelRuntimePublicationSupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import { PreparedModelRuntimePublicationSupersededError as SupersededError } from "../../agents/prepared-model-runtime.errors.js";
+import { captureRuntimeConfigAsyncReader } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
   upsertSessionEntryCore,
@@ -10,16 +13,121 @@ import {
 import type { SessionEntry } from "../../config/sessions/types.js";
 import type { GatewayOperatorRoleDefinition } from "../../config/types.gateway.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { requireNodeSqlite } from "../../infra/node-sqlite.js";
+import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import * as userModelAccounts from "../../state/user-model-accounts.js";
-import { ensureProfileForEmail, setUserProfileRole } from "../../state/user-profiles.js";
-import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
+import { setUserProfileRole } from "../../state/user-profile-writes.worker.js";
+import { ensureProfileForEmail } from "../../state/user-profiles.js";
+import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../../test-utils/openclaw-test-state.js";
 import { invalidateOperatorRolePolicy } from "../operator-role-policy.js";
 import { ADMIN_SCOPE, READ_SCOPE, SESSION_READ_SCOPE } from "../operator-scopes.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
+import * as sessionReads from "../session-utils-store.js";
 import { chatHistoryHandlers } from "./chat-history-handler.js";
-import { connectChatMetadataAccount } from "./chat-metadata-runtime.test-support.js";
+import {
+  registerMetadataCallerCases,
+  registerMetadataRevocationCases,
+} from "./chat-metadata-ownership.test-support.js";
+import {
+  connectChatMetadataAccount,
+  createChatMetadataHarness,
+} from "./chat-metadata-runtime.test-support.js";
 import type { GatewayRequestContext, GatewayRequestHandlerOptions, RespondFn } from "./types.js";
+
+type MetadataFixture = ReturnType<typeof createPersonalMetadataFixture>;
+
+function metadataConnect(scopes: GatewayOperatorRoleDefinition["scopes"]) {
+  return {
+    minProtocol: 1,
+    maxProtocol: 1,
+    client: {
+      id: "openclaw-control-ui" as const,
+      version: "test",
+      platform: "test",
+      mode: "webchat" as const,
+    },
+    role: "operator" as const,
+    scopes: [...scopes],
+  };
+}
+
+function callMetadata(
+  options: Pick<GatewayRequestHandlerOptions, "params" | "context" | "respond"> &
+    Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">>,
+) {
+  return expectDefined(
+    chatHistoryHandlers["chat.metadata"],
+    "metadata handler",
+  )({
+    req: { type: "req", id: "metadata", method: "chat.metadata" },
+    client: null,
+    isWebchatConnect: () => false,
+    ...options,
+  });
+}
+
+function ownedEntry(
+  owner: string,
+  sessionId: string,
+  fields: Partial<SessionEntry> = {},
+): SessionEntry {
+  return {
+    sessionId,
+    updatedAt: 1,
+    createdActor: { type: "human", source: "profile", id: owner },
+    ...fields,
+  };
+}
+
+async function changeDuringMetadata(
+  fixture: MetadataFixture,
+  params: Record<string, unknown>,
+  change: () => void | Promise<unknown>,
+  signal?: AbortSignal,
+) {
+  const entered = createDeferred();
+  const release = createDeferred();
+  fixture.readChatMetadata.mockImplementationOnce(async () => {
+    entered.resolve();
+    await release.promise;
+    return fixture.metadata;
+  });
+  const request = fixture.dispatch(params, signal);
+  const settled = Promise.allSettled([request.pending]);
+  try {
+    await Promise.race([entered.promise, request.pending]);
+    expect(fixture.readChatMetadata).toHaveBeenCalledOnce();
+    await change();
+  } finally {
+    release.resolve();
+    await settled;
+  }
+  return request;
+}
+
+async function withoutHostSql(run: () => Promise<void>) {
+  requireNodeSqlite();
+  const sql = observeMainThreadSql();
+  try {
+    sql.calibrate();
+    await run();
+    sql.expectIdle();
+  } finally {
+    sql.restore();
+  }
+}
+
+async function expectSuperseded(request: { pending: Promise<unknown>; respond: RespondFn }) {
+  const { pending, respond } = request;
+  await expect(pending).rejects.toBeInstanceOf(SupersededError);
+  expect(respond).not.toHaveBeenCalled();
+}
 
 function createPersonalMetadataFixture(
   scopes: GatewayOperatorRoleDefinition["scopes"] = [READ_SCOPE],
@@ -28,13 +136,7 @@ function createPersonalMetadataFixture(
   const authProfileId = connectChatMetadataAccount(owner.id);
   const client: NonNullable<GatewayRequestHandlerOptions["client"]> & { connId: string } = {
     connId: "metadata-owner-connection",
-    connect: {
-      minProtocol: 1,
-      maxProtocol: 1,
-      client: { id: "openclaw-control-ui", version: "test", platform: "test", mode: "webchat" },
-      role: "operator",
-      scopes: [...scopes],
-    },
+    connect: metadataConnect(scopes),
     authenticatedUserProfile: {
       profileId: owner.id,
       displayName: owner.displayName,
@@ -48,7 +150,11 @@ function createPersonalMetadataFixture(
     sessions: { others: "none" },
   };
   const config = {
-    agents: { entries: { main: { default: true }, other: {} } },
+    agents: {
+      ownership: "explicit",
+      defaults: { systemAgent: { agentId: "main" } },
+      entries: { main: {}, other: {} },
+    },
     gateway: {
       roles: {
         default: "reader",
@@ -59,6 +165,7 @@ function createPersonalMetadataFixture(
       },
     },
   } satisfies OpenClawConfig;
+  setRuntimeConfigSnapshot(config);
   let currentConfig: OpenClawConfig = config;
   const clients = new Set([client]);
   const metadata = { models: [], swarmEnabled: false };
@@ -78,18 +185,7 @@ function createPersonalMetadataFixture(
     overrides: Partial<Pick<GatewayRequestHandlerOptions, "client" | "signal">> = {},
   ) => {
     const respond = vi.fn<RespondFn>();
-    await expectDefined(
-      chatHistoryHandlers["chat.metadata"],
-      "metadata handler",
-    )({
-      params,
-      context,
-      client,
-      respond,
-      req: { type: "req", id: "draft-preview", method: "chat.metadata" },
-      isWebchatConnect: () => false,
-      ...overrides,
-    });
+    await callMetadata({ params, context, client, respond, ...overrides });
     return respond;
   };
   return {
@@ -102,41 +198,157 @@ function createPersonalMetadataFixture(
     role,
     setConfig: (next: OpenClawConfig) => {
       currentConfig = next;
+      setRuntimeConfigSnapshot(next);
     },
     metadata,
     readChatMetadata,
     request,
+    saveSession(sessionKey: string, fields: Partial<SessionEntry> = {}, ownerId = owner.id) {
+      const agentId = expectDefined(sessionKey.split(":")[1], "session agent");
+      return upsertSessionEntryCore(
+        { agentId, sessionKey },
+        ownedEntry(ownerId, sessionKey.split(":").slice(2).join(":"), fields),
+      );
+    },
+    dispatch(params: Record<string, unknown>, signal?: AbortSignal) {
+      const respond = vi.fn<RespondFn>();
+      const pending = handleGatewayRequest({
+        req: { type: "req", id: "metadata-dispatch", method: "chat.metadata", params },
+        client,
+        context,
+        respond,
+        signal,
+        isWebchatConnect: () => false,
+      });
+      return { pending, respond };
+    },
   };
 }
 
-function dispatchMetadata(
-  fixture: Pick<ReturnType<typeof createPersonalMetadataFixture>, "client" | "context">,
-  params: Record<string, unknown>,
-  signal?: AbortSignal,
+function withMetadataFixture(
+  run: (fixture: MetadataFixture, state: OpenClawTestState) => Promise<void>,
+  scopes: GatewayOperatorRoleDefinition["scopes"] = [SESSION_READ_SCOPE],
 ) {
-  const respond = vi.fn<RespondFn>();
-  const pending = handleGatewayRequest({
-    req: { type: "req", id: "metadata-dispatch", method: "chat.metadata", params },
-    client: fixture.client,
-    context: fixture.context,
-    isWebchatConnect: () => false,
-    respond,
-    signal,
+  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const fixture = createPersonalMetadataFixture(scopes);
+    using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
+    await run(fixture, state);
   });
-  return { pending, respond };
+}
+
+async function publishFixture(
+  fixture: MetadataFixture,
+  state: OpenClawTestState,
+  role: Partial<GatewayOperatorRoleDefinition> = {},
+) {
+  Object.assign(fixture.role, role);
+  await state.writeConfig(fixture.config);
+  setRuntimeConfigSnapshot(fixture.config);
 }
 
 describe("chat metadata ownership", () => {
+  it("serves commands without preparing a catalog when the client reads models separately", async () => {
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const harness = createChatMetadataHarness(config);
+    const context = createDirectChatContext({
+      getRuntimeConfig: () => config,
+      readChatMetadata: harness.runtime.read,
+    });
+    const request = async (includeModels?: boolean, ifRevision?: string) => {
+      const respond = vi.fn<RespondFn>();
+      await callMetadata({
+        params: {
+          agentId: "main",
+          ...(includeModels === false ? { includeModels } : {}),
+          ...(ifRevision ? { ifRevision } : {}),
+        },
+        context,
+        respond,
+      });
+      return respond;
+    };
+    try {
+      await harness.runtime.refresh();
+      const compact = await request(false);
+      expect(compact).toHaveBeenCalledWith(true, {
+        commands: [{ name: "command-1-1" }],
+        swarmEnabled: true,
+        revision: expect.any(String),
+      });
+      const payload = compact.mock.calls[0]?.[1];
+      assert(payload && typeof payload === "object" && "revision" in payload);
+      const { revision } = payload;
+      assert(typeof revision === "string");
+      expect(await request(false, revision)).toHaveBeenCalledWith(true, {
+        revision,
+        unchanged: true,
+        swarmEnabled: true,
+      });
+      harness.setSkillsVersion(2);
+      await harness.runtime.refresh();
+      expect(await request(false, revision)).toHaveBeenCalledWith(true, {
+        commands: [{ name: "command-2-1" }],
+        swarmEnabled: true,
+        revision: expect.not.stringContaining(revision),
+      });
+      expect(harness.buildProjection).not.toHaveBeenCalled();
+      const legacy = await request();
+      expect(legacy).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({
+          models: [expect.objectContaining({ id: "first" })],
+          commands: [{ name: "command-2-1" }],
+        }),
+      );
+    } finally {
+      await harness.runtime.stop();
+    }
+  });
+
+  it("creates and reuses a legacy requester profile through chat.metadata without host SQL", () =>
+    withOpenClawTestState({ layout: "state-only" }, async () => {
+      ensureProfileForEmail("admitted@example.test");
+      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+      setRuntimeConfigSnapshot(config);
+      const metadata = { models: [], swarmEnabled: false };
+      const readChatMetadata = vi.fn<GatewayRequestContext["readChatMetadata"]>(
+        async () => metadata,
+      );
+      const context = createDirectChatContext({ getRuntimeConfig: () => config, readChatMetadata });
+      const respond = vi.fn<RespondFn>();
+      const client: NonNullable<GatewayRequestHandlerOptions["client"]> = {
+        connId: "metadata-legacy-connection",
+        authenticatedUserId: "metadata-legacy@example.test",
+        connect: metadataConnect([READ_SCOPE]),
+      };
+      await withoutHostSql(async () => {
+        for (let attempt = 0; attempt < 2; attempt++) {
+          await callMetadata({ params: { agentId: "main" }, context, client, respond });
+        }
+      });
+      const profile = ensureProfileForEmail("metadata-legacy@example.test");
+      expect(readChatMetadata).toHaveBeenCalledTimes(2);
+      for (const [scope] of readChatMetadata.mock.calls) {
+        expect(scope.requesterProfileId).toBe(profile.id);
+        expect(scope.assertCurrent).not.toThrow();
+      }
+      expect(respond.mock.calls).toEqual([
+        [true, metadata],
+        [true, metadata],
+      ]);
+    }));
+
   it.each([READ_SCOPE, SESSION_READ_SCOPE])(
     "previews a retained personal account with %s without changing its cleared default",
-    async (scope) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
+    (scope) =>
+      withOpenClawTestState({ layout: "state-only" }, async () => {
         const fixture = createPersonalMetadataFixture([scope]);
+        using _ = { [Symbol.dispose]: (await prepareUserProfileCatalog()).release };
         const { owner, authProfileId, metadata, readChatMetadata } = fixture;
         userModelAccounts.clearUserProfileAuthLink({ profileId: owner.id, provider: "openai" });
         const before = userModelAccounts.readUserModelAuthProfile(authProfileId);
 
-        const { pending, respond } = dispatchMetadata(fixture, { agentId: "main", authProfileId });
+        const { pending, respond } = fixture.dispatch({ agentId: "main", authProfileId });
         await pending;
 
         expect(respond).toHaveBeenCalledWith(true, metadata);
@@ -153,57 +365,13 @@ describe("chat metadata ownership", () => {
         });
         expect(userModelAccounts.listUserProfileAuthLinks(owner.id)).toEqual([]);
         expect(userModelAccounts.readUserModelAuthProfile(authProfileId)).toEqual(before);
-      });
-    },
+      }),
   );
 
-  it.each([
-    "foreign admin",
-    "unidentified admin",
-    "anonymous",
-    "synthetic owner",
-    "forged locator",
-  ] as const)(
-    "rejects a personal draft preview from %s before projecting credentials",
-    async (caller) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const { owner, client, authProfileId, readChatMetadata, request } =
-          createPersonalMetadataFixture();
-        client.connect.scopes = ["operator.admin"];
-        let requestedProfile = authProfileId;
-        if (caller === "foreign admin") {
-          const other = ensureProfileForEmail("metadata-other@example.test");
-          client.authenticatedUserProfile = {
-            profileId: other.id,
-            displayName: other.displayName,
-            hasAvatar: false,
-            updatedAt: other.updatedAt,
-          };
-        } else if (caller === "unidentified admin") {
-          delete client.authenticatedUserProfile;
-        } else if (caller === "synthetic owner") {
-          client.internal = { syntheticClient: true };
-        } else if (caller === "forged locator") {
-          requestedProfile = `personal:${owner.id}:${randomUUID()}`;
-        }
+  registerMetadataCallerCases(createPersonalMetadataFixture);
 
-        const respond = await request(
-          { agentId: "main", authProfileId: requestedProfile },
-          caller === "anonymous" ? { client: null } : {},
-        );
-
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-        expect(readChatMetadata).not.toHaveBeenCalled();
-      });
-    },
-  );
-
-  it("rejects combining a personal draft preview with a persisted session selector", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async () => {
+  it("rejects combining a personal draft preview with a persisted session selector", () =>
+    withOpenClawTestState({ layout: "state-only" }, async () => {
       const { authProfileId, readChatMetadata, request } = createPersonalMetadataFixture();
       const respond = await request({
         agentId: "main",
@@ -217,50 +385,13 @@ describe("chat metadata ownership", () => {
         expect.objectContaining({ code: "INVALID_REQUEST" }),
       );
       expect(readChatMetadata).not.toHaveBeenCalled();
-    });
-  });
+    }));
 
-  it.each(["disconnect", "role loss", "abort"] as const)(
-    "rejects a personal draft preview after %s during the metadata read",
-    async (loss) => {
-      await withOpenClawTestState({ layout: "state-only" }, async () => {
-        const { client, clients, authProfileId, config, metadata, readChatMetadata, request } =
-          createPersonalMetadataFixture();
-        const entered = createDeferred();
-        const release = createDeferred();
-        const abort = new AbortController();
-        readChatMetadata.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return metadata;
-        });
-        const pending = request({ agentId: "main", authProfileId }, { signal: abort.signal });
-        try {
-          await Promise.race([entered.promise, pending]);
-          expect(readChatMetadata).toHaveBeenCalledOnce();
-          if (loss === "disconnect") {
-            clients.delete(client);
-          } else if (loss === "role loss") {
-            config.gateway.roles.definitions.reader.scopes = [];
-          } else {
-            abort.abort();
-          }
-        } finally {
-          release.resolve();
-          await pending;
-        }
-        const respond = await pending;
-        expect(respond).toHaveBeenCalledWith(
-          false,
-          undefined,
-          expect.objectContaining({ code: "FORBIDDEN" }),
-        );
-      });
-    },
-  );
+  registerMetadataRevocationCases(createPersonalMetadataFixture);
 
-  it("reads the persisted session profile without contaminating neutral agent metadata", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+  it("reads saved and neutral metadata without host SQL or sharing the saved profile", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async () => {
+      await captureRuntimeConfigAsyncReader()();
       const sessionKey = "agent:main:locked";
       await upsertSessionEntryCore(
         { agentId: "main", sessionKey },
@@ -277,18 +408,14 @@ describe("chat metadata ownership", () => {
         swarmEnabled: false,
       }));
       const respond = vi.fn<RespondFn>();
-      const handler = expectDefined(chatHistoryHandlers["chat.metadata"], "metadata handler");
       const context = createDirectChatContext({ readChatMetadata });
-      for (const params of [{ agentId: "   ", sessionKey }, { agentId: "main" }]) {
-        await handler({
-          params,
-          context,
-          respond,
-          req: { type: "req", id: "saved-selection", method: "chat.metadata" },
-          client: null,
-          isWebchatConnect: () => false,
-        });
-      }
+      const request = (params: Record<string, unknown>) =>
+        callMetadata({ params, context, respond });
+      await withoutHostSql(async () => {
+        for (const params of [{ agentId: "   ", sessionKey }, { agentId: "main" }]) {
+          await request(params);
+        }
+      });
       expect(readChatMetadata.mock.calls).toEqual([
         [
           expect.objectContaining({
@@ -312,42 +439,25 @@ describe("chat metadata ownership", () => {
       ]);
       expect(respond).toHaveBeenCalledTimes(2);
       readChatMetadata.mockClear();
-      await handler({
-        params: { agentId: "other", sessionKey },
-        context,
-        respond,
-        req: { type: "req", id: "mismatched-agent", method: "chat.metadata" },
-        client: null,
-        isWebchatConnect: () => false,
-      });
+      await request({ agentId: "other", sessionKey });
       expect(readChatMetadata).not.toHaveBeenCalled();
       expect(respond).toHaveBeenLastCalledWith(
         false,
         undefined,
         expect.objectContaining({ code: "INVALID_REQUEST" }),
       );
-    });
-  });
+    }));
 
   it("returns a typed selection error for an ownerless explicit fleet", async () => {
     const config: OpenClawConfig = {
-      agents: {
-        ownership: "explicit",
-        entries: { ops: {}, research: {} },
-      },
+      agents: { ownership: "explicit", entries: { ops: {}, research: {} } },
     };
     const respond = vi.fn<RespondFn>();
     const readChatMetadata = vi.fn();
 
-    await expectDefined(
-      chatHistoryHandlers["chat.metadata"],
-      'chatHistoryHandlers["chat.metadata"] test invariant',
-    )({
+    await callMetadata({
       params: {},
       respond,
-      req: { type: "req", id: "ownerless-fleet", method: "chat.metadata" },
-      client: null,
-      isWebchatConnect: () => false,
       context: createDirectChatContext({
         getRuntimeConfig: () => config,
         readChatMetadata,
@@ -368,205 +478,303 @@ describe("chat metadata ownership", () => {
 
 describe("chat metadata dispatch authority", () => {
   it.each([
-    { name: "ordinary foreign draft", visibility: "draft", incognito: false },
-    { name: "foreign incognito session", visibility: "shared", incognito: true },
-  ] as const)("denies $name before preparing metadata", async ({ visibility, incognito }) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
-      fixture.role.sessions.others = "view";
-      await state.writeConfig(fixture.config);
-      const other = ensureProfileForEmail("metadata-foreign@example.test");
-      const sessionKey = "agent:main:hidden-metadata";
-      const entry: SessionEntry = {
-        sessionId: "hidden-metadata",
-        updatedAt: 1,
-        visibility,
-        createdActor: { type: "human", source: "profile", id: other.id },
-      };
-      if (incognito) {
-        entry.incognito = true;
-      }
-      await upsertSessionEntryCore({ agentId: "main", sessionKey }, entry);
-
-      const { pending, respond } = dispatchMetadata(fixture, { sessionKey });
-      await pending;
-
-      expect(respond).toHaveBeenCalledExactlyOnceWith(
-        false,
-        undefined,
-        expect.objectContaining({
-          code: "INVALID_REQUEST",
-          message: expect.stringContaining("not found"),
-        }),
-      );
-      expect(fixture.readChatMetadata).not.toHaveBeenCalled();
-    });
-  });
-
-  it.each([
-    { name: "ordinary shared", visibility: "shared", own: false, admin: false, incognito: false },
-    { name: "own draft", visibility: "draft", own: true, admin: false, incognito: false },
-    { name: "admin incognito", visibility: "draft", own: false, admin: true, incognito: true },
+    ["ordinary foreign draft", "main", "draft", false, false, false, false],
+    ["foreign incognito session", "main", "shared", false, false, true, false],
+    ["ordinary shared", "other", "shared", false, false, false, true],
+    ["own draft", "other", "draft", true, false, false, true],
+    ["admin incognito", "other", "draft", false, true, true, true],
   ] as const)(
-    "reads $name metadata outside the creation agent allowlist",
-    async ({ visibility, own, admin, incognito }) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const fixture = createPersonalMetadataFixture([admin ? ADMIN_SCOPE : SESSION_READ_SCOPE]);
-        fixture.role.agents = ["main"];
-        fixture.role.sessions.others = "view";
-        await state.writeConfig(fixture.config);
-        const other = ensureProfileForEmail("metadata-foreign@example.test");
-        const sessionKey = "agent:other:visible-metadata";
-        const entry: SessionEntry = {
-          sessionId: "visible-metadata",
-          updatedAt: 1,
-          visibility,
-          createdActor: {
-            type: "human",
-            source: "profile",
-            id: own ? fixture.owner.id : other.id,
-          },
-        };
-        if (incognito) {
-          entry.incognito = true;
-        }
-        await upsertSessionEntryCore({ agentId: "other", sessionKey }, entry);
-
-        const { pending, respond } = dispatchMetadata(fixture, { sessionKey });
-        await pending;
-
-        expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
-        expect(fixture.readChatMetadata).toHaveBeenCalledWith(
-          expect.objectContaining({
-            agentId: "other",
+    "applies saved-session visibility to %s independently of the creation allowlist",
+    (_name, agentId, visibility, own, admin, incognito, visible) =>
+      withMetadataFixture(
+        async (fixture, state) => {
+          await publishFixture(fixture, state, { agents: ["main"], sessions: { others: "view" } });
+          const other = ensureProfileForEmail("metadata-foreign@example.test");
+          const sessionKey = `agent:${agentId}:visibility-metadata`;
+          await fixture.saveSession(
             sessionKey,
-            sessionEntry: expect.objectContaining({ sessionId: "visible-metadata" }),
-          }),
-        );
-      });
-    },
+            { visibility, ...(incognito ? { incognito } : {}) },
+            own ? fixture.owner.id : other.id,
+          );
+
+          const { pending, respond } = fixture.dispatch({ sessionKey });
+          await pending;
+
+          if (visible) {
+            expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
+            expect(fixture.readChatMetadata).toHaveBeenCalledWith(
+              expect.objectContaining({
+                agentId,
+                sessionKey,
+                sessionEntry: expect.objectContaining({ sessionId: "visibility-metadata" }),
+              }),
+            );
+          } else {
+            expect(respond).toHaveBeenCalledExactlyOnceWith(
+              false,
+              undefined,
+              expect.objectContaining({
+                code: "INVALID_REQUEST",
+                message: expect.stringContaining("not found"),
+              }),
+            );
+            expect(fixture.readChatMetadata).not.toHaveBeenCalled();
+          }
+        },
+        [admin ? ADMIN_SCOPE : SESSION_READ_SCOPE],
+      ),
   );
 
   it.each(["draft", "missing saved row"] as const)(
     "keeps %s metadata readable outside the creation allowlist",
-    async (selector) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
-        fixture.role.agents = ["main"];
-        fixture.role.sessions.others = "view";
-        await state.writeConfig(fixture.config);
-        const accountRead = vi.spyOn(userModelAccounts, "isUserModelAuthProfileOwner");
-        try {
-          const { pending, respond } = dispatchMetadata(
-            fixture,
-            selector === "draft"
-              ? { agentId: "other", authProfileId: fixture.authProfileId }
-              : { sessionKey: "agent:other:missing-metadata" },
-          );
-          await pending;
+    (selector) =>
+      withMetadataFixture(async (fixture, state) => {
+        await publishFixture(fixture, state, { agents: ["main"], sessions: { others: "view" } });
+        const { pending, respond } = fixture.dispatch(
+          selector === "draft"
+            ? { agentId: "other", authProfileId: fixture.authProfileId }
+            : { sessionKey: "agent:other:missing-metadata" },
+        );
+        await pending;
 
-          expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
-          expect(fixture.readChatMetadata).toHaveBeenCalledWith(
-            expect.objectContaining({ agentId: "other" }),
-          );
-          if (selector === "draft") {
-            expect(accountRead).toHaveBeenCalledWith({
-              profileId: fixture.owner.id,
-              authProfileId: fixture.authProfileId,
-            });
-          } else {
-            expect(accountRead).not.toHaveBeenCalled();
-          }
-        } finally {
-          accountRead.mockRestore();
-        }
-      });
-    },
+        expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
+        expect(fixture.readChatMetadata).toHaveBeenCalledWith(
+          expect.objectContaining({ agentId: "other" }),
+        );
+      }),
   );
 
-  it("rejects a shared session that becomes a foreign draft during metadata preparation", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
-      fixture.role.sessions.others = "view";
-      await state.writeConfig(fixture.config);
-      const other = ensureProfileForEmail("metadata-foreign@example.test");
-      const scope = { agentId: "main", sessionKey: "agent:main:changing-metadata" };
-      await upsertSessionEntryCore(scope, {
-        sessionId: "changing-metadata",
-        updatedAt: 1,
-        visibility: "shared",
-        createdActor: { type: "human", source: "profile", id: other.id },
-      });
-      const entered = createDeferred();
-      const release = createDeferred();
+  it.each([
+    { change: "title", patch: { displayName: "First reply" }, current: true },
+    { change: "run start", patch: { updatedAt: 2, startedAt: 2 }, current: true },
+    { change: "ordinary patch", patch: { thinkingLevel: "high" }, current: true },
+    { change: "visibility", patch: { visibility: "draft" }, current: false },
+    { change: "account", patch: { authProfileOverride: "test:replacement" }, current: false },
+    { change: "model", patch: { modelOverride: "replacement" }, current: false },
+    { change: "model route", patch: { modelOverrideRouteResolution: "resolved" }, current: false },
+    { change: "runtime", patch: { agentRuntimeOverride: "replacement" }, current: false },
+    { change: "runtime lock", patch: { modelSelectionLocked: true }, current: false },
+    { change: "lifecycle", patch: { lifecycleRevision: "replacement" }, current: false },
+  ] satisfies { change: string; patch: Partial<SessionEntry>; current: boolean }[])(
+    "revalidates $change changes during metadata preparation",
+    ({ patch, current }) =>
+      withMetadataFixture(async (fixture, state) => {
+        await publishFixture(fixture, state, { sessions: { others: "view" } });
+        const other = ensureProfileForEmail("metadata-foreign@example.test");
+        const scope = { agentId: "main", sessionKey: "agent:main:changing-metadata" };
+        await fixture.saveSession(scope.sessionKey, { visibility: "shared" }, other.id);
+        const { pending, respond } = await changeDuringMetadata(
+          fixture,
+          { sessionKey: scope.sessionKey },
+          () => patchSessionEntryCore(scope, () => patch),
+        );
+
+        if (current) {
+          await pending;
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, fixture.metadata);
+        } else {
+          await expectSuperseded({ pending, respond });
+        }
+      }),
+  );
+
+  it("refuses a missing saved row created during metadata preparation", () =>
+    withMetadataFixture(async (fixture, state) => {
+      await publishFixture(fixture, state);
+      const sessionKey = "agent:main:metadata-created-during-read";
       fixture.readChatMetadata.mockImplementationOnce(async () => {
-        entered.resolve();
-        await release.promise;
+        await fixture.saveSession(sessionKey, { sessionId: "created-during-read" });
         return fixture.metadata;
       });
-      const { pending, respond } = dispatchMetadata(fixture, { sessionKey: scope.sessionKey });
-      const settled = Promise.allSettled([pending]);
-      try {
-        await Promise.race([entered.promise, pending]);
-        expect(fixture.readChatMetadata).toHaveBeenCalledOnce();
-        await patchSessionEntryCore(scope, () => ({ visibility: "draft" }));
-      } finally {
-        release.resolve();
-        await settled;
-      }
+      await expectSuperseded(fixture.dispatch({ sessionKey }));
+      expect(fixture.readChatMetadata).toHaveBeenCalledOnce();
+    }));
 
-      await expect(pending).rejects.toBeInstanceOf(PreparedModelRuntimePublicationSupersededError);
+  it("does not publish metadata after its logical store alias selects an identical replacement", () =>
+    withMetadataFixture(async (fixture, state) => {
+      const sessionKey = "agent:main:metadata-store-alias";
+      const original = state.statePath("original", "catalog.sqlite");
+      const replacement = state.statePath("replacement", "catalog.sqlite");
+      const alias = state.statePath("selected");
+      for (const storePath of [original, replacement]) {
+        await upsertSessionEntryCore(
+          { agentId: "main", sessionKey, storePath },
+          ownedEntry(fixture.owner.id, "identical-session", {
+            lifecycleRevision: "identical-lifecycle",
+          }),
+        );
+      }
+      fs.symlinkSync(state.statePath("original"), alias, "junction");
+      const config = {
+        ...fixture.config,
+        session: { store: state.statePath("selected", "catalog.sqlite") },
+      };
+      fixture.setConfig(config);
+      await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
+      fixture.readChatMetadata.mockImplementationOnce(async () => {
+        fs.unlinkSync(alias);
+        fs.symlinkSync(state.statePath("replacement"), alias, "junction");
+        return fixture.metadata;
+      });
+      const { pending, respond } = fixture.dispatch({ sessionKey });
+      await expect(pending).rejects.toThrow();
+      expect(fixture.readChatMetadata).toHaveBeenCalledOnce();
       expect(respond).not.toHaveBeenCalled();
-    });
-  });
+    }));
+
+  it.each(["cleanup", "preparation"] as const)(
+    "joins preparation and preserves the first %s failure",
+    (firstFailure) =>
+      withMetadataFixture(async (fixture, state) => {
+        await publishFixture(fixture, state);
+        const sessionKey = "agent:main:metadata-cleanup";
+        const sibling = { agentId: "main", sessionKey: "agent:main:metadata-cleanup-sibling" };
+        await fixture.saveSession(sessionKey);
+        await upsertSessionEntryCore(sibling, { sessionId: "cleanup-sibling", updatedAt: 1 });
+        const gate = createDeferred();
+        const cleanupReached = createDeferred();
+        const cleanupError = new SupersededError("reader cleanup failed");
+        const events: string[] = [];
+        const preparationError = new Error("private preparation failed");
+        let preparation: Promise<typeof fixture.metadata> | undefined;
+        let failCleanup = false;
+        const original = sessionReads.withGatewaySessionEntry;
+        const reader = vi
+          .spyOn(sessionReads, "withGatewaySessionEntry")
+          .mockImplementation(
+            async <T>(
+              ...args: Parameters<typeof sessionReads.withGatewaySessionEntry<T>>
+            ): Promise<T> => {
+              const value = await original<T>(...args);
+              if (failCleanup) {
+                failCleanup = false;
+                if (firstFailure === "preparation") {
+                  gate.resolve();
+                  await expectDefined(preparation, "private preparation").catch(() => {});
+                }
+                cleanupReached.resolve();
+                throw cleanupError;
+              }
+              return value;
+            },
+          );
+        fixture.readChatMetadata.mockImplementationOnce(async (scope) =>
+          expectDefined(
+            scope.withCurrent,
+            "saved metadata authority",
+          )(() => {
+            failCleanup = true;
+            preparation = gate.promise.then(() => {
+              events.push("preparation settled");
+              if (firstFailure === "preparation") {
+                throw preparationError;
+              }
+              scope.assertCurrent?.();
+              return fixture.metadata;
+            });
+            return preparation;
+          }),
+        );
+        const { pending, respond } = fixture.dispatch({ sessionKey });
+        const outcome = pending.catch((error: unknown) => {
+          events.push("request failed");
+          return error;
+        });
+        try {
+          await awaitGateBeforeSettlement(
+            cleanupReached.promise,
+            pending,
+            "Metadata ended before cleanup failed",
+          );
+          if (firstFailure === "cleanup") {
+            // A separate worker round trip remains usable while the failed reader joins its child.
+            await patchSessionEntryCore(sibling, () => ({ label: "still available" }));
+            expect(events).toEqual([]);
+            expect(respond).not.toHaveBeenCalled();
+            gate.resolve();
+          }
+          expect(await outcome).toBe(
+            firstFailure === "preparation" ? preparationError : cleanupError,
+          );
+          expect(events).toEqual(["preparation settled", "request failed"]);
+          expect(respond).not.toHaveBeenCalled();
+        } finally {
+          gate.resolve();
+          await outcome;
+          reader.mockRestore();
+        }
+      }),
+  );
+
+  it.each(["agent:main:dashboard:incognito-metadata", "dashboard:incognito-metadata"])(
+    "retains native account authority for %s",
+    (requestedKey) =>
+      withMetadataFixture(
+        async (fixture, state) => {
+          await publishFixture(fixture, state);
+          const target = {
+            agentId: "main",
+            sessionKey: "agent:main:dashboard:incognito-metadata",
+            storePath: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
+          };
+          await upsertSessionEntryCore(
+            target,
+            ownedEntry(fixture.owner.id, "native-metadata", { incognito: true }),
+          );
+          const params = { agentId: "main", sessionKey: requestedKey };
+          fixture.readChatMetadata.mockImplementationOnce(async (scope) => {
+            expect(scope).toMatchObject({
+              storePath: target.storePath,
+              sessionEntry: { sessionId: "native-metadata" },
+            });
+            return fixture.metadata;
+          });
+          expect(await fixture.request(params)).toHaveBeenCalledWith(true, fixture.metadata);
+          const preparePrivate = vi.fn(() => fixture.metadata);
+          fixture.readChatMetadata.mockImplementationOnce(async (scope) => {
+            await patchSessionEntryCore(target, () => ({ authProfileOverride: "changed-account" }));
+            return expectDefined(scope.withCurrent, "native metadata authority")(preparePrivate);
+          });
+          await expect(fixture.request(params)).rejects.toBeInstanceOf(SupersededError);
+          expect(preparePrivate).not.toHaveBeenCalled();
+        },
+        [ADMIN_SCOPE],
+      ),
+  );
 
   it.each(["role loss", "config replacement", "profile replacement", "abort"] as const)(
     "rejects a neutral draft after %s during metadata preparation",
-    async (change) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const fixture = createPersonalMetadataFixture([SESSION_READ_SCOPE]);
-        await state.writeConfig(fixture.config);
-        const entered = createDeferred();
-        const release = createDeferred();
+    (change) =>
+      withMetadataFixture(async (fixture, state) => {
+        await publishFixture(fixture, state);
         const abort = new AbortController();
-        fixture.readChatMetadata.mockImplementationOnce(async () => {
-          entered.resolve();
-          await release.promise;
-          return fixture.metadata;
-        });
-        const { pending, respond } = dispatchMetadata(fixture, { agentId: "main" }, abort.signal);
-        const settled = Promise.allSettled([pending]);
-        try {
-          await Promise.race([entered.promise, pending]);
-          expect(fixture.readChatMetadata).toHaveBeenCalledOnce();
-          if (change === "role loss") {
-            setUserProfileRole(fixture.owner.id, "blocked");
-            invalidateOperatorRolePolicy(fixture.owner.id);
-          } else if (change === "config replacement") {
-            const next = structuredClone(fixture.config);
-            next.gateway.roles.definitions.reader.agents = [];
-            fixture.setConfig(next);
-          } else if (change === "profile replacement") {
-            const other = ensureProfileForEmail("metadata-replacement@example.test");
-            fixture.client.authenticatedUserProfile = {
-              profileId: other.id,
-              displayName: other.displayName,
-              hasAvatar: false,
-              updatedAt: other.updatedAt,
-            };
-          } else {
-            abort.abort();
-          }
-        } finally {
-          release.resolve();
-          await settled;
-        }
-
-        await expect(pending).rejects.toBeInstanceOf(
-          PreparedModelRuntimePublicationSupersededError,
+        const request = await changeDuringMetadata(
+          fixture,
+          { agentId: "main" },
+          () => {
+            if (change === "role loss") {
+              setUserProfileRole(fixture.owner.id, "blocked");
+              invalidateOperatorRolePolicy(fixture.owner.id);
+            } else if (change === "config replacement") {
+              const next = structuredClone(fixture.config);
+              next.gateway.roles.definitions.reader.agents = [];
+              fixture.setConfig(next);
+            } else if (change === "profile replacement") {
+              const other = ensureProfileForEmail("metadata-replacement@example.test");
+              fixture.client.authenticatedUserProfile = {
+                profileId: other.id,
+                displayName: other.displayName,
+                hasAvatar: false,
+                updatedAt: other.updatedAt,
+              };
+            } else {
+              abort.abort();
+            }
+          },
+          abort.signal,
         );
-        expect(respond).not.toHaveBeenCalled();
-      });
-    },
+        await expectSuperseded(request);
+      }),
   );
 });

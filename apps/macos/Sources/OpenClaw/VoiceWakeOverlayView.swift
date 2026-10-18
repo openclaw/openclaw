@@ -15,8 +15,6 @@ struct VoiceWakeOverlayView: View {
                             get: { self.controller.model.text },
                             set: { self.controller.updateText($0) }),
                         attributed: self.controller.model.attributed,
-                        isFinal: self.controller.model.isFinal,
-                        isOverflowing: self.controller.model.isOverflowing,
                         onBeginEditing: {
                             self.controller.userBeganEditing()
                         },
@@ -99,10 +97,7 @@ struct VoiceWakeOverlayView: View {
                 onHover: { self.closeHovering = $0 },
                 onClose: { self.controller.cancelEditingAndDismiss() })
         }
-        .padding(.top, self.controller.closeOverflow)
-        .padding(.leading, self.controller.closeOverflow)
-        .padding(.trailing, self.controller.closeOverflow)
-        .padding(.bottom, self.controller.closeOverflow)
+        .padding(self.controller.closeOverflow)
         .onAppear {
             self.updateFocusState(visible: self.controller.model.isVisible, editing: self.controller.model.isEditing)
         }
@@ -133,11 +128,7 @@ private struct OverlayBackground: View {
     }
 }
 
-extension OverlayBackground: @MainActor Equatable {
-    static func == (lhs: Self, rhs: Self) -> Bool {
-        true
-    }
-}
+extension OverlayBackground: @MainActor Equatable {}
 
 struct CloseButtonOverlay: View {
     var isVisible: Bool

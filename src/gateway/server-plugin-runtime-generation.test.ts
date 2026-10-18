@@ -1,16 +1,37 @@
 import { describe, expect, it, vi } from "vitest";
+import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import type { PluginServicesHandle } from "../plugins/services.js";
+import { createPluginRecord } from "../plugins/status.test-helpers.js";
+import { prepareGatewayPluginLoad } from "./server-plugin-bootstrap.js";
+import { createPluginReloadRecovery } from "./server-plugin-reload-recovery.js";
 import { createGatewayPluginRuntimeGeneration } from "./server-plugin-runtime-generation.js";
 
+function createOwner() {
+  let currentServices: PluginServicesHandle | null = null;
+  return createGatewayPluginRuntimeGeneration({
+    getServices: () => currentServices,
+    setServices: (services) => {
+      currentServices = services;
+    },
+  });
+}
+
 describe("Gateway plugin runtime generation", () => {
+  it("preserves readiness when rollback restores an already unavailable startup plugin", () => {
+    const registry = createEmptyPluginRegistry();
+    registry.plugins.push(createPluginRecord({ id: "startup-error", status: "error" }));
+    const selected = new Set(["startup-error"]);
+    const recovery = createPluginReloadRecovery(registry, prepareGatewayPluginLoad);
+    expect(recovery.capture(selected)).toEqual([]);
+    const generation = createOwner();
+    const rejected = generation.reserve();
+    rejected.reject();
+    rejected.finishReload("restored", selected, registry, recovery.unavailablePluginIds);
+    expect(generation.getReloadStatus()).toBeUndefined();
+  });
+
   it("blocks stale publication during reservation, restores rejected claims, and commits winners", async () => {
-    let currentServices: PluginServicesHandle | null = null;
-    const owner = createGatewayPluginRuntimeGeneration({
-      getServices: () => currentServices,
-      setServices: (services) => {
-        currentServices = services;
-      },
-    });
+    const owner = createOwner();
     const startupClaim = owner.currentClaim();
     const published = vi.fn();
 
@@ -52,13 +73,7 @@ describe("Gateway plugin runtime generation", () => {
   ])(
     "settles a pending successor that $successor before deciding discovery and service ownership",
     async ({ survives }) => {
-      let currentServices: PluginServicesHandle | null = null;
-      const owner = createGatewayPluginRuntimeGeneration({
-        getServices: () => currentServices,
-        setServices: (services) => {
-          currentServices = services;
-        },
-      });
+      const owner = createOwner();
       const committed = owner.reserve();
       committed.commit();
       const pendingSuccessor = owner.reserve();

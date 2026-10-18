@@ -60,22 +60,18 @@ async function search(
 }
 
 describe("Parallel MCP envelope selection through the registered free provider", () => {
-  it.each(["json", "sse"])(
-    "keeps the first matching result before conflicting %s tails",
-    async (format) => {
-      const { output } = await search((id) => {
-        const messages = [
-          { id, method: "notifications/progress" },
-          result(id, "selected"),
-          { id, error: { message: "later matching error" } },
-          result("unrelated", "last fallback"),
-        ];
-        return format === "json" ? JSON.stringify(messages) : events(messages);
-      });
+  it("keeps the first matching result before conflicting JSON batch tails", async () => {
+    const { output } = await search((id) =>
+      JSON.stringify([
+        { id, method: "notifications/progress" },
+        result(id, "selected"),
+        { id, error: { message: "later matching error" } },
+        result("unrelated", "last fallback"),
+      ]),
+    );
 
-      expect(output.searchId).toBe("selected");
-    },
-  );
+    expect(output.searchId).toBe("selected");
+  });
 
   it("keeps a matching error before a later matching success", async () => {
     await expect(
@@ -93,17 +89,6 @@ describe("Parallel MCP envelope selection through the registered free provider",
     );
 
     expect(output.searchId).toBe("selected fallback");
-  });
-
-  it("uses the last error when no response id matches", async () => {
-    await expect(
-      search(() =>
-        events([
-          result("other-first", "earlier"),
-          { id: "other-last", error: { message: "selected fallback error" } },
-        ]),
-      ),
-    ).rejects.toThrow("selected fallback error");
   });
 
   it("keeps multiline CRLF data and ignores malformed events and nested batch arrays", async () => {

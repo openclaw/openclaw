@@ -4,11 +4,8 @@ import { createCapturedPluginRegistration } from "openclaw/plugin-sdk/plugin-tes
 import { readVisibleSessionTranscriptMessageEntries } from "openclaw/plugin-sdk/session-transcript-runtime";
 import { createCodexAppServerAgentHarness } from "../../harness.js";
 import { continueLocalCodexSession } from "../session-catalog-adoption.js";
-import {
-  createCodexAppServerBindingStore,
-  sessionBindingIdentity,
-  type StoredCodexAppServerBinding,
-} from "./session-binding.js";
+import { createCodexAppServerBindingStore, sessionBindingIdentity } from "./session-binding.js";
+import { createCodexRuntimeTestBindingStateStore } from "./session-binding.sqlite.test-helpers.js";
 import { importCodexThreadHistoryToTranscript } from "./transcript-mirror.js";
 import {
   codexForkTurn,
@@ -53,7 +50,7 @@ export async function createCodexSessionInitializationFixture(params: {
     data: threadId === sourceThread.id ? sourceThread.turns : forkedThread.turns,
   });
   const bindingStore = createCodexAppServerBindingStore(
-    runtime.state.openSyncKeyedStore<StoredCodexAppServerBinding>({
+    createCodexRuntimeTestBindingStateStore(runtime, {
       namespace: "initialization-test",
       maxEntries: 20,
     }),

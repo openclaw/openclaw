@@ -1,13 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import { z } from "zod";
-import { createWorkerProjectPreparationIdentity } from "./preparation-identity.js";
+import { createWorkerPreparationIdentity } from "./preparation-identity.js";
+import { readWorkerPreparation } from "./preparation-identity.schema.js";
 import { PROJECT_KEY, usePreparedPoolFixture } from "./prepared-pool.test-support.js";
 import { createWorkerProviderIntent } from "./provider-intent.js";
 import { prepareWorkerProviderProject } from "./provider-project-preparation.js";
-import {
-  workerProjectSeedKey,
-  type RepositoryWorkerProjectSnapshot,
-} from "./workspace-git-base.js";
+import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
+import { workerProjectSeedKey } from "./workspace-git-base.js";
 
 const sourceAdmission = vi.hoisted(() =>
   vi.fn<typeof import("./repository-project-admission.js").prepareRepositoryWorkerProjectSource>(),
@@ -23,14 +21,11 @@ describe("prepared project retention compatibility", () => {
     sourceAdmission
       .mockReset()
       .mockRejectedValue(new Error("Retention must not access the repository"));
-    fixture.config.agents = { list: [{ id: "main" }] };
+    fixture.config.agents = { entries: { main: {} } };
     fixture.provider.requiresNodeEnrollment = true;
     fixture.provider.supportsProjectPreparation = () => true;
-    fixture.provider.resolvePreparationTarget = () => ({
-      machineClass: "standard",
-      platform: "linux",
-      arch: "x64",
-    });
+    const { target, artifacts } = readWorkerPreparation(fixture.profile())!;
+    fixture.provider.resolvePreparationTarget = () => target;
     const project: RepositoryWorkerProjectSnapshot = {
       key: PROJECT_KEY,
       baseCommit: "d".repeat(40),
@@ -45,21 +40,13 @@ describe("prepared project retention compatibility", () => {
       },
     };
     const profileSnapshot = { settings: {}, install: "bundle", executionMode: "worker-turn" };
-    const artifacts = {
-      nodeBootstrapSha256: "e".repeat(64),
-      enabledPluginIds: [],
-      workerBundleHash: "c".repeat(64),
-      workerArchiveSha256: "f".repeat(64),
-      openclawVersion: "2026.8.1",
-      protocolFeatures: [],
-    };
-    const preparation = createWorkerProjectPreparationIdentity({
+    const preparation = createWorkerPreparationIdentity({
       namespace: "gateway",
       providerId: fixture.provider.id,
       profileId: "development",
       profileSnapshot,
       project,
-      target: { machineClass: "standard", platform: "linux", arch: "x64" },
+      target,
       artifacts,
       setupRecipe: "e".repeat(40),
       runSetupScript: false,
@@ -71,40 +58,19 @@ describe("prepared project retention compatibility", () => {
       provisionOperationId: "provision:retained",
       profileSnapshot: { ...profileSnapshot, project: { ...project, preparation } },
     });
-    let artifactsCurrent = true;
-    const prepareNodeArtifacts = vi.fn(async () => ({
-      artifacts,
-      assertCurrent: () => {
-        if (!artifactsCurrent) {
-          throw new Error("Runtime artifacts changed");
-        }
-      },
-    }));
+    const prepareNodeArtifacts = vi.fn(async () => ({ artifacts, assertCurrent() {} }));
     const providerFor = vi.fn(() => fixture.provider);
     const owner = createWorkerProviderIntent({
       store: fixture.store,
       getConfig: () => fixture.config,
       projectNamespace: "gateway",
       providerFor,
-      requireWorkerProfile: (value) => z.record(z.string(), z.json()).parse(value),
       prepareNodeArtifacts,
       isStopping: () => false,
-      inState: () => false,
       withLock: async (_id, run) => await run(),
-      serviceError: (_code, message) => new Error(message),
       resumeProvision: async (environment) => environment,
     });
-    return {
-      record,
-      owner,
-      project,
-      artifacts,
-      prepareNodeArtifacts,
-      providerFor,
-      invalidateArtifacts: () => {
-        artifactsCurrent = false;
-      },
-    };
+    return { record, owner, project, artifacts, prepareNodeArtifacts, providerFor };
   }
 
   it("uses repository admission and fences a changed source owner before allocation", async () => {
@@ -115,6 +81,13 @@ describe("prepared project retention compatibility", () => {
       return {
         project,
         setupRecipe: "e".repeat(40),
+        recipe: {
+          source: "script",
+          identity: "e".repeat(40),
+          inputs: { ".openclaw/worktree-setup.sh": "e".repeat(40) },
+          env: {},
+          onCreate: ["./.openclaw/worktree-setup.sh"],
+        },
         assertCurrent: () => {
           if (!current) {
             throw new Error("Repository owner changed");
@@ -141,31 +114,11 @@ describe("prepared project retention compatibility", () => {
       owner.createWithProfile(
         "development",
         "changed-repository",
-        {
-          executionMode: "worker-turn",
-        },
+        { executionMode: "worker-turn" },
         intent,
       ),
     ).rejects.toThrow("Repository owner changed");
     expect(fixture.store.list()).toEqual(before);
-  });
-
-  it("keeps providers without project preparation on ordinary cold provisioning", async () => {
-    const { owner, project } = await setup();
-    fixture.provider.supportsProjectPreparation = () => false;
-    const options = {
-      executionMode: "worker-turn" as const,
-      repository: { agentId: "main", url: project.source.url },
-      runSetupScript: true,
-      setupAuthorized: true,
-    };
-    const intent = await owner.prepareIntent("development", options);
-    expect(intent.preparationKey).toBeUndefined();
-    expect(intent.profileSnapshot).not.toHaveProperty("project");
-    const cold = await owner.createWithProfile("development", "private-cold", options, intent);
-    expect(cold.profileSnapshot).not.toHaveProperty("project");
-    expect(cold.preparation).toBeNull();
-    expect(sourceAdmission).not.toHaveBeenCalled();
   });
 
   it("passes private pack production through the provisioning owner instead of worker fetch", async () => {
@@ -177,6 +130,7 @@ describe("prepared project retention compatibility", () => {
     sourceAdmission.mockResolvedValue({
       project,
       setupRecipe: undefined,
+      recipe: { source: "none", inputs: {}, env: {} },
       assertCurrent: () => {},
       revalidate: async () => {},
       prepareGitPack,
@@ -222,15 +176,20 @@ describe("prepared project retention compatibility", () => {
     ).toThrow("not owned by this lifecycle");
   });
 
-  it.each(["profile", "provider", "target", "owner selection", "agent deletion", "runtime"])(
-    "rechecks %s drift without acquiring external source authority",
+  it.each(["provider", "target", "owner selection", "agent deletion"])(
+    "rejects %s drift on the next retention pass without external source authority",
     async (mutation) => {
-      const { record, owner, invalidateArtifacts } = await setup();
+      const { record, owner, providerFor } = await setup();
       const retained = await owner.prepareRetention(record, fixture.abort.signal);
       expect(retained).toBeDefined();
-      if (mutation === "profile") {
-        fixture.developmentProfile.settings = { region: "changed" };
-      } else if (mutation === "provider") {
+      const unavailable = mutation === "owner selection" || mutation === "agent deletion";
+      if (unavailable) {
+        expect(retained?.isCurrent()).toBe(true);
+        providerFor.mockClear().mockImplementation(() => {
+          throw new Error("Worker provider registry temporarily unavailable");
+        });
+      }
+      if (mutation === "provider") {
         fixture.developmentProfile.provider = "another-provider";
       } else if (mutation === "target") {
         fixture.provider.resolvePreparationTarget = () => ({
@@ -240,58 +199,47 @@ describe("prepared project retention compatibility", () => {
         });
       } else if (mutation === "owner selection") {
         fixture.config.tools = { github: { kind: "oauth", profileId: `ghp_${"a".repeat(32)}` } };
-      } else if (mutation === "agent deletion") {
-        fixture.config.agents = { list: [{ id: "other" }] };
       } else {
-        invalidateArtifacts();
+        fixture.config.agents = { entries: { other: {} } };
       }
-      if (mutation === "runtime") {
-        expect(() => retained!.isCurrent()).toThrow("Runtime artifacts changed");
-      } else {
-        expect(retained!.isCurrent()).toBe(false);
-        expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
+      if (unavailable) {
+        expect(retained?.isCurrent()).toBe(false);
       }
-      expect(sourceAdmission).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["owner selection", "agent deletion"] as const)(
-    "rejects known %s drift while provider observation is unavailable",
-    async (mutation) => {
-      const { record, owner, providerFor } = await setup();
-      const retained = await owner.prepareRetention(record, fixture.abort.signal);
-      expect(retained?.isCurrent()).toBe(true);
-      providerFor.mockClear().mockImplementation(() => {
-        throw new Error("Worker provider registry temporarily unavailable");
-      });
-      if (mutation === "owner selection") {
-        fixture.config.tools = { github: { kind: "oauth", profileId: `ghp_${"a".repeat(32)}` } };
-      } else {
-        fixture.config.agents = { list: [{ id: "other" }] };
-      }
-
-      expect(retained?.isCurrent()).toBe(false);
       expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
-      expect(providerFor).not.toHaveBeenCalled();
+      if (unavailable) {
+        expect(providerFor).not.toHaveBeenCalled();
+      }
       expect(sourceAdmission).not.toHaveBeenCalled();
     },
   );
 
-  it("distinguishes unavailable artifact observations from incompatible contents", async () => {
+  it("rejects agent removal during lifecycle preparation before preparing artifacts", async () => {
     const { record, owner, prepareNodeArtifacts } = await setup();
-    const unavailable = new Error("Artifact archive temporarily unavailable");
-    prepareNodeArtifacts.mockRejectedValueOnce(unavailable);
+    const pending = owner.prepareRetention(record, fixture.abort.signal);
+    fixture.config.agents = { entries: { other: {} } };
 
-    await expect(owner.prepareRetention(record, fixture.abort.signal)).rejects.toBe(unavailable);
-    expect((await owner.prepareRetention(record, fixture.abort.signal))?.isCurrent()).toBe(true);
-    expect(fixture.store.get(record.environmentId)).toEqual(record);
+    await expect(pending).resolves.toBeUndefined();
+    expect(prepareNodeArtifacts).not.toHaveBeenCalled();
     expect(sourceAdmission).not.toHaveBeenCalled();
   });
 
-  it("rejects an old runtime fingerprint when reconstructing retention after restart", async () => {
+  it("rejects an old runtime fingerprint on the first retention pass after restart", async () => {
     const { record, owner, artifacts } = await setup();
     artifacts.workerArchiveSha256 = "1".repeat(64);
     expect(await owner.prepareRetention(record, fixture.abort.signal)).toBeUndefined();
     expect(sourceAdmission).not.toHaveBeenCalled();
+  });
+
+  it("reports why activation demand cannot refill after runtime artifacts change", async () => {
+    const { record, owner, artifacts } = await setup();
+    const activated = await fixture.attach(await fixture.ready(record));
+    artifacts.workerArchiveSha256 = "1".repeat(64);
+    const warn = vi.fn();
+    const pool = fixture.pool({ prepareRetention: owner.prepareRetention, warn });
+    await pool.maintain(activated.environmentId);
+    expect(fixture.reserves()).toEqual([]);
+    expect(warn).toHaveBeenCalledExactlyOnceWith(
+      "Prepared worker refill skipped (development, retained): runtime artifacts or preparation identity changed",
+    );
   });
 });

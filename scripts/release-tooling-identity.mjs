@@ -8,7 +8,7 @@ const SHA_PATTERN = /^[a-f0-9]{40}$/u;
 const RELEASE_PUBLISH_REF_PATTERN = /^release-publish\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
 const RELEASE_CI_REF_PATTERN = /^release-ci\/([a-f0-9]{12})-([1-9][0-9]*)$/u;
 const DIRECT_WORKFLOW_REF_PATTERN =
-  /^(?:main|release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33|tideclaw\/alpha\/[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{4}Z)$/u;
+  /^(?:main|release\/[0-9]{4}\.(?:[1-9]|1[0-2])\.[1-9][0-9]*|extended-stable\/[0-9]{4}\.(?:[1-9]|1[0-2])\.33)$/u;
 const RELEASE_PUBLISH_PARENT_STATE_POLICIES = new Set([
   "active",
   "active-or-failure",
@@ -70,6 +70,8 @@ function parseIdentityJson(value) {
 }
 
 export function resolveReleaseToolingIdentity({
+  qualificationAdmission,
+  candidateSha,
   requestedIdentityJson = "",
   workflowContract,
   workflowFullRef,
@@ -82,6 +84,9 @@ export function resolveReleaseToolingIdentity({
   }
   const ref = requiredString(workflowRef, "workflow ref");
   const fullRef = requiredString(workflowFullRef, "workflow full ref");
+  if (ref.includes("tideclaw/alpha/") || fullRef.includes("tideclaw/alpha/")) {
+    fail("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const sha = requiredSha(workflowSha, "workflow SHA");
   const directRoute = fullRef === `refs/heads/${ref}` && DIRECT_WORKFLOW_REF_PATTERN.test(ref);
   const releaseCiMatch = fullRef === `refs/heads/${ref}` ? RELEASE_CI_REF_PATTERN.exec(ref) : null;
@@ -102,9 +107,6 @@ export function resolveReleaseToolingIdentity({
     ? parseIdentityJson(requestedIdentityJson)
     : undefined;
   if (!requested) {
-    if (contract !== "1" && contract !== "2") {
-      fail(`release tooling contract ${contract} requires explicit trusted workflow identity.`);
-    }
     if (!directRoute) {
       fail("release-ci and protected-tag workflows require explicit trusted workflow identity.");
     }
@@ -114,6 +116,19 @@ export function resolveReleaseToolingIdentity({
   if (directRoute || protectedTagMatch) {
     if (requested.ref !== ref || requested.fullRef !== fullRef || requested.sha !== sha) {
       fail("direct workflow identity must match the executing workflow ref and SHA.");
+    }
+    return requested;
+  }
+
+  if (qualificationAdmission !== undefined) {
+    if (
+      !isRecord(qualificationAdmission) ||
+      candidateSha !== sha ||
+      requested.ref !== ref ||
+      requested.fullRef !== fullRef ||
+      requested.sha !== sha
+    ) {
+      fail("candidate qualification must bind the exact executing C=Q identity");
     }
     return requested;
   }
@@ -133,6 +148,9 @@ export function resolveReleaseToolingIdentity({
 function classifyIdentity({ allowPrevalidatedRef, workflowFullRef, workflowRef, workflowSha }) {
   const ref = requiredString(workflowRef, "release tooling ref");
   const fullRef = requiredString(workflowFullRef, "release tooling full ref");
+  if (ref.includes("tideclaw/alpha/") || fullRef.includes("tideclaw/alpha/")) {
+    fail("Alpha releases are retired; use a beta prerelease instead.");
+  }
   const sha = requiredSha(workflowSha, "release tooling SHA");
   const protectedMatch = RELEASE_PUBLISH_REF_PATTERN.exec(ref);
 
@@ -408,8 +426,10 @@ export function verifyReleaseToolingIdentity({
     workflowSha,
   });
 
+  let tagRef;
+  let branchRef;
+  let mainComparisonStatus;
   if (identity.route === "protected-tag") {
-    let tagRef;
     try {
       tagRef = parseJson(
         runGh([
@@ -423,27 +443,7 @@ export function verifyReleaseToolingIdentity({
     } catch (error) {
       throw new Error("protected release tooling tag is missing or unreadable.", { cause: error });
     }
-    const validated = validateReleaseToolingIdentity({
-      allowPrevalidatedRef,
-      tagRef,
-      workflowFullRef,
-      workflowRef,
-      workflowSha,
-    });
-    validateParentRunIfRequested({
-      identity: validated,
-      releasePublishFullRef,
-      releasePublishParentStatePolicy,
-      releasePublishRef,
-      releasePublishRunAttempt,
-      releasePublishRunId,
-      repository: normalizedRepository,
-      runGh,
-    });
-    return validated;
-  }
-
-  if (identity.route === "main") {
+  } else if (identity.route === "main") {
     let comparison;
     try {
       comparison = parseJson(
@@ -461,45 +461,29 @@ export function verifyReleaseToolingIdentity({
     } catch (error) {
       throw new Error("main release tooling ancestry could not be verified.", { cause: error });
     }
-    const validated = validateReleaseToolingIdentity({
-      allowPrevalidatedRef,
-      mainComparisonStatus: isRecord(comparison) ? comparison.status : undefined,
-      workflowFullRef,
-      workflowRef,
-      workflowSha,
-    });
-    validateParentRunIfRequested({
-      identity: validated,
-      releasePublishFullRef,
-      releasePublishParentStatePolicy,
-      releasePublishRef,
-      releasePublishRunAttempt,
-      releasePublishRunId,
-      repository: normalizedRepository,
-      runGh,
-    });
-    return validated;
-  }
-
-  let branchRef;
-  try {
-    branchRef = parseJson(
-      runGh([
-        "api",
-        `repos/${normalizedRepository}/git/ref/heads/${identity.ref}`,
-        "--method",
-        "GET",
-      ]),
-      "prevalidated release tooling branch",
-    );
-  } catch (error) {
-    throw new Error("prevalidated release tooling branch is missing or unreadable.", {
-      cause: error,
-    });
+    mainComparisonStatus = isRecord(comparison) ? comparison.status : undefined;
+  } else {
+    try {
+      branchRef = parseJson(
+        runGh([
+          "api",
+          `repos/${normalizedRepository}/git/ref/heads/${identity.ref}`,
+          "--method",
+          "GET",
+        ]),
+        "prevalidated release tooling branch",
+      );
+    } catch (error) {
+      throw new Error("prevalidated release tooling branch is missing or unreadable.", {
+        cause: error,
+      });
+    }
   }
   const validated = validateReleaseToolingIdentity({
     allowPrevalidatedRef,
     branchRef,
+    tagRef,
+    mainComparisonStatus,
     workflowFullRef,
     workflowRef,
     workflowSha,
@@ -571,6 +555,9 @@ function validateParentRunIfRequested({
 function parseArgs(argv) {
   const options = {
     allowPrevalidatedRef: false,
+    qualificationAdmission: undefined,
+    qualificationInputs: undefined,
+    candidateSha: "",
     command: "",
     releasePublishRunAttempt: "",
     releasePublishRunId: "",
@@ -603,7 +590,13 @@ function parseArgs(argv) {
     if (arg.startsWith("--writer-")) {
       writerRequested = true;
     }
-    if (arg === "--release-publish-run-id") {
+    if (arg === "--qualification-admission-json") {
+      options.qualificationAdmission = JSON.parse(value);
+    } else if (arg === "--qualification-inputs-json") {
+      options.qualificationInputs = JSON.parse(value);
+    } else if (arg === "--candidate-sha") {
+      options.candidateSha = value;
+    } else if (arg === "--release-publish-run-id") {
       options.releasePublishRunId = value;
     } else if (arg === "--release-publish-run-attempt") {
       options.releasePublishRunAttempt = value;
@@ -651,24 +644,56 @@ function parseArgs(argv) {
   return options;
 }
 
-function main(argv = process.argv.slice(2)) {
+async function main(argv = process.argv.slice(2)) {
   const options = parseArgs([...argv]);
+  if (
+    options.command === "verify" &&
+    (options.qualificationAdmission !== undefined ||
+      options.qualificationInputs !== undefined ||
+      options.candidateSha)
+  ) {
+    fail(
+      "qualification admission belongs to the resolve route, not publication tooling verification",
+    );
+  }
   let identity;
   if (options.command === "resolve") {
     identity = resolveReleaseToolingIdentity(options);
     const protectedMatch = RELEASE_PUBLISH_REF_PATTERN.exec(identity.ref);
-    verifyReleaseToolingIdentity({
-      allowPrevalidatedRef: identity.ref !== "main" && !protectedMatch,
-      releasePublishFullRef: options.releasePublishFullRef,
-      releasePublishParentStatePolicy: options.releasePublishParentStatePolicy,
-      releasePublishRef: options.releasePublishRef,
-      releasePublishRunAttempt: options.releasePublishRunAttempt,
-      releasePublishRunId: options.releasePublishRunId,
-      repository: options.repository,
-      workflowFullRef: identity.fullRef,
-      workflowRef: identity.ref,
-      workflowSha: identity.sha,
-    });
+    if (options.qualificationAdmission !== undefined) {
+      if (
+        !RELEASE_CI_REF_PATTERN.test(identity.ref) ||
+        options.releasePublishRunId ||
+        options.releasePublishRef
+      ) {
+        fail("candidate qualification identity cannot authorize publication tooling");
+      }
+      // Keep the publisher-only identity closure shallow for sparse native workflows.
+      // Only the candidate route acquires independently authenticated P evidence.
+      const { verifyQualificationAdmission } =
+        await import("./release-qualification-admission.mjs");
+      verifyQualificationAdmission({
+        descriptor: options.qualificationAdmission,
+        repository: options.repository,
+        candidateSha: options.candidateSha,
+        qualificationSha: identity.sha,
+        workflowRef: identity.ref,
+        inputs: options.qualificationInputs,
+      });
+    } else {
+      verifyReleaseToolingIdentity({
+        allowPrevalidatedRef: identity.ref !== "main" && !protectedMatch,
+        releasePublishFullRef: options.releasePublishFullRef,
+        releasePublishParentStatePolicy: options.releasePublishParentStatePolicy,
+        releasePublishRef: options.releasePublishRef,
+        releasePublishRunAttempt: options.releasePublishRunAttempt,
+        releasePublishRunId: options.releasePublishRunId,
+        repository: options.repository,
+        workflowFullRef: identity.fullRef,
+        workflowRef: identity.ref,
+        workflowSha: identity.sha,
+      });
+    }
   } else {
     identity = verifyReleaseToolingIdentity(options);
   }
@@ -688,11 +713,11 @@ function main(argv = process.argv.slice(2)) {
   process.stdout.write(`${JSON.stringify(identity)}\n`);
 }
 
+function handleMainError(error) {
+  console.error(error instanceof Error ? error.message : String(error));
+  process.exitCode = 1;
+}
+
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
-  try {
-    main();
-  } catch (error) {
-    console.error(error instanceof Error ? error.message : String(error));
-    process.exit(1);
-  }
+  void main().catch(handleMainError);
 }

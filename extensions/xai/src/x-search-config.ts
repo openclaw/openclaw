@@ -1,4 +1,3 @@
-// Xai helper module supports x search config behavior.
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
@@ -9,7 +8,7 @@ function resolvePluginSearchConfig(
   key: "webSearch" | "xSearch",
 ): JsonRecord | undefined {
   const pluginConfig = config?.plugins?.entries?.xai?.config;
-  return isRecord(pluginConfig?.[key]) ? { ...pluginConfig[key] } : undefined;
+  return isRecord(pluginConfig?.[key]) ? pluginConfig[key] : undefined;
 }
 
 function baseUrlFallback(config?: JsonRecord): JsonRecord | undefined {

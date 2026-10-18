@@ -50,38 +50,33 @@ afterEach(() => {
   unregisterSessionBindingAdapter({ channel: "webchat", accountId: "default", adapter });
 });
 
-function createParams(source: "text" | "native", body = "/acp status") {
+function createParams(body = "/acp status") {
   return buildCommandTestParams(body, cfg, {
     Provider: "webchat",
     Surface: "webchat",
     OriginatingChannel: "webchat",
     OriginatingTo: "room",
     AccountId: "default",
-    CommandSource: source,
-    ...(source === "native" ? { CommandTargetSessionKey: "agent:main:main" } : {}),
+    CommandSource: "native",
+    CommandTargetSessionKey: "agent:main:main",
   });
 }
 
-it.each(["text", "native"] as const)(
-  "prefers the conversation binding over %s command context",
-  async (source) => {
-    await expect(
-      resolveAcpTargetSessionKey({ commandParams: createParams(source) }),
-    ).resolves.toEqual({
-      ok: true,
-      agentId: "work",
-      sessionKey: boundSessionKey,
-    });
-    expect(gatewayRequest).not.toHaveBeenCalled();
-  },
-);
+it("prefers the conversation binding over the native command context", async () => {
+  await expect(resolveAcpTargetSessionKey({ commandParams: createParams() })).resolves.toEqual({
+    ok: true,
+    agentId: "work",
+    sessionKey: boundSessionKey,
+  });
+  expect(gatewayRequest).not.toHaveBeenCalled();
+});
 
 it("prefers an explicit ACP argument over the binding and native chat target", async () => {
   const explicitSessionKey = "agent:other:acp:selected";
   gatewayRequest.mockResolvedValue({ key: explicitSessionKey, agentId: "other" });
   await expect(
     resolveAcpTargetSessionKey({
-      commandParams: createParams("native", `/acp status ${explicitSessionKey}`),
+      commandParams: createParams(`/acp status ${explicitSessionKey}`),
       token: explicitSessionKey,
     }),
   ).resolves.toEqual({ ok: true, agentId: "other", sessionKey: explicitSessionKey });

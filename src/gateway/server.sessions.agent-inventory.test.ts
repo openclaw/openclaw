@@ -35,7 +35,7 @@ test.each(inventorySizes)(
   "lists 37 sparse matches from %i stored rows through the real tool and Gateway handler",
   async (rowCount) => {
     const { storePath } = await createSessionStoreDir();
-    testState.agentsConfig = { list: [{ id: "main", default: true }] };
+    testState.agentsConfig = { entries: { main: {} } };
     const selected = ensureProfileForEmail("inventory-owner@example.test");
     const other = ensureProfileForEmail("inventory-other@example.test");
     const entries: Record<string, SessionEntry> = {};
@@ -71,8 +71,12 @@ test.each(inventorySizes)(
       ...current,
       tools: { ...current.tools, sessions: { ...current.tools?.sessions, visibility: "all" } },
     };
-    const backfilled = observeSessionRowBackfill(Object.keys(entries));
+    const backfilled = observeSessionRowBackfill(expectedKeys);
     const projection = await createSessionRowProjection({ cfg });
+    await projection.ensureMaterialized();
+    for (const key of expectedKeys) {
+      projection.describe({ agentId: "main", key });
+    }
     await backfilled;
     await projection.ensureMaterialized();
     const requests: Array<{ method: string; params: Record<string, unknown> }> = [];
@@ -106,7 +110,6 @@ test.each(inventorySizes)(
     const materialization = {
       list: vi.spyOn(sessionAccessor, "listSessionEntriesReadOnly"),
       fullLookup: vi.spyOn(sessionAccessor, "listSessionEntriesCore"),
-      exactBatch: vi.spyOn(sessionAccessor, "loadExactSessionEntryCandidatesReadOnlyBatch"),
     };
     const transcripts = [
       vi.spyOn(sessionAccessor, "readSessionTranscriptWatermark"),

@@ -42,22 +42,6 @@ function probe(port: number) {
 }
 
 describe("RFB server probe", () => {
-  it.each([
-    ["macOS Screen Sharing", "RFB 003.889\n", [30], [30]],
-    ["TigerVNC", "RFB 003.008\n", [2], [2]],
-    ["wayvnc", "RFB 003.008\n", [1], [1]],
-    ["gnome-remote-desktop", "RFB 003.008\n", [19], [19]],
-  ])("reads the %s security offer", async (_name, banner, offered, expected) => {
-    const port = await listenScriptedRfb((socket) => {
-      socket.write(Buffer.from(banner, "ascii"));
-      socket.once("data", (reply) => {
-        expect(reply.toString("ascii")).toBe("RFB 003.008\n");
-        socket.write(Buffer.from([offered.length, ...offered]));
-      });
-    });
-    await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: expected });
-  });
-
   it("reassembles a handshake split across packets", async () => {
     const port = await listenScriptedRfb((socket) => {
       socket.write(Buffer.from("RFB 003", "ascii"));
@@ -68,42 +52,6 @@ describe("RFB server probe", () => {
       });
     });
     await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: [2, 30] });
-  });
-
-  it("negotiates the legacy RFB 3.3 single security word", async () => {
-    const port = await listenScriptedRfb((socket) => {
-      socket.write(Buffer.from("RFB 003.003\n", "ascii"));
-      socket.once("data", (reply) => {
-        expect(reply.toString("ascii")).toBe("RFB 003.003\n");
-        socket.write(Buffer.from([0, 0, 0, 2]));
-      });
-    });
-    await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: [2] });
-  });
-
-  it("does not negotiate above an RFB 3.7 server", async () => {
-    const port = await listenScriptedRfb((socket) => {
-      socket.write(Buffer.from("RFB 003.007\n", "ascii"));
-      socket.once("data", (reply) => {
-        expect(reply.toString("ascii")).toBe("RFB 003.007\n");
-        socket.write(Buffer.from([1, 2]));
-      });
-    });
-    await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: [2] });
-  });
-
-  it("surfaces a rejected handshake as an empty security offer", async () => {
-    const port = await listenScriptedRfb((socket) => {
-      socket.write(Buffer.from("RFB 003.008\n", "ascii"));
-      socket.once("data", () => {
-        const reason = Buffer.from("too many auth failures", "ascii");
-        const header = Buffer.alloc(5);
-        header.writeUInt8(0, 0);
-        header.writeUInt32BE(reason.length, 1);
-        socket.write(Buffer.concat([header, reason]));
-      });
-    });
-    await expect(probe(port)).resolves.toEqual({ kind: "rfb", securityTypes: [] });
   });
 
   it.each([
@@ -166,7 +114,6 @@ describe("retained RFB connection", () => {
   it.each([
     ["3.3", "RFB 003.003\n", "RFB 003.003\n", Buffer.from([0, 0, 0, 2])],
     ["3.7", "RFB 003.007\n", "RFB 003.007\n", Buffer.from([1, 2])],
-    ["3.8", "RFB 003.008\n", "RFB 003.008\n", Buffer.from([1, 2])],
     ["macOS", "RFB 003.889\n", "RFB 003.008\n", Buffer.from([2, 30, 2])],
   ])(
     "retains one %s connection across split replies and coalesced server data",

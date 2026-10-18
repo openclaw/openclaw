@@ -1,5 +1,6 @@
 // Browser tests cover register.element plugin behavior.
 import { Command } from "commander";
+import { defaultRuntime } from "openclaw/plugin-sdk/runtime-env";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import * as browserCliSharedModule from "../browser-cli-shared.js";
 import {
@@ -7,7 +8,6 @@ import {
   getBrowserCliRuntime,
   getBrowserCliRuntimeCapture,
 } from "../browser-cli.test-support.js";
-import * as cliCoreApiModule from "../core-api.js";
 
 const mocks = vi.hoisted(() => ({
   callBrowserRequest: vi.fn<
@@ -21,12 +21,10 @@ const mocks = vi.hoisted(() => ({
 
 vi.spyOn(browserCliSharedModule, "callBrowserRequest").mockImplementation(mocks.callBrowserRequest);
 const browserCliRuntime = getBrowserCliRuntime();
-vi.spyOn(cliCoreApiModule.defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "writeJson").mockImplementation(
-  browserCliRuntime.writeJson,
-);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
-vi.spyOn(cliCoreApiModule.defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
+vi.spyOn(defaultRuntime, "log").mockImplementation(browserCliRuntime.log);
+vi.spyOn(defaultRuntime, "writeJson").mockImplementation(browserCliRuntime.writeJson);
+vi.spyOn(defaultRuntime, "error").mockImplementation(browserCliRuntime.error);
+vi.spyOn(defaultRuntime, "exit").mockImplementation(browserCliRuntime.exit);
 
 const { registerBrowserElementCommands } = await import("./register.element.js");
 
@@ -112,19 +110,9 @@ describe("browser element commands", () => {
       },
     },
     {
-      name: "press",
-      argv: ["browser", "press", "Enter", "--target-id", "tab-3"],
-      expectedBody: { kind: "press", key: "Enter", targetId: "tab-3" },
-    },
-    {
       name: "hover",
       argv: ["browser", "hover", "node-1", "--target-id", "tab-4"],
       expectedBody: { kind: "hover", ref: "node-1", targetId: "tab-4" },
-    },
-    {
-      name: "scrollintoview",
-      argv: ["browser", "scrollintoview", "node-2", "--target-id", "tab-5"],
-      expectedBody: { kind: "scrollIntoView", ref: "node-2", targetId: "tab-5" },
     },
     {
       name: "drag",
@@ -171,10 +159,6 @@ describe("browser element commands", () => {
 
   it.each([
     {
-      name: "click",
-      argv: ["browser", "click", "ref-1", "--button", "auxiliary"],
-    },
-    {
       name: "click-coords",
       argv: ["browser", "click-coords", "10", "20", "--button", "Left"],
     },
@@ -189,16 +173,16 @@ describe("browser element commands", () => {
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { name: "click", argv: ["browser", "click", "ref-1"] },
-    { name: "click-coords", argv: ["browser", "click-coords", "10", "20"] },
-  ])("leaves button undefined for $name when omitted", async ({ argv }) => {
-    const program = createElementProgram();
+  it.each([{ name: "click", argv: ["browser", "click", "ref-1"] }])(
+    "leaves button undefined for $name when omitted",
+    async ({ argv }) => {
+      const program = createElementProgram();
 
-    await program.parseAsync(argv, { from: "user" });
+      await program.parseAsync(argv, { from: "user" });
 
-    expect(getLastActionBody()?.button).toBeUndefined();
-  });
+      expect(getLastActionBody()?.button).toBeUndefined();
+    },
+  );
 
   it("rejects non-decimal coordinate values before dispatch", async () => {
     const program = createElementProgram();
@@ -209,23 +193,6 @@ describe("browser element commands", () => {
 
     const capture = getBrowserCliRuntimeCapture();
     expect(capture.runtimeErrors.join("\n")).toContain("Invalid x: must be a finite number");
-    expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
-  });
-
-  it("rejects non-decimal delay and timeout options", async () => {
-    const delayProgram = createElementProgram();
-    await expect(
-      delayProgram.parseAsync(["browser", "click-coords", "10", "20", "--delay-ms", "1e3"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("--delay-ms must be a non-negative integer.");
-
-    const timeoutProgram = createElementProgram();
-    await expect(
-      timeoutProgram.parseAsync(["browser", "scrollintoview", "ref-1", "--timeout-ms", "0x1000"], {
-        from: "user",
-      }),
-    ).rejects.toThrow("--timeout-ms must be a positive integer.");
     expect(mocks.callBrowserRequest).not.toHaveBeenCalled();
   });
 

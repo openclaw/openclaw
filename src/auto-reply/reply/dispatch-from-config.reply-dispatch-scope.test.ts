@@ -14,98 +14,66 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   setNoAbort,
-} from "./dispatch-from-config.test-harness.js";
+} from "./dispatch-from-config.test-support.js";
 import type { InternalGetReplyFromConfig } from "./get-reply.types.js";
+import { expectCalls } from "./reply-contract.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
+
+const handledReply = { handled: true, queuedFinal: true, counts: { tool: 0, block: 0, final: 1 } };
+function discordCtx(SessionKey: string, overrides: Parameters<typeof buildTestCtx>[0] = {}) {
+  return buildTestCtx({
+    Body: "hello",
+    BodyForAgent: "hello",
+    SessionKey,
+    Provider: "discord",
+    Surface: "discord",
+    To: "C1",
+    AccountId: "default",
+    ...overrides,
+  });
+}
 
 describe("dispatchReplyFromConfig reply hook scope", () => {
   beforeEach(() => {
     describe0BeforeEach0();
     setNoAbort();
-  });
-
-  it.each<{
-    name: string;
-    targetKey: string;
-    expectedKind: "agent" | "acp";
-    sourceKey?: string;
-    metadata?: boolean;
-    missing?: boolean;
-    bound?: boolean;
-    tail?: boolean;
-  }>([
-    { name: "local session", targetKey: "agent:test:session", expectedKind: "agent" },
-    { name: "new session", targetKey: "agent:test:session", missing: true, expectedKind: "agent" },
-    {
-      name: "stale ACP key",
-      targetKey: "agent:test:acp:missing",
-      missing: true,
-      expectedKind: "acp",
-    },
-    {
-      name: "stored ACP session",
-      targetKey: "agent:test:session",
-      metadata: true,
-      expectedKind: "acp",
-    },
-    {
-      name: "ACP command target",
-      sourceKey: "agent:test:source",
-      targetKey: "agent:test:target",
-      metadata: true,
-      expectedKind: "acp",
-    },
-    {
-      name: "local command target from ACP source",
-      sourceKey: "agent:test:acp:source",
-      targetKey: "agent:test:target",
-      expectedKind: "agent",
-    },
-    {
-      name: "bound ACP reset tail",
-      sourceKey: "agent:test:discord:channel:C1",
-      targetKey: "agent:test:acp:bound",
-      bound: true,
-      tail: true,
-      expectedKind: "acp",
-    },
-  ])("scopes reply hooks to the prepared $name", async (scenario) => {
-    const onAgentRunStart = vi.fn(() => "reply-dispatch");
-    const dispatchRun: ReplyDispatchRun = {
-      completionSource: "reply-dispatch",
-      getResult: () => ({}),
-    };
-    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
-      input: { text: "source user turn" },
-      target: () => undefined,
-    });
-    const sourceKey = scenario.sourceKey ?? scenario.targetKey;
-    const sourceEntry = { sessionId: "source-session", updatedAt: Date.now() };
-    const targetEntry = scenario.missing
-      ? undefined
-      : {
-          sessionId: "target-session",
-          updatedAt: Date.now(),
-          ...(scenario.metadata ? { acp: { backend: "acpx" } } : {}),
-        };
-    if (sourceKey !== scenario.targetKey) {
-      sessionStoreMocks.entriesBySessionKey.set(sourceKey, sourceEntry);
-    }
-    if (targetEntry) {
-      sessionStoreMocks.entriesBySessionKey.set(scenario.targetKey, targetEntry);
-    }
     const readEntry = (...args: unknown[]) => {
       const { sessionKey } = args[0] as { sessionKey: string };
       return sessionStoreMocks.entriesBySessionKey.get(sessionKey);
     };
     sessionStoreMocks.loadSessionStoreEntry.mockImplementation(readEntry);
     sessionStoreMocks.loadSessionEntry.mockImplementation(readEntry);
-    if (scenario.bound) {
+  });
+
+  it.each([
+    ["local command target from ACP source", false, false],
+    ["bound ACP reset tail", true, false],
+    ["prepared bound ACP reset tail", true, true],
+  ] as const)("scopes reply hooks to the prepared %s", async (_name, bound, prepared) => {
+    const sourceKey = bound ? "agent:test:discord:channel:C1" : "agent:test:acp:source";
+    const targetKey = bound ? "agent:test:acp:bound" : "agent:test:target";
+    const runId = "dispatched-run";
+    const onAgentRunStart = vi.fn(() => "reply-dispatch");
+    const onPreparedAgentRunStart = vi.fn(() => "reply-dispatch");
+    const dispatchRun: ReplyDispatchRun = {
+      completionSource: "reply-dispatch",
+      getResult: () => ({}),
+    };
+    const preparedStart = { runId, options: dispatchRun, transcriptStart: null };
+    const userTurnTranscriptRecorder = createUserTurnTranscriptRecorder({
+      input: { text: "source user turn" },
+      target: () => undefined,
+    });
+    const sourceEntry = { sessionId: "source-session", updatedAt: Date.now() };
+    const targetEntry = { sessionId: "target-session", updatedAt: Date.now() };
+    sessionStoreMocks.entriesBySessionKey.set(sourceKey, sourceEntry);
+    sessionStoreMocks.entriesBySessionKey.set(targetKey, targetEntry);
+    if (bound) {
       sessionBindingMocks.resolveByConversation.mockReturnValue({
         bindingId: "bound-dispatch-kind",
-        targetSessionKey: scenario.targetKey,
+        targetSessionKey: targetKey,
         targetKind: "session",
         status: "active",
         boundAt: Date.now(),
@@ -116,70 +84,55 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       (hookName, scope) => hookName === "reply_dispatch" && scope?.dispatchKind !== "agent",
     );
     hookMocks.runner.runReplyDispatch.mockImplementation(async (eventValue, contextValue) => {
-      expect(eventValue).toMatchObject({ sessionKey: scenario.targetKey });
+      expect(eventValue).toMatchObject({ sessionKey: targetKey });
       expect(contextValue).toMatchObject({ dispatchKind: "acp" });
       const event = eventValue as { isTailDispatch?: boolean };
-      if (!scenario.tail || event.isTailDispatch) {
+      if (event.isTailDispatch) {
         const context = contextValue as PluginHookReplyDispatchContext;
-        expect(context.onAgentRunStart?.("dispatched-run", undefined, dispatchRun)).toBe(
-          "reply-dispatch",
-        );
+        expect(
+          prepared
+            ? context.onPreparedAgentRunStart?.(preparedStart)
+            : context.onAgentRunStart?.(runId, undefined, dispatchRun),
+        ).toBe("reply-dispatch");
         context.userTurnTranscriptRecorder?.replaceTextBeforePersistence?.("accepted user turn");
       }
-      return scenario.tail && !event.isTailDispatch
-        ? undefined
-        : {
-            handled: true,
-            queuedFinal: true,
-            counts: { tool: 0, block: 0, final: 1 },
-          };
+      return event.isTailDispatch ? handledReply : undefined;
     });
     const replyResolver = vi.fn<InternalGetReplyFromConfig>(async (ctx, options) => {
-      if (scenario.tail) {
+      if (bound) {
         ctx.AcpDispatchTailAfterReset = true;
         return undefined;
       }
-      expect(options?.onAgentRunStart?.("dispatched-run", undefined, dispatchRun)).toBe(
-        "reply-dispatch",
-      );
+      expect(options?.onAgentRunStart?.(runId, undefined, dispatchRun)).toBe("reply-dispatch");
       return { text: "local reply" };
     });
-    const ctx = buildTestCtx({
-      Body: "hello",
-      BodyForAgent: "hello",
-      SessionKey: sourceKey,
-      Provider: "discord",
-      Surface: "discord",
-      To: "C1",
-      AccountId: "default",
-      ...(scenario.sourceKey && !scenario.bound
-        ? { CommandSource: "native", CommandTargetSessionKey: scenario.targetKey }
-        : {}),
-    });
+    const ctx = discordCtx(
+      sourceKey,
+      !bound ? { CommandSource: "native", CommandTargetSessionKey: targetKey } : {},
+    );
     const result = await dispatchReplyFromConfig({
       ctx,
       cfg: emptyConfig,
       dispatcher: createDispatcher(),
       replyResolver,
-      replyOptions: { onAgentRunStart, userTurnTranscriptRecorder },
+      replyOptions: {
+        ...(prepared ? { onPreparedAgentRunStart } : { onAgentRunStart }),
+        userTurnTranscriptRecorder,
+      },
     });
     expect(result.queuedFinal).toBe(true);
     expect(hookMocks.runner.hasHooks).toHaveBeenCalledWith("reply_dispatch", {
-      dispatchKind: scenario.expectedKind,
+      dispatchKind: bound ? "acp" : "agent",
     });
-    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledTimes(
-      scenario.expectedKind === "agent" ? 0 : scenario.tail ? 2 : 1,
-    );
-    expect(replyResolver).toHaveBeenCalledTimes(
-      scenario.expectedKind === "agent" || scenario.tail ? 1 : 0,
-    );
-    expect(onAgentRunStart).toHaveBeenCalledExactlyOnceWith(
-      "dispatched-run",
-      undefined,
-      dispatchRun,
-    );
+    expect(hookMocks.runner.runReplyDispatch).toHaveBeenCalledTimes(bound ? 2 : 0);
+    expect(replyResolver).toHaveBeenCalledTimes(1);
+    if (prepared) {
+      expectCalls([onPreparedAgentRunStart, [[preparedStart]]], [onAgentRunStart, []]);
+    } else {
+      expectCalls([onAgentRunStart, [[runId, undefined, dispatchRun]]]);
+    }
     expect(userTurnTranscriptRecorder.message?.content).toBe(
-      scenario.expectedKind === "acp" ? "accepted user turn" : "source user turn",
+      bound ? "accepted user turn" : "source user turn",
     );
   });
 
@@ -191,37 +144,20 @@ describe("dispatchReplyFromConfig reply hook scope", () => {
       acp: { backend: "acpx" },
     };
     sessionStoreMocks.entriesBySessionKey.set(sessionKey, entry);
-    const readEntry = () => entry;
-    sessionStoreMocks.loadSessionStoreEntry.mockImplementation(readEntry);
-    sessionStoreMocks.loadSessionEntry.mockImplementation(readEntry);
+    sessionStoreMocks.loadSessionStoreEntry.mockReturnValue(entry);
+    sessionStoreMocks.loadSessionEntry.mockReturnValue(entry);
     hookMocks.runner.hasHooks.mockReturnValue(true);
-    hookMocks.runner.runReplyDispatch.mockResolvedValue({
-      handled: true,
-      queuedFinal: true,
-      counts: { tool: 0, block: 0, final: 1 },
-    });
+    hookMocks.runner.runReplyDispatch.mockResolvedValue(handledReply);
     const dispatcher = createDispatcher();
     const replyResolver = vi.fn<InternalGetReplyFromConfig>();
+    const guarded = { permissionMode: "guarded" as const, toolOverrides: { webSearch: false } };
 
     const result = await dispatchReplyFromConfig({
-      ctx: buildTestCtx({
-        Body: "hello",
-        BodyForAgent: "hello",
-        SessionKey: sessionKey,
-        Provider: "discord",
-        Surface: "discord",
-        To: "C1",
-        AccountId: "default",
-      }),
+      ctx: discordCtx(sessionKey),
       cfg: emptyConfig,
       dispatcher,
       replyResolver,
-      replyOptions: {
-        admittedSessionSettings: {
-          permissionMode: "guarded",
-          toolOverrides: { webSearch: false },
-        },
-      },
+      replyOptions: { admittedSessionSettings: guarded },
     });
 
     expect(hookMocks.runner.runReplyDispatch).not.toHaveBeenCalled();

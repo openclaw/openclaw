@@ -2,6 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { gitRuntimeStagingPath } from "../infra/update-runtime-staging.js";
 import { fingerprintPluginRuntimeArtifact } from "./plugin-runtime-artifact-identity.js";
 
 const tempDirs: string[] = [];
@@ -110,17 +111,25 @@ describe("fingerprintPluginRuntimeArtifact", () => {
     expect(fingerprintPluginRuntimeArtifact(record)).not.toBe(first);
   });
 
-  it("keeps dependency stores outside the plugin-owned artifact identity", () => {
-    const fixture = createPluginFixture();
-    const dependency = path.join(fixture.rootDir, "node_modules", "dependency", "index.js");
-    fs.mkdirSync(path.dirname(dependency), { recursive: true });
-    fs.writeFileSync(dependency, "export const value = 1;\n");
-    const record = { pluginId: "fixture", origin: "global" as const, ...fixture };
-    const first = fingerprintPluginRuntimeArtifact(record);
+  it.each(["node_modules", "transaction"])(
+    "keeps %s outside the plugin-owned artifact identity",
+    (kind) => {
+      const fixture = createPluginFixture();
+      const modules = path.join(fixture.rootDir, "node_modules");
+      const root = kind === "transaction" ? gitRuntimeStagingPath(modules) : modules;
+      const dependency = path.join(root, "dependency", "index.js");
+      const record = { pluginId: "fixture", origin: "global" as const, ...fixture };
+      const first = fingerprintPluginRuntimeArtifact(record);
+      fs.mkdirSync(path.dirname(dependency), { recursive: true });
+      fs.writeFileSync(dependency, "export const value = 1;\n");
+      expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
 
-    fs.writeFileSync(dependency, "export const value = 2;\n");
-    expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
-  });
+      fs.writeFileSync(dependency, "export const value = 2;\n");
+      expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
+      fs.rmSync(root, { recursive: true });
+      expect(fingerprintPluginRuntimeArtifact(record)).toBe(first);
+    },
+  );
 
   it("hashes canonical dist content when the registry points at dist-runtime", () => {
     const packageRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openclaw-plugin-artifact-"));

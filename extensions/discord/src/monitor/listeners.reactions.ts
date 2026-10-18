@@ -1,15 +1,16 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
-import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose, type RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   ChannelType,
   type Client,
-  MessageReactionAddListener,
-  MessageReactionRemoveListener,
+  GatewayDispatchEvents,
+  type ListenerDataByEvent,
   type User,
 } from "../internal/discord.js";
 import {
+  hasConfiguredDiscordChannels,
   isDiscordGroupAllowedByPolicy,
   normalizeDiscordSlug,
   resolveDiscordChannelConfigWithFallback,
@@ -24,14 +25,11 @@ import { runDiscordListenerWithSlowLog, type DiscordListenerLogger } from "./lis
 import type { DiscordLivePolicyReader } from "./live-policy.js";
 import { resolveFetchedDiscordThreadLikeChannelContext } from "./thread-channel-context.js";
 
-type LoadedConfig = OpenClawConfig;
-type RuntimeEnv = import("openclaw/plugin-sdk/runtime-env").RuntimeEnv;
-
-type DiscordReactionEvent = Parameters<MessageReactionAddListener["handle"]>[0];
+type DiscordReactionEvent = ListenerDataByEvent[GatewayDispatchEvents.MessageReactionAdd];
 
 type DiscordReactionListenerParams = {
   readPolicy?: DiscordLivePolicyReader;
-  cfg: LoadedConfig;
+  cfg: OpenClawConfig;
   runtime: RuntimeEnv;
   logger: DiscordListenerLogger;
   onEvent?: () => void;
@@ -54,10 +52,9 @@ type DiscordReactionRoutingParams = {
 type DiscordReactionMode = "off" | "own" | "all" | "allowlist";
 type DiscordFetchedReactionMessage = { author?: User | null } | null;
 
-export class DiscordReactionListener extends MessageReactionAddListener {
-  constructor(private params: DiscordReactionListenerParams) {
-    super();
-  }
+export class DiscordReactionListener {
+  readonly type = GatewayDispatchEvents.MessageReactionAdd;
+  constructor(private params: DiscordReactionListenerParams) {}
 
   async handle(data: DiscordReactionEvent, client: Client) {
     this.params.onEvent?.();
@@ -72,10 +69,9 @@ export class DiscordReactionListener extends MessageReactionAddListener {
   }
 }
 
-export class DiscordReactionRemoveListener extends MessageReactionRemoveListener {
-  constructor(private params: DiscordReactionListenerParams) {
-    super();
-  }
+export class DiscordReactionRemoveListener {
+  readonly type = GatewayDispatchEvents.MessageReactionRemove;
+  constructor(private params: DiscordReactionListenerParams) {}
 
   async handle(data: DiscordReactionEvent, client: Client) {
     this.params.onEvent?.();
@@ -90,7 +86,7 @@ export class DiscordReactionRemoveListener extends MessageReactionRemoveListener
   }
 }
 
-async function runDiscordReactionHandler(initialParams: {
+async function runDiscordReactionHandler(params: {
   data: DiscordReactionEvent;
   client: Client;
   action: "added" | "removed";
@@ -98,47 +94,33 @@ async function runDiscordReactionHandler(initialParams: {
   listener: string;
   event: string;
 }): Promise<void> {
-  const policy = await initialParams.handlerParams.readPolicy?.();
-  const params = policy
+  const policy = await params.handlerParams.readPolicy?.();
+  const handlerParams = policy
     ? {
-        ...initialParams,
-        handlerParams: {
-          ...initialParams.handlerParams,
-          ...policy,
-          isPolicyCurrent: policy.isCurrent,
-        },
+        ...params.handlerParams,
+        ...policy,
+        isPolicyCurrent: policy.isCurrent,
       }
-    : initialParams;
+    : params.handlerParams;
   await runDiscordListenerWithSlowLog({
-    logger: params.handlerParams.logger,
+    logger: handlerParams.logger,
     listener: params.listener,
     event: params.event,
     run: async () =>
       handleDiscordReactionEvent({
+        ...handlerParams,
         data: params.data,
         client: params.client,
         action: params.action,
-        cfg: params.handlerParams.cfg,
-        isPolicyCurrent: params.handlerParams.isPolicyCurrent,
-        accountId: params.handlerParams.accountId,
-        botUserId: params.handlerParams.botUserId,
-        dmEnabled: params.handlerParams.dmEnabled,
-        groupDmEnabled: params.handlerParams.groupDmEnabled,
-        groupDmChannels: params.handlerParams.groupDmChannels,
-        dmPolicy: params.handlerParams.dmPolicy,
-        allowFrom: params.handlerParams.allowFrom,
-        groupPolicy: params.handlerParams.groupPolicy,
-        allowNameMatching: params.handlerParams.allowNameMatching,
-        guildEntries: params.handlerParams.guildEntries,
-        logger: params.handlerParams.logger,
       }),
   });
 }
 
-type DiscordReactionIngressAuthorizationParams = {
-  isPolicyCurrent?: () => boolean;
-  cfg: LoadedConfig;
-  accountId: string;
+type DiscordReactionIngressAuthorizationParams = Omit<
+  DiscordReactionRoutingParams,
+  "botUserId" | "guildEntries"
+> & {
+  cfg: OpenClawConfig;
   user: User;
   memberRoleIds: string[];
   isDirectMessage: boolean;
@@ -147,13 +129,6 @@ type DiscordReactionIngressAuthorizationParams = {
   channelId: string;
   channelName?: string;
   channelSlug: string;
-  dmEnabled: boolean;
-  groupDmEnabled: boolean;
-  groupDmChannels: string[];
-  dmPolicy: "open" | "pairing" | "allowlist" | "disabled";
-  allowFrom: string[];
-  groupPolicy: "open" | "allowlist" | "disabled";
-  allowNameMatching: boolean;
   guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
   channelConfig?: import("./allow-list.js").DiscordChannelConfigResolved | null;
 };
@@ -205,8 +180,7 @@ async function authorizeDiscordReactionIngress(
   if (!params.isGuildMessage) {
     return { allowed: true };
   }
-  const channelAllowlistConfigured =
-    Boolean(params.guildInfo?.channels) && Object.keys(params.guildInfo?.channels ?? {}).length > 0;
+  const channelAllowlistConfigured = hasConfiguredDiscordChannels(params.guildInfo?.channels);
   const channelAllowed = params.channelConfig?.allowed !== false;
   if (
     !isDiscordGroupAllowedByPolicy({
@@ -238,12 +212,6 @@ async function authorizeDiscordReactionIngress(
   return { allowed: true };
 }
 
-function hasDiscordGuildChannelOverrides(
-  guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null,
-) {
-  return Boolean(guildInfo?.channels && Object.keys(guildInfo.channels).length > 0);
-}
-
 function shouldSkipGuildReactionBeforeChannelFetch(params: {
   reactionMode: DiscordReactionMode;
   guildInfo: import("./allow-list.js").DiscordGuildEntryResolved | null;
@@ -259,7 +227,7 @@ function shouldSkipGuildReactionBeforeChannelFetch(params: {
   if (params.reactionMode !== "allowlist") {
     return false;
   }
-  if (hasDiscordGuildChannelOverrides(params.guildInfo)) {
+  if (hasConfiguredDiscordChannels(params.guildInfo?.channels)) {
     return false;
   }
   return !shouldEmitDiscordReactionNotification({
@@ -279,7 +247,7 @@ async function handleDiscordReactionEvent(
     data: DiscordReactionEvent;
     client: Client;
     action: "added" | "removed";
-    cfg: LoadedConfig;
+    cfg: OpenClawConfig;
     logger: DiscordListenerLogger;
   } & DiscordReactionRoutingParams,
 ) {
@@ -307,9 +275,7 @@ async function handleDiscordReactionEvent(
     if (isGuildMessage && guildEntries && Object.keys(guildEntries).length > 0 && !guildInfo) {
       return;
     }
-    const memberRoleIds = Array.isArray(data.rawMember?.roles)
-      ? data.rawMember.roles.map((roleId: string) => roleId)
-      : [];
+    const memberRoleIds = Array.isArray(data.rawMember?.roles) ? data.rawMember.roles.slice() : [];
     const reactionMode = guildInfo?.reactionNotifications ?? "own";
     if (
       isGuildMessage &&
@@ -342,9 +308,7 @@ async function handleDiscordReactionEvent(
     const isGroupDm = channelType === ChannelType.GroupDM;
     const isThreadChannel = channelContext.isThreadChannel;
     const reactionIngressBase: Omit<DiscordReactionIngressAuthorizationParams, "channelConfig"> = {
-      isPolicyCurrent: params.isPolicyCurrent,
-      cfg: params.cfg,
-      accountId: params.accountId,
+      ...params,
       user,
       memberRoleIds,
       isDirectMessage,
@@ -353,13 +317,6 @@ async function handleDiscordReactionEvent(
       channelId: data.channel_id,
       channelName,
       channelSlug,
-      dmEnabled: params.dmEnabled,
-      groupDmEnabled: params.groupDmEnabled,
-      groupDmChannels: params.groupDmChannels,
-      dmPolicy: params.dmPolicy,
-      allowFrom: params.allowFrom,
-      groupPolicy: params.groupPolicy,
-      allowNameMatching: params.allowNameMatching,
       guildInfo,
     };
     if (!isGuildMessage) {

@@ -32,10 +32,20 @@ export function cfgWithPolicy(settings: Record<string, unknown> = {}): OpenClawC
   };
 }
 
-type PolicyConfigFixture = OpenClawConfig & Record<string, unknown>;
+type AuthoredAgents = NonNullable<OpenClawConfig["agents"]>;
+type AuthoredEntry = NonNullable<AuthoredAgents["entries"]>[string];
+
+export type RawLegacyDoctorConfig = Omit<OpenClawConfig, "agents"> & {
+  agents?: Omit<AuthoredAgents, "entries"> & {
+    entries?: Record<string, AuthoredEntry & { default?: boolean }>;
+    list?: unknown[];
+  };
+};
+
+type PolicyConfigFixture = RawLegacyDoctorConfig & Record<string, unknown>;
 
 export function cfgWithPolicyOverrides(
-  overrides: Partial<OpenClawConfig> = {},
+  overrides: Partial<RawLegacyDoctorConfig> = {},
 ): PolicyConfigFixture {
   return { ...cfgWithPolicy(), ...overrides };
 }

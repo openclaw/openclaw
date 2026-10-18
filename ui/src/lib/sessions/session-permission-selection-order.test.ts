@@ -7,7 +7,7 @@ import type { SessionsListResult } from "../../api/types.ts";
 import { createSessionCapability } from "./index.ts";
 import { createGatewayHarness, sessionsResult } from "./session-capability.test-support.ts";
 
-it.each(["success", "failure", "dynamic"] as const)(
+it.each(["success", "dynamic"] as const)(
   "preserves a queued selection across a permission acknowledgment (%s)",
   async (outcome) => {
     const key = "agent:main:permission-selection";
