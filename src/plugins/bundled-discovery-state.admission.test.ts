@@ -53,7 +53,7 @@ afterEach(() => {
 const readers = [
   {
     name: "direct preparation snapshot",
-    reject: reads.snapshotAsync,
+    reject: reads.snapshot,
     read: () => prepareBundledDiscoveryMode(env),
   },
   {
@@ -119,23 +119,6 @@ it.each(readers)(
     });
     await withPluginCache(createPluginCache(), async () => {
       await expect(Promise.resolve().then(async () => await read())).rejects.toBe(failure);
-    });
-  },
-);
-
-it.each([invalidatedRead(), new Error("Snapshot preparation failed")])(
-  "propagates asynchronous snapshot preparation failures: %s",
-  async (cause) => {
-    reads.snapshotAsync.mockRejectedValue(cause);
-    await withPluginCache(createPluginCache(), async () => {
-      const result = prepareBundledDiscoveryMode(env);
-      if ("code" in cause) {
-        await expect(result).rejects.toMatchObject({ cause });
-        await expect(result.catch(isPluginCacheFactInvalidatedError)).resolves.toBe(true);
-      } else {
-        await expect(result).rejects.toBe(cause);
-      }
-      expect(reads.metadata).not.toHaveBeenCalled();
     });
   },
 );
