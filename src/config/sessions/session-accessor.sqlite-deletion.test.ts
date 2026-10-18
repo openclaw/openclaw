@@ -192,27 +192,42 @@ describe("session deletion and native owner state", () => {
   const read = (key = sessionKey) =>
     loadSessionEntry({ sessionKey: key, storePath, readConsistency: "latest" });
 
+  async function seedRepository(
+    repositories: ReturnType<typeof createSessionRepositoryWorkspaceStore>,
+    scope: Parameters<typeof replaceSessionEntry>[0] & { agentId: string; sessionKey: string },
+    id: string,
+    checkpoint: string,
+  ) {
+    const repository = await repositories.create({
+      agentId: scope.agentId,
+      sessionKey: scope.sessionKey,
+      url: "https://github.com/openclaw/fixture.git",
+      assertCurrent() {},
+    });
+    await replaceSessionEntry(scope, {
+      sessionId: id,
+      updatedAt: 1,
+      repositoryWorkspaceId: repository.workspaceId,
+    });
+    const entry = loadSessionEntry(scope);
+    expect(entry).toMatchObject({ sessionId: id });
+    const artifactRoot = repositories.artifactPath(repository.workspaceId);
+    const artifact = path.join(artifactRoot, "checkpoint");
+    await fs.mkdir(artifactRoot, { recursive: true });
+    await fs.writeFile(artifact, checkpoint);
+    return { repository, entry, artifactRoot, artifact };
+  }
+
   it("cleans repository state in the explicit environment and preserves the ambient same-key session", async () => {
     const ambientEnv = { ...process.env };
     const ambientRepositories = createSessionRepositoryWorkspaceStore({ env: ambientEnv });
-    const ambientRepository = await ambientRepositories.create({
-      agentId: "main",
-      sessionKey,
-      url: "https://github.com/openclaw/fixture.git",
-      assertCurrent: () => {},
-    });
     const ambientScope = { agentId: "main", sessionKey, storePath, env: ambientEnv };
-    await replaceSessionEntry(ambientScope, {
-      sessionId: "ambient-sentinel",
-      updatedAt: 1,
-      repositoryWorkspaceId: ambientRepository.workspaceId,
-    });
-    const ambientEntry = loadSessionEntry(ambientScope);
-    expect(ambientEntry).toMatchObject({ sessionId: "ambient-sentinel" });
-    const ambientArtifactRoot = ambientRepositories.artifactPath(ambientRepository.workspaceId);
-    const ambientArtifact = path.join(ambientArtifactRoot, "checkpoint");
-    await fs.mkdir(ambientArtifactRoot, { recursive: true });
-    await fs.writeFile(ambientArtifact, "ambient checkpoint");
+    const ambient = await seedRepository(
+      ambientRepositories,
+      ambientScope,
+      "ambient-sentinel",
+      "ambient checkpoint",
+    );
 
     await withOpenClawTestState(
       { label: "repository-cleanup-explicit-env", applyEnv: false },
@@ -222,20 +237,12 @@ describe("session deletion and native owner state", () => {
         const scope = { agentId: "main", sessionKey, storePath: explicitStorePath, env: state.env };
         const repositories = createSessionRepositoryWorkspaceStore({ env: state.env });
         expect(repositories.path).not.toBe(ambientRepositories.path);
-        const repository = await repositories.create({
-          agentId: "main",
-          sessionKey,
-          url: "https://github.com/openclaw/fixture.git",
-          assertCurrent: () => {},
-        });
-        await replaceSessionEntry(scope, {
-          sessionId: "explicit-environment-session",
-          updatedAt: 1,
-          repositoryWorkspaceId: repository.workspaceId,
-        });
-        const artifactRoot = repositories.artifactPath(repository.workspaceId);
-        await fs.mkdir(artifactRoot, { recursive: true });
-        await fs.writeFile(path.join(artifactRoot, "checkpoint"), "explicit checkpoint");
+        const { repository, artifactRoot } = await seedRepository(
+          repositories,
+          scope,
+          "explicit-environment-session",
+          "explicit checkpoint",
+        );
 
         const result = await applySessionEntryLifecycleMutation({
           agentId: "main",
@@ -249,11 +256,11 @@ describe("session deletion and native owner state", () => {
         expect(loadSessionEntry(scope)).toBeUndefined();
         expect(await repositories.get(repository.workspaceId)).toBeUndefined();
         await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
-        expect(loadSessionEntry(ambientScope)).toEqual(ambientEntry);
-        expect(await ambientRepositories.get(ambientRepository.workspaceId)).toEqual(
-          ambientRepository,
+        expect(loadSessionEntry(ambientScope)).toEqual(ambient.entry);
+        expect(await ambientRepositories.get(ambient.repository.workspaceId)).toEqual(
+          ambient.repository,
         );
-        expect(await fs.readFile(ambientArtifact, "utf8")).toBe("ambient checkpoint");
+        expect(await fs.readFile(ambient.artifact, "utf8")).toBe("ambient checkpoint");
       },
     );
   });
@@ -278,37 +285,18 @@ describe("session deletion and native owner state", () => {
         env: state.env,
       };
       const siblingScope = { ...scope, agentId: "worker", sessionKey: "agent:worker:task" };
-      const repository = await repositories.create({
-        agentId: scope.agentId,
-        sessionKey: scope.sessionKey,
-        url: "https://github.com/openclaw/fixture.git",
-        assertCurrent: () => {},
-      });
-      const siblingRepository = await repositories.create({
-        agentId: siblingScope.agentId,
-        sessionKey: siblingScope.sessionKey,
-        url: "https://github.com/openclaw/fixture.git",
-        assertCurrent: () => {},
-      });
-      await replaceSessionEntry(scope, {
-        sessionId: "global-session",
-        updatedAt: 1,
-        repositoryWorkspaceId: repository.workspaceId,
-      });
-      await replaceSessionEntry(siblingScope, {
-        sessionId: "worker-sibling",
-        updatedAt: 1,
-        repositoryWorkspaceId: siblingRepository.workspaceId,
-      });
-      const siblingEntry = loadSessionEntry(siblingScope);
-      expect(siblingEntry).toMatchObject({ sessionId: "worker-sibling" });
-      const artifactRoot = repositories.artifactPath(repository.workspaceId);
-      const siblingArtifactRoot = repositories.artifactPath(siblingRepository.workspaceId);
-      const siblingArtifact = path.join(siblingArtifactRoot, "checkpoint");
-      await fs.mkdir(artifactRoot, { recursive: true });
-      await fs.writeFile(path.join(artifactRoot, "checkpoint"), "global checkpoint");
-      await fs.mkdir(siblingArtifactRoot, { recursive: true });
-      await fs.writeFile(siblingArtifact, "worker checkpoint");
+      const { repository, artifactRoot } = await seedRepository(
+        repositories,
+        scope,
+        "global-session",
+        "global checkpoint",
+      );
+      const sibling = await seedRepository(
+        repositories,
+        siblingScope,
+        "worker-sibling",
+        "worker checkpoint",
+      );
       expect(resolveSqliteScope(scope)).toMatchObject({
         agentId: "ops",
         databaseAgentId: "main",
@@ -327,9 +315,9 @@ describe("session deletion and native owner state", () => {
       expect(loadSessionEntry(scope)).toBeUndefined();
       expect(await repositories.get(repository.workspaceId)).toBeUndefined();
       await expect(fs.stat(artifactRoot)).rejects.toMatchObject({ code: "ENOENT" });
-      expect(loadSessionEntry(siblingScope)).toEqual(siblingEntry);
-      expect(await repositories.get(siblingRepository.workspaceId)).toEqual(siblingRepository);
-      expect(await fs.readFile(siblingArtifact, "utf8")).toBe("worker checkpoint");
+      expect(loadSessionEntry(siblingScope)).toEqual(sibling.entry);
+      expect(await repositories.get(sibling.repository.workspaceId)).toEqual(sibling.repository);
+      expect(await fs.readFile(sibling.artifact, "utf8")).toBe("worker checkpoint");
     });
   });
 
