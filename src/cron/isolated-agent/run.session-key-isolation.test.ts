@@ -2,7 +2,7 @@ import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
 import { assert, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runInitialModelFallbackAttempt } from "../../agents/test-helpers/model-fallback-runner.test-support.js";
-import { isSessionWorkAdmissionActive } from "../../sessions/session-lifecycle-admission.js";
+import { isSessionControllerWorkActive } from "../../sessions/session-controller.lifecycle.js";
 import { mockCall } from "../../test-utils/mock-call-assertions.js";
 import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
@@ -45,19 +45,21 @@ describe("runCronIsolatedAgentTurn isolated session identity", () => {
 
   it("isolates run identities while retaining job-level prompt-cache affinity", async () => {
     const baseKey = "agent:default:cron:daily-monitor";
-    for (const sessionId of ["run-a", "run-b"]) {
-      h.resolveCronSessionMock.mockReturnValueOnce(makeSession({ sessionId }));
-    }
+    const firstSession = makeSession({ sessionId: "run-a" });
+    h.resolveCronSessionMock.mockReturnValueOnce(firstSession);
     h.mockRunCronFallbackPassthrough();
     h.removeCronRunContinuationSessionIfIdleMock.mockImplementation(async (sessionKey) => {
       expect(sessionKey).toMatch(/:run:run-[ab]$/u);
-      expect(isSessionWorkAdmissionActive("/tmp/store.json", [sessionKey])).toBe(false);
+      expect(isSessionControllerWorkActive("/tmp/store.json", [sessionKey])).toBe(false);
     });
     const params = makeJobParams(
       { payload: { kind: "agentTurn", message: "test", lightContext: true } },
       { sessionKey: "cron:daily-monitor" },
     );
     const first = await runAgent(params);
+    h.resolveCronSessionMock.mockReturnValueOnce(
+      makeSession({ sessionId: "run-b" }, { initialSessionEntry: firstSession.sessionEntry }),
+    );
     const second = await runAgent(params);
     expect([first.status, second.status]).toEqual(["ok", "ok"]);
     expect([first.sessionKey, second.sessionKey]).toEqual([

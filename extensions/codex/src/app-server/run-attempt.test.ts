@@ -1631,10 +1631,10 @@ describe("runCodexAppServerAttempt", () => {
     expect(registeredToolNames).toContain("message");
     expect(registeredToolNames).toContain("heartbeat_respond");
     expect(normalInstructions).not.toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond",
+      "Deferred searchable OpenClaw dynamic tools available: openclaw.heartbeat_respond",
     );
     expect(heartbeatInstructions).toContain(
-      "Deferred searchable OpenClaw dynamic tools available: heartbeat_respond.",
+      "Deferred searchable OpenClaw dynamic tools available: openclaw.heartbeat_respond.",
     );
     for (const bridge of [normalBridge, heartbeatBridge, nextNormalBridge]) {
       const heartbeat = flattenSpecsWithNamespace(bridge.specs).find(
@@ -2199,9 +2199,6 @@ describe("runCodexAppServerAttempt", () => {
         if (kind === "heartbeat") {
           params.trigger = "heartbeat";
         }
-        if (kind === "authorized") {
-          params.toolAuthorityFingerprint = "synthetic-authority";
-        }
         const run = runCodexAppServerAttempt(params);
         await awaitGateBeforeSettlement(
           harness.waitForMethod("turn/start"),
@@ -2310,7 +2307,6 @@ describe("runCodexAppServerAttempt", () => {
     );
     const { sessionFile, workspaceDir } = createRunPaths();
     const params = createParams(sessionFile, workspaceDir);
-    params.toolAuthorityFingerprint = "restrictive-turn-authority";
 
     await expect(runCodexAppServerAttempt(params)).rejects.toThrow(
       "Codex app-server cannot enforce before_prompt_build toolsAllow",
@@ -2348,7 +2344,7 @@ describe("runCodexAppServerAttempt", () => {
     expect(removeAbortListener).toHaveBeenCalledWith("abort", expect.any(Function));
   });
 
-  it("preserves binding retention errors while releasing fundamental resources", async () => {
+  it("preserves binding retention errors while releasing the shared thread subscription", async () => {
     const bindingStore = createCodexTestBindingStore();
     const originalWithLease = bindingStore.withLease.bind(bindingStore);
     const { sessionFile, workspaceDir } = createRunPaths();
@@ -2365,7 +2361,6 @@ describe("runCodexAppServerAttempt", () => {
           return await originalWithLease(identity, run);
         }
         bindingCleanupFailures += 1;
-        params.cleanupBundleMcpOnRunEnd = true;
         throw new Error("binding retention cleanup failed");
       },
     };
@@ -2385,8 +2380,8 @@ describe("runCodexAppServerAttempt", () => {
     await expect(run).rejects.toThrow("binding retention cleanup failed");
 
     expect(bindingCleanupFailures).toBe(1);
-    expect(params.cleanupBundleMcpOnRunEnd).toBe(true);
     expect(events).toContain("request:turn/start");
+    expect(events).toContain("request:thread/unsubscribe");
     expect(events).not.toContain("closeAndWait");
     expect(retireSpy).not.toHaveBeenCalled();
     expect(closeAndWait).not.toHaveBeenCalled();
@@ -3844,9 +3839,8 @@ describe("runCodexAppServerAttempt", () => {
     const settled = vi.fn();
     const settledRun = run.then(settled, settled);
     try {
-      await vi.waitFor(() => {
-        expect(resolveActiveEmbeddedRunSessionId(params.sessionKey!)).toBe(params.sessionId);
-      }, fastWait);
+      // The controller reports the session active from admission; native events need the turn.
+      await run.waitForTurnAccepted();
       await harness.notify(
         itemNotification("item/started", {
           id: "msg-1",

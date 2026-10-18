@@ -41,7 +41,11 @@ export function showConfirmChoiceDialog(
 export function showConfirmDialog(options: ConfirmDialogOptions): Promise<boolean> {
   // An operator who opted out gets the action itself, not a modal they already
   // answered. Only callers that opted into a skip preference can reach this.
-  if (options.skipPreference?.skipped && !options.requiredAcknowledgement) {
+  if (
+    options.skipPreference?.skipped &&
+    !options.requiredAcknowledgement &&
+    options.canConfirm?.() !== false
+  ) {
     return Promise.resolve(true);
   }
   return presentConfirmDialog(options).then((result) => result === "confirm");

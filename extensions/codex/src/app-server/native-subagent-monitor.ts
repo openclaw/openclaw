@@ -92,7 +92,6 @@ import {
   type NativeParentRegistration,
 } from "./native-subagent-parent-owner.js";
 import { matchesNativeAssignmentLifecycle } from "./native-subagent-pending-assignments.js";
-import { canPrepareNativeReceiver } from "./native-subagent-receiver.js";
 import {
   CodexNativeSubagentRecoveryCoordinator,
   logRecoveryFailure,
@@ -251,7 +250,7 @@ class Monitor {
         ) {
           throw new Error("Native submission parent generation is no longer current.");
         }
-        state.submissionStore?.assertCurrent();
+        // The mutation owner compares its binding row; retain only parent custody here.
       },
       parentOwner: (state, turnId) => this.resolveParentOwner(state, turnId),
       client: this.client,
@@ -304,7 +303,7 @@ class Monitor {
         ) {
           throw new Error("Native assignment parent is no longer current.");
         }
-        state.assignmentStore?.assertCurrent();
+        // The mutation owner compares its binding row; retain only parent custody here.
       },
       isCurrent: (state) => this.isCurrentParent(state),
       readHistory: (assignment) =>
@@ -529,6 +528,7 @@ class Monitor {
     run: (cancel: () => Promise<NativeDescendantCancellationResult>) => Promise<T>,
   ): Promise<T> {
     params.assertCurrent();
+    params.assertBindingCurrent?.();
     const parent = this.parentStates.get(params.parentThreadId);
     if (!parent) {
       return run(async () => ({ killed: 0, cancelledRequesters: [] }));
@@ -569,7 +569,7 @@ class Monitor {
       throw new Error("Codex descendant cancellation requester generation changed");
     }
     const states = [...this.parentStates.values()].filter(matches);
-    const assertCurrent = () => {
+    const assertCustodyCurrent = () => {
       params.assertCurrent();
       if (
         this.disposed ||
@@ -582,6 +582,10 @@ class Monitor {
       ) {
         throw new Error("Codex descendant cancellation reservation changed");
       }
+    };
+    const assertCurrent = () => {
+      assertCustodyCurrent();
+      params.assertBindingCurrent?.();
       for (const state of states) {
         state.assignmentStore?.assertCurrent();
       }
@@ -683,8 +687,8 @@ class Monitor {
             let turnId = child.nativeTurnId;
             const requesterTurnRunId = child.requesterTurnRunId;
             const requestCustody = child.requestCustody;
-            const assertChild = () => {
-              assertCurrent();
+            const assertChildCustody = () => {
+              assertCustodyCurrent();
               if (
                 this.childStates.get(child.runId) !== child ||
                 this.currentChild(child.childThreadId) !== child ||
@@ -698,6 +702,10 @@ class Monitor {
               ) {
                 throw new Error("Codex descendant assignment changed before cancellation");
               }
+            };
+            const assertChild = () => {
+              assertCurrent();
+              assertChildCustody();
             };
             assertChild();
             if (!child.terminal) {
@@ -757,9 +765,9 @@ class Monitor {
               child.cancellationRequested && child.pendingCompletion?.status === "cancelled";
             if (cancelled && this.childStates.get(child.runId) === child) {
               assertChild();
-              await this.submissions.settleCancelled(state, child, assertChild);
+              await this.submissions.settleCancelled(state, child, assertChildCustody);
               assertChild();
-              await this.assignments.settleCancelled(state, child, assertChild);
+              await this.assignments.settleCancelled(state, child, assertChildCustody);
               assertChild();
               this.unregisterChild(child);
             }
@@ -1551,19 +1559,42 @@ class Monitor {
     return known?.parent === state ? known.deliveryReceipts : state.deliveryReceipts;
   }
 
+  /** Read-only eligibility; transferring observation still needs fresh native lineage. */
   private canPrepareReceiverChild(state: ParentState, threadId: string): boolean {
     const child = this.knownChildren.get(threadId);
-    return canPrepareNativeReceiver(
-      state,
-      child?.parent ?? this.parentStates.get(threadId),
-      child,
-      threadId,
-      {
-        isCurrent: (parent) => this.isCurrentParent(parent),
-        isRetired: (parent) => this.retiredParentStates.has(parent),
-        hasChildCustody: (parent, id) => this.submissions.hasChildCustody(parent, id),
-      },
-    );
+    const previous = child?.parent ?? this.parentStates.get(threadId);
+    if (previous === state) {
+      return true;
+    }
+    if (
+      !this.isCurrentParent(state) ||
+      (child &&
+        (!child.assignment.terminal ||
+          child.pendingTurns.length > 0 ||
+          this.submissions.hasChildCustody(child.parent, threadId)))
+    ) {
+      return false;
+    }
+    if (!previous) {
+      return true;
+    }
+    if (
+      this.retiredParentStates.has(previous) ||
+      !state.requesterSessionKey ||
+      previous.requesterSessionKey !== state.requesterSessionKey ||
+      !previous.historyOwner ||
+      !state.historyOwner ||
+      !matchesNativeAssignmentLifecycle(previous.historyOwner, state.historyOwner) ||
+      ![...state.owners.values()].some((owner) => owner.completionCustody?.isCurrent())
+    ) {
+      return false;
+    }
+    try {
+      state.assignmentStore?.assertCurrent();
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   private prepareReceiverChild(

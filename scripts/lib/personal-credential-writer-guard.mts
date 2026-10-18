@@ -353,7 +353,7 @@ const nativeReadCallers = new Map<string, readonly string[]>([
       "extensions/codex/src/account-usage-runtime.ts:handleCodexAccountUsage/assertCurrent",
       "extensions/codex/src/app-server/auth-profile.ts:<module>",
       "extensions/codex/src/app-server/auth-profile-selection.ts:createCodexAuthProfileSelection/resolveCodexAppServerAuthProfileIdAtEffect",
-      "extensions/codex/src/command-diagnostics.ts:resolvePendingCodexDiagnosticsTargets",
+      "extensions/codex/src/command-diagnostics.ts:resolvePendingCodexDiagnosticsTarget",
       "src/agents/embedded-agent-runner/cli-backend-dispatch-eligibility.ts:resolveEmbeddedCliBackendDispatchEligibility",
       "src/agents/model-auth-label.ts:resolveModelAuthLabel",
       "src/agents/model-auth-provider.ts:resolveScopedAuthProfileStore",

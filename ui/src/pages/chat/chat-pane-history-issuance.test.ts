@@ -31,6 +31,7 @@ function createCanonicalRoutePane(
   const sessions = createTestSessionCapability(createGatewayHarness(client).gateway);
   vi.spyOn(sessions, "listBranches").mockResolvedValue([]);
   const { pane, state } = createTestChatPane({ client, sessions });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   const sessionDefaults = {
     defaultAgentId: "main",
     mainKey: "main",
@@ -43,6 +44,7 @@ function createCanonicalRoutePane(
     lastActiveSessionKey: state.sessionKey,
   } as typeof state.settings;
   Object.assign(pane, { sessionKey: "main", connectedClient: null, active: true, presented: true });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   const snapshot = {
     ...pane.context.gateway.snapshot,
     assistantAgentId: "main",
@@ -67,7 +69,13 @@ async function expectRecoveredHistory(
   await vi.waitFor(() => expect(requestCalls(request, method)).toHaveLength(attempts));
   expect(request).toHaveBeenCalledWith(
     method,
-    { sessionKey: state.sessionKey, limit: 80, maxBytes: 256 * 1024, toolResultMaxChars: 2_000 },
+    {
+      sessionKey: state.sessionKey,
+      knownState: {},
+      limit: 80,
+      maxBytes: 256 * 1024,
+      toolResultMaxChars: 2_000,
+    },
     { signal: expect.any(AbortSignal), timeoutMs: 30_000 },
   );
   await vi.waitFor(() => expect(state.chatMessages).toEqual(assistantHistory(text).messages));
@@ -85,7 +93,9 @@ it("does not request the optional header platform while initial history is pendi
       return history.promise;
     },
   });
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
   pane.sessionKey = state.sessionKey;
+  Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
   state.loadAssistantIdentity = vi.fn(async () => undefined);
   const hello = { ...snapshot.hello, features: { methods: ["system.info"], events: [] } };
   pane.context.gateway.snapshot.hello = hello;

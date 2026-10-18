@@ -14,7 +14,7 @@ import { readTranscriptEventRows } from "./session-accessor.sqlite-read.js";
 import { rewriteTranscriptEventRowsExact } from "./session-accessor.sqlite-transcript-write.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
 import type { SessionActorAuthority } from "./session-actor-contract.js";
-import { createDurableSessionActorFactory } from "./session-actor-durable.js";
+import { createSessionActorFactory } from "./session-actor-durable.js";
 import { createSessionCompoundWorkerFixture } from "./session-compound-worker.test-support.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 import { readSessionTranscriptAnchorsAsync } from "./session-transcript-anchor-read.js";
@@ -93,7 +93,7 @@ it("reuses durable summaries and accounting while refreshing transcript writes a
       throw new Error("Fixture requires durable storage");
     }
     const database = { agentId: "main", path: fixture.database.path, env };
-    const actor = await createDurableSessionActorFactory(database).acquire(
+    const actor = await createSessionActorFactory(database).acquire(
       {
         sessionKey: scope.sessionKey,
         database: {
@@ -549,7 +549,7 @@ it("slides durable context within its bounds and reloads only when an admission 
       throw new Error("Fixture requires durable storage");
     }
     const database = { agentId: "main", path: fixture.database.path, env };
-    const actor = await createDurableSessionActorFactory(database).acquire(
+    const actor = await createSessionActorFactory(database).acquire(
       {
         sessionKey: scope.sessionKey,
         database: {

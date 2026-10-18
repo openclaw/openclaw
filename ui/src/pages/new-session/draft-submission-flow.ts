@@ -281,7 +281,7 @@ export class DraftSubmissionFlow {
       permissionMode: this.permissionMode,
       visibility: options.visibility ?? this.visibility,
       catalogId: this.read().data?.catalogId,
-      category: this.gateway.resolvedGroupCategory(),
+      category: catalog.resolvedGroupName(this.read().data, this.read().context?.sessions),
     });
 
   submissionAccess = (

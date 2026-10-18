@@ -46,7 +46,7 @@ export type UsageCostRollupEntry = {
 export type UsageCostRollupEnvelope = Omit<UsageCostRollupEntry, "rollup"> & {
   format: typeof USAGE_COST_ROLLUP_FORMAT_VERSION;
   projection?: {
-    version: 2;
+    version: 3;
     dates: string[];
     canonicalNumbers: boolean;
   };
@@ -65,7 +65,7 @@ export function encodeUsageCostRollup(entry: UsageCostRollupEntry): {
 } {
   const json = JSON.stringify(entry.rollup);
   const raw = Buffer.from(json, "utf8");
-  const compressed = raw.byteLength >= 1024 ? zstd?.compress(raw, 1) : undefined;
+  const compressed = raw.byteLength >= 1024 ? zstd.compress(raw, 1) : undefined;
   const useCompressed = compressed !== undefined && compressed.byteLength < raw.byteLength;
   const bytes = useCompressed ? compressed : raw;
   const envelope: UsageCostRollupEnvelope = {
@@ -136,7 +136,7 @@ export function decodeUsageCostRollupEnvelope(
     if (
       record.projection !== undefined &&
       (!isRecord(record.projection) ||
-        record.projection.version !== 2 ||
+        record.projection.version !== 3 ||
         !Array.isArray(record.projection.dates) ||
         !record.projection.dates.every(
           (date) => typeof date === "string" && /^\d{4}-\d{2}-\d{2}$/.test(date),
@@ -183,9 +183,9 @@ export function decodeUsageCostRollup(
   try {
     const raw =
       envelope.body.encoding === "zstd"
-        ? zstd?.decompress(blob, envelope.body.bytes)
+        ? zstd.decompress(blob, envelope.body.bytes)
         : Buffer.from(blob.buffer, blob.byteOffset, blob.byteLength);
-    if (!raw || raw.byteLength !== envelope.body.bytes || sha256Hex(raw) !== envelope.body.sha256) {
+    if (raw.byteLength !== envelope.body.bytes || sha256Hex(raw) !== envelope.body.sha256) {
       return undefined;
     }
     const json = raw.toString("utf8");

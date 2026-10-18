@@ -1,9 +1,8 @@
 import { createMemo } from "solid-js";
 import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
-import "../../components/select-picker.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
+import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { SettingsRow, SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatCompletionRoute } from "../../lib/model-runtime-label.ts";
@@ -70,10 +69,6 @@ export function SessionObserverSettings(props: SessionObserverSettingsProps) {
         : []),
       ...catalog.map((option) => Object.assign({}, option, { disabled: props.modelsUnavailable })),
     ];
-    const selectedIndex = result.findIndex((option) => option.value === selected());
-    if (selectedIndex > 0) {
-      result.unshift(...result.splice(selectedIndex, 1));
-    }
     return result;
   });
   return (
@@ -97,36 +92,21 @@ export function SessionObserverSettings(props: SessionObserverSettingsProps) {
             : "configView.sessionObserver.modelPickerHint",
         )}
         control={
-          <div class="model-picker">
-            <openclaw-select-picker
-              class="settings-select picker-select model-picker__select"
-              style={{ width: "100%", "min-width": "min(138px,100%)" }}
-              prop:params={{
-                label: t("configView.sessionObserver.modelPicker"),
-                value: selected(),
-                options: options(),
-                disabled: props.disabled,
-                searchable: true,
-                renderLeading: (option: { provider?: string }) =>
-                  option.provider ? (
-                    <ProviderBrandIcon
-                      provider={option.provider}
-                      class="model-picker__provider-icon"
-                    />
-                  ) : undefined,
-                showOptionTooltips: false,
-                className: "model-picker__select ",
-                onChange: (value: string) =>
-                  props.onUtilityModelChange(
-                    value === AUTO_VALUE
-                      ? { kind: "auto" }
-                      : value === ""
-                        ? { kind: "disabled" }
-                        : { kind: "model", model: value },
-                  ),
-              }}
-            />
-          </div>
+          <ModelPicker
+            label={t("configView.sessionObserver.modelPicker")}
+            value={selected()}
+            options={options()}
+            disabled={props.disabled}
+            onChange={(value) =>
+              props.onUtilityModelChange(
+                value === AUTO_VALUE
+                  ? { kind: "auto" }
+                  : value === ""
+                    ? { kind: "disabled" }
+                    : { kind: "model", model: value },
+              )
+            }
+          />
         }
       />
     </div>

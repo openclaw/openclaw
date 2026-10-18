@@ -16,8 +16,8 @@ import type {
 } from "../../infra/sqlite-worker-contract.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import * as workerStore from "../../infra/sqlite-worker-store.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import * as agentWorkers from "../../state/openclaw-agent-worker-store.js";
-import { removeChatAbortControllerEntry } from "../chat-abort.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { sharingPolicyClient } from "../session-sharing.test-utils.js";
@@ -48,8 +48,8 @@ it.each([
     agentId: "main",
     owner: { connId: "original-connection", deviceId: "same-device" },
   });
-  const successor = createActiveRun(sessionKey, { sessionId, agentId: "main" });
-  context.chatAbortControllers.set("run", original);
+  let successor: ReturnType<typeof createActiveRun> | undefined;
+  rpcSourceTesting.set("run", original);
   const entered = createDeferred();
   const resume = createDeferred();
   const publicationEntered = createDeferred();
@@ -226,11 +226,10 @@ it.each([
         await updating;
       }
     } else {
-      expect(removeChatAbortControllerEntry(context.chatAbortControllers, "run", original)).toBe(
-        true,
-      );
+      expect(rpcSourceTesting.deleteExpected("run", original)).toBe(true);
       if (change === "controller") {
-        context.chatAbortControllers.set("run", successor);
+        successor = createActiveRun(sessionKey, { sessionId, agentId: "main", queued: true });
+        rpcSourceTesting.set("run", successor);
       }
     }
     resume.resolve();
@@ -258,8 +257,8 @@ it.each([
         },
       ]);
     }
-    expect(original.controller.signal.aborted).toBe(aborts);
-    expect(successor.controller.signal.aborted).toBe(false);
+    expect(original.input.abortSignal.aborted).toBe(aborts);
+    expect(successor?.input.abortSignal.aborted ?? false).toBe(false);
   } finally {
     resume.resolve();
     publish.resolve();

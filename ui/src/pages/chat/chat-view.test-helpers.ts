@@ -30,15 +30,19 @@ type ChatModelControlsProps = Parameters<typeof ChatModelControls>[0];
 const modelControlsUpdates = new WeakMap<HTMLElement, (props: ChatModelControlsProps) => void>();
 
 export function renderChatModelControls(props: ChatModelControlsProps, container: HTMLDivElement) {
+  const renderProps: ChatModelControlsProps = {
+    ...props,
+    modelPickerOpen: props.modelPickerOpen ?? true,
+  };
   const update = modelControlsUpdates.get(container);
   if (update) {
-    update(props);
+    update(renderProps);
   } else {
     if (!container.isConnected) {
       document.body.append(container);
       onTestFinished(() => container.remove());
     }
-    const view = mountSolidComponent(ChatModelControls, props, container);
+    const view = mountSolidComponent(ChatModelControls, renderProps, container);
     modelControlsUpdates.set(container, (next) => view.update(next));
   }
   return container;
@@ -65,10 +69,7 @@ let nextTestTranscriptId = 0;
 export function createTestTranscript(
   paneId = `test-transcript-${++nextTestTranscriptId}`,
 ): ChatTranscript {
-  return createChatTranscript(
-    () => undefined,
-    () => paneId,
-  );
+  return createChatTranscript(() => paneId);
 }
 
 export function createPasteEvent(
@@ -212,7 +213,6 @@ export function createChatProps(overrides: Partial<ChatProps> = {}): ChatProps {
     onScrollToBottom: () => undefined,
     onRefresh: () => undefined,
     onDraftChange: () => undefined,
-    onRequestUpdate: () => undefined,
     onSend: () => undefined,
     onToggleRealtimeTalk: () => undefined,
     onToggleRealtimeCamera: () => undefined,
@@ -448,7 +448,6 @@ export function createReactiveDraftHarness({
       draft,
       getDraft: () => draft,
       onDraftChange,
-      onRequestUpdate: renderCurrent,
       ...currentOverrides,
       draftSource: currentOverrides.draftSource ?? draftSource,
       onGoalDraftModeChange: (mode) => {
@@ -489,12 +488,11 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
   const onDraftChange = vi.fn((next: string) => {
     host.draft = next;
   });
-  const onRequestUpdate = vi.fn(() => redraw());
   const onClearReply = vi.fn(() => {
     host.replyTarget = null;
     redraw();
   });
-  function redraw() {
+  const redraw = vi.fn(() => {
     renderChatInto(container, {
       paneId,
       sessionKey: `agent:main:${paneId}`,
@@ -504,18 +502,16 @@ export function createReplyPane(paneId: string, draft: string, quote: string) {
       canAbort: true,
       runActive: true,
       onDraftChange,
-      onRequestUpdate,
       onClearReply,
       onSend,
       onAbort,
     });
-  }
+  });
   return {
     container,
     host,
     redraw,
     onDraftChange,
-    onRequestUpdate,
     onClearReply,
     onSend,
     onAbort,

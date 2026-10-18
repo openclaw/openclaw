@@ -12,10 +12,8 @@ import {
 } from "../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
-import {
-  runContextEngineMaintenance,
-  waitForDeferredTurnMaintenanceForSession,
-} from "./context-engine-maintenance.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { log } from "./logger.js";
 
 it.for([
@@ -178,7 +176,7 @@ it.for([
       finishActive.resolve();
       await racePromiseWithAbortSignal(releaseEntered.promise, ctx.signal);
       let completed = false;
-      const completion = waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => {
+      const completion = waitForSessionMaintenance(sessionKey).then(() => {
         completed = true;
       });
       pending.push(completion);
@@ -193,7 +191,7 @@ it.for([
       );
       expect(closingContext).toEqual([true, true, true]);
       expect(closingOrder).toEqual([true, true, true]);
-      await waitForDeferredTurnMaintenanceForSession(sessionKey);
+      await waitForSessionMaintenance(sessionKey);
       await Promise.all(pending);
       expect(factoryValues).toEqual([42, 42, 42]);
       expect(cleanupValues).toHaveLength(new Set(ids).size);
@@ -218,7 +216,7 @@ it.for([
       }
       await Promise.all(callbacks.map(({ force }) => force()));
       await Promise.allSettled([...services, ...cleanupTails, ...pending]);
-      await waitForDeferredTurnMaintenanceForSession(sessionKey);
+      await waitForSessionMaintenance(sessionKey);
       db.close();
       warn.mockRestore();
       resetCommandQueueStateForTest();

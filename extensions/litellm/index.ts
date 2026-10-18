@@ -9,11 +9,20 @@ import {
   findNormalizedProviderValue,
   normalizeOptionalSecretInput,
 } from "openclaw/plugin-sdk/provider-auth";
+import {
+  buildApiKeyCredential,
+  captureProviderApiKey,
+} from "openclaw/plugin-sdk/provider-auth-api-key";
 import { buildOpenAICompatibleProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { resolveMergedModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
 import { createProviderApiKeyAuthMethod } from "openclaw/plugin-sdk/provider-entry";
 import { buildLitellmImageGenerationProvider } from "./image-generation-provider.js";
-import { applyLitellmConfig, LITELLM_BASE_URL, LITELLM_DEFAULT_MODEL_REF } from "./onboard.js";
+import {
+  applyLitellmConfig,
+  applyLitellmModelConfig,
+  LITELLM_BASE_URL,
+  LITELLM_DEFAULT_MODEL_REF,
+} from "./onboard.js";
 import { buildLitellmProvider } from "./provider-catalog.js";
 
 const PROVIDER_ID = "litellm";
@@ -55,7 +64,7 @@ function validateProxyBaseUrl(value: string): string | undefined {
     : "The LiteLLM proxy URL must start with http:// or https://";
 }
 
-async function promptLitellmBaseUrl(ctx: ProviderAuthContext): Promise<string | undefined> {
+async function promptLitellmBaseUrl(ctx: ProviderAuthContext): Promise<string> {
   const configured =
     resolveMergedModelProviderConfig(ctx.config, PROVIDER_ID)?.baseUrl?.trim() ?? "";
   const answer = await ctx.prompter.text({
@@ -66,9 +75,71 @@ async function promptLitellmBaseUrl(ctx: ProviderAuthContext): Promise<string | 
     placeholder: LITELLM_BASE_URL,
     validate: validateProxyBaseUrl,
   });
-  const chosen = answer.trim().replace(/\/+$/, "");
-  // Keep fresh default-model seeding, but honor switching an existing remote URL back.
-  return chosen === LITELLM_BASE_URL && !configured ? undefined : chosen;
+  return (answer.trim() || configured || LITELLM_BASE_URL).replace(/\/+$/, "");
+}
+
+async function promptLitellmModel(ctx: ProviderAuthContext, apiKey: string): Promise<string> {
+  const baseUrl = ctx.config.models?.providers?.litellm?.baseUrl ?? LITELLM_BASE_URL;
+  let modelIds: string[] = [];
+  let reason = "the proxy could not be reached or its request settings could not be resolved";
+  try {
+    const { discoverOpenAICompatibleLocalModels } =
+      await import("openclaw/plugin-sdk/provider-setup");
+    const result = await discoverOpenAICompatibleLocalModels({
+      baseUrl: baseUrl.endsWith("/v1") ? baseUrl : `${baseUrl}/v1`,
+      apiKey,
+      configuredProvider: { config: ctx.config, id: PROVIDER_ID },
+      beforeRequest: ctx.assertCurrent,
+      env: ctx.env,
+      signal: ctx.signal,
+      label: "LiteLLM",
+      rawResult: true,
+      discoverRuntimeContext: false,
+    });
+    if (result.kind === "success") {
+      modelIds = [
+        ...new Set(
+          result.rows.flatMap(({ model }) =>
+            typeof model.id === "string" && model.id.trim() ? [model.id.trim()] : [],
+          ),
+        ),
+      ];
+      reason = "the proxy returned an empty model list";
+    } else if (result.kind === "http-error") {
+      reason = `the proxy returned HTTP ${result.status}`;
+    } else if (result.kind === "invalid-response") {
+      reason = "the proxy returned an invalid model list";
+    }
+  } catch {
+    // Discovery is advisory; keep request errors and credentials out of the prompt.
+  }
+  ctx.signal?.throwIfAborted();
+  ctx.assertCurrent?.();
+  if (modelIds.length > 0) {
+    const selected = await ctx.prompter.select({
+      message: "LiteLLM model",
+      initialValue: modelIds[0],
+      options: [
+        ...modelIds.map((id) => ({ value: id, label: id })),
+        { value: "", label: "Enter model ID manually" },
+      ],
+    });
+    if (selected) {
+      return selected;
+    }
+  } else {
+    await ctx.prompter.note(
+      `Model discovery unavailable: ${reason}. Enter a model ID manually.`,
+      "LiteLLM models",
+    );
+  }
+  return (
+    await ctx.prompter.text({
+      message: "LiteLLM model ID",
+      placeholder: "Model ID served by your proxy",
+      validate: (value) => (value.trim() ? undefined : "Model ID is required"),
+    })
+  ).trim();
 }
 
 export default definePluginEntry({
@@ -87,12 +158,6 @@ export default definePluginEntry({
       promptMessage: "Enter LiteLLM API key",
       defaultModel: LITELLM_DEFAULT_MODEL_REF,
       applyConfig: applyLitellmConfig,
-      noteTitle: "LiteLLM",
-      noteMessage: [
-        "LiteLLM provides a unified API to 100+ LLM providers.",
-        "Get your API key from your LiteLLM proxy or https://litellm.ai",
-        "Default proxy runs on http://localhost:4000",
-      ].join("\n"),
       wizard: {
         choiceId: `${PROVIDER_ID}-api-key`,
         choiceLabel: "LiteLLM API key",
@@ -113,10 +178,43 @@ export default definePluginEntry({
           ...apiKeyAuth,
           run: async (ctx: ProviderAuthContext) => {
             const baseUrl = await promptLitellmBaseUrl(ctx);
-            return await apiKeyAuth.run({
-              ...ctx,
-              config: applyLitellmBaseUrl(ctx.config, baseUrl),
+            const config = applyLitellmBaseUrl(ctx.config, baseUrl);
+            const flagValue = normalizeOptionalSecretInput(ctx.opts?.litellmApiKey);
+            const { apiKey, input, mode } = await captureProviderApiKey(ctx, {
+              provider: PROVIDER_ID,
+              expectedProviders: [PROVIDER_ID],
+              envLabel: "LITELLM_API_KEY",
+              promptMessage: "Enter LiteLLM API key",
+              noteTitle: "LiteLLM",
+              noteMessage: [
+                "LiteLLM provides a unified API to 100+ LLM providers.",
+                "Get your API key from your LiteLLM proxy or https://litellm.ai",
+                "Default proxy runs on http://localhost:4000",
+              ].join("\n"),
+              token: flagValue ?? normalizeOptionalSecretInput(ctx.opts?.token),
+              tokenProvider: flagValue
+                ? PROVIDER_ID
+                : normalizeOptionalSecretInput(ctx.opts?.tokenProvider),
+              env: ctx.env,
             });
+            const modelId = ctx.credentialOnly
+              ? undefined
+              : await promptLitellmModel({ ...ctx, config }, apiKey);
+            return {
+              profiles: [
+                {
+                  profileId: "litellm:default",
+                  credential: buildApiKeyCredential(
+                    PROVIDER_ID,
+                    input,
+                    undefined,
+                    mode ? { secretInputMode: mode, config } : undefined,
+                  ),
+                },
+              ],
+              configPatch: modelId ? await applyLitellmModelConfig(config, modelId) : config,
+              ...(modelId ? { defaultModel: `${PROVIDER_ID}/${modelId}` } : {}),
+            };
           },
           runNonInteractive: async (ctx: ProviderAuthMethodNonInteractiveContext) => {
             const runNonInteractive = apiKeyAuth.runNonInteractive;

@@ -16,6 +16,7 @@ import type { PluginHookReplyDispatchContext } from "../../plugins/hook-types.js
 import { createHookRunner } from "../../plugins/hooks.js";
 import { createTestPluginRegistry } from "../../plugins/registry-runtime.test-helpers.js";
 import { createPluginRecord } from "../../plugins/status.test-fixtures.js";
+import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions } from "../types.js";
 import {
@@ -23,6 +24,7 @@ import {
   acpMocks,
   createDispatcher,
   hookMocks,
+  sessionStoreMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
 import {
   automaticDirectReplyConfig,
@@ -41,11 +43,10 @@ import { isFinalizedInboundContext } from "./inbound-context.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { enqueueFollowupRun, type FollowupRun } from "./queue.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
-import { clearFollowupDrainCallback } from "./queue/drain.js";
+import { clearSessionQueues } from "./queue/cleanup.js";
 import { resetRecentQueuedMessageIdDedupe } from "./queue/recent-message-ids.test-support.js";
-import { clearFollowupQueue, getExistingFollowupQueue } from "./queue/state.js";
+import { getExistingFollowupQueue } from "./queue/state.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
-import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 import { createAcpSessionMeta } from "./test-fixtures/acp-runtime.js";
 
@@ -57,7 +58,7 @@ beforeEach(() => {
   vi.useFakeTimers();
 });
 afterEach(() => {
-  replyRunTesting.resetReplyRunRegistry();
+  controllerTesting.resetSessionControllerForTest();
   resetInboundDedupe();
   vi.clearAllTimers();
   vi.useRealTimers();
@@ -104,6 +105,10 @@ describe("dispatch retry after queued ingress abandonment", () => {
             originatingChannel: "discord",
             originatingTo: "channel:ingress-fixture",
           });
+          run.run.agentId = "main";
+          run.run.config = {
+            session: { store: sessionStoreMocks.resolveSessionStorePathCore() },
+          };
           run.turnAdoptionLifecycle = options?.turnAdoptionLifecycle;
           run.abortSignal = options?.turnAdoptionLifecycle?.abortSignal;
           let renewalFailed = false;
@@ -154,8 +159,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
           }
           runState.admission = { status: "accepted", mode: "followup" };
           if (abandonment === "abandon-before-commit") {
-            clearFollowupQueue(key);
-            clearFollowupDrainCallback(key);
+            clearSessionQueues([key]);
           }
           return undefined;
         });
@@ -227,8 +231,7 @@ describe("dispatch retry after queued ingress abandonment", () => {
           expect(duplicateDispatcher.sendFinalReply).not.toHaveBeenCalled();
         } finally {
           drain.dispose();
-          clearFollowupQueue(key);
-          clearFollowupDrainCallback(key);
+          clearSessionQueues([key]);
         }
       });
     },

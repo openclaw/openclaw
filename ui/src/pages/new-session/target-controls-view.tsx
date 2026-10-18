@@ -4,6 +4,7 @@ import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { liveValue } from "../../lib/reactive/live-value.ts";
+import { readSessionMethodAccess } from "../../lib/session-method-access.ts";
 import { normalizeAgentId } from "../../lib/sessions/session-key.ts";
 import * as catalog from "./catalog-target.ts";
 import type { CheckoutChipOptions } from "./checkout-chip.ts";
@@ -224,11 +225,10 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
       ),
     projectAddAvailable:
       !view().nativeTerminal &&
-      canCallGatewayMethod(
-        props.params.context?.gateway.snapshot,
-        props.params.place.remotePlacement ? "sessions.create" : "projects.add",
-        "operator.write",
-      ),
+      readSessionMethodAccess(props.params.context?.gateway.snapshot, {
+        method: "sessions.create",
+        sessionScope: true,
+      }).allowed,
     remoteProjects: view().browser.projectSearchResult?.projects ?? [],
     selectedRemoteProject: view().browser.remoteProject,
     projectSearchCredentialMissing: view().browser.projectSearchResult?.credential === "missing",
@@ -321,26 +321,41 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
           ) : (
             <WhereChip params={whereParams()} />
           )}
-          {props.params.place.hostedEnvironment ? (
-            <span
-              class="new-session-page__select new-session-page__hosted-workspace"
-              title={t("newSession.hostedHint")}
-            >
-              {t("newSession.hostedWorkspace")}
-            </span>
-          ) : view().nativeTerminal && props.params.place.terminalOnNode ? (
-            <label class="new-session-page__select new-session-page__menu-field">
-              <span>{t("newSession.terminalNodeFolder")}</span>
-              <input
-                aria-label={t("newSession.terminalNodeFolder")}
-                ref={folderValue}
-                disabled={props.params.submitting}
-                onInput={(event) => props.params.place.applyFolder(event.currentTarget.value)}
-              />
-            </label>
-          ) : (
-            <ProjectChip params={projectParams()} focus={view().browser.projectFocus} />
-          )}
+          <div
+            class={[
+              "new-session-page__workspace",
+              {
+                "new-session-page__workspace--checkout":
+                  props.params.place.checkoutVisible &&
+                  !(view().nativeTerminal && props.params.place.terminalOnNode),
+              },
+            ]}
+          >
+            {props.params.place.hostedEnvironment ? (
+              <span
+                class="new-session-page__select new-session-page__hosted-workspace"
+                title={t("newSession.hostedHint")}
+              >
+                {t("newSession.hostedWorkspace")}
+              </span>
+            ) : view().nativeTerminal && props.params.place.terminalOnNode ? (
+              <label class="new-session-page__select new-session-page__menu-field">
+                <span>{t("newSession.terminalNodeFolder")}</span>
+                <input
+                  aria-label={t("newSession.terminalNodeFolder")}
+                  ref={folderValue}
+                  disabled={props.params.submitting}
+                  onInput={(event) => props.params.place.applyFolder(event.currentTarget.value)}
+                />
+              </label>
+            ) : (
+              <ProjectChip params={projectParams()} focus={view().browser.projectFocus} />
+            )}
+            {props.params.place.checkoutVisible &&
+            !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
+              <CheckoutChip params={checkoutParams()} />
+            ) : undefined}
+          </div>
           {props.params.place.deviceFolder ? (
             <label class="new-session-page__select new-session-page__menu-field new-session-page__device-folder">
               <span>{t("newSession.deviceFolderPath")}</span>
@@ -358,10 +373,6 @@ export function NewSessionPlaceControls(props: { params: NewSessionPlaceControls
                   t("newSession.deviceFolderDescription")}
               </span>
             </label>
-          ) : undefined}
-          {props.params.place.checkoutVisible &&
-          !(view().nativeTerminal && props.params.place.terminalOnNode) ? (
-            <CheckoutChip params={checkoutParams()} />
           ) : undefined}
         </>
       )}{" "}

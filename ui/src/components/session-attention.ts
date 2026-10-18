@@ -46,12 +46,7 @@ export function createSessionAttention(
   const agentsList = createMemo(() => agents.read().agentsList);
   const prompts = projectSource(questions, {
     read: (state) => listQuestionPrompts(state),
-    subscribe: (state, notify) => {
-      state.onChange = notify;
-      return () => {
-        state.onChange = () => {};
-      };
-    },
+    subscribe: (state, notify) => state.subscribe(notify),
     equality: "revision",
   });
   const [ready, setReady] = createSignal(false);

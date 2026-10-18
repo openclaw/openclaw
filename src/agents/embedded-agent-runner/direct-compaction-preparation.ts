@@ -6,6 +6,7 @@ import {
   getActiveDiagnosticTraceContext,
 } from "../../infra/diagnostic-trace-context.js";
 import { formatErrorMessage } from "../../infra/errors.js";
+import { generateSecureToken } from "../../infra/secure-random.js";
 import {
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
@@ -30,9 +31,9 @@ import {
 import { resolveSandboxContext } from "../sandbox.js";
 import { withSandboxRuntimeStatusInWorker } from "../sandbox/runtime-status.js";
 import type { SandboxContext } from "../sandbox/types.js";
+import type { CompactionAppendPersistenceAsync } from "../sessions/session-compaction-persistence.js";
 import { classifyCompactionReason } from "./compact-reasons.js";
 import type { CompactEmbeddedAgentSessionParams } from "./compact.types.js";
-import { createDirectCompactionDiagId } from "./compaction-diagnostics.js";
 import { resolveEmbeddedCompactionThinkingLevel } from "./compaction-runtime-context.js";
 import {
   prepareCompactionHarnessAuth,
@@ -41,18 +42,12 @@ import {
 import { log } from "./logger.js";
 import { resolveTieredModel } from "./model-resolution.js";
 import { resolveModelAsync } from "./model.js";
-import type {
-  TranscriptByteCompactionPersistence,
-  TranscriptByteCompactionPersistenceAsync,
-} from "./transcript-byte-preflight-authority.js";
 import type { EmbeddedAgentCompactResult } from "./types.js";
 
 export type PreparedCompactEmbeddedAgentSessionParams = CompactEmbeddedAgentSessionParams & {
   preparedModelRuntime: PreparedModelRuntimeSnapshot;
   requestedRouteResolution?: "resolved";
-  transcriptBytePreflightAuthority?: true;
-  transcriptByteCompactionPersistence?: TranscriptByteCompactionPersistence;
-  transcriptByteCompactionPersistenceAsync?: TranscriptByteCompactionPersistenceAsync;
+  seedCompaction?: CompactionAppendPersistenceAsync;
   sandbox?: SandboxContext | null;
 };
 
@@ -60,7 +55,8 @@ export async function prepareDirectCompactionAttempt(
   params: PreparedCompactEmbeddedAgentSessionParams,
 ) {
   const startedAt = Date.now();
-  const diagId = params.diagId?.trim() || createDirectCompactionDiagId();
+  const diagId =
+    params.diagId?.trim() || `cmp-${Date.now().toString(36)}-${generateSecureToken(4)}`;
   const trigger = params.trigger ?? "manual";
   const attempt = params.attempt ?? 1;
   const maxAttempts = params.maxAttempts ?? 1;

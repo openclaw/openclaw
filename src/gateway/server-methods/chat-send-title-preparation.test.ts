@@ -9,7 +9,7 @@ import {
   replaceSessionEntry,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../../sessions/session-row-changes.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
@@ -20,6 +20,7 @@ import {
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { sessionTitleRequests } from "../session-title-state.js";
 import { scheduleChatDashboardSessionTitle } from "./chat-send-background.js";
+import { bindInProcessRequestMutationAuthority } from "./session-mutation-guards.js";
 import { sessionCompactHandlers } from "./sessions-compact.js";
 
 const generate = vi.hoisted(() =>
@@ -188,21 +189,27 @@ it("compacts after the reply releases its admission while its title is still gen
     { cfg: { agents: { entries: { main: {} } } }, writeConfig: true, legacyPath: true },
     async ({ scope, context, append, start, finish }) => {
       await append("First question", "Follow-up question", "Final answer");
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: scope.storePath,
         identities: [scope.sessionKey, scope.sessionId],
         assertAllowed: () => {},
       });
       const compact = async () => {
         const respond = vi.fn();
-        await sessionCompactHandlers["sessions.compact"]!({
-          req: { type: "req", id: "compact", method: "sessions.compact" },
-          params: { key: scope.sessionKey, maxLines: 2 },
-          client: null,
-          isWebchatConnect: () => false,
-          respond,
-          context,
-        });
+        await sessionCompactHandlers["sessions.compact"]!(
+          bindInProcessRequestMutationAuthority(
+            {
+              req: { type: "req", id: "compact", method: "sessions.compact" },
+              params: { key: scope.sessionKey, maxLines: 2 },
+              client: null,
+              isWebchatConnect: () => false,
+              respond,
+              context,
+            },
+            undefined,
+            undefined,
+          ),
+        );
         return respond;
       };
       try {

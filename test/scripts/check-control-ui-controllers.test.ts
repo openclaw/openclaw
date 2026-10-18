@@ -41,28 +41,72 @@ function runLint(root: string, args: string[], checkoutBase = "HEAD") {
 }
 
 describe("Control UI controller guard", () => {
-  it("rejects new host consumers while existing controllers are still being retired", () => {
-    const root = fixture(
-      'import type { SolidController } from "./lib/reactive/solid-controller-host.ts";\nclass OldController {}\n',
-    );
+  it.each(["./lib/reactive/solid-controller-host.ts", "./lib/subscriptions-controller.ts"])(
+    "rejects existing and new production or test consumers of retired %s",
+    (module) => {
+      const root = fixture(`import "${module}";\nclass OldController {}\n`);
+      vi.spyOn(console, "log").mockImplementation(() => {});
+      vi.spyOn(console, "error").mockImplementation(() => {});
+      expect(main(root, ["--base", "HEAD"])).toBe(1);
+      fs.writeFileSync(path.join(root, "ui/src/view.ts"), "class OldController {}\n");
+      for (const name of ["new.ts", "new.test.ts"]) {
+        const target = path.join(root, "ui/src", name);
+        for (const source of [
+          `import type { LegacyHost } from "${module}";`,
+          `export { LegacyHost } from "${module}";`,
+          `const load = () => import("${module}");`,
+          `const load = () => import(\`${module}\`);`,
+          `type Host = import("${module}").LegacyHost;`,
+        ]) {
+          fs.writeFileSync(target, source);
+          expect(main(root, ["--base", "HEAD"]), source).toBe(1);
+        }
+        fs.writeFileSync(target, `// import "${module}";\nconst example = "${module}";\n`);
+      }
+      expect(main(root, ["--base", "HEAD"])).toBe(0);
+    },
+  );
+
+  it.each([
+    "ui/src/lib/reactive/solid-controller-host.ts",
+    "ui/src/lib/subscriptions-controller.ts",
+  ])("rejects restoring retired %s without an importer", (file) => {
+    const root = fixture("class OldController {}\n");
     vi.spyOn(console, "log").mockImplementation(() => {});
-    vi.spyOn(console, "error").mockImplementation(() => {});
-    const target = path.join(root, "ui/src/new.ts");
-    for (const source of [
-      'import type { SolidControllerHost } from "./lib/reactive/solid-controller-host.ts";',
-      'export { useSolidControllerHost } from "./lib/reactive/solid-controller-host.ts";',
-      'const load = () => import("./lib/reactive/solid-controller-host.ts");',
-      "const load = () => import(`./lib/reactive/solid-controller-host.ts`);",
-      'type Host = import("./lib/reactive/solid-controller-host.ts").SolidControllerHost;',
-    ]) {
-      fs.writeFileSync(target, source);
-      expect(main(root, ["--base", "HEAD"]), source).toBe(1);
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    const target = path.join(root, file);
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, "export {};\n");
+    expect(main(root, ["--base", "HEAD"])).toBe(1);
+    expect(errors.mock.calls.flat().join("\n")).toContain(file);
+  });
+
+  it("rejects retired host contracts under other production or test paths", () => {
+    const root = fixture("class OldController {}\n");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const name of ["replacement.ts", "replacement.test.ts"]) {
+      const file = `ui/src/${name}`;
+      const target = path.join(root, file);
+      for (const source of [
+        "export interface SolidController {}",
+        "export interface SolidControllerHost {}",
+        "interface ReplacementHost { addController(controller: unknown): void }",
+        "const retire = (host: { removeController(): void }) => host.removeController();",
+        'import type { SolidController as LegacyController } from "./other.ts";',
+        'import type { LegacyHost as SolidControllerHost } from "./other.ts";',
+        'type Host = import("./other.ts").SolidControllerHost;',
+      ]) {
+        errors.mockClear();
+        fs.writeFileSync(target, source);
+        expect(main(root, ["--base", "HEAD"]), source).toBe(1);
+        expect(errors.mock.calls.flat().join("\n")).toContain(file);
+      }
+      fs.writeFileSync(
+        target,
+        '// interface SolidController {}\nconst example = "SolidControllerHost";\ninterface SolidControllerOptions {}\n',
+      );
     }
-    fs.writeFileSync(target, 'const example = "./lib/reactive/solid-controller-host.ts";\n');
-    fs.writeFileSync(
-      path.join(root, "ui/src/new.test.ts"),
-      'import type { SolidControllerHost } from "./lib/reactive/solid-controller-host.ts";',
-    );
     expect(main(root, ["--base", "HEAD"])).toBe(0);
   });
 
@@ -71,7 +115,7 @@ describe("Control UI controller guard", () => {
     vi.spyOn(console, "log").mockImplementation(() => {});
     vi.spyOn(console, "error").mockImplementation(() => {});
     const target = path.join(root, "ui/src/new.ts");
-    fs.writeFileSync(target, "class NewController { hostDisconnected() {} requestUpdate() {} }\n");
+    fs.writeFileSync(target, "class NewController { hostDisconnected() {} }\n");
     expect(main(root, ["--base", "HEAD"])).toBe(0);
 
     fs.writeFileSync(path.join(root, "ui/src/view.ts"), "// class OldController {}\n");
@@ -88,6 +132,31 @@ describe("Control UI controller guard", () => {
       fs.writeFileSync(target, source);
       expect(main(root, ["--base", "HEAD"]), source).toBe(1);
     }
+  });
+
+  it("rejects redraw contracts in production and tests independently of controller retirement", () => {
+    const root = fixture("class OldController { hostConnected() {} }\n");
+    vi.spyOn(console, "log").mockImplementation(() => {});
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    for (const name of ["new.tsx", "new.test.tsx"]) {
+      const target = path.join(root, "ui/src", name);
+      for (const source of [
+        "interface Host { requestUpdate(): void }",
+        "host.requestUpdate?.();",
+        'host["requestUpdate"]();',
+        'vi.spyOn(host, "requestUpdate");',
+      ]) {
+        errors.mockClear();
+        fs.writeFileSync(target, source);
+        expect(main(root, ["--base", "HEAD"]), source).toBe(1);
+        expect(errors.mock.calls.flat().join("\n")).toContain(`ui/src/${name}`);
+      }
+      fs.writeFileSync(
+        target,
+        '// requestUpdate() is retired.\nconst text = "Use signals instead of requestUpdate.";\n',
+      );
+    }
+    expect(main(root, ["--base", "HEAD"])).toBe(0);
   });
 
   it("preserves staged and explicit base scope through the full lint entry point", () => {

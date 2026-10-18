@@ -167,7 +167,7 @@ describe("session startup catch-up", () => {
       },
     });
     const harness = await Harness.create([], true);
-    const parse = vi.spyOn(memorySessions, "buildSessionEntry");
+    const parse = vi.spyOn(memorySessions, "buildSessionEntries");
     vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
     try {
       await expect(harness.markStartupDirtyFiles(true)).resolves.toEqual([]);
@@ -181,6 +181,8 @@ describe("session startup catch-up", () => {
       expect(harness.indexedPaths).toEqual([]);
 
       await append(session, "Remember my favorite fruit is mango.");
+      await expect(harness.markStartupDirtyFiles(true)).resolves.toEqual([session.sessionKey]);
+      parse.mockClear();
       await harness.catchUp();
       expect(parse).not.toHaveBeenCalled();
       await flushSessionSync(harness);

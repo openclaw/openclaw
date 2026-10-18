@@ -332,6 +332,38 @@ it("reuses resolved bindings until sync or worker writes publish new facts", asy
   });
 });
 
+it("keeps a prepared selection current after a completed no-op worker resolve", async () => {
+  await withOpenClawTestState({ label: "binding-prepared-noop-resolve" }, async () => {
+    openOpenClawStateDatabase();
+    const conversation = {
+      channel: INTERNAL_MESSAGE_CHANNEL,
+      accountId: "default",
+      conversationId: "missing-prepared",
+    };
+    const prepared = await prepareSessionBindingInspections([conversation]);
+    const changes: string[] = [];
+    const unsubscribe = currentConversationBindingPublication.subscribeFacts((change) => {
+      changes.push(
+        "receipt" in change
+          ? "receipt"
+          : change.kind === "settled"
+            ? (change.outcome ?? "unknown")
+            : change.kind,
+      );
+    });
+    try {
+      expect(prepared.inspect()).toMatchObject([{ status: "available", binding: null }]);
+      expect(await resolveCurrentConversationBindingRecordAsync(conversation)).toBeNull();
+      expect(changes).toEqual(["pending", "unchanged"]);
+      expect(prepared.inspect()).toMatchObject([{ status: "available", binding: null }]);
+    } finally {
+      unsubscribe();
+      prepared.dispose();
+    }
+    expect(() => prepared.inspect()).toThrow("no longer active");
+  });
+});
+
 it("invalidates prepared effect ownership after committed binding replacement and deletion", async () => {
   await withOpenClawTestState({ label: "binding-prepared-ownership" }, async () => {
     const conversation = {

@@ -9,7 +9,6 @@ import { setReplyPayloadMetadata } from "../../auto-reply/reply-payload.js";
 import { withAgentTurnCompletion } from "../../auto-reply/reply/agent-runner-completion.js";
 import { clearPendingFinalDeliveryAfterSuccess } from "../../auto-reply/reply/dispatch-from-config.pending-final.js";
 import { resolvePendingFinalDeliveryCompletion } from "../../auto-reply/reply/pending-final-delivery.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRestartRecoveryTerminalDeliveryEvidence } from "../../config/sessions/restart-recovery-state.js";
 import {
   loadSessionEntry,
@@ -18,6 +17,8 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry.js";
 import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../../plugins/runtime.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../../test-utils/channel-plugins.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -103,6 +104,12 @@ describe("recovered requester final receipts", () => {
         });
       } else {
         const operation = createReplyOperation({
+          target: captureSessionTarget({
+            storeScope: scope.storePath,
+            sessionKey: scope.sessionKey,
+            incarnation: entry.sessionId,
+            agentId: scope.agentId,
+          }),
           sessionId: entry.sessionId,
           sessionKey: scope.sessionKey,
           resetTriggered: false,

@@ -1,6 +1,3 @@
-/**
- * Tests HTTP request context extraction for gateway auth and routing.
- */
 import type { IncomingMessage } from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
@@ -33,6 +30,12 @@ function createReq(headers: Record<string, string> = {}): IncomingMessage {
 
 const sharedSecretRequestAuth = { trustDeclaredOperatorScopes: false };
 const trustedRequestAuth = { trustDeclaredOperatorScopes: true };
+const requestContext = (sessionKey: string) =>
+  resolveGatewayRequestContext({
+    req: createReq({ "x-openclaw-session-key": sessionKey }),
+    model: "openclaw",
+    sessionPrefix: "openai",
+  });
 
 beforeEach(() => sessionEntries.clear());
 
@@ -71,26 +74,16 @@ describe("resolveGatewayRequestContext", () => {
     "agent:main:acp:run-1",
     "agent:main:harness:codex:supervision:native-thread",
   ])("rejects reserved internal session-key override %s", async (sessionKey) => {
-    await expect(
-      resolveGatewayRequestContext({
-        req: createReq({ "x-openclaw-session-key": sessionKey }),
-        model: "openclaw",
-        sessionPrefix: "openai",
-      }),
-    ).rejects.toThrow(/reserved internal session namespaces/u);
+    await expect(requestContext(sessionKey)).rejects.toThrow(
+      /reserved internal session namespaces/u,
+    );
   });
 
   it("preserves an existing unlocked legacy harness-prefixed override", async () => {
     const sessionKey = "agent:main:harness:legacy-notes";
     sessionEntries.set(sessionKey, { sessionId: "legacy-session", modelSelectionLocked: false });
 
-    const result = await resolveGatewayRequestContext({
-      req: createReq({ "x-openclaw-session-key": sessionKey }),
-      model: "openclaw",
-      sessionPrefix: "openai",
-    });
-
-    expect(result.sessionKey).toBe(sessionKey);
+    expect((await requestContext(sessionKey)).sessionKey).toBe(sessionKey);
   });
 
   it("rejects an existing locked harness-prefixed override", async () => {
@@ -101,13 +94,9 @@ describe("resolveGatewayRequestContext", () => {
       modelSelectionLocked: true,
     });
 
-    await expect(
-      resolveGatewayRequestContext({
-        req: createReq({ "x-openclaw-session-key": sessionKey }),
-        model: "openclaw",
-        sessionPrefix: "openai",
-      }),
-    ).rejects.toThrow(/reserved internal session namespaces/u);
+    await expect(requestContext(sessionKey)).rejects.toThrow(
+      /reserved internal session namespaces/u,
+    );
   });
 
   it("does not build session state for explicit unknown agent ids", async () => {
@@ -215,32 +204,21 @@ describe("resolveTrustedHttpOperatorScopes", () => {
           scopes: roleScopes,
         },
       };
+      const scopes = (value?: string) =>
+        resolveTrustedHttpOperatorScopes(
+          createReq(value === undefined ? {} : { "x-openclaw-scopes": value }),
+          requestAuth,
+        );
 
       expect(
-        resolveTrustedHttpOperatorScopes(
-          createReq({
-            "x-openclaw-scopes":
-              "operator.admin, operator.read, operator.write, operator.talk, operator.approvals, operator.talk.secrets",
-          }),
-          requestAuth,
+        scopes(
+          "operator.admin, operator.read, operator.write, operator.talk, operator.approvals, operator.talk.secrets",
         ),
       ).toEqual(expectedScopes);
-      expect(resolveTrustedHttpOperatorScopes(createReq(), requestAuth)).toEqual(expectedDefaults);
-      expect(
-        resolveTrustedHttpOperatorScopes(
-          createReq({ "x-openclaw-scopes": "operator.read" }),
-          requestAuth,
-        ),
-      ).toEqual(roleScopes.length ? ["operator.read"] : []);
-      expect(
-        resolveTrustedHttpOperatorScopes(
-          createReq({ "x-openclaw-scopes": "operator.admin" }),
-          requestAuth,
-        ),
-      ).toEqual(roleScopes);
-      expect(
-        resolveTrustedHttpOperatorScopes(createReq({ "x-openclaw-scopes": "" }), requestAuth),
-      ).toEqual([]);
+      expect(scopes()).toEqual(expectedDefaults);
+      expect(scopes("operator.read")).toEqual(roleScopes.length ? ["operator.read"] : []);
+      expect(scopes("operator.admin")).toEqual(roleScopes);
+      expect(scopes("")).toEqual([]);
     },
   );
 });

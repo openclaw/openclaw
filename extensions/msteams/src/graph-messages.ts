@@ -237,7 +237,6 @@ type ReactionSummary = {
   reactionType: string;
   /** Display name for the reaction (matches reactionType for known types). */
   name: string;
-  /** Emoji representation when available. */
   emoji?: string;
   count: number;
   users: Array<{ id: string; displayName?: string }>;

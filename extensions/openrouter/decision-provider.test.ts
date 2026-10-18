@@ -81,6 +81,53 @@ beforeEach(() => {
 afterEach(() => vi.useRealTimers());
 
 describe("OpenRouter native decision transport", () => {
+  it.each(["typesafe/jev-1.14", "~typesafe/jev-latest"])(
+    "sends inline image evidence and preserves the native box on %s",
+    async (modelId) => {
+      const image: DecisionBatchV2 = {
+        state: { type: "image", dataUri: "data:image/png;base64,AA==", text: "Listing photo" },
+        questions: { target: { type: "box", instructions: "the red product in the photo" } },
+      };
+      const box = { top: 0.25, bottom: 0.75, left: 0.25, right: 0.76 };
+      respond({ ...wire(), answers: { target: { type: "box", box, confidence: 0.91 } } });
+      const ctx = context();
+      ctx.model.id = modelId;
+      ctx.model.inference!.decision!.questions!.box = { probabilities: "none", abstention: false };
+      expect(await provider.evaluate(image, ctx)).toMatchObject({
+        status: "ok",
+        result: { answers: { target: { type: "box", box, confidence: 0.91 } } },
+      });
+      const request = vi.mocked(fetchWithSsrFGuard).mock.calls[0]![0];
+      expect(readRequestBody(request.init)).toEqual({
+        model: modelId,
+        state: [
+          "Listing photo",
+          { type: "image_url", image_url: { url: "data:image/png;base64,AA==" } },
+        ],
+        questions: image.questions,
+      });
+      expect(release).toHaveBeenCalledOnce();
+      vi.mocked(fetchWithSsrFGuard).mockClear();
+      expect(await provider.evaluate(image, context())).toMatchObject({
+        reason: "unsupported-input",
+      });
+      expect(fetchWithSsrFGuard).not.toHaveBeenCalled();
+    },
+  );
+
+  it.each(["png", "jpeg"])(
+    "supports %s evidence for existing Jev 1.13 questions",
+    async (format) => {
+      const dataUri = `data:image/${format};base64,AA==`;
+      expect(
+        await provider.evaluate({ ...batch, state: { type: "image", dataUri } }, context()),
+      ).toMatchObject({ status: "ok" });
+      expect(readRequestBody(vi.mocked(fetchWithSsrFGuard).mock.calls[0]![0].init).state).toEqual([
+        { type: "image_url", image_url: { url: dataUri } },
+      ]);
+    },
+  );
+
   it.each(["thrown", "deadline"] as const)(
     "rechecks %s admission after transport preparation before physical dispatch",
     async (state) => {
@@ -249,7 +296,7 @@ describe("OpenRouter native decision transport", () => {
 
   it("rejects unsupported native inputs, parameters and absent credentials before HTTP", async () => {
     for (const state of [
-      { type: "image", dataUri: "data:image/png;base64,AA==" },
+      { type: "image", dataUri: "data:image/webp;base64,AA==" },
       { type: "json", value: null },
       { type: "list", items: [] },
     ] as const) {

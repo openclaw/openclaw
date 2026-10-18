@@ -4,7 +4,6 @@ import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
-import { createReplyOperation } from "../auto-reply/reply/reply-run-registry.js";
 import { enqueueSessionEventForHost as enqueueSessionEvent } from "../auto-reply/reply/session-event-handoff.js";
 import type { OpenClawConfig } from "../config/config.js";
 import {
@@ -15,6 +14,7 @@ import { replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { clearAgentRunContext } from "../infra/agent-run-registry.js";
 import { peekSystemEventEntries, resetSystemEventsForTest } from "../infra/system-events.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
 import { createOutboundTestPlugin, createTestRegistry } from "../test-utils/channel-plugins.js";
 import {
   createOpenClawTestState,
@@ -76,6 +76,7 @@ beforeEach(async () => {
       resetTriggered: false,
     });
     try {
+      replyOptions!.onReplyOperationAdmitted?.(operation);
       await replyOptions!.turnAdoptionLifecycle!.onAdopted();
       await replyOptions!.internalEventExecution!.beforeStart?.();
       replyOptions!.internalEventExecution!.onStarted(RUN_ID);

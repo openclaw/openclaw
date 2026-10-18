@@ -2394,11 +2394,16 @@ describe("gateway healthHandlers.health cache freshness", () => {
     }
   });
 
-  it("retains cached ingress pressure while merging live dead letters", async () => {
+  it("reuses owner-cached ingress health while merging live dead letters", async () => {
     const openClawState = await createOpenClawTestState({
       layout: "state-only",
       prefix: "openclaw-health-cached-dq-",
     });
+    const stateRead = await import("../../state/openclaw-state-db-readonly.js");
+    const ingressReads = vi.spyOn(stateRead, "executeExistingOpenClawStateRead");
+    const ingressReadCount = () =>
+      ingressReads.mock.calls.filter(([, command]) => command.type === "channelIngress.health")
+        .length;
     try {
       const queue = await import("../../infra/delivery-queue-sqlite.kernel.js");
       const { openOpenClawStateDatabase } = await import("../../state/openclaw-state-db.js");
@@ -2413,9 +2418,6 @@ describe("gateway healthHandlers.health cache freshness", () => {
           oldestReceivedAt: 500,
         },
       ];
-      const cached = createHealthSnapshot({
-        deliveryQueues: { failed: [], ingressPressure: cachedPressure },
-      });
       const entry = {
         id: "dead-1",
         enqueuedAt: 1_000,
@@ -2443,8 +2445,16 @@ describe("gateway healthHandlers.health cache freshness", () => {
         throw new Error("Expected inbound dead-letter claim");
       }
       await ingressQueue.fail(deadClaim, { reason: "handler-error", failedAt: 50_000 });
-      await ingressQueue.enqueue("retry-head", { text: "head" }, { laneKey: "lane" });
-      await ingressQueue.enqueue("retry-follower", { text: "follower" }, { laneKey: "lane" });
+      await ingressQueue.enqueue(
+        "retry-head",
+        { text: "head" },
+        { laneKey: "lane", receivedAt: 1_000 },
+      );
+      await ingressQueue.enqueue(
+        "retry-follower",
+        { text: "follower" },
+        { laneKey: "lane", receivedAt: 2_000 },
+      );
       for (let attempt = 0; attempt < DEFAULT_INGRESS_RETRY_MAX_ATTEMPTS; attempt += 1) {
         const claim = await ingressQueue.claim("retry-head", { ownerId: "worker" });
         if (!claim) {
@@ -2453,6 +2463,9 @@ describe("gateway healthHandlers.health cache freshness", () => {
         await ingressQueue.release(claim, { lastError: "retryable failure" });
       }
 
+      const cached = createHealthSnapshot({
+        deliveryQueues: { failed: [], ingressPressure: cachedPressure },
+      });
       const { respond } = await requestHealthSnapshot({ cached });
 
       const payload = mockCallArg(respond, 0, 1) as HealthSummary | undefined;
@@ -2465,9 +2478,26 @@ describe("gateway healthHandlers.health cache freshness", () => {
       expect(payload?.deliveryQueues?.ingressFailed).toEqual([
         { channelId: "telegram", accountId: "ops", count: 1, oldestFailedAt: 50_000 },
       ]);
-      expect(payload?.deliveryQueues?.ingressPressure).toEqual(cachedPressure);
+      expect(payload?.deliveryQueues?.ingressPressure).toEqual([
+        {
+          channelId: "telegram",
+          accountId: "ops",
+          laneCount: 1,
+          pendingCount: 2,
+          claimedCount: 0,
+          blockedCount: 1,
+          oldestReceivedAt: 1_000,
+        },
+      ]);
+      expect(ingressReadCount()).toBe(1);
       expect(mockCallArg(respond, 0, 3)).toEqual({ cached: true });
+
+      const repeated = await requestHealthSnapshot({ cached });
+      const repeatedPayload = mockCallArg(repeated.respond, 0, 1) as HealthSummary | undefined;
+      expect(repeatedPayload?.deliveryQueues).toEqual(payload?.deliveryQueues);
+      expect(ingressReadCount()).toBe(1);
     } finally {
+      ingressReads.mockRestore();
       await openClawState.cleanup();
     }
   });

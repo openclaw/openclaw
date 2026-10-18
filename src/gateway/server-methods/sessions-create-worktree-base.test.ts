@@ -16,7 +16,6 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.js";
 import {
   controlUiClient,
   initializeRepository,
@@ -71,7 +70,7 @@ test("sessions.create revalidates an unavailable remote base before retrying", a
     counts: { block: 0, final: 0, tool: 0 },
   });
   const broadcast = vi.fn();
-  const context = { broadcast, chatAbortControllers: new Map<string, ChatAbortControllerEntry>() };
+  const context = { broadcast };
   const created = await directSessionReq<{ key: string; runId: string }>(
     "sessions.create",
     {
@@ -174,7 +173,6 @@ test("sessions.create accepts a fresh valid remote base without refreshing the c
   });
   const context = {
     broadcast: vi.fn(),
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
   };
   const created = await directSessionReq<{ key: string }>(
     "sessions.create",
@@ -297,7 +295,6 @@ test.each(["local", "remote"] as const)(
     });
     const context = {
       broadcast: vi.fn(),
-      chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
     };
     const options = { client: { connect: { scopes: ["operator.admin"] } } as never, context };
     const created = await directSessionReq<{ key: string }>(
@@ -375,7 +372,6 @@ test("sessions.create recovers a failed worktree in the same session with an exp
   const { storePath } = await createSessionStoreDir();
   const context = {
     broadcast: vi.fn(),
-    chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
   };
   const options = { ...controlUiClient, context };
   dispatchInboundMessageMock.mockResolvedValue({

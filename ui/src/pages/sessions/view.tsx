@@ -3,69 +3,25 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "@openclaw/normalization-core/string-coerce";
-import { createMemo, For } from "solid-js";
-import type { GatewaySessionRow } from "../../api/types.ts";
+import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
-import {
-  SettingsPage,
-  SettingsSection,
-  SettingsSegmented,
-} from "../../components/solid/settings-ui.tsx";
+import { ContextNewSessionAction } from "../../components/solid/new-session-link.tsx";
+import { SettingsPage, SettingsSection } from "../../components/solid/settings-ui.tsx";
 import { presenceViewerLabel } from "../../lib/presence-users.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
-import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
 import {
   groupSessionRows,
   type SessionRowGroup,
   UNGROUPED_ID,
 } from "../../lib/sessions/grouping.ts";
-import type { SessionArchivedFilter } from "../../lib/sessions/index.ts";
 import { getAgentIdentity, SessionRows, sessionsTableColumnCount } from "./session-row.tsx";
-import {
-  categoryDropHandlers,
-  handleSessionsSearchKeydown,
-  SessionsAdvancedFilters,
-} from "./sessions-filters.tsx";
-import { TranscriptSearch } from "./transcript-search-view.tsx";
+import { categoryDropHandlers, SessionsAdvancedFilters } from "./sessions-filters.tsx";
+import { TranscriptSearchForm, TranscriptSearchResults } from "./transcript-search-view.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../styles/sessions.css";
 
 const PAGE_SIZES = [10, 25, 50, 100] as const;
-
-function renderSessionsHeadingFacts(
-  rows: GatewaySessionRow[],
-  liveCount: number,
-  statusFilter: SessionArchivedFilter,
-) {
-  const unreadCount = rows.filter((row) => row.unread === true && row.archived !== true).length;
-  const archivedCount = rows.filter((row) => row.archived === true).length;
-  const facts: Array<readonly [string, string, boolean]> = [
-    [String(liveCount), t("sessionsView.statusLive"), liveCount > 0],
-    [String(unreadCount), t("sessionsView.unread"), unreadCount > 0],
-  ];
-  if (statusFilter !== "active") {
-    facts.push([String(archivedCount), t("sessionsView.archived"), false]);
-  }
-  return (
-    <span class="sessions-heading-facts">
-      <For each={facts}>
-        {([value, label, active], index) => (
-          <>
-            {index() > 0 ? (
-              <span class="sessions-heading-fact__separator" aria-hidden="true">
-                ·
-              </span>
-            ) : undefined}
-            <span class={["sessions-heading-fact", { "sessions-heading-fact--active": active }]}>
-              <strong>{value}</strong> {label}
-            </span>
-          </>
-        )}
-      </For>
-    </span>
-  );
-}
 
 const SKELETON_ROW_COUNT = 4;
 
@@ -149,8 +105,8 @@ function renderGroupHeaderRow(group: SessionRowGroup, props: SessionsProps) {
 }
 
 export function SessionsView(props: SessionsProps) {
+  const application = useOptionalApplication();
   const rows = createMemo(() => props.result?.sessions ?? []);
-  const liveCount = createMemo(() => rows().filter(isSessionRunActive).length);
   const archivedCount = createMemo(() => rows().filter((row) => row.archived === true).length);
   return (
     <SettingsPage wide>
@@ -159,45 +115,47 @@ export function SessionsView(props: SessionsProps) {
           {props.error}
         </div>
       ) : undefined}
-      <SettingsSection title={t("sessionsView.transcriptSearchTitle")}>
-        <TranscriptSearch {...props} />
-      </SettingsSection>
       <SettingsSection
-        title={
-          <>
-            {t("sessionsView.title")}
-            {props.result ? (
-              <openclaw-tooltip prop:content={t("sessionsView.store", { path: props.result.path })}>
-                <span class="settings-count">{rows().length}</span>
-              </openclaw-tooltip>
-            ) : undefined}
-            {props.result
-              ? renderSessionsHeadingFacts(rows(), liveCount(), props.statusFilter)
-              : undefined}
-          </>
+        title={t("sessionsView.title")}
+        description={
+          !props.transcriptSearchAvailable ? (
+            <span role="status">{t("sessionsView.transcriptSearchUnavailable")}</span>
+          ) : undefined
         }
         actions={
           <>
-            {props.statusFilter === "archived" ? (
-              <button
-                class="btn danger"
-                disabled={
-                  props.loading ||
-                  archivedCount() === 0 ||
-                  Boolean(props.deleteArchivedDisabledReason)
-                }
-                title={props.deleteArchivedDisabledReason}
-                onClick={props.onDeleteAllArchived}
-              >
-                <Icon name="trash" /> {t("sessionsView.deleteAllArchived")}
-              </button>
-            ) : undefined}
-            <button class="btn" disabled={props.refreshing} onClick={() => props.onRefresh()}>
-              {props.refreshing ? t("common.loading") : t("common.refresh")}
+            <TranscriptSearchForm {...props} />
+            <button
+              class="btn btn--xs btn--icon sessions-toolbar__icon sessions-toolbar__refresh"
+              type="button"
+              aria-label={t("common.refresh")}
+              disabled={props.refreshing || props.refreshDisabled}
+              onClick={() => props.onRefresh()}
+            >
+              <Icon name="refresh" />
             </button>
+            <SessionsAdvancedFilters
+              {...props}
+              searchQuery={props.searchQuery}
+              archivedCount={archivedCount()}
+            />
+            <Show when={application}>
+              {(context) => (
+                <ContextNewSessionAction
+                  context={context()}
+                  class="btn btn--xs btn--icon primary sessions-toolbar__icon sessions-toolbar__new-session"
+                  agentId={props.agentId}
+                  label={t("newSession.title")}
+                  showTooltip={false}
+                />
+              )}
+            </Show>
           </>
         }
       >
+        <Show when={props.transcriptSearch.status !== "idle"}>
+          <TranscriptSearchResults {...props} />
+        </Show>
         <SessionsTable {...props} />
       </SettingsSection>
     </SettingsPage>
@@ -234,9 +192,7 @@ function SortHeader(
 }
 
 function SessionsTable(props: SessionsProps) {
-  let searchInput!: HTMLInputElement;
   const rawRows = createMemo(() => props.result?.sessions ?? []);
-  const searchQuery = createMemo(() => props.searchQuery);
   const pageSizeValue = createMemo(() => String(props.pageSize));
   const direction = createMemo(() => (props.sortDir === "asc" ? 1 : -1));
   const sorted = createMemo(() => {
@@ -248,14 +204,7 @@ function SessionsTable(props: SessionsProps) {
         return pinnedDiff;
       }
       const diff =
-        column === "kind"
-          ? resolveSessionDisplayKind(a).localeCompare(resolveSessionDisplayKind(b))
-          : column === "key"
-            ? a.key.localeCompare(b.key)
-            : column === "updated"
-              ? (a.updatedAt ?? 0) - (b.updatedAt ?? 0)
-              : (a.totalTokens ?? a.inputTokens ?? a.outputTokens ?? 0) -
-                (b.totalTokens ?? b.inputTokens ?? b.outputTokens ?? 0);
+        column === "key" ? a.key.localeCompare(b.key) : (a.updatedAt ?? 0) - (b.updatedAt ?? 0);
       return diff * sortDirection;
     });
   });
@@ -303,55 +252,6 @@ function SessionsTable(props: SessionsProps) {
   );
   return (
     <>
-      <div
-        class="sessions-toolbar sessions-filter-bar"
-        role="group"
-        aria-label={t("sessionsView.filterControls")}
-      >
-        <div class="data-table-search sessions-toolbar__search">
-          <Icon name="search" />
-          <input
-            ref={(element) => (searchInput = element)}
-            type="text"
-            aria-label={t("sessionsView.searchPlaceholder")}
-            placeholder={t("sessionsView.searchPlaceholder")}
-            value={searchQuery()}
-            onInput={(e) => props.onSearchChange(e.currentTarget.value)}
-            onKeyDown={(event: KeyboardEvent) => handleSessionsSearchKeydown(event, props)}
-          />
-          <button
-            type="button"
-            class="sessions-toolbar__clear"
-            aria-label={t("sessionsView.clearSearch")}
-            title={t("sessionsView.clearSearch")}
-            hidden={!props.searchQuery}
-            disabled={!props.searchQuery}
-            onClick={() => {
-              searchInput.focus({ preventScroll: true });
-              props.onSearchChange("");
-            }}
-          >
-            <Icon name="x" />
-          </button>
-        </div>
-        <SettingsSegmented<SessionArchivedFilter>
-          value={props.statusFilter}
-          ariaLabel={t("sessionsView.sessionState")}
-          class="sessions-view-segment"
-          options={[
-            { value: "active", label: t("common.active") },
-            {
-              value: "archived",
-              label: t("sessionsView.archived"),
-              title: t("sessionsView.archivedOnlyTooltip"),
-            },
-            { value: "all", label: t("sessionsView.all") },
-          ]}
-          onChange={(value) => props.onStatusFilterChange(value)}
-        />
-        <SessionsAdvancedFilters {...props} />
-      </div>
-
       {props.selectedKeys.size > 0 ? (
         <div class="data-table-bulk-bar">
           <span>{t("sessionsView.selected", { count: String(props.selectedKeys.size) })}</span>
@@ -390,14 +290,14 @@ function SessionsTable(props: SessionsProps) {
               <SortHeader
                 {...props}
                 column="key"
-                label={t("sessionsView.key")}
+                label={t("sessionsView.session")}
                 extraClass="data-table-key-col"
               />
+              {props.allAgentsScope ? (
+                <th class="session-agent-col">{t("sessionsView.agent")}</th>
+              ) : undefined}
               {props.groupBy === "category" ? <th>{t("sessionsView.group")}</th> : undefined}
-              <SortHeader {...props} column="kind" label={t("sessionsView.kind")} />
-              <th class="session-status-col">{t("sessionsView.status")}</th>
               <SortHeader {...props} column="updated" label={t("sessionsView.updated")} />
-              <SortHeader {...props} column="tokens" label={t("sessionsView.tokens")} />
               <th class="session-actions-col">
                 <span class="sr-only">{t("sessionsView.actions")}</span>
               </th>

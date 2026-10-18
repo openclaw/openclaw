@@ -4,7 +4,7 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { saveLegacySessionStore as saveSessionStore } from "../../infra/state-migrations.legacy-session-store.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import { withTestDir } from "../../test-helpers/temp-dir.js";
 import { enforceSessionDiskBudget } from "./disk-budget.js";
 import { applyFileBackedSessionStoreMaintenance } from "./store-maintenance-operations.js";
@@ -252,7 +252,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
       ["removable-old", { sessionId: "removable-old-session", updatedAt: now - 2 }],
       ["removable-recent", { sessionId: "removable-recent-session", updatedAt: now - 1 }],
     ]);
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [...identities],
       assertAllowed: () => {},
@@ -290,7 +290,7 @@ describe("applyFileBackedSessionStoreMaintenance", () => {
     const activeStorePath = "/tmp/openclaw-sessions/active-store.json";
     const maintainedStorePath = "/tmp/openclaw-sessions/maintained-store.json";
     const activeSessionId = "shared-session-id";
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: activeStorePath,
       identities: [activeSessionId],
       assertAllowed: () => {},

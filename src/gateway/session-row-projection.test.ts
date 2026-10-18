@@ -50,6 +50,9 @@ it("resolves agent-scoped legacy locators from resident topology for reads and d
     const projection = await createSessionRowProjection({ cfg });
     await projection.ensureMaterialized();
     try {
+      for (const agentId of ["main", "work"]) {
+        projection.describe({ agentId, key: "global" });
+      }
       const main = projection.capture({ agentId: "main", key: "global" })!;
       const work = projection.capture({ agentId: "work", key: "global" })!;
       expect(main.storeTarget.storePath).not.toBe(work.storeTarget.storePath);
@@ -150,6 +153,7 @@ it("settles a committed write queued while the previous materialization is finis
     const projection = await createSessionRowProjection({ cfg });
     await projection.ensureMaterialized();
     try {
+      projection.describe({ agentId: "main", key });
       const materialize = rowInputs.materializeSessionRow;
       let latestCommitted = false;
       vi.spyOn(rowInputs, "materializeSessionRow").mockImplementationOnce((inputs) => {

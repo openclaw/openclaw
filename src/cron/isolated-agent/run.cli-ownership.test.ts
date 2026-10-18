@@ -31,7 +31,7 @@ const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
 const sessionId = "cron-cli-diagnostic-session";
 
 function makeCliOwnershipParams(): RunCronAgentTurnParams {
-  const cfg = {};
+  const cfg = { session: { store: "/tmp/store.json" } };
   setRuntimeConfigSnapshot(cfg);
   return {
     deliveryAttemptFence: null,

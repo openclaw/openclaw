@@ -63,41 +63,21 @@ function createGlobalDatabase(databasePath: string): void {
       PRAGMA wal_autocheckpoint = 0;
       ${OPENCLAW_STATE_SCHEMA_SQL}
       PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION};
-      CREATE TABLE durable_entries (
-        id INTEGER PRIMARY KEY,
-        value TEXT NOT NULL
-      );
+      CREATE TABLE durable_entries (id INTEGER PRIMARY KEY, value TEXT NOT NULL);
     `);
     database
       .prepare(
-        `
-          INSERT INTO schema_meta (
-            meta_key,
-            role,
-            schema_version,
-            agent_id,
-            app_version,
-            created_at,
-            updated_at
-          ) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)
-        `,
+        "INSERT INTO schema_meta (meta_key, role, schema_version, agent_id, app_version, created_at, updated_at) VALUES ('primary', 'global', ?, NULL, NULL, 1, 1)",
       )
       .run(OPENCLAW_STATE_SCHEMA_VERSION);
     const entryJson = '{"payload":"do-not-restore"}';
     database
       .prepare(
         `
-          INSERT INTO delivery_queue_entries (
-            queue_name,
-            id,
-            status,
-            entry_json,
-            retention_id_prefix,
-            retention_max_age_ms,
-            retention_max_entries,
-            enqueued_at,
-            updated_at
-          ) VALUES ('delivery', 'queued', 'pending', ?,
+          INSERT INTO delivery_queue_entries
+            (queue_name, id, status, entry_json, retention_id_prefix,
+             retention_max_age_ms, retention_max_entries, enqueued_at, updated_at)
+          VALUES ('delivery', 'queued', 'pending', ?,
             @retention_id_prefix, @retention_max_age_ms, @retention_max_entries, 1, 1)
         `,
       )
@@ -192,10 +172,9 @@ describe("SQLite backup commands", () => {
   );
 
   it("reports missing snapshot paths for verify and restore", async () => {
-    const tempDir = state.root;
-    const repositoryPath = path.join(tempDir, "snapshots");
+    const repositoryPath = state.path("snapshots");
     const snapshotPath = path.join(repositoryPath, "missing-snapshot");
-    const restorePath = path.join(tempDir, "restored.sqlite");
+    const restorePath = state.path("restored.sqlite");
     const runtime = createRuntimeCapture();
     const missingRepositoryMessage = `SQLite snapshot repository does not exist: ${repositoryPath}. Check the snapshot path or create a snapshot with \`openclaw backup sqlite create\`.`;
 
@@ -214,6 +193,17 @@ describe("SQLite backup commands", () => {
     await expect(
       backupSqliteRestoreCommand(runtime, snapshotPath, { target: restorePath }),
     ).rejects.toThrow(missingSnapshotMessage);
+  });
+
+  it("reports a repository-format mismatch when listing a Git backup as SQLite", async () => {
+    const repositoryPath = path.join(state.root, "git-backup");
+    await fs.mkdir(path.join(repositoryPath, ".git"), { recursive: true });
+    await fs.writeFile(path.join(repositoryPath, ".git", "COMMIT_EDITMSG"), "snapshot commit\n");
+
+    const runtime = createRuntimeCapture();
+    await expect(
+      backupSqliteListCommand(runtime, { repository: repositoryPath, json: true }),
+    ).rejects.toThrow("Git backup repository is not a SQLite snapshot repository");
   });
 
   it("requires exactly one named OpenClaw database source", async () => {
@@ -248,8 +238,7 @@ describe("SQLite backup commands", () => {
   });
 
   it("does not claim completion when a corrupt database also rejects outcome recording", async () => {
-    const tempDir = state.root;
-    const repositoryPath = path.join(tempDir, "snapshots");
+    const repositoryPath = state.path("snapshots");
     const databasePath = resolveOpenClawStateSqlitePath();
     await fs.mkdir(path.dirname(databasePath), { recursive: true });
     await fs.writeFile(databasePath, Buffer.alloc(32));
@@ -280,10 +269,9 @@ describe("SQLite backup commands", () => {
   });
 
   it("rejects generic provider artifacts before verify or restore", async () => {
-    const tempDir = state.root;
-    const databasePath = path.join(tempDir, "generic.sqlite");
-    const repositoryPath = path.join(tempDir, "snapshots");
-    const restorePath = path.join(tempDir, "restore", "generic.sqlite");
+    const databasePath = state.path("generic.sqlite");
+    const repositoryPath = state.path("snapshots");
+    const restorePath = state.path("restore", "generic.sqlite");
     const sqlite = requireNodeSqlite();
     const database = new sqlite.DatabaseSync(databasePath);
     try {

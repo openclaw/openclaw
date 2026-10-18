@@ -1,6 +1,7 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { CronJob } from "../../../cron/types.js";
 import type { AgentRuntimeIdentity } from "../../../gateway/agent-runtime-identity-token.js";
+import type { SessionControllerInput } from "../../../sessions/session-controller.mailbox.js";
 import { createRequesterInitialTransferFixture } from "../registry/subagent-registry-requester-yield.test-support.js";
 import { copySubagentRunRuntimeOwner } from "../registry/subagent-run-generation.js";
 import { prepareRequesterCronAuthority } from "../requester-cron-authority.js";
@@ -163,72 +164,77 @@ describe("requester continuation automation management", () => {
     };
     let canManage = false;
     deliverSpy.mockImplementationOnce(async (params) => {
-      const runId = String(params.directIdempotencyKey);
-      const admission = resolveGatewayCronCreatorAuthorityAdmission({
-        runId,
-        resolvedSessionKey: REQUESTER,
-        sessionId: "sess-main",
-        client: createSyntheticPluginRuntimeClient(),
-        request: { message: String(params.triggerMessage), idempotencyKey: runId },
-        inputProvenance: {
-          kind: "inter_session",
-          sourceSessionKey: child.childSessionKey,
-          sourceTool: String(params.sourceTool),
-        },
-        hasRestoredCronContinuation: false,
-        isOneShotModelRun: false,
-        isRestartRecoveryResumeRun: false,
-      });
-      if (admission) {
-        const operationalRunInstance = createTestAdmittedRunContext(runId).operationalRunInstance;
-        const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
-        const identity: AgentRuntimeIdentity = {
-          kind: "agentRuntime",
-          agentId: "main",
-          sessionKey: REQUESTER,
-          operationalRunInstance,
-          delegatedAuthority: { kind: "local", ...authority },
-        };
-        const client = createSyntheticPluginRuntimeClient();
-        client.internal!.agentRuntimeIdentity = identity;
-        expect(cronJobMatchesCallerScope({ job, callerScope: readCronCallerScope(client) })).toBe(
-          false,
-        );
-        const capability = createCronCreatorAuthorityCapability(
+      const dispatch = async () => {
+        const runId = String(params.directIdempotencyKey);
+        const admission = resolveGatewayCronCreatorAuthorityAdmission({
           runId,
-          admission.callerOrigin,
-          admission.managementEntitlement,
-          admission.isCurrent,
-        )!;
-        admission.bindRunScope?.(capability);
-        try {
-          await runWithCronCreatorAuthorityCapability(capability, () =>
-            withGatewayToolCallerIdentity(
-              { agentId: "main", sessionKey: REQUESTER, approvalAuthority: authority },
-              async () => {
-                child.requesterSettleWake = undefined;
-                runs.delete(child.runId);
-                const management = bindCronManagementGrant(runId)!;
-                expect(management.managementOnly).toBe(true);
-                await withCronManagementGrant(
-                  management.mint("cron.update")!,
-                  identity,
-                  "cron.update",
-                  async () => {
-                    canManage = cronJobMatchesCallerScope({
-                      job,
-                      callerScope: readCronCallerScope(client),
-                    });
-                  },
-                );
-              },
-            ),
+          resolvedSessionKey: REQUESTER,
+          sessionId: "sess-main",
+          client: createSyntheticPluginRuntimeClient(),
+          request: { message: String(params.triggerMessage), idempotencyKey: runId },
+          inputProvenance: {
+            kind: "inter_session",
+            sourceSessionKey: child.childSessionKey,
+            sourceTool: String(params.sourceTool),
+          },
+          hasRestoredCronContinuation: false,
+          isOneShotModelRun: false,
+          isRestartRecoveryResumeRun: false,
+        });
+        if (admission) {
+          const operationalRunInstance = createTestAdmittedRunContext(runId).operationalRunInstance;
+          const authority = claimAgentRunDelegatedAuthority(operationalRunInstance);
+          const identity: AgentRuntimeIdentity = {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: REQUESTER,
+            operationalRunInstance,
+            delegatedAuthority: { kind: "local", ...authority },
+          };
+          const client = createSyntheticPluginRuntimeClient();
+          client.internal!.agentRuntimeIdentity = identity;
+          expect(cronJobMatchesCallerScope({ job, callerScope: readCronCallerScope(client) })).toBe(
+            false,
           );
-        } finally {
-          releaseAgentRunDelegatedAuthority(authority);
+          const capability = createCronCreatorAuthorityCapability(
+            runId,
+            admission.callerOrigin,
+            admission.managementEntitlement,
+            admission.isCurrent,
+          )!;
+          admission.bindRunScope?.(capability);
+          try {
+            await runWithCronCreatorAuthorityCapability(capability, () =>
+              withGatewayToolCallerIdentity(
+                { agentId: "main", sessionKey: REQUESTER, approvalAuthority: authority },
+                async () => {
+                  child.requesterSettleWake = undefined;
+                  runs.delete(child.runId);
+                  const management = bindCronManagementGrant(runId)!;
+                  expect(management.managementOnly).toBe(true);
+                  await withCronManagementGrant(
+                    management.mint("cron.update")!,
+                    identity,
+                    "cron.update",
+                    async () => {
+                      canManage = cronJobMatchesCallerScope({
+                        job,
+                        callerScope: readCronCallerScope(client),
+                      });
+                    },
+                  );
+                },
+              ),
+            );
+          } finally {
+            releaseAgentRunDelegatedAuthority(authority);
+          }
         }
-      }
-      return { delivered: true, path: "direct" };
+        return { delivered: true as const, path: "direct" as const };
+      };
+      const caller = (params as { controllerInput?: SessionControllerInput }).controllerInput
+        ?.continuationCaller;
+      return caller ? caller.run(dispatch) : dispatch();
     });
     expect(await maybeWakeRequesterAfterAllChildrenSettled(wakeParams())).toBe(true);
     expect(canManage).toBe(true);

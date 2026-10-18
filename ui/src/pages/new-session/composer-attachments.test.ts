@@ -33,7 +33,7 @@ it.each(["owner", "tile"] as const)(
       () => redraw(),
       () => {},
     );
-    const textareaController = createNewSessionComposerTextarea();
+    const composerTextarea = createNewSessionComposerTextarea();
     const modelControl = new NewSessionModelControl(() => {});
     const currentOptions = (): NewSessionComposerOptions => ({
       agentId: "main",
@@ -47,7 +47,7 @@ it.each(["owner", "tile"] as const)(
       requiresModifier: false,
       onChange: redraw,
       submitting: false,
-      textareaController,
+      composerTextarea,
       onInput: () => {},
       onSubmit: () => {},
     });
@@ -70,7 +70,7 @@ it.each(["owner", "tile"] as const)(
     );
     onTestFinished(() => {
       attachmentDraft.reset();
-      textareaController.disconnect();
+      composerTextarea.disconnect();
       mounted.unmount();
     });
     const composer = expectDefined(

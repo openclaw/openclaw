@@ -18,7 +18,10 @@ import { updateSessionProfileInvolvementAsync } from "../../config/sessions/sess
 import { assignSessionOwnerInWorker } from "../../config/sessions/session-metadata-write.async.js";
 import { patchPluginSessionExtension } from "../../plugins/host-hook-state.js";
 import { isPluginJsonValue } from "../../plugins/host-hooks.js";
-import { runExclusiveSessionLifecycleMutation } from "../../sessions/session-lifecycle-admission.js";
+import {
+  captureSessionTarget,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import { resolveCurrentUserProfileDisplay } from "../current-user-profile-display.js";
 import { captureGatewayOperatorRunAuthority } from "../operator-run-authority.js";
 import { ADMIN_SCOPE } from "../operator-scopes.js";
@@ -460,9 +463,18 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           );
         }
       };
-      const assignment = await runExclusiveSessionLifecycleMutation("assign-owner", {
-        scope: target.storePath,
-        identities: [target.storeKey, expectedSessionId],
+      const assignment = await runSessionMutation({
+        diagnosticLabel: "assign-owner",
+        target: captureSessionTarget({
+          storeScope: target.storePath,
+          sessionKey: target.canonicalKey,
+          aliases: [target.storeKey],
+          incarnation: expectedSessionId,
+          agentId: target.agentId,
+        }),
+        requiredSessionId: expectedSessionId,
+        policy: "allow-live",
+        signal,
         run: () =>
           assignSessionOwnerInWorker(
             { agentId: target.agentId, sessionKey: target.storeKey, storePath: target.storePath },

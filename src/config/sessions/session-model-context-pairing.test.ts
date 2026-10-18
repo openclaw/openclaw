@@ -32,16 +32,12 @@ describe("bounded model-context pairing", () => {
     const retained = [olderResult, recent, recentResult];
     const pairing = createModelContextPairing([older, ...retained], retained);
 
-    expect([...pairing.read().owners]).toEqual([
+    expect([...pairing.read()]).toEqual([
       [olderResult, PREFIX_TOOL_OWNER],
       [recentResult, recent],
     ]);
-    expect(pairing.read().spans).toEqual([
-      { assistant: PREFIX_TOOL_OWNER, result: olderResult },
-      { assistant: recent, result: recentResult },
-    ]);
     pairing.retain([recentResult]);
-    expect([...pairing.read().owners]).toEqual([[recentResult, PREFIX_TOOL_OWNER]]);
+    expect([...pairing.read()]).toEqual([[recentResult, PREFIX_TOOL_OWNER]]);
   });
 
   it("accepts local results after unresolved-prefix overflow, including reused IDs", () => {
@@ -57,7 +53,7 @@ describe("bounded model-context pairing", () => {
     const nextResult = result("X");
     expect(pairing.append([next, nextResult])).toBe(true);
     pairing.retain([next, nextResult]);
-    expect([...pairing.read().owners]).toEqual([[nextResult, next]]);
+    expect([...pairing.read()]).toEqual([[nextResult, next]]);
   });
 
   it("requires recovery when a new displaced result could become falsely unambiguous", () => {
@@ -79,7 +75,7 @@ describe("bounded model-context pairing", () => {
     const displaced = result("X");
 
     expect(pairing.append([displaced])).toBe(true);
-    expect(pairing.read().owners.has(displaced)).toBe(false);
+    expect(pairing.read().has(displaced)).toBe(false);
   });
 
   it("replaces a retained synthetic result owned by a discarded frame", () => {
@@ -90,8 +86,8 @@ describe("bounded model-context pairing", () => {
     const replacement = result("X");
 
     expect(pairing.append([replacement])).toBe(true);
-    expect(pairing.read().owners.has(missing)).toBe(false);
-    expect(pairing.read().owners.get(replacement)).toBe(PREFIX_TOOL_OWNER);
+    expect(pairing.read().has(missing)).toBe(false);
+    expect(pairing.read().get(replacement)).toBe(PREFIX_TOOL_OWNER);
   });
 
   it("keeps the last tool frame through user and plain assistant messages", () => {
@@ -105,7 +101,7 @@ describe("bounded model-context pairing", () => {
     const duplicate = result("X");
 
     expect(pairing.append([duplicate])).toBe(true);
-    expect(pairing.read().owners.has(duplicate)).toBe(false);
+    expect(pairing.read().has(duplicate)).toBe(false);
   });
 
   it("recovers an oversized frame but resumes local pairing at the next frame", () => {
@@ -116,7 +112,7 @@ describe("bounded model-context pairing", () => {
     const next = call("next");
     const nextResult = result("next");
     expect(pairing.append([next, nextResult])).toBe(true);
-    expect(pairing.read().owners.get(nextResult)).toBe(next);
+    expect(pairing.read().get(nextResult)).toBe(next);
   });
 
   it("keeps retained live-frame results canonical across appends beyond the prefix cap", () => {
@@ -138,7 +134,7 @@ describe("bounded model-context pairing", () => {
       expect(pairing.append(appended)).toBe(true);
       retained.push(...appended);
       pairing.retain(retained);
-      const actual = pairing.read().owners;
+      const actual = pairing.read();
       expect(actual.size).toBe(retained.length - 1);
       for (const frame of classifyToolUseResultPairing(retained).frames) {
         for (const occurrence of frame.occurrences) {
@@ -166,7 +162,7 @@ describe("bounded model-context pairing", () => {
 
     pairing.retain([completed]);
     pairing.retain([completed]);
-    expect(pairing.read().owners.get(completed)).toBe(PREFIX_TOOL_OWNER);
+    expect(pairing.read().get(completed)).toBe(PREFIX_TOOL_OWNER);
     expect(pairing.append([result("call-1")])).toBe(false);
   });
 
@@ -177,7 +173,7 @@ describe("bounded model-context pairing", () => {
     const orphan = result("unrelated");
 
     expect(pairing.append([next, orphan])).toBe(true);
-    expect(pairing.read().owners.has(orphan)).toBe(false);
+    expect(pairing.read().has(orphan)).toBe(false);
   });
 
   it("does not recover unknown prefix ownership for a result without an ID", () => {
@@ -188,6 +184,6 @@ describe("bounded model-context pairing", () => {
     const orphan = { ...result(""), toolName: "another_tool" };
 
     expect(pairing.append([orphan])).toBe(true);
-    expect(pairing.read().owners.has(orphan)).toBe(false);
+    expect(pairing.read().has(orphan)).toBe(false);
   });
 });

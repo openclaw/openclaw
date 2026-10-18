@@ -40,6 +40,7 @@ declare module "@solidjs/web" {
 function MarkdownAttachment(props: { text: string; label: string }) {
   let article!: HTMLElement;
   const markdown = createMarkdownRef(() => ({
+    incremental: true,
     content: toSanitizedMarkdownHtml(props.text, {
       mode: "document",
       remoteImages: false,

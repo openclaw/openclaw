@@ -210,127 +210,13 @@ export function registerGatewaySupersededReloadTests({
           await expect(reload).resolves.toBe("applied-restart-required");
         }
         expect(setState).toHaveBeenCalledOnce();
-        expect(handlers.hasOutstandingGatewayRestart()).toBe(recoveryRequired);
+        expect(handlers.hasOutstandingGatewayRestart()).toBe(recoveryRequired && !superseded);
       } finally {
         handlers.stopRestartRetries();
       }
     });
 
-    it("rearms detached stale-tail recovery against an already accepted config", async () => {
-      vi.useFakeTimers();
-      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-      const prepareRuntimeConfig = vi.fn(async (): Promise<OpenClawConfig> => ({
-        logging: { level: "debug" },
-      }));
-      const handlers = createGatewayReloadHandlers({ requestRecoveryRestart });
-      handlers.recordAcceptedRestartTarget({
-        runtimeConfig: { logging: { level: "debug" } },
-        sourceConfig: { logging: { level: "debug" } },
-        prepareRuntimeConfig,
-      });
-      let current = true;
-      refreshContextWindowCache.mockImplementationOnce(async () => {
-        current = false;
-        throw new Error("detached tail failed");
-      });
-      const plan = createHotTailPlan({
-        changedPaths: ["agents.defaults.workspace"],
-        hotReasons: ["agents.defaults.workspace"],
-      });
-
-      try {
-        await handlers.applyHotReload(
-          plan,
-          { agents: { defaults: { workspace: "/tmp/a" } } },
-          {
-            sourceConfig: { agents: { defaults: { workspace: "/tmp/a" } } },
-            isCurrent: () => current,
-            publish: async (commit) => await commit(),
-          },
-        );
-        await vi.runAllTimersAsync();
-
-        expect(prepareRuntimeConfig).toHaveBeenCalledOnce();
-        expect(requestRecoveryRestart).toHaveBeenCalledWith(
-          "config reload: hot reload recovery: context window cache reload",
-          undefined,
-        );
-      } finally {
-        handlers.stopRestartRetries();
-      }
-    });
-
-    it("pauses stale-target recovery until a newer valid config is accepted", async () => {
-      vi.useFakeTimers();
-      const requestRecoveryRestart = vi.fn(() => ({ status: "emitted" as const }));
-      const handlers = createGatewayReloadHandlers({ requestRecoveryRestart });
-      const configA = { logging: { level: "info" as const } } satisfies OpenClawConfig;
-      const configC = { logging: { level: "debug" as const } } satisfies OpenClawConfig;
-      const prepareA = vi.fn(async () => configA);
-      const prepareC = vi.fn(async () => configC);
-      handlers.recordAcceptedRestartTarget({
-        runtimeConfig: configA,
-        sourceConfig: configA,
-        prepareRuntimeConfig: prepareA,
-      });
-      let current = true;
-      let rejectTail: ((error: Error) => void) | undefined;
-      refreshContextWindowCache.mockImplementationOnce(
-        async () =>
-          await new Promise<never>((_resolve, reject) => {
-            rejectTail = reject;
-          }),
-      );
-      const plan = createHotTailPlan({
-        changedPaths: ["agents.defaults.workspace"],
-        hotReasons: ["agents.defaults.workspace"],
-      });
-
-      try {
-        const staleTail = handlers.applyHotReload(plan, configA, {
-          sourceConfig: configA,
-          isCurrent: () => current,
-          publish: async (commit) => await commit(),
-        });
-        await vi.advanceTimersByTimeAsync(0);
-        expect(refreshContextWindowCache).toHaveBeenCalledOnce();
-
-        current = false;
-        handlers.pauseGatewayRestartForConfigCandidate();
-        const acceptedBeforeTailFailure = handlers.acceptRestartConfig(configC);
-        expect(acceptedBeforeTailFailure.debt).toBeUndefined();
-        rejectTail?.(new Error("stale A tail failed"));
-        await staleTail;
-        await vi.runAllTimersAsync();
-
-        expect(requestRecoveryRestart).not.toHaveBeenCalled();
-        expect(prepareA).not.toHaveBeenCalled();
-
-        const accepted = handlers.publishAcceptedRestartTarget({
-          runtimeConfig: configC,
-          sourceConfig: configC,
-          prepareRuntimeConfig: prepareC,
-        });
-        expect(accepted.conservativeDebt).toBeDefined();
-        if (!accepted.conservativeDebt) {
-          throw new Error("expected paused stale-tail recovery debt");
-        }
-        const restart = handlers.requestGatewayRestart(accepted.conservativeDebt.plan, configC, {
-          retainDebtAcrossConfigChanges: accepted.conservativeDebt.retainDebtAcrossConfigChanges,
-          debtConfig: configC,
-          prepareRuntimeConfig: prepareC,
-        });
-        restart.settle("committed");
-        await vi.runAllTimersAsync();
-
-        expect(requestRecoveryRestart).toHaveBeenCalledOnce();
-        expect(prepareC).toHaveBeenCalledOnce();
-      } finally {
-        handlers.stopRestartRetries();
-      }
-    });
-
-    it("defers a failed context tail to a newer valid config", async () => {
+    it("reports a failed context tail without restarting the newer config", async () => {
       const entered = createDeferred();
       const release = createDeferred();
       let current = true;
@@ -362,7 +248,7 @@ export function registerGatewaySupersededReloadTests({
       await expect(reloadA).resolves.toBe("applied");
       expect(requestRecoveryRestart).not.toHaveBeenCalled();
       expect(logReload.warn).toHaveBeenCalledWith(
-        expect.stringContaining("recovery deferred to the newer config"),
+        expect.stringContaining("reapply the config or restart the Gateway"),
       );
       const configC: OpenClawConfig = { logging: { level: "debug" } };
       await handlers.applyHotReload(createHotTailPlan(), configC, {

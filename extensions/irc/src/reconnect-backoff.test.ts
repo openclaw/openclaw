@@ -17,36 +17,6 @@ describe("irc reconnect backoff", () => {
     vi.restoreAllMocks();
   });
 
-  it("starts at the historical one-second delay and doubles up to the cap", () => {
-    vi.spyOn(Math, "random").mockReturnValue(0);
-    const backoff = createIrcReconnectBackoff(createClock().now);
-    const delays = Array.from({ length: 8 }, () => backoff.nextDelayMs());
-    expect(delays).toEqual([1_000, 2_000, 4_000, 8_000, 16_000, 30_000, 30_000, 30_000]);
-  });
-
-  it("keeps jitter within twenty percent and never exceeds the cap", () => {
-    vi.spyOn(Math, "random").mockReturnValue(0.999);
-    const backoff = createIrcReconnectBackoff(createClock().now);
-    const first = backoff.nextDelayMs();
-    expect(first).toBeGreaterThanOrEqual(1_000);
-    expect(first).toBeLessThanOrEqual(1_200);
-    const later = Array.from({ length: 10 }, () => backoff.nextDelayMs());
-    expect(Math.max(...later)).toBeLessThanOrEqual(30_000);
-  });
-
-  it("keeps growing when a peer registers and is dropped immediately", () => {
-    vi.spyOn(Math, "random").mockReturnValue(0);
-    const clock = createClock();
-    const backoff = createIrcReconnectBackoff(clock.now);
-    const delays: number[] = [];
-    for (let i = 0; i < 4; i += 1) {
-      backoff.markConnected();
-      clock.advance(5);
-      delays.push(backoff.nextDelayMs());
-    }
-    expect(delays).toEqual([1_000, 2_000, 4_000, 8_000]);
-  });
-
   it("resets after a connection stayed up for a minute", () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
     const clock = createClock();

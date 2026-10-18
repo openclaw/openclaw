@@ -190,8 +190,8 @@ function preserveJitiDynamicImportResults(loader: ReturnType<typeof createJiti>)
 function resolvePluginModuleLoaderCacheEntry(params: ResolvePluginModuleLoaderCacheEntryParams) {
   const loaderFilename = toSafeImportPath(params.loaderFilename ?? params.modulePath);
   const tryNative = params.tryNative ?? resolvePluginLoaderTryNative(params.modulePath, params);
-  // Explicit maps are content-keyed and captured before a retained loader can escape.
-  const explicit = params.aliasMap ? { ...params.aliasMap } : undefined;
+  // Explicit maps are producer-owned facts; loaders retain their content-keyed view.
+  const explicit = params.aliasMap;
   const aliases = explicit
     ? {
         cacheKey: createPluginLoaderModuleCacheKey({ tryNative, aliasMap: explicit }),

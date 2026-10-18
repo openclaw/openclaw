@@ -37,6 +37,5 @@ export function createSessionMutationTestContext(cfg: OpenClawConfig) {
     getRuntimeConfig: () => cfg,
     getSessionEventSubscriberConnIds: () => new Set(["observer"]),
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
   } as unknown as GatewayRequestContext;
 }

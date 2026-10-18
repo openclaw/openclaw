@@ -3,6 +3,8 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { SessionTranscriptProjectionUnavailableError } from "../config/sessions/session-transcript-projection-error.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import { WorkerTaskError } from "../infra/worker-task-pool.js";
+import { setRpcSourceProjectSessionActive } from "../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import { CONTEXT_OVERFLOW_ERROR_MESSAGE } from "../shared/assistant-error-format.js";
 import { projectChatDisplayMessage } from "./chat-display-projection.core.js";
 import {
@@ -16,7 +18,6 @@ import {
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
   projectChatDisplayMessageMock,
-  resolveEmbeddedAgentSessionProgressStateMock,
   runtimeConfigState,
   sessionRow,
 } from "./server-session-events.test-support.js";
@@ -25,7 +26,6 @@ describe("live failed-attempt presentation", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     projectChatDisplayMessageMock.mockImplementation(projectChatDisplayMessage);
-    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
@@ -134,13 +134,12 @@ describe("live failed-attempt presentation", () => {
         message,
       });
       const broadcastToConnIds = vi.fn();
-      const activeRun = createActiveRun(true);
-      const controllers = new Map([["recovering-run", activeRun]]);
+      const activeRun = createActiveRun(true, true, { storePath: "/tmp/recovery.sqlite" });
+      rpcSourceTesting.reset([["recovering-run", activeRun]]);
       const handler = createTranscriptUpdateBroadcastHandler({
         broadcastToConnIds,
         sessionEventSubscribers: { getAll: () => new Set(["broad"]) },
         sessionMessageSubscribers: { get: () => new Set(["selected"]) },
-        chatAbortControllers: controllers,
       });
       const update = {
         target: {
@@ -158,7 +157,7 @@ describe("live failed-attempt presentation", () => {
       expect(broadcastToConnIds).not.toHaveBeenCalled();
 
       // Keeping the idempotency entry is not evidence that execution is still active.
-      activeRun.projectSessionActive = false;
+      setRpcSourceProjectSessionActive(activeRun, false);
       broadcastToConnIds.mockClear();
       await handler(update);
       expect(broadcastToConnIds).not.toHaveBeenCalled();

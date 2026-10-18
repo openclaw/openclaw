@@ -18,6 +18,7 @@ import {
   formatSidebarTimestamp,
   normalizeCatalogTimestamp,
   type CatalogSessionMenuRequest,
+  type CatalogRowControls,
 } from "./app-sidebar-session-catalogs.ts";
 import type { SessionCatalogGroupsParams } from "./app-sidebar-session-render-types.ts";
 import { Icon } from "./solid/icon.tsx";
@@ -26,13 +27,13 @@ import {
   SessionRowBadges,
   sessionRunVisibility,
 } from "./solid/session-presentation.tsx";
-const CATALOG_CONTROL_SELECTORS = [
-  ".sidebar-recent-session__link",
-  "[data-child-session-toggle]",
-  "[data-sidebar-session-pin]",
-  "[data-sidebar-session-archive]",
-  "[data-sidebar-session-menu]",
-  "[data-catalog-session-menu]",
+const CATALOG_CONTROLS = [
+  ["link", ".sidebar-recent-session__link"],
+  ["children", "[data-child-session-toggle]"],
+  ["pin", "[data-sidebar-session-pin]"],
+  ["archive", "[data-sidebar-session-archive]"],
+  ["menu", "[data-sidebar-session-menu]"],
+  ["catalogMenu", "[data-catalog-session-menu]"],
 ] as const;
 function catalogRowRef(
   identityKey: string,
@@ -40,37 +41,30 @@ function catalogRowRef(
   catalogKey: CatalogSessionKey,
   menuOpen: boolean,
   params: SessionCatalogGroupsParams,
-): ((element: Element | undefined) => void) | undefined {
+): ((element: Element | undefined, controls: CatalogRowControls) => void) | undefined {
   const active = document.activeElement instanceof HTMLElement ? document.activeElement : null;
   const activeRow = active?.closest<HTMLElement>("[data-session-key]");
-  const selector = CATALOG_CONTROL_SELECTORS.find((candidate) => active?.matches(candidate));
+  const control = CATALOG_CONTROLS.find(([, selector]) => active?.matches(selector))?.[0];
   const restoreFocus =
-    selector !== undefined &&
+    control !== undefined &&
     (activeRow?.dataset.catalogSessionKey === identityKey ||
       activeRow?.dataset.sessionKey === identityKey ||
       activeRow?.dataset.sessionKey === sessionKey);
   if (!menuOpen && !restoreFocus) {
     return undefined;
   }
-  return (element) => {
+  return (element, controls) => {
     if (!(element instanceof HTMLElement)) {
       return;
     }
     if (menuOpen) {
-      params.onCatalogMenuTriggerRendered(
-        catalogKey,
-        element.querySelector("[data-catalog-session-menu]") ??
-          element.querySelector(".sidebar-recent-session__link") ??
-          undefined,
-      );
+      params.onCatalogMenuTriggerRendered(catalogKey, controls.catalogMenu ?? controls.link);
     }
-    if (restoreFocus) {
+    if (restoreFocus && control) {
       queueMicrotask(() => {
         if (element.isConnected && document.activeElement === document.body) {
-          (
-            element.querySelector<HTMLElement>(selector) ??
-            element.querySelector<HTMLElement>(".sidebar-recent-session__link")
-          )?.focus({
+          const target = controls[control];
+          (target && element.contains(target) ? target : controls.link)?.focus({
             preventScroll: true,
           });
         }
@@ -153,12 +147,11 @@ export function renderCatalogSessionRow(
   const canOpenTerminal = () => readSession().canOpenTerminal === true && params.terminalAvailable;
   const openMenu = (x: number, y: number, trigger?: HTMLElement) =>
     params.onOpenMenu(catalogMenu(), x, y, trigger);
+  const controls: CatalogRowControls = {};
   const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
     handleContextMenuEvent(
       event,
-      event instanceof KeyboardEvent
-        ? event.currentTarget.querySelector<HTMLElement>("[data-catalog-session-menu]")
-        : null,
+      event instanceof KeyboardEvent ? (controls.catalogMenu ?? null) : null,
       (trigger, x, y) => openMenu(x, y, trigger ?? undefined),
     );
   const marqueeLabel = (
@@ -167,8 +160,8 @@ export function renderCatalogSessionRow(
     </Show>
   );
   let element: HTMLDivElement | undefined;
-  // Ref retargeting reads the current sidebar host outside a tracking scope.
-  createEffect(rowRef, (callback) => untrack(() => callback?.(element)));
+  // Ref retargeting deliberately samples the current host without render dependencies.
+  createEffect(rowRef, (callback) => untrack(() => callback?.(element, controls)));
   const row = (
     <div
       ref={(node) => {
@@ -192,6 +185,7 @@ export function renderCatalogSessionRow(
       onKeyDown={openMenuFromEvent}
     >
       <a
+        ref={(node) => (controls.link = node)}
         href={target().href}
         class="sidebar-recent-session__link"
         aria-current={active() ? "page" : undefined}
@@ -228,6 +222,7 @@ export function renderCatalogSessionRow(
       <span class="sidebar-recent-session__aside session-row-aside">
         <span class="session-row-actions">
           <button
+            ref={(node) => (controls.catalogMenu = node)}
             class="session-action"
             data-catalog-session-menu="true"
             type="button"

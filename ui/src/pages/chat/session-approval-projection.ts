@@ -1,10 +1,9 @@
-import { Value } from "typebox/value";
 import type { PendingApprovalSnapshot } from "../../../../packages/gateway-protocol/src/index.js";
-import {
-  SessionApprovalEventSchema,
-  SessionApprovalReplaySchema,
-} from "../../../../packages/gateway-protocol/src/index.js";
 import type { ExecApprovalRequest } from "../../app/exec-approval.ts";
+import {
+  isSessionApprovalEvent,
+  isSessionApprovalReplay,
+} from "../../lib/protocol-validators.generated/approvals.js";
 import {
   isUiGlobalSessionKey,
   normalizeAgentId,
@@ -81,7 +80,7 @@ export function projectSessionApprovalReplay(
   sessionKey: string,
   selectedAgentId?: string,
 ): ExecApprovalRequest[] {
-  if (!Value.Check(SessionApprovalReplaySchema, replay)) {
+  if (!isSessionApprovalReplay(replay)) {
     return [];
   }
   if (!approvalStreamMatchesSession(replay.sessionKey, sessionKey, selectedAgentId)) {
@@ -98,7 +97,7 @@ export function reconcileSessionApprovalEvent(
   sessionKey?: string,
   selectedAgentId?: string,
 ): ExecApprovalRequest[] | null {
-  if (!Value.Check(SessionApprovalEventSchema, event)) {
+  if (!isSessionApprovalEvent(event)) {
     return null;
   }
   const presentationSessionKey = sessionKey ?? event.sessionKey;

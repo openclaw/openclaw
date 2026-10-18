@@ -35,7 +35,9 @@ it("fingerprints chat sends with the cached identity while the state database is
     databasePath: path.join(stateDir, "state", "openclaw.sqlite"),
   });
   try {
-    expect(() => loadOrCreateDeviceIdentity()).toThrow("offline maintenance");
+    expect(() => loadOrCreateDeviceIdentity()).toThrow(
+      "without an active schema lease or maintenance scope",
+    );
     expect(await fingerprintSessionGoalRequest(request)).toBe(expected);
     expect(await fingerprintSessionGoalRequest({ ...request, message: "changed" })).not.toBe(
       expected,

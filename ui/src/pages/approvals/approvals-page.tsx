@@ -115,7 +115,7 @@ function EmptyRow(props: { columns: number; label: string }) {
 }
 function Cell(props: { labelKey: string; value: JSX.Element; mono?: boolean }) {
   return (
-    <td class={props.mono ? "mono" : undefined} data-label={t(props.labelKey)}>
+    <td class={{ mono: props.mono }} data-label={t(props.labelKey)}>
       {props.value}
     </td>
   );
@@ -316,7 +316,7 @@ export function ApprovalsPage() {
       if (!canPublish()) {
         return;
       }
-      state.grants = Array.isArray(result.grants) ? result.grants : [];
+      state.grants = result.grants;
       state.grantsError = null;
       publish();
     } catch (error) {

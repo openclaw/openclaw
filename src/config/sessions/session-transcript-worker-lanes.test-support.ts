@@ -73,31 +73,6 @@ vi.mock("../../infra/sqlite-database-admission.js", async (importOriginal) => ({
   hasSqliteDatabaseSchemaAdmissionForPath: () => observed.preparedDatabase,
 }));
 
-vi.mock("../../state/openclaw-agent-execution.js", async (importOriginal) => ({
-  ...(await importOriginal<typeof import("../../state/openclaw-agent-execution.js")>()),
-  captureExistingOpenClawAgentDatabaseExecution: (options: { path: string }) => {
-    if (!observed.preparedDatabase) {
-      return undefined;
-    }
-    const claim = { identity: "transport", incarnation: "transport", assertCurrent() {} };
-    return {
-      agentId: "main",
-      path: options.path,
-      fileIdentity: undefined,
-      assertCurrent() {},
-      captureGenerationClaim: () => claim,
-      capturePreparedGenerationClaim: () => claim,
-      async prepare() {
-        throw new Error("Readonly transport must not prepare a writer");
-      },
-      async runExisting() {
-        throw new Error("Readonly transport must not open a writer");
-      },
-      async release() {},
-    };
-  },
-}));
-
 vi.mock("../../infra/bun-sqlite-library.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/bun-sqlite-library.js")>()),
   ensureSqliteLibrarySelected: () => ({ source: "runtime" }),
@@ -188,7 +163,6 @@ vi.mock("../../state/openclaw-agent-db-resources.js", () => ({
     return observed.unregister;
   },
 }));
-// The pure transport must not become the process-wide disk-scan singleton.
 // mock-isolation: Reader controls must never start the process-wide disk scanner.
 vi.mock("./disk-budget-runtime.js", () => ({
   measureSessionPhysicalDiskUsage: () => {

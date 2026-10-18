@@ -14,12 +14,12 @@ import type { InternalSessionEntry as SessionEntry } from "../../config/sessions
 import type { SessionActivitySummaryCompletion } from "../../gateway/session-activity-summary-completion.js";
 import { logVerbose } from "../../globals.js";
 import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
+import { isCurrentSessionControllerOperation } from "../../sessions/session-controller.identity.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
 import type {
   AgentTurnCompletion,
   AgentTurnRestartClaimCleanup,
 } from "./agent-runner-completion.types.js";
-import { replyRunRegistry, type ReplyOperation } from "./reply-run-registry.js";
-import { retainReplyOperationUntilComplete } from "./reply-run-registry.state.js";
 
 /** One retained terminal owner, including no-send and exceptional completion. */
 export async function withAgentTurnCompletion<T>(
@@ -48,12 +48,11 @@ export async function withAgentTurnCompletion<T>(
   };
   const operationKey = operation.key;
   const assertCurrent = () => {
-    if (operation.key !== operationKey || replyRunRegistry.get(operationKey) !== operation) {
+    if (operation.key !== operationKey || !isCurrentSessionControllerOperation(operation)) {
       throw new Error("Terminal accounting lost its reply operation");
     }
   };
   assertCurrent();
-  retainReplyOperationUntilComplete(operation);
   const result = await withSessionActor(
     { agentId: params.agentId, storePath, sessionKey },
     { assertCurrent, assertReadable: assertCurrent },

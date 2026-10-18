@@ -377,11 +377,9 @@ export async function checkTelemetryUpdate(
     return cached;
   };
 
-  const pendingCheck = check().finally(() => {
-    if (inFlightUpdate === pendingCheck) {
-      inFlightUpdate = undefined;
-    }
+  // Concurrent callers share one check, including its cached result.
+  inFlightUpdate = check().finally(() => {
+    inFlightUpdate = undefined;
   });
-  inFlightUpdate = pendingCheck;
-  return pendingCheck;
+  return inFlightUpdate;
 }

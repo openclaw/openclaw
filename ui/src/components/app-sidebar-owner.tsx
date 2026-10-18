@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, Show, untrack } from "solid-js";
+import { createEffect, createMemo, createRoot, runWithOwner, Show } from "solid-js";
 import type {
   FsListDirResult,
   WorktreeRepositoryStatus,
@@ -19,15 +19,14 @@ import type { CatalogProjectGrouping } from "../lib/sessions/catalog-project-gro
 import "./mcp-app-catalog.tsx";
 import "./sidebar-agent-card.tsx";
 import "./sidebar-attention.tsx";
-import { SubscriptionsController } from "../lib/subscriptions-controller.ts";
 import "./theme-mode-toggle.ts";
 import "./tooltip.ts";
 import { renderAppSidebarOnline, sidebarOnlineOrder } from "./app-sidebar-online.tsx";
 import { hidePersonalSidebarCatalog } from "./app-sidebar-personal-navigation.ts";
 import { renderSidebarRail, renderSidebarPages } from "./app-sidebar-rail.tsx";
-import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import "../styles/app-sidebar.css";
 import "../styles/sidebar-rail.css";
+import type { SessionCatalogGroupsRenderer } from "./app-sidebar-session-catalog-render.tsx";
 import type { CatalogSessionMenuRequest } from "./app-sidebar-session-catalogs.ts";
 import { renderSessionListToolbar } from "./app-sidebar-session-filter-summary.tsx";
 import { renderSessionList as SessionList } from "./app-sidebar-session-list-render.tsx";
@@ -45,11 +44,10 @@ import {
   type SidebarRecentSession,
   type SidebarToolActivity,
 } from "./app-sidebar-session-types.ts";
-import { SessionOrganizerController } from "./session-organizer-controller.ts";
+import { SessionOrganizer } from "./session-organizer.ts";
 import { SidebarAgentRoster, renderSidebarPinnedSession } from "./sidebar-agent-roster.tsx";
 import type { createSidebarScroll } from "./sidebar-context-controller.ts";
-import { equalSidebarContext, selectSidebarContext } from "./sidebar-context-state.ts";
-import { SidebarMenusController } from "./sidebar-menus-controller.tsx";
+import { createSidebarMenus } from "./sidebar-menus.tsx";
 import type { SidebarNavigationCatalog } from "./sidebar-navigation-catalog.ts";
 import { createSidebarPeople, SidebarPeoplePreferences } from "./sidebar-people.ts";
 import {
@@ -58,6 +56,7 @@ import {
 } from "./sidebar-snapshot-capture.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
+import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
 import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
@@ -77,9 +76,24 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     return this.readNarration()?.observerDigests ?? this.emptyObserverDigests;
   }
 
-  override readonly sessionOrganizer = new SessionOrganizerController(this);
-  override readonly sidebarMenus = new SidebarMenusController(this);
-  readonly people = new SidebarPeoplePreferences(() => this.requestUpdate());
+  override readonly sessionOrganizer = new SessionOrganizer(this, () => this.invalidate());
+  // Native sidebar custody outlives provider/view roots.
+  private readonly menuRoot = runWithOwner(null, () =>
+    createRoot((dispose) => ({
+      menus: createSidebarMenus({
+        host: this,
+        element: this.hostElement,
+        commit: () => {
+          this.invalidate();
+          return this.updateComplete;
+        },
+      }),
+      dispose,
+    })),
+  );
+  override readonly sidebarMenus = this.menuRoot.menus;
+  readonly disposeMenus = this.menuRoot.dispose;
+  readonly people = new SidebarPeoplePreferences(() => this.invalidate());
   peopleView?: ReturnType<typeof createSidebarPeople>;
   // A connected host retains its pending boot read when Solid recreates the view.
   readonly snapshot = createSidebarSnapshot(this);
@@ -196,34 +210,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     ...args: ConstructorParameters<typeof AppSidebarSessionNavigationElement>
   ) {
     super(...args);
-    new SubscriptionsController(this)
-      .watch(
-        () => this.router,
-        (router, notify) => {
-          const stop = router.subscribeSelector(selectSidebarContext, notify, equalSidebarContext);
-          return () => {
-            stop();
-            this.contextualSidebar = undefined;
-          };
-        },
-        (router) => {
-          this.contextualSidebar = selectSidebarContext(router.getState());
-        },
-      )
-      .effect(
-        () => this.context?.chatSubmissions,
-        (submissions) => submissions.subscribeCreate(() => this.requestUpdate()),
-      )
-      .effect(
-        () => this.context?.agentIdentity,
-        (identity) => identity.subscribe(this.sessionData.requestSessionDataUpdate),
-      )
-      .watchStore(() => this.context?.theme)
-      .watchStore(() => this.context?.config)
-      .effect(
-        () => this.context?.plugins,
-        (plugins) => plugins.subscribe(this.sessionData.requestSessionDataUpdate),
-      );
   }
   get nativeGatewaySnapshot(): NativeGatewaysSnapshot | null {
     // SAFETY: The macOS dashboard injects its encoded gateway snapshot at this key; browsers leave it unset.
@@ -241,7 +227,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
     (module) => {
       this.catalogRenderer = module.renderSessionCatalogGroups;
       if (this.isConnected) {
-        this.requestUpdate();
+        this.invalidate();
       }
     },
   );
@@ -253,6 +239,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override disconnectedCallback() {
+    this.sidebarMenus.disconnect();
     this.sessionData.disconnect();
     this.peopleView?.dismiss();
     this.narration?.disconnect();
@@ -306,6 +293,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   }
 
   override connectedCallback() {
+    this.sidebarMenus.connect();
     this.sessionData.connect();
     this.snapshot.connect();
     super.connectedCallback();
@@ -361,7 +349,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
         sectionId,
         limit,
       );
-      this.requestUpdate();
+      this.invalidate();
     } else {
       this.sessionData.setVisibleSessionLimit(sectionId, limit);
     }
@@ -374,7 +362,7 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
   setCatalogProjectGrouping(next: CatalogProjectGrouping): void {
     storeSidebarCatalogGrouping(next);
     this.catalogProjectGrouping = next;
-    this.requestUpdate();
+    this.invalidate();
   }
 
   hideSessionCatalog(catalogId: string): void {
@@ -457,7 +445,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
             !host().contextualSidebar
           }
           sections={sections()}
-          empty={visibleSessions().length === 0}
           involvingMe={host().sessionInvolvingMeFilterActive}
         />
       </Show>
@@ -475,7 +462,10 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
       const pages = renderSidebarPages(this);
       const toolbar = renderSessionListToolbar(this);
       const online = renderAppSidebarOnline(this);
-      const menus = untrack(() => this.sidebarMenus).render();
+      const menus = this.sidebarMenus.render(this);
+      const statusVisible = () =>
+        this.gatewayStatus?.kind &&
+        (this.gatewayStatus.kind !== "connected" || this.connectionRecovery);
       return (
         <aside
           class="sidebar sidebar--rail"
@@ -544,16 +534,21 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                 <SidebarCommunityInvite />
               </Show>
             </div>
-            <Show when={this.devGitBranch}>
+            <Show when={statusVisible() || this.devGitBranch}>
               <div class="sidebar-shell__footer">
-                <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
-                  <div class="sidebar-footer-branch">
-                    <span class="sidebar-footer-branch__icon" aria-hidden="true">
-                      <Icon name="gitBranch" />
-                    </span>
-                    <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
-                  </div>
-                </openclaw-tooltip>
+                <Show when={statusVisible()}>
+                  <GatewayStatus {...this.gatewayStatus!} row />
+                </Show>
+                <Show when={this.devGitBranch}>
+                  <openclaw-tooltip prop:content={this.devGitBranch ?? undefined}>
+                    <div class="sidebar-footer-branch">
+                      <span class="sidebar-footer-branch__icon" aria-hidden="true">
+                        <Icon name="gitBranch" />
+                      </span>
+                      <span class="sidebar-footer-branch__name">{this.devGitBranch}</span>
+                    </div>
+                  </openclaw-tooltip>
+                </Show>
               </div>
             </Show>
           </div>

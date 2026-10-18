@@ -20,21 +20,6 @@ vi.mock("node:child_process", async (importOriginal) => {
 });
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("carries a platform env snapshot across the advanced-serialization IPC boundary", async () => {
-  const directory = tempDirs.make("agent-schema-proxy-env-");
-  const pathname = path.join(directory, "agent.sqlite");
-  const database = sqlite.openNodeSqliteDatabase(pathname);
-  database.exec("CREATE TABLE probe(value TEXT);");
-  database.close();
-  // `cloneEnvWithPlatformSemantics()` returns a case-insensitive Proxy on win32, and
-  // advanced IPC serialization cannot clone a Proxy (startup preflight DataCloneError). #176111
-  const env = new Proxy({ ...process.env }, {}) as NodeJS.ProcessEnv;
-
-  await using reader = createAgentSchemaInspectionWorker();
-  await expect(
-    reader.inspect({ pathname, supportedVersion: 21, env }, undefined),
-  ).resolves.toBeDefined();
-});
 it("inspects state in cold children without executing comparison DDL", async () => {
   const directory = tempDirs.make("state-schema-contract-transfer-");
   const pathname = openOpenClawStateDatabase({ env: { OPENCLAW_STATE_DIR: directory } }).path;
@@ -141,7 +126,7 @@ it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
   },
 );
 
-it("agentSchemaInspection child retains returned migration failures and their hydrated class", async () => {
+it("agentSchemaInspection carries a Proxy env across IPC and retains typed migration failures", async () => {
   const pathname = path.join(tempDirs.make("agent-schema-migration-"), "source.sqlite");
   const database = sqlite.openNodeSqliteDatabase(pathname);
   database.exec("CREATE TABLE probe(value TEXT); PRAGMA user_version = 1;");
@@ -151,6 +136,8 @@ it("agentSchemaInspection child retains returned migration failures and their hy
   const inspection = await reader.inspect({
     pathname,
     supportedVersion: 21,
+    // Windows config environments are Proxies, which advanced IPC cannot clone.
+    env: new Proxy({ OPENCLAW_STATE_DIR: path.dirname(pathname) }, {}),
     requireStartupMigrationReadiness: true,
   });
   expect(inspection?.version).toBe(1);

@@ -65,6 +65,7 @@ type InternalReadOptions = {
   allowCurrentPluginMetadata?: boolean;
   recoverSuspicious?: boolean;
   skipSuspiciousRecovery?: boolean;
+  onSourceEnvApplied?: ConfigSnapshotReadOptions["onSourceEnvApplied"];
   allowSuspiciousRecovery?: (
     candidate: OpenClawConfig,
     current: OpenClawConfig,
@@ -235,6 +236,7 @@ async function readConfigSnapshot(
         () => resolveConfigForRead(resolved, deps.env, deps.lowerPrecedenceEnv),
         (restore) => {
           restoreReadEnv = restore;
+          options.onSourceEnvApplied?.(restore);
         },
       );
     });
@@ -501,6 +503,7 @@ export async function readConfigFileSnapshotFromContext(
     await readConfigFileSnapshotInternal(context, {
       recoverSuspicious: options.recoverSuspicious === true,
       allowSuspiciousRecovery: options.allowSuspiciousRecovery,
+      onSourceEnvApplied: options.onSourceEnvApplied,
     })
   ).snapshot;
 }
@@ -523,6 +526,7 @@ async function readConfigSnapshotWithPluginMetadata(
     allowCurrentPluginMetadata: options.allowCurrentPluginMetadata,
     recoverSuspicious: options.recoverSuspicious === true,
     allowSuspiciousRecovery: options.allowSuspiciousRecovery,
+    onSourceEnvApplied: options.onSourceEnvApplied,
   });
   let pluginMetadataSnapshot = result.pluginMetadataSnapshot;
   if (

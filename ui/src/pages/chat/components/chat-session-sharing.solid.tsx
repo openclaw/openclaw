@@ -514,11 +514,7 @@ export function ChatSessionSharing(props: ChatSessionSharingProps) {
         <Menu
           lazy
           id={id}
-          class={
-            capped()
-              ? "chat-pane__sharing-menu chat-pane__sharing-menu--capped"
-              : "chat-pane__sharing-menu"
-          }
+          class={["chat-pane__sharing-menu", { "chat-pane__sharing-menu--capped": capped() }]}
           panelClass="session-menu chat-pane__sharing-panel"
           label={t("chat.sessionSharing.menu")}
           placement="bottom-end"

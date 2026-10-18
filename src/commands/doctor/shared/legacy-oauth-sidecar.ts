@@ -51,7 +51,6 @@ type LegacyOAuthEncryptedPayload = {
   ciphertext: string;
 };
 
-/** Resolve the legacy OAuth sidecar JSON path for an auth profile ref. */
 function resolveLegacyOAuthSidecarPath(
   ref: LegacyOAuthRef,
   env: NodeJS.ProcessEnv = process.env,

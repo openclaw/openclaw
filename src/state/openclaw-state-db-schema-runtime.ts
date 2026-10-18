@@ -232,6 +232,7 @@ export function ensureOpenClawStateRuntimeSchema(
         });
         writeCurrentStateSchemaMetadata(db, now);
         assertOpenClawStateDatabaseForMaintenance(db, { pathname });
+        assertMigratedStateTableIntegrity(db, pathname, previousVersion, true);
         runtimeReady = true;
         warnAgentPathMigration(stateDbLog, pathMigration, pathname);
         return changes;

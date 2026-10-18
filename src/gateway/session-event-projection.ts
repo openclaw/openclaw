@@ -1,14 +1,26 @@
 import { randomUUID } from "node:crypto";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { GATEWAY_CLIENT_IDS } from "../../packages/gateway-protocol/src/client-info.js";
+import {
+  GATEWAY_CLIENT_CAPS,
+  GATEWAY_CLIENT_IDS,
+  hasGatewayClientCap,
+} from "../../packages/gateway-protocol/src/client-info.js";
+import type { SessionRow } from "../../packages/gateway-protocol/src/schema/sessions-row.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { readGatewayAccessRevision } from "./gateway-access-revision.js";
 import type { PrepareSessionEventProjection } from "./server-broadcast-types.js";
 import { prepareSessionAncestor } from "./session-ancestor-references.js";
 import { buildGatewaySessionSnapshot } from "./session-event-payload.js";
+import { createSessionRowDeltaDiffer } from "./session-row-delta-fields.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
-import { prepareSessionRowPublication, serializeSessionRow } from "./session-row-presentation.js";
+import { prepareSessionRowPublication } from "./session-row-presentation.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { serializeSessionRow } from "./session-row-serialization.js";
+
+type ProjectedPayload = Record<string, unknown> & {
+  session: SessionRow;
+  ancestorSessions?: SessionRow[];
+};
 
 /** Bind prepared rows without exposing their implementation to transport contracts. */
 export function prepareSessionEventProjection(
@@ -92,9 +104,24 @@ export function prepareSessionEventProjection(
         row: NonNullable<ReturnType<ReturnType<typeof presentRecipient>["present"]>>;
         ancestors: ReturnType<typeof prepareSessionAncestor>[] | undefined;
         hiddenAncestors: string[];
-        payloads: Map<string | undefined, Record<string, unknown>>;
+        payloads: Map<string | undefined, ProjectedPayload>;
       }
     >();
+    const diff = createSessionRowDeltaDiffer();
+    const deltaPayloads = new WeakMap<object, Map<string, Record<string, unknown>>>();
+    const baselineIds = new WeakMap<object, number>();
+    let nextBaselineId = 0;
+    const baselineId = (baseline: object | undefined) => {
+      if (!baseline) {
+        return 0;
+      }
+      let id = baselineIds.get(baseline);
+      if (id === undefined) {
+        id = ++nextBaselineId;
+        baselineIds.set(baseline, id);
+      }
+      return id;
+    };
     let revision = projection.state.revision;
     let accessRevision = readGatewayAccessRevision();
     // Run display facts belong to this synchronous publication; recipient authority stays live.
@@ -172,11 +199,40 @@ export function prepareSessionEventProjection(
         }
         audience.payloads.set(deliveryKey, projected);
       }
+      const rowDelivery = hasGatewayClientCap(
+        client.connect.caps,
+        GATEWAY_CLIENT_CAPS.SESSION_ROW_DELTAS,
+      )
+        ? references.prepareRows([row, ...(projected.ancestorSessions ?? [])], diff)
+        : undefined;
+      let wirePayload: Record<string, unknown> = projected;
+      if (rowDelivery) {
+        const cacheKey = JSON.stringify([rowDelivery.key, rowDelivery.bases.map(baselineId)]);
+        let cached = deltaPayloads.get(projected);
+        if (!cached) {
+          cached = new Map();
+          deltaPayloads.set(projected, cached);
+        }
+        let deltaPayload = cached.get(cacheKey);
+        if (!deltaPayload) {
+          deltaPayload = {
+            ...projected,
+            session: rowDelivery.wire[0],
+            ...(Array.isArray(projected.ancestorSessions)
+              ? { ancestorSessions: rowDelivery.wire.slice(1) }
+              : {}),
+          };
+          cached.set(cacheKey, deltaPayload);
+        }
+        wirePayload = deltaPayload;
+      }
       return {
-        payload: projected,
-        serializeSession: () => serializeSessionRow(row),
+        payload: wirePayload,
+        serializeSession: () =>
+          rowDelivery ? JSON.stringify(rowDelivery.wire[0]) : serializeSessionRow(row),
         serializeMessage,
         delivered: () => {
+          rowDelivery?.delivered();
           references.forget(row.key);
           if (event === "sessions.changed" && source.reason === "activity-summary") {
             // Rosters skip recaps, so a full recap row cannot certify a later reference.

@@ -373,7 +373,6 @@ function resolveBridgeSession(
   return handle.bridgeSession === undefined ? handle : handle.bridgeSession;
 }
 
-/** OpenClaw-managed ACP runtime implementation backed by the upstream acpx runtime. */
 export class AcpxRuntime implements CompleteAcpRuntime {
   readonly ownerAwareSessions = 1 as const;
   private readonly legacyBareSessionKeys: Set<string>;

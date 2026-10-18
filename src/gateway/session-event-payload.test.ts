@@ -16,6 +16,22 @@ it("clears transient title pending in both event and nested session snapshots", 
   });
 });
 
+it("clears assistant previews in event and nested session snapshots", () => {
+  const sessionRow = { key: "agent:main:preview", kind: "direct" as const, updatedAt: 1 };
+  const previous = buildGatewaySessionSnapshot({
+    sessionRow: {
+      ...sessionRow,
+      lastAssistantMessage: { text: "Previous answer", timestamp: 100 },
+    },
+    includeSession: true,
+  });
+  const cleared = buildGatewaySessionSnapshot({ sessionRow, includeSession: true });
+  expect({ ...previous, ...cleared }).toMatchObject({
+    lastAssistantMessage: null,
+    session: { lastAssistantMessage: null },
+  });
+});
+
 it("clears automatic-label metadata when a subscribed client merges a later snapshot", () => {
   const sessionRow = { key: "agent:main:node-device", kind: "direct" as const, updatedAt: 1 };
   const previous = buildGatewaySessionSnapshot({

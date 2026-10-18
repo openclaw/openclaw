@@ -3,6 +3,7 @@ import { renameSync } from "node:fs";
 import { backup, DatabaseSync } from "node:sqlite";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
+import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -59,9 +60,9 @@ function seedPendingRows(count: number, textBytes = 0, agentId = "main") {
         JSON.stringify({ sessionId, updatedAt: 1, lastRunError: "x".repeat(textBytes) }),
       );
     }
-    database.db.exec(
-      "INSERT INTO session_canonical_validation_pending SELECT session_key FROM session_nodes",
-    );
+    if (count > 0) {
+      markCanonicalSessionValidationPending(database);
+    }
     database.db.exec("COMMIT");
   } catch (error) {
     database.db.exec("ROLLBACK");
@@ -361,6 +362,16 @@ it("shares active runtime certification without retaining success or failure", a
     });
     await certifySessionCanonicalValidationPending(options);
     jobs.mockClear();
+    const observed = observeHostDataSql();
+    try {
+      await certifySessionCanonicalValidationPending(options);
+      expect(
+        observed.queries.filter((query) => /session_canonical_validation_pending/i.test(query)),
+      ).toEqual([]);
+      expect(jobs).not.toHaveBeenCalled();
+    } finally {
+      observed.restore();
+    }
     const dirty = () => {
       markCanonicalSessionValidationPending(database);
       database.db.exec("UPDATE session_nodes SET entry_json = entry_json || ' '");

@@ -2,7 +2,7 @@
 import { refreshPersistedInstalledPluginIndex } from "./installed-plugin-index-store-write.js";
 import type { InstalledPluginIndexStoreOptions } from "./installed-plugin-index-store.js";
 import type { RefreshInstalledPluginIndexParams } from "./installed-plugin-index.js";
-import type { PluginLifecycleLeaseContext } from "./plugin-lifecycle-lease.js";
+import type { PluginMetadataLeaseContext } from "./plugin-lifecycle-lease.js";
 import {
   resolveControlPlaneRegistryParams,
   type PluginRegistrySnapshot,
@@ -11,7 +11,7 @@ import {
 export async function refreshPluginRegistry(
   params: RefreshInstalledPluginIndexParams &
     InstalledPluginIndexStoreOptions & {
-      lease?: PluginLifecycleLeaseContext;
+      lease?: PluginMetadataLeaseContext;
     },
 ): Promise<PluginRegistrySnapshot> {
   return await refreshPersistedInstalledPluginIndex(resolveControlPlaneRegistryParams(params));

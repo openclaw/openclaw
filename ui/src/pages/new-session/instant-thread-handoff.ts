@@ -54,9 +54,8 @@ export function prepareInstantThreadHandoff(options: {
 }
 
 /**
- * A transient route owns the original draft element, not a copy of its controllers.
- * Its attachment custody, selection flags and frozen startup intent survive rollback.
- * No draft bytes are persisted here, including incognito drafts.
+ * Retain the original draft element, attachments, selections and startup intent for rollback.
+ * Never persist draft bytes, including incognito drafts.
  */
 export class InstantThreadHandoff {
   private readonly creation;

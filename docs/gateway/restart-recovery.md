@@ -225,6 +225,15 @@ gateway stops accepting new work, then waits for active agent turns and
 background tasks to finish, up to a drain budget (5 minutes by default). Most
 restarts therefore interrupt nothing at all.
 
+A confirmed unavailable child Node runtime follows this same graceful drain when
+the effective native service command's Node can still start. The lifecycle owner
+requests a fresh-process supervisor handoff once; it never uses the in-process
+restart fallback for a broken retained runtime. If the service runtime is also
+broken or the latest shutdown records runtime recovery within five minutes, the
+Gateway stays up with degraded readiness for operator repair. See
+[Runtime health](/gateway/health#http-probes) for the health fields and report-only
+cases. A handoff failure after shutdown begins requires a service-owner restart.
+
 On Linux, shutdown closes idle pooled database readers through IPC before closing
 their spawn broker; active readers retain the existing cancellation grace.
 
@@ -489,7 +498,9 @@ restart is recorded as restart cancellation rather than a provider failure.
 Explicit user cancellation and genuine execution timeouts
 remain terminal. Recovery startup uses the admitted run's existing deadline,
 including runtime preparation and waiting for session or global capacity. Waiting
-in a healthy queue does not consume separate failed-start attempts.
+in a healthy queue does not consume separate failed-start attempts. A resend whose
+start times out before its turn begins is a failed start: the charged attempt stays
+owed and is retried within the budget below.
 
 `sessions.abort` waits for the cancellation's session write before acknowledging
 success. Restarting immediately after that acknowledgment preserves the terminal
@@ -823,10 +834,11 @@ receipts remain intact; recovery uses its normal transcript replay checks.
 
 If a Gateway left a dead writer and an unfinished recovery cycle,
 `sessions.recover` reconciles that writer
-and starts a continuation in the same session. A new Control UI message also reconciles this
-state before admission, so a rejected send cannot trap the conversation in a
-"conversation changed" retry loop. Both paths preserve the session key and
-transcript. A live run or cloud worker still prevents this repair. Tombstoned
+and starts a continuation in the same session. New Control UI and channel messages
+also reconcile this state before admission, so a rejected send cannot trap the
+conversation in a "conversation changed" retry loop. Channel messages wait behind
+live recovery ownership and resume admission when it settles. These paths preserve
+the session key and transcript. A live run or cloud worker still prevents this repair. Tombstoned
 sessions retain their separate recovery path into a new session.
 
 If recovery fails during preparation before the agent starts, the Gateway restores
@@ -846,13 +858,14 @@ final reply had already been produced but not delivered, its text is included
 so the agent can deliver it instead of redoing the work.
 
 Startup recovery prepares continuations in interruption-time order across session
-stores. Automatic continuations execute in a dedicated restart-recovery command
-lane with up to four turns running at once. Each session still runs one turn at a
-time, and each recovered turn retains its lane slot until it finishes. Interactive
-turns and unrelated background work keep their own execution slots. Later
-interrupted turns retain their durable claims while waiting for recovery capacity.
-Transient startup or store-admission failures use bounded backoff without clearing
-those claims.
+stores, separately from execution. Preparing the next continuation does not wait
+for the previous turn's execution or source settlement. Automatic continuations
+execute in a dedicated restart-recovery command lane with up to four turns running
+at once. Each session still runs one turn at a time, and each recovered turn retains
+its lane slot until it finishes. Interactive turns and unrelated background work
+keep their own execution slots. Later interrupted turns retain their durable
+claims while waiting for recovery capacity. Transient startup or store-admission
+failures use bounded backoff without clearing those claims.
 
 When a new user message or a retry of an accepted chat turn initiates recovery,
 that recovery uses the main lane for both admission and execution. It does not
@@ -880,11 +893,29 @@ an active turn retains its recovery claim, even if the admission fence closes
 before the shutdown owner cancels that turn. Genuine provider failures, explicit
 Stop actions, and exhausted recovery remain separate outcomes.
 
+Each resend is one ordinary input in the session's queue, so Stop,
+`sessions.abort`, reset, and delete apply to it like any other waiting input.
+The existing startup preparation and global execution budgets still apply;
+a waiting session does not add a separate process-wide scheduling barrier.
+An owed resend runs before an ordinary message that arrives on the same session
+during startup; later messages queue behind it in arrival order.
+
+A message sent with `interrupt` always wins over a resend that has not started:
+the resend is cancelled and the message runs. While a recovered turn runs, an
+interrupt ends it like any active turn. Steering follows the session's normal
+[queue mode](/concepts/queue#queue-modes): a steer that the recovered turn's tool
+permissions cannot accept, including every steer into a replay-safe turn, waits and
+runs as its own turn afterward.
+
+Stopping or interrupting a resend before it starts ends that recovery. The resend
+is recorded as a stopped run, is not sent again (including after a later restart),
+and does not use one of the automatic attempts described below.
+
 The restart does not cancel the user's task. The agent checks the current state,
 reconciles tool results whose outcomes are unknown, and continues without asking
 the user to repeat the request. Preparing a new message cannot consume the
-interruption marker; the recovery owner retains it until work is adopted or
-settled.
+interruption marker; the durable recovery claim retains it until work is
+adopted or settled.
 
 Recovery reads the interrupted turn's source before starting another run, even
 when a final reply is already pending. If the transcript cannot be read, the
@@ -961,7 +992,9 @@ model selection instead direct you to **Resume** in WebChat.
 Every retry reuses one durable dispatch identifier, so an ambiguous connection
 failure cannot start the same recovery twice. Completed Control UI turns also
 retain bounded durable completion markers, allowing a reconnecting outbox
-to retire them without re-executing the request.
+to retire them without re-executing the request. When the outbox resubmits an
+interrupted turn whose resend is already queued, the Gateway acknowledges it
+without starting a second run.
 
 When a pending final has no remaining queue owner and its delivery outcome is
 uncertain, recovery records a notice for the next turn on the same route when
@@ -1113,12 +1146,14 @@ a restart from a genuine failure. Inspect those retained sessions before
 continuing them; recovery does not rewrite ambiguous history.
 
 A completed child may still owe its requester a final follow-up. If that
-follow-up is waiting to retry or is interrupted by restart, the saved
-obligation survives and resumes after startup. Restart admission rejection
-does not consume an attempt, and cancellation of an admitted attempt does
-not exhaust the obligation. Existing delivery retry limits still apply.
-Transient cleanup preparation failures keep required final delivery scheduled
-within its existing delivery window. Incidental cleanup retains its bounded retry limit.
+follow-up is waiting for admission or is interrupted by restart, the saved
+obligation survives and resumes after startup. Restart admission rejection and
+transient preparation failures leave that obligation owed. The requester mailbox
+orders the input under fresh admission; a waiting input has no separate
+announcement expiry. An observed terminal delivery outcome settles once. If its
+bookkeeping fails, the registry retains that receipt and retries persistence
+without resending the result. The outbound durable delivery queue keeps its own
+transport retries. Incidental cleanup retains its bounded retry limit.
 Settling a yielded turn's wake leaves its unfinished native run and final delivery
 intact. Completed cancellation keeps its wake and cleanup bookkeeping in the
 native subagent record; it does not require a separate Tasks row.

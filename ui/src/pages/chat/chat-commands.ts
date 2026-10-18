@@ -70,7 +70,6 @@ export type ChatCommandHost = Parameters<typeof handleAbortChat>[0] &
     createChatSession?: () => Promise<boolean>;
     confirmConversationReset?: () => Promise<boolean>;
     exportCurrentChat?: () => Promise<ChatExportResult> | ChatExportResult;
-    refreshCurrentSessionTools?: () => Promise<void>;
     refreshCurrentChat?: () => Promise<void>;
   } & UiSessionDefaultsHost &
   ChatScrollHost;
@@ -421,10 +420,6 @@ export async function dispatchChatSlashCommand(
       host.chatRunId,
       resolveCurrentUserIdentity(host.hello, host.client?.instanceId, host.selfUser) ?? undefined,
     );
-  }
-
-  if (result.modelChanged && targetIsCurrent()) {
-    await host.refreshCurrentSessionTools?.();
   }
 
   if (result.action === "refresh" && targetIsCurrent()) {

@@ -73,7 +73,7 @@ describe("chat pane transcript loading", () => {
     expect(state.chatError).toBeNull();
   });
 
-  it("reports each transcript loading edge from the load owner without a render", async () => {
+  it("reports each transcript loading edge from the load owner", async () => {
     const pane = createRenderTestChatPane();
     const first = createDeferred<ChatHistoryResult>();
     const second = createDeferred<ChatHistoryResult>();
@@ -94,16 +94,13 @@ describe("chat pane transcript loading", () => {
     state.client = client;
     state.connected = true;
     state.sessionKey = "agent:main:signal";
-    const invalidate = vi.spyOn(state.renderLifecycle, "invalidate");
     const changed = vi.fn();
     pane.addEventListener("openclaw-chat-transcript-loading-changed", changed);
 
-    // Session-event reloads never re-render the page, so the load owner reports
-    // the edge itself, without spending a frame on it.
+    // The load owner reports each edge independently of a component commit.
     const firstLoad = loadChatHistory(state);
     expect(pane.transcriptLoading).toBe(true);
     expect(changed).toHaveBeenCalledOnce();
-    expect(invalidate).not.toHaveBeenCalled();
 
     // A coalesced re-entry into the same in-flight request is not an edge.
     void loadChatHistory(state);

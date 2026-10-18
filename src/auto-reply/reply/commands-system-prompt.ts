@@ -169,6 +169,7 @@ export async function resolveCommandsSystemPromptBundle(params: HandleCommandsPa
     cwd: process.cwd(),
     sessionKey: params.sessionKey,
     sessionId: targetSessionEntry?.sessionId,
+    preparedSessionEntry: targetSessionEntry,
     model: `${params.provider}/${params.model}`,
     channel: params.command.channel,
     accountId,

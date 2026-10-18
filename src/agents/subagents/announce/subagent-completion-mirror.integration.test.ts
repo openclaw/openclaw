@@ -8,12 +8,12 @@ import {
 } from "../../../config/sessions/session-accessor.js";
 import { mirrorDeliveredPayloads } from "../../../infra/outbound/deliver-transcript.js";
 import { sendMessage } from "../../../infra/outbound/message.js";
-import { enqueueCommandInLane } from "../../../process/command-queue.js";
 import { runWithGatewayIndependentRootWorkAdmission } from "../../../process/gateway-work-admission.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
+import { runSessionMutation } from "../../../sessions/session-controller.lifecycle.js";
 import { AsyncWorkScope } from "../../../shared/async-work-scope.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
-import { resolveSessionLane } from "../../embedded-agent-runner/lanes.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
 import { deliverCompletionDirect } from "./subagent-announce-completion-delivery.js";
@@ -23,7 +23,7 @@ vi.mock("../../../infra/outbound/message.js", async (importOriginal) => ({
   sendMessage: vi.fn(),
 }));
 
-it("settles a direct child result before its mirror waits behind the requester's keyed turn", async ({
+it("settles a direct child result before its mirror waits behind the requester's controller turn", async ({
   signal,
 }) => {
   await withOpenClawTestState({ label: "direct-completion-mirror" }, async (state) => {
@@ -45,8 +45,7 @@ it("settles a direct child result before its mirror waits behind the requester's
     const wakeId = await manager.appendMessageAsync(wake);
     const entered = createDeferredCore();
     const release = createDeferredCore();
-    const lane = resolveSessionLane(target.sessionKey);
-    const turn = enqueueCommandInLane(lane, async () => {
+    const turn = withSessionTurn(target, async () => {
       entered.resolve();
       await release.promise;
       const requester = await SessionManager.openAsync(target, state.workspaceDir);
@@ -55,6 +54,14 @@ it("settles a direct child result before its mirror waits behind the requester's
         makeAgentAssistantMessage({ content: [{ type: "text", text: "Synthetic wake reply" }] }),
       );
     });
+    const settleMirrors = () =>
+      runSessionMutation({
+        scope: target.storePath,
+        identities: [target.sessionKey, target.sessionId],
+        agentId: target.agentId,
+        policy: "wait",
+        run: async () => {},
+      });
     // Observe rejection immediately, but preserve it for the owning assertion below.
     void turn.catch(() => {});
     const send = vi.mocked(sendMessage).mockImplementation(async (params) => {
@@ -127,10 +134,7 @@ it("settles a direct child result before its mirror waits behind the requester's
 
       release.resolve();
       await withinTest(turn, signal);
-      await withinTest(
-        enqueueCommandInLane(lane, async () => {}),
-        signal,
-      );
+      await withinTest(settleMirrors(), signal);
       const messages = (await loadTranscriptEvents(target)).flatMap((entry) =>
         isRecord(entry) && entry.type === "message" ? [entry.message] : [],
       );
@@ -146,7 +150,7 @@ it("settles a direct child result before its mirror waits behind the requester's
       ]);
     } finally {
       release.resolve();
-      await Promise.allSettled([turn, enqueueCommandInLane(lane, async () => {})]);
+      await Promise.allSettled([turn, settleMirrors()]);
       send.mockReset();
     }
   });

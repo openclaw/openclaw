@@ -322,15 +322,14 @@ describe("bounded memory publication transfer", () => {
   });
 
   it.each(["success", "stale", "begin", "write", "transaction", "commit"] as const)(
-    "settles a single-statement source refresh through %s",
+    "settles an atomic source refresh through %s",
     async (fault) => {
       const owner = await createOwner();
       const db = fixtureWriter(owner);
       db.exec(`INSERT INTO memory_index_sources(path, source, hash, mtime, size)
         VALUES ('sessions/current', 'sessions', 'old', 1, 1)`);
-      const stages: string[] = [];
+      const revision = readMemoryDatabaseRevision(db);
       const backend = await createBackend(owner, (stage) => {
-        stages.push(stage);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
         if (fault === stage) {
           throw new Error(`refused ${stage}`);
@@ -343,7 +342,6 @@ describe("bounded memory publication transfer", () => {
       const locker =
         fault === "begin" ? sqliteRuntime.openNodeSqliteDatabase(db.location()!) : undefined;
       locker?.exec("BEGIN IMMEDIATE");
-      const exec = vi.spyOn(db, "exec");
       try {
         const outcome = backend.execute({
           type: "source.refresh",
@@ -360,22 +358,11 @@ describe("bounded memory publication transfer", () => {
             ? { ok: true, value: fault === "success" }
             : { ok: false, entered: fault !== "begin", committed: false },
         );
-        expect(stages).toEqual(
-          fault === "transaction" ? ["transaction"] : ["transaction", "commit"],
-        );
-        expect(
-          exec.mock.calls.filter(([sql]) => sql === "PRAGMA busy_timeout = 5000"),
-        ).toHaveLength(fault === "transaction" || fault === "commit" ? 0 : 1);
-        expect(
-          exec.mock.calls.filter(([sql]) =>
-            /^(BEGIN|COMMIT|ROLLBACK|SAVEPOINT|RELEASE)\b/u.test(sql),
-          ),
-        ).toEqual([]);
         expect(db.isTransaction).toBe(false);
         expect(db.prepare("PRAGMA busy_timeout").get()?.timeout).toBe(5000);
         expect(sourceHash(db)).toEqual({ hash: fault === "success" ? "new" : "old" });
+        expect(readMemoryDatabaseRevision(db)).toBe(revision + (fault === "success" ? 1 : 0));
       } finally {
-        exec.mockRestore();
         locker?.exec("ROLLBACK");
         locker?.close();
       }
@@ -665,57 +652,65 @@ describe("bounded memory publication transfer", () => {
     );
   });
 
-  it("publishes planned removals and keeps unchanged session rows searchable", async () => {
-    const owner = await createOwner();
-    ensureMemorySessionTombstones(fixtureWriter(owner));
-    const [template] = replacement().chunks;
-    assert.ok(template);
-    const turn = (line: number) => ({
-      ...template,
-      startLine: line,
-      endLine: line,
-      text: `turn ${line} Violetmarker`,
-      hash: `turn-${line}`,
-    });
-    const session = (
-      hash: string,
-      chunks: ReturnType<typeof turn>[],
-      retained: ReturnType<typeof turn>[] = [],
-    ): Extract<MemorySourceIndexReplacement, { source: "sessions" }> => ({
-      ...replacement(),
-      source: "sessions",
-      agentId: "main",
-      sessionId: "delta-session",
-      entry: { path: "sessions/main/delta.jsonl", hash, mtimeMs: 1, size: 1 },
-      embeddings: chunks.map(() => []),
-      chunks,
-      retained,
-    });
-    const rows = () =>
-      queryRows(
+  it.each(["sessions", "memory"] as const)(
+    "publishes planned removals and keeps unchanged %s rows searchable",
+    async (source) => {
+      const owner = await createOwner();
+      ensureMemorySessionTombstones(fixtureWriter(owner));
+      const [template] = replacement().chunks;
+      assert.ok(template);
+      const turn = (line: number) => ({
+        ...template,
+        startLine: line,
+        endLine: line,
+        text: `turn ${line} Violetmarker`,
+        hash: `turn-${line}`,
+      });
+      const session = (
+        hash: string,
+        chunks: ReturnType<typeof turn>[],
+        retained: ReturnType<typeof turn>[] = [],
+      ): MemorySourceIndexReplacement => ({
+        ...replacement(),
+        ...(source === "sessions"
+          ? { source, agentId: "main", sessionId: "delta-session" }
+          : { source }),
+        entry: {
+          path: source === "sessions" ? "sessions/main/delta.jsonl" : "memory/delta.md",
+          hash,
+          mtimeMs: 1,
+          size: 1,
+        },
+        embeddings: chunks.map(() => []),
+        chunks,
+        retained,
+      });
+      const rows = () =>
+        queryRows(
+          owner.db,
+          "SELECT chunk_rowid, start_line, text FROM memory_index_chunks ORDER BY start_line",
+        );
+
+      await publish(owner, session("v1", [turn(1), turn(2)]));
+      const [first] = rows();
+      const delta = session("v2", [turn(3)], [turn(1)]);
+      delta.removedIds = [memoryChunkRowId(source, delta.entry.path, turn(2), delta.model)];
+      await expect(publish(owner, delta)).resolves.toBe(true);
+      expect(rows()).toEqual([
+        first,
+        expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
+      ]);
+      expect(
+        owner.db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts").get(),
+      ).toEqual({ count: 2 });
+
+      expectRows(
         owner.db,
-        "SELECT chunk_rowid, start_line, text FROM memory_index_chunks ORDER BY start_line",
+        "SELECT start_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker' ORDER BY start_line",
+        [{ start_line: 1 }, { start_line: 3 }],
       );
-
-    await publish(owner, session("v1", [turn(1), turn(2)]));
-    const [first] = rows();
-    const delta = session("v2", [turn(3)], [turn(1)]);
-    delta.removedIds = [memoryChunkRowId("sessions", delta.entry.path, turn(2), delta.model)];
-    await expect(publish(owner, delta)).resolves.toBe(true);
-    expect(rows()).toEqual([
-      first,
-      expect.objectContaining({ start_line: 3, text: "turn 3 Violetmarker" }),
-    ]);
-    expect(owner.db.prepare("SELECT COUNT(*) AS count FROM memory_index_chunks_fts").get()).toEqual(
-      { count: 2 },
-    );
-
-    expectRows(
-      owner.db,
-      "SELECT start_line FROM memory_index_chunks_fts WHERE memory_index_chunks_fts MATCH 'Violetmarker' ORDER BY start_line",
-      [{ start_line: 1 }, { start_line: 3 }],
-    );
-  });
+    },
+  );
 
   it.each([8, 4 * 1024 * 1024 + 1])(
     "roundtrips %i-coordinate cache vectors with tombstone and capacity limits",

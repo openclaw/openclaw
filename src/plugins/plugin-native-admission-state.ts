@@ -32,7 +32,13 @@ export type AdmissionState = {
   readonly publicationStateDir: string;
   readonly artifactPreservingReadOnly: boolean;
   preparedIndexes: WeakSet<InstalledPluginIndex>;
-  owners: Map<string, InstalledPluginIndexRecord>;
+  owners: Map<
+    string,
+    Pick<
+      InstalledPluginIndexRecord,
+      "pluginId" | "rootDir" | "installRecordHash" | "source" | "setupSource"
+    >
+  >;
   managedRoots: Map<string, "retained-npm" | "installed">;
   receipts: Map<string, PluginSourceAdmissionReceipt>;
   files: Map<string, PluginNativeArtifactFact>;
@@ -234,7 +240,7 @@ export function overlayPluginNativeAdmissions(
             ...record,
             sourceAdmissions: {
               ...record.sourceAdmissions,
-              ...structuredClone(Object.fromEntries(receipts)),
+              ...Object.fromEntries(receipts),
             },
           }
         : record;
@@ -256,7 +262,14 @@ export function preparePluginNativeAdmissions(
     if (state.owners.has(root)) {
       continue;
     }
-    state.owners.set(root, record);
+    // Admission needs source and publication identity, not the inventory's catalogs or receipts.
+    state.owners.set(root, {
+      pluginId: record.pluginId,
+      rootDir: record.rootDir,
+      installRecordHash: record.installRecordHash,
+      source: record.source,
+      setupSource: record.setupSource,
+    });
     const installOwner = resolveInstalledPluginIndexInstallOwner(record);
     const install = installOwner ? index.installRecords[installOwner] : undefined;
     const installRoot = install?.installPath
@@ -284,7 +297,7 @@ export function preparePluginNativeAdmissions(
       }
     }
     for (const [key, receipt] of Object.entries(record.sourceAdmissions ?? {})) {
-      state.receipts.set(key, structuredClone(receipt));
+      state.receipts.set(key, receipt);
       for (const [id, namespace] of Object.entries(receipt.nativeNamespaces)) {
         state.namespaces.set(id, structuredClone(namespace));
       }

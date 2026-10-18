@@ -52,6 +52,7 @@ import {
   transcriptEventJsonSql,
   transcriptEventModelBytesSql,
   transcriptEventModelNavigationSql,
+  transcriptPredicateSql,
 } from "./transcript-payload.js";
 import { assertTranscriptNavigationValid } from "./transcript-predicate-fields.js";
 import {
@@ -309,9 +310,14 @@ function withTranscriptContextSnapshot<T>(
             database.db,
             base
               .select(transcriptEventJsonSql(database.db).as("event_json"))
-              .select("navigation_valid")
+              .select(
+                transcriptPredicateSql(database.db, "navigation_valid").as("navigation_valid"),
+              )
               .where((eb) =>
-                eb.or([eb("navigation_type", "=", "session"), eb("navigation_valid", "=", 0)]),
+                eb.or([
+                  eb(transcriptPredicateSql(database.db, "navigation_type"), "=", "session"),
+                  eb(transcriptPredicateSql(database.db, "navigation_valid"), "=", 0),
+                ]),
               )
               .orderBy("seq", "asc")
               .limit(1),
@@ -406,7 +412,7 @@ function withTranscriptContextSnapshot<T>(
                           transcriptEventJsonSql(database.db),
                           omitCheckpoint,
                           omission,
-                          eb.ref("message_role"),
+                          transcriptPredicateSql(database.db, "message_role"),
                         ),
                       ])
                       .as("bytes"),
@@ -425,14 +431,14 @@ function withTranscriptContextSnapshot<T>(
                 // Bound both IN lists while keeping payload selection inside the navigation snapshot.
                 // SQL removes obsolete replay/private fields before they enter JavaScript.
                 const query = base
-                  .select((eb) => [
+                  .select([
                     "seq",
                     projectModelContextEventSql(
                       database.db,
                       transcriptEventJsonSql(database.db),
                       omitCheckpoint,
                       omission,
-                      eb.ref("message_role"),
+                      transcriptPredicateSql(database.db, "message_role"),
                     ).as("event_json"),
                   ])
                   .where("seq", "in", [...bySeq.keys()]);

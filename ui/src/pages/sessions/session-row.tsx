@@ -7,7 +7,7 @@ import { formatAgentRuntimeLabel } from "../../../../src/shared/agent-runtime-di
 import { formatFastModeValue } from "../../../../src/shared/fast-mode.js";
 import type { AgentIdentityResult, GatewaySessionRow } from "../../api/types.ts";
 import { AgentRowChip } from "../../components/agent-row-chip.tsx";
-import { Icon, type IconName } from "../../components/solid/icon.tsx";
+import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsStatus } from "../../components/solid/settings-ui.tsx";
 import {
   formatThinkingOverrideLabel,
@@ -15,15 +15,13 @@ import {
   resolveChatThinkingSelectState,
 } from "../../lib/chat/thinking.ts";
 import { formatDurationCompact } from "../../lib/format-duration.ts";
-import { formatRelativeTimestamp, formatCompactTokenCount } from "../../lib/format.ts";
+import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { handleContextMenuEvent } from "../../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../../lib/navigation-click.ts";
 import { formatSessionTokens } from "../../lib/presenter.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayKind } from "../../lib/session-display.ts";
 import { formatGoalDetail, formatGoalSummary } from "../../lib/session-goal.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
-import { resolveSessionContextLimit } from "../../lib/sessions/context-budget.ts";
 import { SESSION_DRAG_MIME } from "../../lib/sessions/drag.ts";
 import {
   resolveSessionPreferredFace,
@@ -37,7 +35,6 @@ import { SessionStatusBadge } from "./session-status.tsx";
 import { categoryDropHandlers } from "./sessions-filters.tsx";
 import type { SessionsProps } from "./view-types.ts";
 import "../../components/tooltip.ts";
-import "../../styles/capacity-meter.css";
 
 const VERBOSE_LEVEL_VALUES = ["", "off", "on", "full"] as const;
 const FAST_LEVEL_VALUES = ["", "auto", "on", "off"] as const;
@@ -62,76 +59,6 @@ function buildSessionLevelOptions(
           ? t("sessionsView.offExplicit")
           : t(`sessionsView.${value}`),
   }));
-}
-
-const SESSION_KIND_ICONS = {
-  cron: "clock",
-  direct: "messageSquare",
-  group: "users",
-  global: "globe",
-  unknown: "circle",
-} satisfies Record<GatewaySessionRow["kind"] | "cron", IconName>;
-
-// Kind glyph anchors each row; the dot mirrors isSessionRunActive so run
-// state also reads at the identity anchor while scanning the key column.
-function renderSessionAvatar(row: GatewaySessionRow) {
-  const displayKind = resolveSessionDisplayKind(row);
-  return (
-    <span class={["session-avatar", `session-avatar--${displayKind}`]} aria-hidden="true">
-      <Icon name={SESSION_KIND_ICONS[displayKind]} />
-      {isSessionRunActive(row) ? <span class="session-avatar__status" /> : undefined}
-    </span>
-  );
-}
-
-const CONTEXT_METER_WARN_PERCENT = 65;
-const CONTEXT_METER_DANGER_PERCENT = 85;
-
-function renderTokensCell(row: GatewaySessionRow) {
-  const total = row.totalTokens;
-  if (typeof total !== "number" || !Number.isFinite(total)) {
-    return <span class="muted">{t("common.na")}</span>;
-  }
-  // Stale snapshots (post-compaction, incomplete usage reporting) stay visible
-  // as "~" orientation but must not drive warn/danger tones; mirrors the chat
-  // composer's context-usage convention.
-  const fresh = row.totalTokensFresh !== false;
-  const totalLabel = `${fresh ? "" : "~"}${formatCompactTokenCount(total)}`;
-  const limit = resolveSessionContextLimit(row);
-  const context = limit.tokens > 0 ? limit.tokens : null;
-  if (!context) {
-    return <span class="session-tokens__value">{totalLabel}</span>;
-  }
-  const percent = Math.min(100, Math.round((total / context) * 100));
-  const tone = !fresh
-    ? "stale"
-    : percent >= CONTEXT_METER_DANGER_PERCENT
-      ? "danger"
-      : percent >= CONTEXT_METER_WARN_PERCENT
-        ? "warn"
-        : "ok";
-  const titleKey = limit.fromLastPrompt ? "promptBudgetUsage" : "contextUsage";
-  const title = t(`sessionsView.${titleKey}${fresh ? "" : "Approx"}`, {
-    percent: String(percent),
-    used: total.toLocaleString(),
-    context: context.toLocaleString(),
-  });
-  return (
-    <openclaw-tooltip prop:content={title}>
-      <div class="session-tokens">
-        <span class="session-tokens__value">
-          {totalLabel} / {formatCompactTokenCount(context)}
-        </span>
-        <span
-          class={["session-context-meter", `session-context-meter--${tone}`]}
-          role="img"
-          aria-label={title}
-        >
-          <span class="session-context-meter__fill" style={{ width: `${percent}%` }} />
-        </span>
-      </div>
-    </openclaw-tooltip>
-  );
 }
 
 function formatRuntimeMs(runtimeMs: number | undefined): string | null {
@@ -216,7 +143,7 @@ function sessionDetailItems(
 }
 
 export function sessionsTableColumnCount(options: SessionsProps): number {
-  return options.groupBy === "category" ? 8 : 7;
+  return 4 + Number(options.allAgentsScope) + Number(options.groupBy === "category");
 }
 
 function isRowControlTarget(target: EventTarget | null): boolean {
@@ -345,7 +272,6 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
         <td class="data-table-key-col">
           <openclaw-tooltip prop:content={keyCellTitle()}>
             <div class={["session-key-cell", { mono: !friendlyKeyLabel() }]}>
-              {renderSessionAvatar(row())}
               <div class="session-key-cell__text">
                 <span class="session-key-cell__primary">
                   {row().unread === true ? (
@@ -378,11 +304,6 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
                     </span>
                   ) : undefined}
                 </span>
-                {row().kind === "global" && !row().agentId ? undefined : (
-                  <AgentRowChip
-                    agentId={parseAgentSessionKey(row().key)?.agentId ?? row().agentId}
-                  />
-                )}
                 {showDisplayName() ? (
                   <span class="muted session-key-display-name">{displayName()}</span>
                 ) : undefined}
@@ -390,20 +311,15 @@ export function SessionRows(props: SessionsProps & { row: GatewaySessionRow }) {
             </div>
           </openclaw-tooltip>
         </td>
+        {props.allAgentsScope ? (
+          <td class="session-agent-col">
+            {row().kind === "global" && !row().agentId ? undefined : (
+              <AgentRowChip agentId={parseAgentSessionKey(row().key)?.agentId ?? row().agentId} />
+            )}
+          </td>
+        ) : undefined}
         {categoryMode() ? <CategoryCell {...props} row={row()} /> : undefined}
-        <td>
-          <span class={kindClass()}>{displayKind()}</span>
-        </td>
-        <td class="session-status-col">
-          <div class="session-status-stack">
-            <SessionStatusBadge row={row()} /> <SessionGoalStatus goal={row().goal} />
-            {props.statusFilter === "all" && row().archived === true ? (
-              <SettingsStatus kind="muted" label={t("sessionsView.archived")} />
-            ) : undefined}
-          </div>
-        </td>
         <td>{updated()}</td>
-        <td class="session-token-cell">{renderTokensCell(row())}</td>
         <td class="session-actions-cell">
           <div class="session-actions">
             <button

@@ -4,6 +4,9 @@ import {
   readOperatorToolGatewayAuthority,
   runWithOperatorToolGatewayAuthority,
 } from "../../gateway/operator-tool-gateway-authority.js";
+import { withSessionTurn } from "../../sessions/session-controller.admission.js";
+import { runWithSessionControllerCleanup } from "../../sessions/session-controller.owner-context.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import { drainGlobalSingletonLifecycleState } from "../../shared/global-singleton.js";
 import {
   getGatewayToolCallerIdentity,
@@ -119,19 +122,35 @@ describe("session maintenance ownership", () => {
       preemptible: true,
     });
     let ran = false;
+    let admitted = false;
     const work = owner.track(
-      owner.run(async () => {
-        owner.assertCurrent();
-        ran = true;
+      owner.run({
+        admit: (run) =>
+          withSessionTurn(
+            {
+              sessionKey: "session:pending",
+              sessionId: "pending",
+              storePath: "/maintenance/pending",
+            },
+            () => {
+              admitted = true;
+              return run(async () => {
+                owner.assertCurrent();
+                ran = true;
+              });
+            },
+          ),
       }),
     );
     try {
       await waitForSessionMaintenance("session:pending");
+      expect(admitted).toBe(false);
       expect(ran).toBe(false);
 
       releaseFirst();
       releaseFirst();
       await waitForSessionMaintenance("session:pending");
+      expect(admitted).toBe(false);
       expect(ran).toBe(false);
       expect(owner.signal.aborted).toBe(false);
     } finally {
@@ -170,6 +189,111 @@ describe("session maintenance ownership", () => {
       (await busyAdmission)();
     }
     expect(busyAdmitted).toBe(true);
+  });
+
+  it.each(["pending-other-store", "running-writer", "non-preemptible"] as const)(
+    "keeps the admitted read checkpoint waiting for %s maintenance",
+    async (mode) => {
+      const sessionKey = `session:checkpoint:${mode}`;
+      const target = captureSessionTarget({
+        storeScope: "/maintenance/current",
+        sessionKey,
+        incarnation: mode,
+      });
+      const owner = createSessionMaintenanceOwner({
+        sessionKey,
+        target:
+          mode === "pending-other-store"
+            ? captureSessionTarget({ ...target, storeScope: "/maintenance/other" })
+            : target,
+        preemptible: mode !== "non-preemptible",
+      });
+      const release = createDeferred();
+      const started = createDeferred();
+      const work = owner.track(
+        mode === "running-writer"
+          ? owner.run(async () => {
+              started.resolve();
+              await release.promise;
+            })
+          : release.promise,
+      );
+      if (mode === "running-writer") {
+        await started.promise;
+      }
+      try {
+        await withSessionTurn({ sessionKey, sessionId: mode, target }, async () => {
+          let readCompleted = false;
+          const checkpoint = waitForSessionMaintenance(sessionKey).then(() => {
+            readCompleted = true;
+          });
+          await new Promise<void>((resolve) => {
+            setImmediate(resolve);
+          });
+          expect(readCompleted).toBe(false);
+          release.resolve();
+          await checkpoint;
+          expect(readCompleted).toBe(true);
+        });
+      } finally {
+        release.resolve();
+        await work;
+      }
+    },
+  );
+
+  it("does not await a maintenance dependency chain queued behind the admitted turn", async () => {
+    const sessionKey = "session:pending-dependency";
+    const target = captureSessionTarget({
+      storeScope: "/maintenance/dependency",
+      sessionKey,
+      incarnation: "dependency",
+    });
+    const finishOptional = createDeferred();
+    const optionalStarted = createDeferred();
+    const events: string[] = [];
+    let optionalWork = Promise.resolve();
+    let dependentWork = Promise.resolve();
+    try {
+      await withSessionTurn({ sessionKey, sessionId: "dependency", target }, async () => {
+        const optional = createSessionMaintenanceOwner({ sessionKey, target, preemptible: true });
+        optionalWork = optional.track(
+          runWithSessionControllerCleanup(() =>
+            optional.run<void>({
+              admit: (run) =>
+                withSessionTurn({ sessionKey, sessionId: "dependency", target }, () =>
+                  run(async () => {
+                    events.push("optional");
+                    optionalStarted.resolve();
+                    await finishOptional.promise;
+                  }),
+                ),
+            }),
+          ),
+        );
+        // Outbox replay can register nonpreemptible engine maintenance for another active session.
+        const dependent = createSessionMaintenanceOwner({ sessionKey });
+        dependentWork = dependent.track(
+          dependent.run(async () => {
+            events.push("dependent");
+          }),
+        );
+        const checkpoint = waitForSessionMaintenance(sessionKey).then(() => events.push("read"));
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expect(events).toEqual(["read"]);
+        await checkpoint;
+      });
+      await optionalStarted.promise;
+      expect(events).toEqual(["read", "optional"]);
+      finishOptional.resolve();
+      await Promise.all([optionalWork, dependentWork]);
+      expect(events).toEqual(["read", "optional", "dependent"]);
+    } finally {
+      finishOptional.resolve();
+      await Promise.allSettled([optionalWork, dependentWork]);
+    }
   });
 
   it("allows nested maintenance reads to exclude their own active ancestors", async () => {

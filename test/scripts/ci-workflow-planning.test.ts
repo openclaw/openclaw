@@ -97,6 +97,30 @@ function successfulNativeSetup() {
 }
 
 describe("PostgreSQL conformance selection", () => {
+  it("runs three balanced shards independently under the existing aggregate gate", () => {
+    const workflow = readCiWorkflow();
+    const job = workflow.jobs["postgres-conformance"];
+    expect(job.strategy).toEqual({
+      "fail-fast": false,
+      "max-parallel": 3,
+      matrix: { shard: ["1/3", "2/3", "3/3"] },
+    });
+    expect(job["timeout-minutes"]).toBe(30);
+    expect(
+      evaluateWorkflowExpression(job["runs-on"], {
+        eventName: "pull_request",
+        repository: "openclaw/openclaw",
+        runAttempt: 1,
+      }),
+    ).toBe("ubuntu-24.04");
+    expect(
+      job.steps.find((step: WorkflowStep) => step.name === "Run PostgreSQL conformance").run,
+    ).toBe(
+      "node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres --shard ${{ matrix.shard }}",
+    );
+    expect(workflow.jobs["ci-gate"].needs).toContain("postgres-conformance");
+  });
+
   it.each<[string[] | null, boolean, Partial<Parameters<typeof runCiManifestFixture>[0]>?]>([
     [["extensions/workboard/README.md", "src/utils/absolute-deadline.test.ts"], false],
     [["extensions/workboard/README.md", "extensions/workboard/src/store.ts"], true],
@@ -115,13 +139,17 @@ describe("PostgreSQL conformance selection", () => {
     [["src/config/zod-schema.database.ts"], true],
     [["scripts/test-database-conformance.mjs"], true],
     [["scripts/test-database-conformance-preload.mjs"], true],
+    [["scripts/lib/weighted-test-shards.mts"], true],
+    [["config/postgres-conformance-timings.json"], true],
     [["src/infra/unrelated.ts"], false],
     [["docs/help/testing/suites.md"], false],
     [null, false, { scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" } }],
     [["extensions/workboard/README.md"], false, { scopeEnv: { OPENCLAW_CI_DOCS_ONLY: "true" } }],
     [[], true, { runNode: false, eventName: "schedule" }],
+    [[], true, { runNode: false, eventName: "workflow_dispatch" }],
     [null, true, { runNode: false }],
     [[], false, { runNode: false, eventName: "schedule", targetFiles: [] }],
+    [[], false, { runNode: false, eventName: "workflow_dispatch", targetFiles: [] }],
     [["extensions/workboard/src/store.ts"], false, { runNode: false, eventName: "push" }],
   ])("selects conformance for %j: %s (%j)", (changedPaths, selected, options) => {
     const result = runCiManifestFixture({
@@ -955,11 +983,11 @@ describe("channel detail presentation CI selection", () => {
 });
 
 describe("curated plugin settings CI selection", () => {
-  it("selects the actual consumer proof for a presentation-only change", () => {
-    expect(
-      detectChangedScope(["extensions/memory-core/control-ui.settings-presentation.json"])
-        .runUiTests,
-    ).toBe(true);
+  it.each([
+    "extensions/memory-core/control-ui.settings-presentation.json",
+    "extensions/acpx/control-ui.session-source.json",
+  ])("selects the actual consumer proof for %s", (file) => {
+    expect(detectChangedScope([file]).runUiTests).toBe(true);
   });
 });
 
@@ -3113,6 +3141,24 @@ describe("ci workflow guards", () => {
         },
       });
     }
+
+    it("counts all three PostgreSQL conformance shards in hosted admission", () => {
+      const result = manifestWithHostedNodeRows(0, {
+        eventName: "pull_request",
+        changedPaths: ["src/infra/database-engine/open.ts"],
+        targetFiles: ["scripts/test-database-conformance.mjs"],
+      });
+      expect(result.status, result.output).toBe(0);
+      const rows = emittedHostedRows(
+        {
+          ...result.outputs,
+          hybrid_hosted_offload: "false",
+        },
+        { eventName: "pull_request" },
+      );
+      expect(rows.filter((name) => name === "postgres-conformance")).toHaveLength(3);
+      expect(Number(result.outputs.hybrid_hosted_base_rows)).toBe(rows.length);
+    });
 
     it("reserves tiny hybrid controls and fork owners before admitting optional hosted rows", () => {
       const eventName = "pull_request" as const;
@@ -5718,7 +5764,7 @@ describe("ci workflow guards", () => {
       expect(coverage(qualification.outputs)).toEqual(coverage(ordinaryPush.outputs));
       const rows = JSON.parse(qualification.outputs.checks_node_core_nondist_matrix!).include;
       expect(rows).toHaveLength(1);
-      expect(rows[0].test_runtime_policy).toBe("node");
+      expect(rows[0].test_runtime_policy).toBe("bun-all");
       expect(qualification.outputs.run_qa_smoke_ci).toBe("true");
       expect(JSON.parse(qualification.outputs.qa_smoke_ci_matrix!).include).toHaveLength(4);
       expect(qualification.outputs.run_docker_seed_e2e).toBe("true");
@@ -7623,16 +7669,16 @@ describe("ci workflow guards", () => {
       eventName: "pull_request",
       capability: true,
       uiCapability: true,
-      policy: "bun-compatible",
-      uiPolicy: "bun-compatible",
+      policy: "bun-all",
+      uiPolicy: "bun-all",
       bun: true,
     },
     {
       eventName: "workflow_dispatch",
       capability: true,
       uiCapability: true,
-      policy: "dual",
-      uiPolicy: "dual",
+      policy: "dual-all",
+      uiPolicy: "dual-all",
       bun: true,
     },
     {
@@ -7640,17 +7686,17 @@ describe("ci workflow guards", () => {
       releaseGate: true,
       capability: true,
       uiCapability: true,
-      policy: "bun-compatible",
-      uiPolicy: "bun-compatible",
+      policy: "dual-all",
+      uiPolicy: "dual-all",
       bun: true,
     },
     {
       eventName: "push",
       capability: true,
       uiCapability: true,
-      policy: "node",
-      uiPolicy: "node",
-      bun: false,
+      policy: "bun-all",
+      uiPolicy: "bun-all",
+      bun: true,
     },
     {
       eventName: "workflow_dispatch",
@@ -7664,7 +7710,7 @@ describe("ci workflow guards", () => {
       eventName: "pull_request",
       capability: true,
       uiCapability: false,
-      policy: "bun-compatible",
+      policy: "bun-all",
       uiPolicy: "node",
       bun: true,
     },
@@ -7672,7 +7718,7 @@ describe("ci workflow guards", () => {
       eventName: "workflow_dispatch",
       capability: true,
       uiCapability: "requires-ftl-flag",
-      policy: "dual",
+      policy: "dual-all",
       uiPolicy: "node",
       bun: true,
     },
@@ -7681,7 +7727,7 @@ describe("ci workflow guards", () => {
       historicalCompatibility: true,
       capability: true,
       uiCapability: true,
-      policy: "dual",
+      policy: "dual-all",
       uiPolicy: "node",
       bun: true,
     },
@@ -9315,6 +9361,19 @@ describe("ci workflow guards", () => {
     expect(legacy.outputs.run_docker_seed_e2e).toBe("false");
     expect(legacy.outputs.docker_seed_lanes).toBe("");
     expect(legacy.outputs.run_channel_contracts_shards).toBe("false");
+    expect(legacy.outputs.run_plugin_contracts_shards).toBe("true");
+    expect(
+      JSON.parse(
+        expectDefined(legacy.outputs.plugin_contracts_matrix, "legacy plugin contract matrix"),
+      ).include.flatMap((shard: { groups: unknown[] }) => shard.groups),
+    ).toEqual([
+      {
+        checkName: "checks-fast-contracts-plugins-legacy",
+        includePatterns: ["src/plugins/contracts/**/*.test.ts"],
+        runtime: "node",
+        task: "contracts-plugins",
+      },
+    ]);
     expect(legacy.outputs.run_protocol_event_coverage).toBe("false");
     expect(
       JSON.parse(expectDefined(legacy.outputs.android_matrix, "legacy Android matrix output"))
@@ -9857,7 +9916,7 @@ describe("ci workflow guards", () => {
       ]);
     }
     for (const compatibilityTarget of [false, true]) {
-      for (const policy of ["node", "bun-compatible", "dual", "bun-all", "dual-all"]) {
+      for (const policy of ["node", "bun-all", "dual-all"]) {
         const result = runWorkflowShellScript(uiTest.run, {
           cwd: commandRoot,
           env: {
@@ -10448,7 +10507,7 @@ describe("ci workflow guards", () => {
     },
   );
 
-  // Main runs UI on Node, so these PR rows are the only automatic Bun UI proof.
+  // Runtime-owner changes keep complete Bun UI proof in the affected PR plan.
   it.each([
     { paths: ["scripts/lib/ci-test-runtime.mts"], selected: true },
     { paths: ["scripts/lib/ci-test-native-bun-qualification.json"], selected: false },
@@ -10493,7 +10552,7 @@ describe("ci workflow guards", () => {
           expectDefined(manifest.outputs.ui_test_groups_gzip_base64, "UI selection"),
         ).flat(),
       ).toEqual(expectedUi);
-      expect(manifest.outputs.ui_test_runtime_policy).toBe("bun-compatible");
+      expect(manifest.outputs.ui_test_runtime_policy).toBe("bun-all");
       const ui = workflow.jobs["checks-ui"];
       const context: Parameters<typeof evaluateWorkflowExpression>[1] = {
         eventName: "pull_request",

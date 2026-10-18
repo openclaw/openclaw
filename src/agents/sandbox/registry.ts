@@ -47,7 +47,6 @@ async function executeRegistry<Key extends keyof SandboxRegistryOperations>(
 ): Promise<SandboxRegistryOperations[Key]["output"]> {
   guard?.assertHost?.();
   guard?.beforeLegacyApply?.();
-  const input = structuredClone(command.input);
   const assertCurrent = () => {
     guard?.assertHost?.();
     context.admission.assertCurrent();
@@ -58,18 +57,14 @@ async function executeRegistry<Key extends keyof SandboxRegistryOperations>(
     await import("../../state/openclaw-state-worker-store.js");
   // Reservation checks stay outside grants; the worker checks its authoritative rows.
   guard?.beforeLegacyApply?.();
-  return runOpenClawStateWorkerOperation(
-    context,
-    (scope) => scope.execute({ type: command.type, input }),
-    {
-      assertCurrent,
-      createAdmission: withSandboxRegistryPublication(
-        createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
-        () => context.admission.identity.key,
-        () => context.admission.assertCurrent(),
-      ),
-    },
-  );
+  return runOpenClawStateWorkerOperation(context, (scope) => scope.execute(command), {
+    assertCurrent,
+    createAdmission: withSandboxRegistryPublication(
+      createSqliteWorkerWriteAdmission(assertCurrent, [context.admission.databasePath]),
+      () => context.admission.identity.key,
+      () => context.admission.assertCurrent(),
+    ),
+  });
 }
 
 function writeRegistry(
@@ -228,11 +223,11 @@ export async function removeSandboxRegistryRuntime(
     options.guard?.beforeLegacyApply?.();
   };
   assertCurrent();
-  const input = structuredClone({
+  const input = {
     entry,
     reserveRuntime: options.reserveRuntime,
     prune: options.prune,
-  });
+  };
   return withSandboxRegistrySettlement(context, async () => {
     const selected = await executeRegistry(
       { type: "sandboxRegistry.beginRemoval", input },

@@ -69,8 +69,6 @@ import { sessionMessagingHandlers } from "./sessions-messaging.js";
 
 function createRequestContext(overrides: Record<string, unknown> = {}): GatewayRequestContext {
   return {
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     chatRunState: { runs: new Map() },
     dedupe: new Map(),
     broadcastToConnIds: vi.fn(),

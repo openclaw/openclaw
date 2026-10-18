@@ -7,7 +7,7 @@ import { readSidebarToolActivity } from "../../components/sidebar-tool-activity.
 import { resolveToolDisplay } from "../../lib/chat/tool-display.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import type { SessionMethodAccess } from "../../lib/session-method-access.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import {
   childSessionListQuery,
   fetchChildSessionRows,
@@ -83,7 +83,6 @@ function createMetrics(identity: string): Metrics {
   };
 }
 
-/** Presentation-scoped child discovery. Shared owners retain wire subscriptions and roster facts. */
 export class SubagentsPanelData {
   rows: readonly SubagentsPanelRow[] = [];
   loading = false;
@@ -136,6 +135,7 @@ export class SubagentsPanelData {
         }
       },
     };
+    // Until disposal, keep rows synchronous and retire connection scopes before observer events.
     this.unsubscribe = [
       this.narration.subscribe(() => this.publish()),
       context.gateway.subscribe(() => {
@@ -144,7 +144,6 @@ export class SubagentsPanelData {
       }),
       context.gateway.subscribeEvents((event) => this.handleEvent(event)),
     ];
-    // This synchronous activity owner binds document visibility until dispose().
     this.visibilityDocument?.addEventListener("visibilitychange", this.visibilityChanged);
   }
 
@@ -315,7 +314,7 @@ export class SubagentsPanelData {
       source: this.narrationSource,
       rows: this.sessions.map((row) => ({
         key: row.key,
-        hasActiveRun: isSessionRunActive(row),
+        hasActiveRun: isSessionRunStateActive(row),
         startedAt: row.startedAt,
         updatedAt: row.updatedAt,
       })),
@@ -335,7 +334,7 @@ export class SubagentsPanelData {
         metrics.read ||
         metrics.pending ||
         this.historyReads >= HISTORY_CONCURRENCY ||
-        (isSessionRunActive(row) && !this.messageSubscriptions.has(row.key))
+        (isSessionRunStateActive(row) && !this.messageSubscriptions.has(row.key))
       ) {
         continue;
       }
@@ -504,11 +503,11 @@ export class SubagentsPanelData {
     const tools = this.narration.read().tools;
     this.rows = this.sessions.map((session) => {
       const metrics = this.metrics.get(session.key);
-      const tool = isSessionRunActive(session)
+      const tool = isSessionRunStateActive(session)
         ? (tools.get(session.key) ?? (metrics?.liveToolObserved ? undefined : metrics?.tool))
         : undefined;
       const headline =
-        isSessionRunActive(session) && metrics
+        isSessionRunStateActive(session) && metrics
           ? selectActivityHeadline(
               [...metrics.calls]
                 .filter(([identity, item]) => {
@@ -535,14 +534,16 @@ export class SubagentsPanelData {
         activity:
           tool?.text ||
           headline?.title ||
-          (isSessionRunActive(session) &&
+          (isSessionRunStateActive(session) &&
           session.observerDigest?.runId &&
           session.activeRunIds?.includes(session.observerDigest.runId)
             ? session.observerDigest.headline.trim() || undefined
             : undefined),
         toolDisplayName: tool ? resolveToolDisplay({ name: tool.name }).label : undefined,
         canStop:
-          isSessionRunActive(session) && session.activeRunIds?.length === 1 && stopAccess.allowed,
+          isSessionRunStateActive(session) &&
+          session.activeRunIds?.length === 1 &&
+          stopAccess.allowed,
         stopping: this.stopping.has(session.key),
         stopAccess,
       };

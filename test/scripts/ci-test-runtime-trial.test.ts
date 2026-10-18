@@ -27,16 +27,20 @@ const fixture = {
   ],
 } satisfies Parameters<typeof runCiManifestFixture>[0];
 
-// Captured from the pre-trial manifest with host gzip metadata canonicalized.
+// Captured before the default cutover, with host gzip metadata canonicalized.
 const defaults = [
   {
     name: "PR",
     eventName: "pull_request",
+    previousPolicy: "bun-compatible",
+    policy: "bun-all",
     digest: "66eb4fe868dcfe446d359e9b5a0249a76467ca1198f435c5f160420289871862",
   },
   {
     name: "main push",
     eventName: "push",
+    previousPolicy: "node",
+    policy: "bun-all",
     digest: "f05634e6cd8e14f3dc45a53122605175c95b5276541a3da7e25a635683363df8",
   },
   {
@@ -46,11 +50,15 @@ const defaults = [
       OPENCLAW_CI_VALIDATION_TIER: "main",
       OPENCLAW_CI_WORKFLOW_REVISION: "a".repeat(40),
     },
+    previousPolicy: "node",
+    policy: "bun-all",
     digest: "854476e7a631b59fb62e33bd45005b7de782a583b8a003d6c4b6599ea52c38a1",
   },
   {
     name: "FRV",
     eventName: "workflow_dispatch",
+    previousPolicy: "dual",
+    policy: "dual-all",
     digest: "cbd832cc5d5fe53a88b1959821899f68f4a1b746d5af94c3855883bbea8b779d",
   },
 ] as const;
@@ -86,15 +94,32 @@ function nodeRows(outputs: Record<string, string>) {
   return JSON.parse(outputs.checks_node_core_nondist_matrix!).include;
 }
 
-describe("dispatch-only runtime trials", () => {
-  it.each(defaults)("preserves every default $name manifest byte", (scenario) => {
-    vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "bun-compatible");
+describe("default and dispatched CI runtimes", () => {
+  it.each(defaults)("changes only the $name runtime and sequential budget", (scenario) => {
+    vi.stubEnv("OPENCLAW_CI_TEST_RUNTIME_POLICY", "node");
     const outputs = manifest({ ...fixture, ...scenario });
-    expect(manifestDigest(outputs)).toBe(scenario.digest);
+    const rows = nodeRows(outputs);
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ test_runtime_policy: scenario.policy, requires_bun: true });
+    expect(rows[0].timeout_minutes).toBe(scenario.policy === "dual-all" ? 120 : undefined);
+    expect(outputs.ui_test_runtime_policy).toBe(scenario.policy);
+    // Project only the changed policy fields back to the captured baseline.
+    rows[0].test_runtime_policy = scenario.previousPolicy;
+    if (scenario.previousPolicy === "node") {
+      delete rows[0].requires_bun;
+    }
+    delete rows[0].timeout_minutes;
+    expect(
+      manifestDigest({
+        ...outputs,
+        checks_node_core_nondist_matrix: JSON.stringify({ include: rows }),
+        ui_test_runtime_policy: scenario.previousPolicy,
+      }),
+    ).toBe(scenario.digest);
   });
 
-  it.each(["bun-all", "dual-all"])(
-    "routes main dispatch and UI through %s in existing slots",
+  it.each(["node", "bun-all", "dual-all"])(
+    "routes explicit main dispatch and UI through %s in existing slots",
     (policy) => {
       const scopeEnv = {
         OPENCLAW_CI_VALIDATION_TIER: "main",
@@ -108,7 +133,8 @@ describe("dispatch-only runtime trials", () => {
       });
       const rows = nodeRows(outputs);
       expect(rows).toHaveLength(nodeRows(baseline).length);
-      expect(rows[0]).toMatchObject({ test_runtime_policy: policy, requires_bun: true });
+      expect(rows[0].test_runtime_policy).toBe(policy);
+      expect(Boolean(rows[0].requires_bun)).toBe(policy !== "node");
       expect(rows[0].timeout_minutes).toBe(policy === "dual-all" ? 120 : undefined);
       expect(outputs.ui_test_runtime_policy).toBe(policy);
       const workflow = readCiWorkflow();
@@ -132,11 +158,11 @@ describe("dispatch-only runtime trials", () => {
           (step: WorkflowStep) => step.name === "Setup pinned Bun test runtime",
         );
         expect(setup.uses).toBe("./.ci-harness/.github/actions/setup-test-bun");
-        expect(evaluateWorkflowCondition(setup.if, context)).toBe(true);
+        expect(evaluateWorkflowCondition(setup.if, context)).toBe(policy !== "node");
       }
-      // Only trial policy and its sequential runtime budget may change.
-      rows[0].test_runtime_policy = "node";
-      delete rows[0].requires_bun;
+      // Runtime selection never adds a matrix row or a runner registration.
+      rows[0].test_runtime_policy = "bun-all";
+      rows[0].requires_bun = true;
       delete rows[0].timeout_minutes;
       expect(rows).toEqual(nodeRows(baseline));
       const {
@@ -153,8 +179,8 @@ describe("dispatch-only runtime trials", () => {
     },
   );
 
-  it.each(["node", "bun-compatible", "dual", "bun-all", "dual-all"])(
-    "preserves UI backend budgets and doubles only %s trials",
+  it.each(["node", "bun-all", "dual-all"])(
+    "preserves UI backend budgets and doubles only dual-all (%s)",
     (policy) => {
       const timeout = readCiWorkflow().jobs["checks-ui"]["timeout-minutes"];
       for (const runnerBackend of ["blacksmith", "github"] as const) {
@@ -178,7 +204,7 @@ describe("dispatch-only runtime trials", () => {
         ...fixture,
         eventName: "workflow_dispatch",
         nodeTestShards: [
-          { ...fixture.nodeTestShards[0], configs: ["node-only.config.ts"], timeoutMinutes: 90 },
+          { ...fixture.nodeTestShards[0], timeoutMinutes: 90 },
           { ...fixture.nodeTestShards[0], timeoutMinutes: 120 },
         ],
         scopeEnv: { OPENCLAW_CI_TEST_RUNTIME_POLICY: policy },
@@ -211,7 +237,8 @@ describe("dispatch-only runtime trials", () => {
       eventName: "pull_request",
       scopeEnv: { OPENCLAW_CI_TEST_RUNTIME_POLICY: "dual-all" },
     });
-    expect(manifestDigest(outputs)).toBe(defaults[0].digest);
+    expect(nodeRows(outputs)[0].test_runtime_policy).toBe("bun-all");
+    expect(outputs.ui_test_runtime_policy).toBe("bun-all");
     expect(readCiWorkflow().on.workflow_dispatch.inputs.test_runtime_policy).toMatchObject({
       default: "",
       type: "string",
@@ -219,8 +246,12 @@ describe("dispatch-only runtime trials", () => {
   });
 
   it.each([
-    { policy: "all-bun", capability: true, error: "must be empty, bun-all, or dual-all" },
-    { policy: "dual-all", capability: false, error: "does not support test_runtime_policy trials" },
+    { policy: "all-bun", capability: true, error: "must be empty, node, bun-all, or dual-all" },
+    {
+      policy: "dual-all",
+      capability: false,
+      error: "does not support test_runtime_policy selection",
+    },
   ])(
     "rejects unsupported dispatch rather than silently falling back ($policy, $capability)",
     ({ policy, capability, error }) => {

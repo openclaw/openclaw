@@ -18,7 +18,7 @@ import {
   buildDefaultTestCliBackend,
   createCliRunnerPrepareFixture,
 } from "../cli-runner.test-helpers.js";
-import * as maintenance from "../embedded-agent-runner/context-engine-maintenance.js";
+import * as maintenance from "../session-maintenance/coordinator.js";
 import { SessionManager } from "../sessions/session-manager.js";
 import { executePreparedCliRun } from "./execute.js";
 import { prepareCliRunContext } from "./prepare.js";
@@ -273,6 +273,40 @@ describe("CLI durable session context", () => {
     },
   );
 
+  it.each(["public", "private"] as const)(
+    "carries the %s session sharing state into the CLI system prompt",
+    async (visibility) => {
+      cliBackendsTesting.setDepsForTest({
+        resolvePluginSetupCliBackend: () => undefined,
+        resolveRuntimeCliBackends: () => [buildDefaultTestCliBackend()],
+      });
+      const { sessionTarget } = fixture.session;
+      const context = await fixture.prepare({
+        sessionKey: sessionTarget.sessionKey,
+        skillsSnapshot: { prompt: "", skills: [] },
+        sessionEntry: {
+          sessionId: sessionTarget.sessionId,
+          updatedAt: 1,
+          ...(visibility === "public"
+            ? {
+                publicShare: {
+                  id: "a".repeat(48),
+                  sessionId: sessionTarget.sessionId,
+                  createdAt: 1,
+                },
+              }
+            : {}),
+        },
+        config: { gateway: { publicOrigin: "https://gateway.example" } },
+      });
+      cleanups.push(() => context.preparedBackend.cleanup?.());
+
+      expect(context.systemPrompt.includes("https://gateway.example/chat/main")).toBe(
+        visibility === "public",
+      );
+    },
+  );
+
   it("builds fresh-session caller-memory prompts from hook-mutated prompts", async () => {
     const { dir, sessionTarget } = fixture.session;
     const manager = SessionManager.open(sessionTarget, dir);
@@ -329,22 +363,20 @@ describe("CLI durable session context", () => {
     });
     const history = await prepareOwnedHistory();
     const { sessionTarget } = fixture.session;
-    const wait = vi
-      .spyOn(maintenance, "waitForDeferredTurnMaintenanceForSession")
-      .mockImplementation(async () => {
-        history.appendTranscript({
-          id: "completed-maintenance-note",
-          parentId: null,
-          timestamp: new Date(1).toISOString(),
-          message: {
-            role: "custom",
-            customType: "openclaw.system-note",
-            content: "FACT_AFTER_MAINTENANCE",
-            display: false,
-            timestamp: 1,
-          },
-        });
+    const wait = vi.spyOn(maintenance, "waitForSessionMaintenance").mockImplementation(async () => {
+      history.appendTranscript({
+        id: "completed-maintenance-note",
+        parentId: null,
+        timestamp: new Date(1).toISOString(),
+        message: {
+          role: "custom",
+          customType: "openclaw.system-note",
+          content: "FACT_AFTER_MAINTENANCE",
+          display: false,
+          timestamp: 1,
+        },
       });
+    });
     const context = await history.prepare({ sessionKey: sessionTarget.sessionKey });
     try {
       expect(wait).toHaveBeenCalledExactlyOnceWith(sessionTarget.sessionKey);

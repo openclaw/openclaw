@@ -9,6 +9,130 @@ import { ChatModelPicker } from "./chat-model-picker.tsx";
 
 afterEach(() => document.body.replaceChildren());
 
+it.each(["open", "closed", "removed", "focus moved"])(
+  "focuses late catalog search only while its opening still owns focus (%s)",
+  async (state) => {
+    const frames: FrameRequestCallback[] = [];
+    const frame = vi.spyOn(globalThis, "requestAnimationFrame").mockImplementation((callback) => {
+      frames.push(callback);
+      return frames.length;
+    });
+    try {
+      const params: Parameters<typeof ChatModelPicker>[0] = {
+        disabled: false,
+        modelSelectionLocked: false,
+        modelOptions: [],
+        modelCatalogState: { hasSnapshot: false, status: "loading" },
+        selectedModelValue: "fixture/ready",
+        sessionModelPinned: true,
+        sessionKey: "main",
+        triggerModelLabel: "Loading models",
+        onModelSelect: vi.fn(async () => {}),
+      };
+      let update!: (next: typeof params) => void;
+      const { container } = mountSolid(() => {
+        const [props, setProps] = createSignal(params);
+        update = (next) => {
+          setProps(() => next);
+          flush();
+        };
+        return (
+          <>
+            <textarea />
+            <ChatModelPicker {...props()} />
+          </>
+        );
+      });
+      flush();
+      await Promise.resolve();
+      const picker = container.querySelector("details")!;
+      const trigger = picker.querySelector("summary")!;
+      const composer = container.querySelector("textarea")!;
+      trigger.focus();
+      trigger.click();
+      expect(picker.open).toBe(true);
+      for (const callback of frames.splice(0)) {
+        callback(0);
+      }
+      expect(picker.querySelector("[data-chat-model-search]")).toBeNull();
+      expect(document.activeElement).toBe(trigger);
+
+      if (state === "closed") {
+        trigger.click();
+      } else if (state === "removed") {
+        picker.remove();
+      }
+      if (state !== "open") {
+        composer.focus();
+      }
+      update({
+        ...params,
+        modelCatalogState: { hasSnapshot: true, status: "ready" },
+        modelOptions: [
+          {
+            provider: "fixture",
+            value: "fixture/ready",
+            commitValue: "fixture/ready",
+            label: "Ready",
+            isDefault: false,
+          },
+        ],
+      });
+      await Promise.resolve();
+      const search = picker.querySelector<HTMLInputElement>("[data-chat-model-search]");
+      expect(search).not.toBeNull();
+      expect(document.activeElement).toBe(state === "open" ? search : composer);
+    } finally {
+      frame.mockRestore();
+    }
+  },
+);
+
+it("mounts model choices on first open and retains them across dismissal", async () => {
+  const container = document.body.appendChild(document.createElement("div"));
+  const onModelSelect = vi.fn(async () => {});
+  mountSolid(
+    () => (
+      <ChatModelPicker
+        disabled={false}
+        modelSelectionLocked={false}
+        modelOptions={[
+          {
+            provider: "fixture",
+            value: "fixture/current",
+            commitValue: "fixture/current",
+            label: "Current",
+            isDefault: false,
+          },
+        ]}
+        selectedModelValue="fixture/current"
+        sessionModelPinned
+        sessionKey="main"
+        triggerModelLabel="Current"
+        onModelSelect={onModelSelect}
+      />
+    ),
+    { container },
+  );
+  flush();
+  expect(container.querySelector("[data-chat-model-option]")).toBeNull();
+  const details = container.querySelector("details")!;
+  details.querySelector("summary")!.click();
+  flush();
+  await Promise.resolve();
+  const choice = container.querySelector<HTMLButtonElement>("[data-chat-model-option]")!;
+  expect(choice.hidden).toBe(false);
+  details.open = false;
+  details.dispatchEvent(new Event("toggle"));
+  flush();
+  details.querySelector("summary")!.click();
+  flush();
+  await Promise.resolve();
+  expect(container.querySelector("[data-chat-model-option]")).toBe(choice);
+  choice.click();
+  expect(onModelSelect).toHaveBeenCalledWith("fixture/current", "main", undefined);
+});
+
 it.each([false, true])(
   "initially expands the selected provider and retains toggles on reopen (inherited=%s)",
   async (inherited) => {
@@ -237,6 +361,7 @@ it("groups Anthropic refs pinned to Claude CLI under Claude CLI", () => {
       <ChatModelPicker
         {...{
           disabled: false,
+          open: true,
           modelSelectionLocked: false,
           modelOptions: [
             option("anthropic", "claude-opus-4-8", "claude-cli"),

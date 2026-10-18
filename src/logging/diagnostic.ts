@@ -24,18 +24,12 @@ import {
 } from "./diagnostic-liveness.js";
 import {
   emitDiagnosticMemorySample,
-  resetDiagnosticMemoryForTest,
   type EmitDiagnosticMemorySample,
 } from "./diagnostic-memory.js";
 import { emitMessageProcessedDiagnosticEvent } from "./diagnostic-message-content.js";
-import {
-  getCurrentDiagnosticPhase,
-  getRecentDiagnosticPhases,
-  resetDiagnosticPhasesForTest,
-} from "./diagnostic-phase.js";
+import { getCurrentDiagnosticPhase, getRecentDiagnosticPhases } from "./diagnostic-phase.js";
 import {
   getDiagnosticSessionActivitySnapshot,
-  resetDiagnosticRunActivityForTest,
   resolveRunStaleThresholdMs,
   startDiagnosticRunActivityTracking,
   stopDiagnosticRunActivityTracking,
@@ -46,7 +40,6 @@ import {
   getLastDiagnosticActivityAt,
   logMessageQueuedWithBacklogPolicy,
   markDiagnosticActivity as markActivity,
-  resetDiagnosticActivityForTest,
 } from "./diagnostic-runtime.js";
 import {
   classifySessionAttention,
@@ -57,7 +50,6 @@ import {
 import { logWithSessionDiagnosticContext } from "./diagnostic-session-context.js";
 import {
   requestStuckSessionRecovery,
-  resetDiagnosticSessionRecoveryCoordinatorForTest,
   type RecoverStuckSession,
 } from "./diagnostic-session-recovery-coordinator.js";
 import type {
@@ -69,8 +61,9 @@ import {
   retireDiagnosticSessionObservations,
   getDiagnosticSessionState,
   isDiagnosticSessionStateCurrent,
+  isIncognitoDiagnosticSession,
+  resolveDiagnosticSessionKey,
   pruneDiagnosticSessionStates,
-  resetDiagnosticSessionStateForTest,
   touchDiagnosticSessionState,
   type SessionRef,
   type SessionState,
@@ -81,7 +74,6 @@ import {
   uninstallDiagnosticStabilityFatalHook,
 } from "./diagnostic-stability-bundle.js";
 import {
-  resetDiagnosticStabilityRecorderForTest,
   startDiagnosticStabilityRecorder,
   stopDiagnosticStabilityRecorder,
 } from "./diagnostic-stability.js";
@@ -137,10 +129,14 @@ const loadCommandPollBackoffRuntime = createLazyRuntimeModule(
 async function recoverStuckSession(
   params: StuckSessionRecoveryRequest,
 ): Promise<StuckSessionRecoveryOutcome> {
+  // Runtime loading can outlive the diagnostic alias used by an ID-only request.
+  const incognito = isIncognitoDiagnosticSession(params);
   return loadStuckSessionRecoveryRuntime()
     .then(({ recoverStuckDiagnosticSession }) => recoverStuckDiagnosticSession(params))
     .catch((err: unknown) => {
-      diag.warn(`stuck session recovery unavailable: ${String(err)}`);
+      if (!incognito) {
+        diag.warn(`stuck session recovery unavailable: ${String(err)}`);
+      }
       return {
         status: "failed",
         action: "none",
@@ -470,7 +466,7 @@ export function logMessageDispatchCompleted(
     return;
   }
   const level = params.outcome === "error" ? "error" : "debug";
-  if (diag.isEnabled(level)) {
+  if (!isIncognitoDiagnosticSession(params) && diag.isEnabled(level)) {
     const payload = `message dispatch completed: channel=${params.channel ?? "unknown"} sessionId=${
       params.sessionId ?? "unknown"
     } sessionKey=${params.sessionKey ?? "unknown"} source=${params.source} outcome=${
@@ -483,7 +479,7 @@ export function logMessageDispatchCompleted(
   emitDiagnosticEvent({
     type: "message.dispatch.completed",
     sessionId: params.sessionId,
-    sessionKey: params.sessionKey,
+    sessionKey: resolveDiagnosticSessionKey(params),
     channel: params.channel,
     source: params.source,
     durationMs: params.durationMs,
@@ -504,7 +500,7 @@ export function logMessageProcessed(
     return;
   }
   const level = params.outcome === "error" ? "error" : "debug";
-  if (diag.isEnabled(level)) {
+  if (!isIncognitoDiagnosticSession(params) && diag.isEnabled(level)) {
     const payload = `message processed: channel=${params.channel} chatId=${
       params.chatId ?? "unknown"
     } messageId=${params.messageId ?? "unknown"} sessionId=${
@@ -516,7 +512,10 @@ export function logMessageProcessed(
     }`;
     diag[level](payload);
   }
-  emitMessageProcessedDiagnosticEvent(params);
+  emitMessageProcessedDiagnosticEvent({
+    ...params,
+    sessionKey: resolveDiagnosticSessionKey(params),
+  });
   markActivity();
 }
 
@@ -691,23 +690,25 @@ function logSessionAttention(
       : classification.eventType === "session.stalled"
         ? "stalled session"
         : "long-running session";
-  void logWithSessionDiagnosticContext({
-    level:
-      classification.eventType === "session.long_running" && queueDepth <= 0 ? "debug" : "warn",
-    sessionKey: params.sessionKey,
-    format: (sessionFields) => {
-      const detailFields = [formatSessionActivityLogFields(activity), sessionFields]
-        .filter(Boolean)
-        .join(" ");
-      return `${label}: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
-        params.sessionKey ?? "unknown"
-      } state=${params.expectedState} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
-        queueDepth
-      } reason=${classification.reason} classification=${classification.classification}${
-        classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
-      }${detailFields ? ` ${detailFields}` : ""} recovery=${recovery ? "checking" : "none"}`;
-    },
-  });
+  if (!isIncognitoDiagnosticSession(state)) {
+    void logWithSessionDiagnosticContext({
+      level:
+        classification.eventType === "session.long_running" && queueDepth <= 0 ? "debug" : "warn",
+      sessionKey: params.sessionKey,
+      format: (sessionFields) => {
+        const detailFields = [formatSessionActivityLogFields(activity), sessionFields]
+          .filter(Boolean)
+          .join(" ");
+        return `${label}: sessionId=${params.sessionId ?? "unknown"} sessionKey=${
+          params.sessionKey ?? "unknown"
+        } state=${params.expectedState} age=${Math.round(params.ageMs / 1000)}s queueDepth=${
+          queueDepth
+        } reason=${classification.reason} classification=${classification.classification}${
+          classification.activeWorkKind ? ` activeWorkKind=${classification.activeWorkKind}` : ""
+        }${detailFields ? ` ${detailFields}` : ""} recovery=${recovery ? "checking" : "none"}`;
+      },
+    });
+  }
   const baseEvent = {
     sessionId: params.sessionId,
     sessionKey: params.sessionKey,
@@ -1001,27 +1002,4 @@ export function stopGatewayDiagnosticHeartbeat() {
   stopDiagnosticObservations();
 }
 
-function resetDiagnosticStateForTest(): void {
-  stopGatewayDiagnosticHeartbeat();
-  resetDiagnosticSessionRecoveryCoordinatorForTest();
-  resetDiagnosticSessionStateForTest();
-  resetDiagnosticActivityForTest();
-  resetDiagnosticRunActivityForTest();
-  webhookStats.received = 0;
-  webhookStats.processed = 0;
-  webhookStats.errors = 0;
-  resetDiagnosticMemoryForTest();
-  resetDiagnosticPhasesForTest();
-  resetDiagnosticStabilityRecorderForTest();
-}
-
-const testing = {
-  resetDiagnosticStateForTest,
-  resolveStuckSessionAbortMs,
-  resolveStuckSessionWarnMs,
-};
-
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.diagnosticTestApi")] = testing;
-}
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

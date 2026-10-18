@@ -566,7 +566,9 @@ export function createGatewayHookDispatcher(params: {
                 } satisfies CronExecutionIdentityAdmission,
                 abortSignal: startupAbortController.signal,
                 onLaneWait: (info) => {
-                  if (info?.waiting === false) {
+                  // Session preparation precedes execution-lane admission; only the
+                  // execution lane may accept the hook before the admission deadline.
+                  if (info?.waiting === false && info.stage === undefined) {
                     settleSuccessfulAdmission();
                   }
                 },

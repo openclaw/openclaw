@@ -32,7 +32,6 @@ describe("GitHub reference presentation parity", () => {
                 onRetry() {},
                 onClose() {},
                 onViewRawText() {},
-                onAttachmentUpdate() {},
                 onClick() {},
                 onKeydown() {},
               }}

@@ -14,7 +14,7 @@ import { releaseChatAttachmentPayloads } from "../attachment-payload-store.ts";
 import { createTestTranscript } from "../chat-view.test-helpers.ts";
 import { admitChatSubmission, reduceChatSessionProjection } from "../history-merge.ts";
 import { buildInitialChatSubmission, buildLocalUserMessage } from "../user-message-content.ts";
-import { releaseChatMediaResourceSubscriber } from "./chat-message-media.ts";
+import { releaseChatMediaResourceOwner } from "./chat-message-media.ts";
 import type { ChatThreadProps } from "./chat-thread-interactions.ts";
 import { ChatThread } from "./chat-thread-view.tsx";
 import {
@@ -67,7 +67,7 @@ function mountTranscriptPane(props: ChatThreadProps) {
   const [presented, setPresented] = createSignal(true);
   let root: ReturnType<typeof mountSolid> | undefined;
   const renderPane = () => {
-    setCurrent({ ...props, onRequestUpdate: renderPane });
+    setCurrent({ ...props, mediaOwner: renderPane });
     flush();
     root ??= mountSolid(
       () => (
@@ -94,7 +94,7 @@ function mountTranscriptPane(props: ChatThreadProps) {
   };
   onTestFinished(() => {
     root?.unmount();
-    releaseChatMediaResourceSubscriber(renderPane);
+    releaseChatMediaResourceOwner(renderPane);
     transcript.dispose();
   });
   renderPane();
@@ -592,6 +592,7 @@ describe("canonical image presentation handoff", () => {
           presentation === "canonical" ? [] : undefined,
         );
         fixture.publish();
+        await vi.advanceTimersByTimeAsync(0);
         fixture.requests[0]?.resolve(mediaMetadataResponse(true, "before-offline"));
         await vi.advanceTimersByTimeAsync(0);
         const displayed = expectDefined(fixture.images()[0], "loaded canonical image");

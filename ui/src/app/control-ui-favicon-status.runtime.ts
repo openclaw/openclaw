@@ -1,6 +1,6 @@
 import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { listen } from "../lib/reactive/listener.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import { normalizeAgentId, parseAgentSessionKey } from "../lib/sessions/session-key.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
@@ -70,6 +70,7 @@ export function connectControlUiFavicon(
     synchronizeScope();
     const snapshot = context.gateway.snapshot;
     let working = false;
+    // Chat owns these live panes; the favicon adapter aggregates their reported run activity.
     for (const pane of shell.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")) {
       const activity = pane.runActivity;
       const completion = activity?.completion;
@@ -104,7 +105,7 @@ export function connectControlUiFavicon(
         if (rowAgent !== agentId) {
           continue;
         }
-        if (isSessionRunActive(row)) {
+        if (isSessionRunStateActive(row)) {
           working ||= context.sessions.isRunVisuallyActive(row);
           nextActive.set(row.key, row.sessionId);
         } else if (
