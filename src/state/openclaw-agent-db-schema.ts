@@ -1,7 +1,5 @@
 import type { DatabaseSync } from "node:sqlite";
 import {
-  ensureMemoryChunkProvenance,
-  ensureMemoryRecallMetadataSchema,
   migrateMemoryIndexSourcesIdentity,
   migrateMemoryIndexStorage,
 } from "../../packages/memory-host-sdk/src/host/memory-schema.js";
@@ -32,6 +30,7 @@ import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { configureSqlitePreSchemaPragmas } from "../infra/sqlite-wal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { normalizeAgentId } from "../routing/session-key.js";
+import { tryAgentDatabaseStartupFtsRepair } from "./agent-database-startup-fts.js";
 import { assertAgentDeletionRecoveryAllowsMutation } from "./agent-deletion-journal-recovery.js";
 import * as agentDeletion from "./agent-deletion-journal.js";
 import { ensureOpenClawAgentBoardSchemaInTransaction } from "./openclaw-agent-board-schema.js";
@@ -77,6 +76,7 @@ import {
   finishAgentSchemaMigration,
   hasPendingCurrentVersionAgentDatabaseMigration,
   hasPendingMemoryChunkMetadataMigration,
+  migrateMemoryChunkMetadataSchema,
   migrateRetiredAgentStateLeaseSchema,
   ensureSessionKeyContractSchemaInTransaction,
   ensureSessionReactionsSchemaInTransaction,
@@ -149,11 +149,6 @@ export function resolveAgentDatabaseIntegrityGateReason(
   return proof.reuseIntegrity ? "no-proof" : "lease-class";
 }
 
-function migrateMemoryChunkMetadataSchema(db: DatabaseSync): void {
-  ensureMemoryRecallMetadataSchema(db);
-  ensureMemoryChunkProvenance(db);
-}
-
 export function* agentDatabaseIntegrityBeforeMutationSteps(
   database: DatabaseSync,
   agentId: string,
@@ -223,7 +218,7 @@ export function* agentDatabaseIntegrityBeforeMutationSteps(
         validateUnchanged: validateSchema,
         diagnostics,
         reuseIntegrity,
-        // Current-schema callbacks do not repeat historical migration table coverage.
+        repairIntegrityError: () => tryAgentDatabaseStartupFtsRepair(database),
         integrity: integrityCheck
           ? { ...integrity, tables: integrityTables ?? integrity.tables }
           : undefined,

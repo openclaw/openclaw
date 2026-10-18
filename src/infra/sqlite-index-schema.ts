@@ -55,15 +55,36 @@ export function* verifyAndRepairCanonicalSqliteIndexSteps(
   options: Omit<RepairCanonicalSqliteIndexesOptions, "verifyPhysicalIntegrity"> & {
     diagnostics?: SqliteIntegrityDiagnostics;
     reuseIntegrity?: boolean;
+    repairIntegrityError?: () => boolean;
   } = {},
 ): SqliteIntegrityOperation<string[]> {
-  const { diagnostics, reuseIntegrity, ...repairOptions } = options;
+  const { diagnostics, reuseIntegrity, repairIntegrityError, ...repairOptions } = options;
   if (reuseIntegrity) {
     if (diagnostics) {
       diagnostics.integrityGateOutcome = "cached";
     }
   } else {
-    yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, options.integrity);
+    try {
+      yield* sqliteIntegrityCheckSteps(db, databaseLabel, diagnostics, options.integrity);
+    } catch (error) {
+      if (!(error instanceof Error) || !isTerminalSqliteIntegrityError(error)) {
+        throw error;
+      }
+      try {
+        if (!repairIntegrityError?.()) {
+          throw error;
+        }
+      } catch (repairError) {
+        // Preserve the corruption verdict so failed repair still follows quarantine policy.
+        if (repairError !== error) {
+          error.message += ` Startup FTS repair failed: ${String(repairError)}`;
+        }
+        throw error;
+      }
+      if (diagnostics) {
+        diagnostics.integrityGateOutcome = "healthy";
+      }
+    }
   }
 
   const indexesStartedAt = performance.now();
@@ -197,11 +218,16 @@ export function repairCanonicalSqliteIndexes(
   return [...repairIndexes].map((index) => index.name).toSorted();
 }
 
-/** Explicit maintenance only: preserve the damaged image before rebuilding derived indexes. */
+/** Preserve the damaged image before rebuilding derived indexes under the caller's custody. */
 export function repairSqliteIndexCorruption(
   database: DatabaseSync,
   pathname: string,
-  options: { backup: () => void; assertCurrent: () => void; ftsSchemas?: readonly string[] },
+  options: {
+    backup: () => void;
+    assertCurrent: () => void;
+    ftsSchemas?: readonly string[];
+    ftsOnly?: boolean;
+  },
 ): string[] {
   let repaired: string[] = [];
   return runSqliteImmediateTransactionSync(
@@ -215,6 +241,9 @@ export function repairSqliteIndexCorruption(
         findings,
         options.ftsSchemas ?? [],
       );
+      if (options.ftsOnly && !ftsTables) {
+        throw new Error("Startup repair requires only canonical FTS integrity findings");
+      }
       for (const finding of ftsTables ? [] : findings) {
         if (finding === "ok") {
           continue;

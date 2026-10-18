@@ -31,6 +31,7 @@ import {
   AgentDatabaseSchemaAdmissionChangedError,
 } from "./agent-database-admission-error.js";
 import { captureAgentDatabasePreparationJournal } from "./agent-database-admission.js";
+import { handleAgentDatabaseStartupFtsRepair } from "./agent-database-startup-fts-outcomes.js";
 import { captureAgentDeletionCleanupAdmission } from "./agent-deletion-cleanup-admission.js";
 import type { OpenClawAgentDatabaseWorkerLeaseReceipt } from "./openclaw-agent-db-lease.js";
 import {
@@ -193,6 +194,21 @@ export function createAgentDatabaseNativeGeneration(
         }
         assertCurrent();
         cleanup?.assertCurrent();
+        if (
+          handleAgentDatabaseStartupFtsRepair(
+            request,
+            pathname,
+            context.admission.databasePath,
+            () => {
+              assertSourceCurrent();
+              if (!assertPreparationJournal || !lease) {
+                throw new Error("FTS repair requires live Gateway startup admission");
+              }
+            },
+          )
+        ) {
+          return undefined;
+        }
         if (!nativeIdentity || creatingIdentity) {
           assertCallerCurrent?.();
         }

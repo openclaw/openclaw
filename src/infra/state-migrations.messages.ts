@@ -3,6 +3,7 @@ import { sanitizeTerminalText } from "../../packages/terminal-core/src/safe-text
 import { redactSensitiveText } from "../logging/redact.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { listAgentDatabaseAdmissionRefusals } from "../state/agent-database-admission.js";
+import { listAgentDatabaseStartupFtsRepairs } from "../state/agent-database-startup-fts-outcomes.js";
 import type {
   LegacyStateMigrationStepPlan,
   LegacyStateMigrationStepReceipt,
@@ -65,11 +66,28 @@ export function readStartupMigrationWarning(includeSensitive = true): string | u
   const admissionWarnings = listAgentDatabaseAdmissionRefusals()
     .filter((refusal) => refusal.code !== "agent-database-inspection-pending")
     .map((refusal) => `${refusal.reason}\n${refusal.repairHint}`);
-  const details = [startupMigrationDetails, formatStartupMigrationDetails(admissionWarnings)]
+  const repairs = listAgentDatabaseStartupFtsRepairs();
+  const needsAttention = Boolean(
+    startupMigrationDetails ||
+    admissionWarnings.length ||
+    repairs.some((repair) => !repair.repaired),
+  );
+  const details = [
+    startupMigrationDetails,
+    formatStartupMigrationDetails([
+      ...admissionWarnings,
+      ...repairs.map((repair) => repair.message),
+    ]),
+  ]
     .filter(Boolean)
     .join("\n");
   if (!details) {
     return undefined;
+  }
+  if (!needsAttention) {
+    return includeSensitive
+      ? boundStartupMigrationDetails(details)
+      : "Startup rebuilt stale search indexes; see startup log.";
   }
   // Migration errors can contain host paths; read-only status keeps only the repair hint.
   return includeSensitive

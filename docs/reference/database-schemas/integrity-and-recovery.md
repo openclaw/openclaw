@@ -1152,11 +1152,16 @@ session recovery uses this same repair instead of moving the database aside.
 Unknown or changed FTS definitions and findings mixed with structural damage
 are not eligible for this repair.
 
-Startup does not rebuild FTS indexes automatically: the offline maintenance
-owner supplies the exclusive custody needed for backup and quarantine recovery.
-The admission error gives the `openclaw doctor --fix` command. Switching SQLite
-versions again may require another rebuild, without changing stored content or
-the database schema.
+Gateway startup makes one automatic repair attempt per database per process when
+every finding names a canonical, schema-validated FTS table. Under exclusive
+writer custody, it uses the same pre-repair backup and transactional rebuild as
+Doctor, then requires clean integrity and foreign-key checks before admission.
+One warning names the agent, affected tables and row counts, SQLite version, and
+backup. Status and Doctor retain this startup outcome. A failed backup or rebuild,
+live foreign writer, unknown FTS definition, or mixed damage keeps the database
+quarantined with the precise Doctor command. Ordinary runtime opens do not attempt
+this repair. Switching SQLite versions again may require another rebuild,
+without changing stored content or the database schema.
 
 <a id="downgrades-are-unsupported" />
 
