@@ -1872,7 +1872,7 @@
     "dup:check": "node scripts/check-duplicates.mjs",
     "dup:check:coverage": "node scripts/check-duplicates.mjs --coverage",
     "dup:check:json": "node scripts/check-duplicates.mjs --json",
-    "format": "node scripts/run-format.mts --write --threads=1",
+    "format": "node scripts/run-format.mts --write",
     "format:all": "pnpm format && pnpm format:swift",
     "format:check": "node scripts/run-format.mts --check",
     "format:diff": "pnpm format && git --no-pager diff",
