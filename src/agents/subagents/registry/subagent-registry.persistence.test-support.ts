@@ -129,6 +129,13 @@ export async function prepareSubagentRecoveryFixture(
       };
       return {
         controlUiAdmin: false,
+        authenticatedUserProfile: {
+          profileId: params.snapshot.profileId,
+          displayName: null,
+          avatarRevision: "1",
+          hasAvatar: false,
+          updatedAt: 1,
+        },
         authority: createAdmittedRunOperatorAuthority({
           profileId: params.snapshot.profileId,
           scopes: params.snapshot.scopes,

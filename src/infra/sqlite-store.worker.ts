@@ -539,8 +539,7 @@ async function receive(request: SqliteWorkerRequest): Promise<void> {
     const originalError = refusedOpen ? error.originalError : error;
     const admissionRefused =
       commandAdmissionRefused ||
-      (request.type === "open" &&
-        operationAdmission?.actor === request.actor &&
+      (operationAdmission?.actor === request.actor &&
         operationAdmission.context.refusal !== undefined &&
         operationAdmission.context.refusal === originalError);
     const failure =

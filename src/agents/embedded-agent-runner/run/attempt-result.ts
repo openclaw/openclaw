@@ -9,13 +9,13 @@ import {
   prepareAgentRunTerminalReply,
   sanitizeAgentRunTerminalReply,
 } from "../../agent-run-terminal-reply.js";
-import { isCloudCodeAssistFormatError } from "../../embedded-agent-helpers.js";
 import type { CompletedAssistantAnswer } from "../../embedded-agent-subscribe.handlers.types.js";
 import type { subscribeEmbeddedAgentSession } from "../../embedded-agent-subscribe.js";
 import {
   extractAssistantVisibleText,
   prepareAssistantVisibleText,
 } from "../../embedded-agent-utils.js";
+import { isCloudCodeAssistFormatError } from "../../failover/classify-core.js";
 import {
   INCOMPLETE_ASSISTANT_STREAM_RE,
   TERMINATED_TRANSPORT_MESSAGE_RE,

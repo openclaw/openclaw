@@ -1,6 +1,7 @@
 import { createHash } from "node:crypto";
 import { runGitBuffered } from "../../agents/worktrees/git.js";
 import { ownedWorkerBytes } from "../../infra/worker-transfer-bytes.js";
+import { isStagedInputPath, stagedInputDirectoriesFromEntries } from "../../media/staged-inputs.js";
 import { WORKSPACE_PREVIEW_MAX_BYTES } from "../workspace-file-limits.js";
 import { parseChangedWorkspaceResult } from "./workspace-manifest-comparison.js";
 import {
@@ -8,6 +9,7 @@ import {
   parseWorkerWorkspaceManifest,
   type WorkerWorkspaceManifestEntry,
 } from "./workspace-manifest.js";
+import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
 import { reconciliationEntries } from "./workspace-reconcile-derived-paths.js";
 import { WORKSPACE_RESULT_GIT_TIMEOUT_MS as PATCH_TIMEOUT_MS } from "./workspace-result-git.js";
 import {
@@ -91,6 +93,7 @@ export async function loadStagedWorkerWorkspace(
   if (tree.termination !== "exit" || tree.code !== 0) {
     throw new Error(tree.stderr.toString("utf8").trim() || "git ls-tree failed");
   }
+  const stagedInputs = stagedInputDirectoriesFromEntries(current.entries);
   const objectsByPath = new Map<string, { mode: string; objectId: string }>();
   for (const record of tree.stdout.toString("utf8").split("\0").filter(Boolean)) {
     const parsed = /^(100644|100755|120000) blob ([a-f0-9]{40}|[a-f0-9]{64})\t([\s\S]+)$/u.exec(
@@ -99,7 +102,13 @@ export async function loadStagedWorkerWorkspace(
     if (!parsed) {
       throw new Error("Cloud workspace staged result tree is invalid");
     }
-    objectsByPath.set(parsed[3]!, { mode: parsed[1]!, objectId: parsed[2]! });
+    const entryPath = parsed[3]!;
+    // Older receipts can contain caches that the authenticated manifest reader
+    // now excludes. Apply the same rule without rewriting the retained result.
+    if (isDerivedWorkspacePath(entryPath, isStagedInputPath(entryPath, stagedInputs))) {
+      continue;
+    }
+    objectsByPath.set(entryPath, { mode: parsed[1]!, objectId: parsed[2]! });
   }
   if (objectsByPath.size !== treeEntries.length) {
     throw new Error("Cloud workspace staged result tree does not match its manifest");

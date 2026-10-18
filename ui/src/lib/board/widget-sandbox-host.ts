@@ -1,4 +1,4 @@
-import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../../../packages/gateway-protocol/src/schema/canvas.ts";
+import { WIDGET_HTML_MAX_UTF8_BYTES } from "../../../../packages/gateway-protocol/src/canvas-limits.js";
 import { formatUiError } from "../format-error.ts";
 import { listen } from "../reactive/listener.ts";
 import { readResponseTextWithLimit } from "../response-body.ts";

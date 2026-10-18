@@ -11,6 +11,7 @@ import type { OpenClawConfig } from "../config/types.js";
 import type { GatewayRequestFunction } from "../gateway/call.js";
 import type { OperatorScope } from "../gateway/operator-scopes.js";
 import { resolveIdentityPathViaExistingAncestorSync } from "../infra/boundary-path.js";
+import type { DatabaseEngineSelection } from "../infra/database-engine/context.js";
 import type { DatabasePortRecoveryIntent } from "../infra/database-port-recovery.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { GatewayLockIdentity } from "../infra/gateway-lock.js";
@@ -49,6 +50,10 @@ export async function runWithLocalStateOwner<T>(params: {
   databasePortRecovery?: DatabasePortRecoveryIntent;
   /** Engine transitions retire native handles while retaining exclusive schema custody. */
   databasePortMaintenance?: true;
+  /** Resolve configured engines only after offline custody, before runtime config can write state. */
+  databaseEngine?: "configured";
+  /** Bounded config repairs keep offline custody while leaving every database untouched. */
+  databaseAccess?: "none";
   requiredCapabilities?: readonly string[];
   scopes?: readonly OperatorScope[];
   timeoutMs?: number;
@@ -85,10 +90,12 @@ export async function runWithLocalStateOwner<T>(params: {
     },
     { captureGatewayStateOwner, tryBorrowGatewayStateOwner },
     { createOpenClawDatabaseMaintenanceScope },
+    { getScopedDatabaseEngineSelection, withDatabaseEngineSelection },
   ] = await Promise.all([
     import("../infra/gateway-lock.js"),
     import("../infra/gateway-state-owner.js"),
     import("../state/openclaw-state-db-async-lifecycle.js"),
+    import("../infra/database-engine/context.js"),
   ]);
   const paths = resolveGatewayLockPaths(env);
   const databasePath = path.join(paths.stateDir, "state", "openclaw.sqlite");
@@ -250,6 +257,9 @@ export async function runWithLocalStateOwner<T>(params: {
       if (databasePortRecovery) {
         return refuse(new Error("Database port recovery requires exclusive offline ownership"));
       }
+      if (params.databaseAccess === "none") {
+        return refuse(new Error("Config-only repair requires exclusive offline ownership"));
+      }
       return await runLocal(hosted.assertCurrent);
     }
     const owner = databasePortRecovery ? undefined : await discover();
@@ -264,6 +274,7 @@ export async function runWithLocalStateOwner<T>(params: {
         role: params.databasePortMaintenance ? "sqlite-maintenance" : "agent-embedded",
         allowInTests: true,
         databasePortRecovery,
+        databaseAccess: params.databaseAccess,
       });
     } catch (error) {
       if (!databasePortRecovery && isGatewayLifecycleContentionError(error)) {
@@ -277,26 +288,78 @@ export async function runWithLocalStateOwner<T>(params: {
     if (!lock) {
       return refuse(new Error("Offline state ownership was not acquired"));
     }
-    const resources = params.databasePortMaintenance
-      ? undefined
-      : createOpenClawDatabaseMaintenanceScope({
-          assertOwnerCurrent: () => lock.assertCurrent(),
-          assertDatabaseAccess: lock.assertDatabaseAccess,
-        });
-    let uncertainCleanup = false;
+    let selection: DatabaseEngineSelection | undefined;
     try {
-      return await (resources ?? lock).run(() => runLocal(lock.assertCurrent));
+      if (
+        params.databaseAccess !== "none" &&
+        params.databaseEngine === "configured" &&
+        !getScopedDatabaseEngineSelection()
+      ) {
+        const [
+          { createConfigIO },
+          errors,
+          { resolveDatabaseEngineSelection },
+          { loadDotEnvAsync },
+        ] = await Promise.all([
+          import("../config/io.js"),
+          import("../config/io.invalid-config.js"),
+          import("../infra/database-engine/config.js"),
+          import("../infra/dotenv.js"),
+        ]);
+        lock.assertCurrent();
+        assertTargetCurrent();
+        await loadDotEnvAsync({ env });
+        lock.assertCurrent();
+        assertTargetCurrent();
+        const snapshot = await createConfigIO({
+          env,
+          configPath: env.OPENCLAW_CONFIG_PATH,
+          observe: false,
+          pluginValidation: "core-only",
+        }).readConfigFileSnapshot();
+        if (errors.isConfigReadFailure(snapshot)) {
+          throw errors.createConfigReadError(snapshot);
+        }
+        if (!snapshot.valid) {
+          throw errors.createInvalidConfigError(
+            snapshot.path,
+            errors.formatInvalidConfigDetails(snapshot.issues),
+          );
+        }
+        lock.assertCurrent();
+        assertTargetCurrent();
+        selection = await resolveDatabaseEngineSelection(snapshot.config, env);
+        lock.assertCurrent();
+        assertTargetCurrent();
+      }
     } catch (error) {
-      uncertainCleanup = hasCommandProcessCleanupError(error);
-      throw error;
-    } finally {
-      // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
-      await resources?.close();
-      // Stop lending this owner, but keep physical custody until uncertain children exit.
-      const retained = uncertainCleanup ? tryBorrowGatewayStateOwner(databasePath) : undefined;
       await lock.release();
-      retained?.assertCurrent();
+      throw error;
     }
+    const runOwned = async () => {
+      const resources =
+        params.databasePortMaintenance || params.databaseAccess === "none"
+          ? undefined
+          : createOpenClawDatabaseMaintenanceScope({
+              assertOwnerCurrent: () => lock.assertCurrent(),
+              assertDatabaseAccess: lock.assertDatabaseAccess,
+            });
+      let uncertainCleanup = false;
+      try {
+        return await (resources ?? lock).run(() => runLocal(lock.assertCurrent));
+      } catch (error) {
+        uncertainCleanup = hasCommandProcessCleanupError(error);
+        throw error;
+      } finally {
+        // Failed cleanup keeps physical custody; release cannot race accepted worker/native work.
+        await resources?.close();
+        // Stop lending this owner, but keep physical custody until uncertain children exit.
+        const retained = uncertainCleanup ? tryBorrowGatewayStateOwner(databasePath) : undefined;
+        await lock.release();
+        retained?.assertCurrent();
+      }
+    };
+    return selection ? await withDatabaseEngineSelection(selection, runOwned) : await runOwned();
   } finally {
     finished.resolve();
     releaseExitGate();

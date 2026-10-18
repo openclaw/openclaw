@@ -9,7 +9,6 @@ import type {
   SessionsUsageEntry,
   SessionsUsageResult,
   SessionsUsageTotals,
-  SessionUsageTimePoint,
 } from "./data-types.ts";
 import type { ProviderUsageSnapshot } from "./request-usage-snapshot.ts";
 
@@ -50,8 +49,6 @@ export type UsageRouteData = {
   error: string | null;
 };
 
-export type TimeSeriesPoint = SessionUsageTimePoint;
-
 type UsageDataState = {
   loading: boolean;
   exporting: boolean;
@@ -78,9 +75,9 @@ type UsageFilterState = {
   startDate: string;
   endDate: string;
   scope: "instance" | "family";
-  selectedSessions: string[]; // Support multiple session selection
-  selectedDays: string[]; // Support multiple day selection
-  selectedHours: number[]; // Support multiple hour selection
+  selectedSessions: string[];
+  selectedDays: string[];
+  selectedHours: number[];
   creatorKey: string | null;
   query: string;
   queryDraft: string;

@@ -28,7 +28,7 @@ import {
 } from "./compaction-notice.js";
 import { settleQueuedFollowupPresentation } from "./followup-presentation.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import { isGoalContinuationCurrent } from "./goal-continuation.js";
+import { isGoalContinuationCurrent, isSupportedWorkerGoalPlacement } from "./goal-continuation.js";
 import { refreshActiveGoalContext } from "./inbound-meta.js";
 import { isFollowupRunAborted, resolveFollowupAbortSignal, type FollowupRun } from "./queue.js";
 import { getFollowupQueueDepth } from "./queue/enqueue.js";
@@ -417,8 +417,17 @@ export async function admitFollowupTurn(params: {
               sessionKey: replySessionKey,
             })
           : session.current();
+      const workerPlacementCurrent =
+        !goalContinuation.workerGoal ||
+        (Boolean(params.queued.operatorAuthority) &&
+          (await isSupportedWorkerGoalPlacement({
+            agentId: run.agentId,
+            sessionKey: replySessionKey ?? "",
+            sessionId: goalContinuation.sessionId,
+          })));
       assertOperatorCurrent();
       if (
+        !workerPlacementCurrent ||
         operation.abortSignal.aborted ||
         !isGoalContinuationCurrent(goalContinuation, currentEntry) ||
         getFollowupQueueDepth(replySessionKey ?? "") > 0

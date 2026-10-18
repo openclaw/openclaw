@@ -175,6 +175,12 @@ Console logs are **TTY-aware** and formatted for readability:
 
 Console formatting is controlled by `logging.consoleStyle`.
 
+Gateway startup notices for `OPENCLAW_RAW_STREAM` and `OPENCLAW_RAW_STREAM_PATH`
+identify configured flags without printing their values. Successful LSP startup,
+native web-search activation, and web-search provider auto-detection stay quiet.
+Video generation retains the first skipped-candidate warning and all returned
+attempts without repeating every skip at debug level.
+
 SQLite worker diagnostics use stderr. After the final backend closes normally,
 the worker flushes queued file logs and gives pending console output up to five
 seconds to drain before acknowledging close. Source-loaded backends and compiled
@@ -1141,6 +1147,13 @@ with progress drafts show this transient status, including later model calls in
 the same turn. It clears on the first stream event, cancellation, failure, or
 completion. Fast requests do not flash a waiting status, and no server polling
 or user configuration is required.
+
+If you cancel while this local-model wait is visible, the terminal acknowledgment
+adds “Cancellation requested; the local model may still be finishing.” Control UI
+and TUI show the caveat for five seconds; channels append it to their existing stop
+reply. The run ends immediately. This is not evidence that the backend is still
+busy or has released its slot, and fast cancels or cancels after output begins do
+not add the caveat.
 
 “Waiting for a free model slot” is reserved for request-correlated backend
 evidence. The pinned llama.cpp server and Ollama do not expose that evidence for

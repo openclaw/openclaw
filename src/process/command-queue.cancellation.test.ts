@@ -1,12 +1,12 @@
 import { getEventListeners } from "node:events";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
-  clearCommandLane,
+  clearCommandLane as clear,
   CommandLaneClearedError,
-  enqueueCommandInLane,
-  getCommandLaneSnapshot,
-  setCommandLaneConcurrency,
+  enqueueCommandInLane as enqueue,
+  getCommandLaneSnapshot as snapshot,
+  setCommandLaneConcurrency as setConcurrency,
 } from "./command-queue.js";
 import {
   dequeueLaneQueue,
@@ -71,14 +71,9 @@ function measureCancellationWork(count: number) {
   }
   const queue = observe(getLaneState(`cancellation-work:${count}`).queue);
   const entries = Array.from({ length: count }, (_, index) => observe(makeEntry(index)));
-  for (const entry of entries) {
-    enqueueLaneQueue(queue, entry);
-  }
+  entries.forEach((entry) => enqueueLaneQueue(queue, entry));
   operations = 0;
-  let removed = 0;
-  for (const entry of entries.toReversed()) {
-    removed += Number(removeLaneQueueEntry(queue, entry));
-  }
+  const removed = entries.toReversed().filter((entry) => removeLaneQueueEntry(queue, entry)).length;
   const cancellationOperations = operations;
   expect(removed).toBe(count);
   expect(queue.length).toBe(0);
@@ -86,229 +81,199 @@ function measureCancellationWork(count: number) {
   return cancellationOperations;
 }
 
-describe("queued command scheduling and cancellation", () => {
-  beforeEach(resetCommandQueueStateForTest);
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    resetCommandQueueStateForTest();
-  });
+beforeEach(resetCommandQueueStateForTest);
+afterEach(() => {
+  vi.useRealTimers();
+  vi.restoreAllMocks();
+  resetCommandQueueStateForTest();
+});
 
-  it("admits aging work in FIFO order while foreground arrivals continue", async () => {
-    vi.useFakeTimers();
-    const lane = "main";
-    setCommandLaneConcurrency(lane, 0);
-    const starts: Array<[string, number]> = [];
-    const pending: Promise<unknown>[] = [];
-    for (const priority of ["background", "normal"] as const) {
-      for (let index = 0; index < 2; index += 1) {
-        pending.push(
-          enqueueCommandInLane(
-            lane,
-            async () => {
-              starts.push([`${priority}-${index}`, performance.now()]);
-            },
-            { priority },
-          ),
-        );
-      }
+it("admits aging work in FIFO order while foreground arrivals continue", async () => {
+  vi.useFakeTimers();
+  const lane = "main";
+  setConcurrency(lane, 0);
+  const starts: Array<[string, number]> = [];
+  const pending: Promise<unknown>[] = [];
+  const add = (priority: "background" | "normal" | "foreground", task: () => Promise<void>) =>
+    pending.push(enqueue(lane, task, { priority }));
+  for (const priority of ["background", "normal"] as const) {
+    for (let index = 0; index < 2; index += 1) {
+      add(priority, async () => void starts.push([`${priority}-${index}`, performance.now()]));
     }
-    const foregroundDone = createDeferred();
-    const foreground = (index: number) => {
-      pending.push(
-        enqueueCommandInLane(
+  }
+  const foregroundDone = createDeferred();
+  const foreground = (index: number) => {
+    add("foreground", async () => {
+      starts.push(["foreground", performance.now()]);
+      vi.advanceTimersByTime(1_000);
+      // Wall-clock corrections must not extend priority's head start.
+      vi.setSystemTime(Date.now() - 2_000);
+      if (index < 39) {
+        foreground(index + 1);
+      } else {
+        foregroundDone.resolve();
+      }
+    });
+  };
+  foreground(0);
+  setConcurrency(lane, 1);
+  await foregroundDone.promise;
+  await Promise.all(pending);
+  expect(starts[0]).toEqual(["foreground", 0]);
+  expect(starts.filter(([kind]) => kind !== "foreground")).toEqual([
+    ["normal-0", 15_000],
+    ["normal-1", 15_000],
+    ["background-0", 30_000],
+    ["background-1", 30_000],
+  ]);
+  expect(starts.at(-1)).toEqual(["foreground", 39_000]);
+});
+
+it("preserves priority and FIFO after cancelling heads, middle entries and tails", async () => {
+  const lane = "cancellation-order";
+  setConcurrency(lane, 0);
+  const order: string[] = [];
+  const reason = new Error("cancel pending work");
+  const priorities = ["background", "normal", "foreground"] as const;
+  const pending = priorities.flatMap((priority) =>
+    Array.from({ length: 4 }, (_, index) => {
+      const controller = new AbortController();
+      const label = `${priority}-${index}`;
+      return {
+        controller,
+        index,
+        label,
+        promise: enqueue(
           lane,
           async () => {
-            starts.push(["foreground", performance.now()]);
-            vi.advanceTimersByTime(1_000);
-            // Wall-clock corrections must not extend priority's head start.
-            vi.setSystemTime(Date.now() - 2_000);
-            if (index < 39) {
-              foreground(index + 1);
-            } else {
-              foregroundDone.resolve();
-            }
+            order.push(label);
+            return label;
           },
-          { priority: "foreground" },
+          { priority, abortSignal: controller.signal },
         ),
-      );
-    };
-    foreground(0);
-    setCommandLaneConcurrency(lane, 1);
-    await foregroundDone.promise;
-    await Promise.all(pending);
-
-    expect(starts[0]).toEqual(["foreground", 0]);
-    expect(starts.filter(([kind]) => kind !== "foreground")).toEqual([
-      ["normal-0", 15_000],
-      ["normal-1", 15_000],
-      ["background-0", 30_000],
-      ["background-1", 30_000],
-    ]);
-    expect(starts.at(-1)).toEqual(["foreground", 39_000]);
-  });
-
-  it("preserves priority and FIFO after cancelling heads, middle entries and tails", async () => {
-    const lane = "cancellation-order";
-    setCommandLaneConcurrency(lane, 0);
-    const order: string[] = [];
-    const reason = new Error("cancel pending work");
-    const priorities = ["background", "normal", "foreground"] as const;
-    const pending = priorities.flatMap((priority) =>
-      Array.from({ length: 4 }, (_, index) => {
-        const controller = new AbortController();
-        const label = `${priority}-${index}`;
-        return {
-          controller,
-          index,
-          label,
-          promise: enqueueCommandInLane(
-            lane,
-            async () => {
-              order.push(label);
-              return label;
-            },
-            { priority, abortSignal: controller.signal },
-          ),
-        };
-      }),
-    );
-    const outcomes = Promise.allSettled(pending.map((entry) => entry.promise));
-    for (const entry of pending) {
-      if (entry.index !== 1) {
-        entry.controller.abort(reason);
-      }
+      };
+    }),
+  );
+  const outcomes = Promise.allSettled(pending.map((entry) => entry.promise));
+  for (const entry of pending) {
+    if (entry.index !== 1) {
+      entry.controller.abort(reason);
     }
-    expect(getCommandLaneSnapshot(lane).queuedCount).toBe(3);
-    const refills = priorities.map((priority) =>
-      enqueueCommandInLane(
-        lane,
-        async () => {
-          order.push(`${priority}-refill`);
-        },
-        { priority },
-      ),
-    );
-    setCommandLaneConcurrency(lane, 1);
-    const settled = await outcomes;
-    await Promise.all(refills);
-    expect(settled).toEqual(
-      pending.map((entry) =>
-        entry.index === 1
-          ? { status: "fulfilled", value: entry.label }
-          : { status: "rejected", reason },
-      ),
-    );
-    expect(order).toEqual([
-      "foreground-1",
-      "foreground-refill",
-      "normal-1",
-      "normal-refill",
-      "background-1",
-      "background-refill",
-    ]);
-    expect(getCommandLaneSnapshot(lane)).toMatchObject({ activeCount: 0, queuedCount: 0 });
-  });
+  }
+  expect(snapshot(lane).queuedCount).toBe(3);
+  const refills = priorities.map((priority) =>
+    enqueue(lane, async () => void order.push(`${priority}-refill`), { priority }),
+  );
+  setConcurrency(lane, 1);
+  const settled = await outcomes;
+  await Promise.all(refills);
+  expect(settled).toEqual(
+    pending.map((entry) =>
+      entry.index === 1
+        ? { status: "fulfilled", value: entry.label }
+        : { status: "rejected", reason },
+    ),
+  );
+  expect(order).toEqual(
+    priorities.toReversed().flatMap((priority) => [`${priority}-1`, `${priority}-refill`]),
+  );
+  expect(snapshot(lane)).toMatchObject({ activeCount: 0, queuedCount: 0 });
+});
 
-  it("does not search a shared signal for once-listeners that already fired", async () => {
-    const lane = "cancellation-shared-signal";
-    setCommandLaneConcurrency(lane, 0);
-    const controller = new AbortController();
-    const task = vi.fn(async () => "unexpected");
-    const pending = Array.from({ length: 8 }, () =>
-      enqueueCommandInLane(lane, task, { abortSignal: controller.signal }),
-    );
-    const outcomes = Promise.allSettled(pending);
-    const removeListener = vi.spyOn(controller.signal, "removeEventListener");
-    const reason = new Error("shared owner stopped");
-    controller.abort(reason);
-    expect(removeListener).not.toHaveBeenCalled();
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
-    expect(await outcomes).toEqual(pending.map(() => ({ status: "rejected", reason })));
-    expect(task).not.toHaveBeenCalled();
-    expect(getCommandLaneSnapshot(lane).queuedCount).toBe(0);
-    setCommandLaneConcurrency(lane, 1);
-    await expect(enqueueCommandInLane(lane, async () => "refilled")).resolves.toBe("refilled");
-  });
+it("does not search a shared signal for once-listeners that already fired", async () => {
+  const lane = "cancellation-shared-signal";
+  setConcurrency(lane, 0);
+  const controller = new AbortController();
+  const task = vi.fn(async () => "unexpected");
+  const pending = Array.from({ length: 8 }, () =>
+    enqueue(lane, task, { abortSignal: controller.signal }),
+  );
+  const outcomes = Promise.allSettled(pending);
+  const removeListener = vi.spyOn(controller.signal, "removeEventListener");
+  const reason = new Error("shared owner stopped");
+  controller.abort(reason);
+  expect(removeListener).not.toHaveBeenCalled();
+  expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  expect(await outcomes).toEqual(pending.map(() => ({ status: "rejected", reason })));
+  expect(task).not.toHaveBeenCalled();
+  expect(snapshot(lane).queuedCount).toBe(0);
+  setConcurrency(lane, 1);
+  await expect(enqueue(lane, async () => "refilled")).resolves.toBe("refilled");
+});
 
-  it("detaches queued cancellation on admission and clear without cancelling active work", async () => {
-    const lane = "cancellation-admission";
-    const controller = new AbortController();
-    const gate = createDeferred<string>();
-    const active = enqueueCommandInLane(lane, async () => await gate.promise, {
-      abortSignal: controller.signal,
+it("detaches queued cancellation on admission and clear without cancelling active work", async () => {
+  const lane = "cancellation-admission";
+  const controller = new AbortController();
+  const gate = createDeferred<string>();
+  const active = enqueue(lane, async () => await gate.promise, {
+    abortSignal: controller.signal,
+  });
+  expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  const queued = enqueue(lane, async () => "unexpected", {
+    abortSignal: controller.signal,
+  });
+  const rejection = expect(queued).rejects.toBeInstanceOf(CommandLaneClearedError);
+  expect(getEventListeners(controller.signal, "abort")).toHaveLength(1);
+  expect(clear(lane)).toBe(1);
+  expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+  controller.abort(new Error("too late to cancel admission"));
+  gate.resolve("active finished");
+  await rejection;
+  await expect(active).resolves.toBe("active finished");
+});
+
+it("clears selected session work while unrelated queued work keeps its order", async () => {
+  const lane = "session:selective-clear";
+  setConcurrency(lane, 0);
+  const started: string[] = [];
+  const enqueueSession = (sessionId: string) =>
+    enqueue(lane, async () => started.push(sessionId), {
+      sessionTarget: { sessionId },
     });
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
-    const queued = enqueueCommandInLane(lane, async () => "unexpected", {
-      abortSignal: controller.signal,
-    });
-    const rejection = expect(queued).rejects.toBeInstanceOf(CommandLaneClearedError);
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(1);
-    expect(clearCommandLane(lane)).toBe(1);
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
-    controller.abort(new Error("too late to cancel admission"));
-    gate.resolve("active finished");
-    await rejection;
-    await expect(active).resolves.toBe("active finished");
-  });
+  const [before, selected, after] = ["before", "selected", "after"].map(enqueueSession);
+  const rejection = expect(selected).rejects.toBeInstanceOf(CommandLaneClearedError);
+  expect(clear(lane, (target) => target?.sessionId === "selected")).toBe(1);
+  expect(snapshot(lane).queuedCount).toBe(2);
+  setConcurrency(lane, 1);
+  await rejection;
+  await Promise.all([before, after]);
+  expect(started).toEqual(["before", "after"]);
+});
 
-  it("clears selected session work while unrelated queued work keeps its order", async () => {
-    const lane = "session:selective-clear";
-    setCommandLaneConcurrency(lane, 0);
-    const started: string[] = [];
-    const enqueue = (sessionId: string) =>
-      enqueueCommandInLane(lane, async () => started.push(sessionId), {
-        sessionTarget: { sessionId },
-      });
-    const before = enqueue("before");
-    const selected = enqueue("selected");
-    const after = enqueue("after");
-    const rejection = expect(selected).rejects.toBeInstanceOf(CommandLaneClearedError);
-
-    expect(clearCommandLane(lane, (target) => target?.sessionId === "selected")).toBe(1);
-    expect(getCommandLaneSnapshot(lane).queuedCount).toBe(2);
-    setCommandLaneConcurrency(lane, 1);
-
-    await rejection;
-    await Promise.all([before, after]);
-    expect(started).toEqual(["before", "after"]);
-  });
-
-  it("releases entry references before reentrant cancellation cleanup", () => {
-    const queue = getLaneState("reentrant-cancellation").queue;
-    const entries = [makeEntry(0), makeEntry(1), makeEntry(2)];
+it("releases entry references before reentrant cancellation cleanup", () => {
+  const queue = getLaneState("reentrant-cancellation").queue;
+  const entries = [makeEntry(0), makeEntry(1), makeEntry(2)];
+  for (const entry of entries) {
+    enqueueLaneQueue(queue, entry);
+  }
+  const removed = entries[1]!;
+  const refill = makeEntry(3);
+  const release = vi.fn(() => {
+    expect(removed.queued).toBeUndefined();
+    expect(removed.releaseQueuedAbort).toBeUndefined();
     for (const entry of entries) {
-      enqueueLaneQueue(queue, entry);
+      expect(Object.values(removed)).not.toContain(entry);
     }
-    const removed = entries[1]!;
-    const refill = makeEntry(3);
-    const release = vi.fn(() => {
-      expect(removed.queued).toBeUndefined();
-      expect(removed.releaseQueuedAbort).toBeUndefined();
-      for (const entry of entries) {
-        expect(Object.values(removed)).not.toContain(entry);
-      }
-      expect(queue.length).toBe(2);
-      expect(removeLaneQueueEntry(queue, removed)).toBe(false);
-      enqueueLaneQueue(queue, refill);
-    });
-    removed.releaseQueuedAbort = release;
-    expect(removeLaneQueueEntry(queue, removed)).toBe(true);
-    expect(release).toHaveBeenCalledOnce();
-    const survivors = entries.filter((entry) => entry !== removed);
-    expect([dequeueLaneQueue(queue), dequeueLaneQueue(queue), dequeueLaneQueue(queue)]).toEqual([
-      ...survivors,
-      refill,
-    ]);
-    expect(dequeueLaneQueue(queue)).toBeUndefined();
-    enqueueLaneQueue(queue, makeEntry(4));
-    expect(dequeueLaneQueue(queue)?.sequence).toBe(4);
-    expect(queue.length).toBe(0);
+    expect(queue.length).toBe(2);
+    expect(removeLaneQueueEntry(queue, removed)).toBe(false);
+    enqueueLaneQueue(queue, refill);
   });
+  removed.releaseQueuedAbort = release;
+  expect(removeLaneQueueEntry(queue, removed)).toBe(true);
+  expect(release).toHaveBeenCalledOnce();
+  expect(Array.from({ length: 3 }, () => dequeueLaneQueue(queue))).toEqual([
+    entries[0],
+    entries[2],
+    refill,
+  ]);
+  expect(dequeueLaneQueue(queue)).toBeUndefined();
+  enqueueLaneQueue(queue, makeEntry(4));
+  expect(dequeueLaneQueue(queue)?.sequence).toBe(4);
+  expect(queue.length).toBe(0);
+});
 
-  it("keeps total cancellation work linear as a backlog doubles", () => {
-    const smaller = measureCancellationWork(128);
-    const larger = measureCancellationWork(256);
-    expect(larger).toBeLessThan(smaller * 3);
-  });
+it("keeps total cancellation work linear as a backlog doubles", () => {
+  const smaller = measureCancellationWork(128);
+  const larger = measureCancellationWork(256);
+  expect(larger).toBeLessThan(smaller * 3);
 });

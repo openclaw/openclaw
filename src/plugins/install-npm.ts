@@ -224,10 +224,8 @@ export async function installPluginFromNpmSpec(
       trustedSourceLinkedOfficialInstall: params.trustedSourceLinkedOfficialInstall,
       config: params.config,
       packageName: parsedSpec.name,
-      dependencySpec: resolveManagedNpmRootDependencySpec({
-        parsedSpec,
-        resolution: npmResolution,
-      }),
+      prepareDependencySpec: async () =>
+        resolveManagedNpmRootDependencySpec({ parsedSpec, resolution: npmResolution }),
       displaySpec: spec,
       installPolicyRequest: {
         kind: "plugin-npm",

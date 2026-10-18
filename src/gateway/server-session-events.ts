@@ -1,4 +1,3 @@
-// Gateway session event broadcaster.
 // Projects transcript and lifecycle updates to websocket subscribers.
 import path from "node:path";
 import { asPositiveSafeInteger } from "@openclaw/normalization-core/number-coercion";
@@ -382,6 +381,7 @@ async function handleTranscriptUpdateBroadcast(
       connIds,
       {
         ...resolvePrivateSessionEventBroadcastScope(sessionKey, agentScope),
+        sessionEventSubscriptionKeys: broadcastKeys,
         dropIfSlow: true,
       },
     );
@@ -502,15 +502,13 @@ async function handleTranscriptUpdateBroadcast(
         includeSession: true,
         activeRunState,
       });
-      const broadcastOptions =
-        read && projection
-          ? {
-              prepareSessionProjection: prepareSessionEventProjection(projection, read, {
-                ancestors,
-                encodeMessage: true,
-              }),
-            }
-          : undefined;
+      const broadcastOptions = {
+        sessionEventSubscriptionKeys: broadcastKeys,
+        prepareSessionProjection:
+          read && projection
+            ? prepareSessionEventProjection(projection, read, { ancestors, encodeMessage: true })
+            : undefined,
+      };
       const messageProjectionParams =
         message === undefined
           ? undefined
@@ -551,6 +549,7 @@ async function handleTranscriptUpdateBroadcast(
         });
         if (controlUiProjection.payload) {
           params.broadcastToConnIds("session.message", controlUiProjection.payload, connIds, {
+            sessionEventSubscriptionKeys: broadcastKeys,
             prepareSessionProjection: prepareSessionEventProjection(projection, read, {
               ancestors,
               encodeMessage: true,
@@ -608,11 +607,17 @@ export function createLifecycleEventBroadcastHandler(params: {
       return;
     }
     const [eventAgentId, routingAgentId, compatibilityOwnerAgentId] = agentScope;
-    const privateBroadcastScope = resolvePrivateSessionEventBroadcastScope(
-      emittedEvent.sessionKey,
-      agentScope,
-    );
-    const broadcastOptions = { ...privateBroadcastScope, dropIfSlow: true };
+    const broadcastOptions = {
+      ...resolvePrivateSessionEventBroadcastScope(emittedEvent.sessionKey, agentScope),
+      sessionEventSubscriptionKeys: routingAgentId
+        ? resolveSessionSubscriptionKeys(
+            emittedEvent.sessionKey,
+            routingAgentId,
+            compatibilityOwnerAgentId,
+          )
+        : [emittedEvent.sessionKey],
+      dropIfSlow: true,
+    };
     // Key-only lifecycle deletes invalidate membership; a later row is not deletion evidence.
     if (
       emittedEvent.reason === "delete" ||
@@ -711,7 +716,7 @@ export function createLifecycleEventBroadcastHandler(params: {
           },
           connIds,
           {
-            dropIfSlow: true,
+            ...broadcastOptions,
             ...(read && projection
               ? {
                   prepareSessionProjection: prepareSessionEventProjection(projection, read, {

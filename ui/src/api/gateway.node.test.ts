@@ -315,7 +315,14 @@ describe("GatewayBrowserClient", () => {
     { advertised: false, modelCatalog: { agentId: "alpha" } },
     { advertised: true, modelCatalog: { agentId: "alpha", sessionKey: "agent:alpha:saved" } },
   ])("connects with only advertised catalog input: %j", async ({ advertised, modelCatalog }) => {
-    const client = createClient({ modelCatalog });
+    const readModelCatalog = vi.fn(() => modelCatalog);
+    const client = new GatewayBrowserClient({
+      url: DEFAULT_GATEWAY_URL,
+      get modelCatalog() {
+        return readModelCatalog();
+      },
+    });
+    clients.push(client);
     client.start();
     const { connectFrame } = await continueConnect(
       getLatestWebSocket(),
@@ -323,6 +330,7 @@ describe("GatewayBrowserClient", () => {
       1_800_000_000_000,
       advertised ? [GATEWAY_SERVER_CAPS.MODEL_CATALOG_SNAPSHOT] : undefined,
     );
+    expect(readModelCatalog).toHaveBeenCalledTimes(advertised ? 1 : 0);
     if (advertised) {
       expect(connectFrame.params?.modelCatalog).toEqual(modelCatalog);
       expect(connectFrame.params?.caps).toContain(GATEWAY_CLIENT_CAPS.MODEL_CATALOG_SNAPSHOT);

@@ -15,7 +15,7 @@ import { listen } from "../../lib/reactive/listener.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { VoiceWakeEditorState } from "./talk-device.tsx";
 import {
-  isTalkGptLiveModel,
+  resolveTalkModelFamilySettings,
   resolveTalkRealtimeSelection,
   talkProviderRejectsTransport,
 } from "./talk-schema.ts";
@@ -72,10 +72,6 @@ type ModelDefaultResetIntent = {
 
 /** Transports whose sessions are client-owned (`talk.client.create`). */
 const TALK_CLIENT_OWNED_TRANSPORTS = new Set(["webrtc", "provider-websocket"]);
-
-function gptLiveRejectsTransport(model: string | null, transport: string): boolean {
-  return isTalkGptLiveModel(model) && transport === "provider-websocket";
-}
 
 // Drafts and write ordering belong to the application Gateway, not a route
 // element. Weak ownership retains them across navigation without durable storage.
@@ -418,17 +414,17 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       const selection = liveSelection();
       const transport = selection.transport;
       const provider = selectedTalkProviderOption(catalog(), selection);
+      const family = resolveTalkModelFamilySettings(provider, model);
       const rejectsTransport =
         transport !== null &&
-        (gptLiveRejectsTransport(model, transport) ||
+        (family?.unsupportedTransports.some((candidate) => candidate === transport) ||
           talkProviderRejectsTransport(provider?.transports, transport));
       // Preserve configured transports unless the selected provider positively
       // advertises that it cannot serve them.
-      if (isTalkGptLiveModel(model) && rejectsTransport) {
+      if (family && rejectsTransport) {
         runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
       } else if (
-        provider?.id === "openai" &&
-        isTalkGptLiveModel(model) &&
+        family?.gatewayRelayHandlesAgentConsult &&
         transport === "gateway-relay" &&
         selection.consultRouting === "force-agent-consult"
       ) {
@@ -513,9 +509,10 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
         { ...selection, provider: providerId, model: null, speakerVoice: null },
         option,
       ).model ?? option?.defaultModel;
+    const family = resolveTalkModelFamilySettings(option, targetModel ?? null);
     const rejectsTransport =
       configuredTransport !== null &&
-      (gptLiveRejectsTransport(targetModel ?? null, configuredTransport) ||
+      (family?.unsupportedTransports.some((candidate) => candidate === configuredTransport) ||
         talkProviderRejectsTransport(option?.transports, configuredTransport));
     if (rejectsTransport) {
       runtimeConfig.removeFormValue(["talk", "realtime", "transport"]);
@@ -533,8 +530,7 @@ function createTalkSettings(context: ApplicationContext, props: TalkSettingsPage
       resultingTransport = "gateway-relay";
     }
     if (
-      option?.id === "openai" &&
-      isTalkGptLiveModel(targetModel ?? null) &&
+      family?.gatewayRelayHandlesAgentConsult &&
       resultingTransport === "gateway-relay" &&
       selection.consultRouting === "force-agent-consult"
     ) {

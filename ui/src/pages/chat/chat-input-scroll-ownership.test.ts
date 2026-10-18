@@ -1,12 +1,11 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { createInitializationContext } from "./chat-pane.test-support.ts";
+import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support.ts";
 import { applyChatPendingInputs } from "./chat-pending-inputs.ts";
-import { createChatState } from "./chat-state-controller.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import { createPageState } from "./chat-state-page.ts";
-import { requestChatPageUpdate } from "./chat-state-render.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
+import { mutateChatRunState, publishChatRunState } from "./chat-state-render.ts";
 import { handleChatScrollTakeover } from "./scroll.ts";
 
 const disposals: Array<() => void> = [];
@@ -35,17 +34,10 @@ function userMessage(sendId: string) {
   };
 }
 function setup() {
-  const requestUpdate = vi.fn();
-  const controller = createChatState<ChatPageHost>({
-    invalidate: requestUpdate,
-    updateComplete: Promise.resolve(true),
-  });
+  const { pane, state } = createTestChatPane({ client: createTestGatewayClient(async () => ({})) });
+  const controller = getPaneTestRuntime(pane).chatState;
   const dispose = controller.dispose;
   disposals.push(dispose);
-  const state = createPageState(createInitializationContext(), controller.createRenderLifecycle(), {
-    dispatchEvent: () => true,
-    querySelector: () => null,
-  });
   state.sessionKey = "agent:main:scroll-ownership";
   state.currentSessionId = "physical-session";
   state.chatMessages = [userMessage("loaded")];
@@ -69,16 +61,20 @@ function setup() {
     scrollport.scrollTop = height - scrollport.clientHeight;
     return true;
   };
-  controller.attach(state);
+  controller.prepareRender();
+  controller.commitRender();
+  vi.advanceTimersToNextFrame();
+  const published = vi.fn();
+  disposals.push(chatRunPresentation(state).subscribe(published));
   return {
     state,
     controller,
     dispose,
-    requestUpdate,
+    published,
     scrollport,
     commitGrowth: () => {
-      state.requestUpdate?.();
       height += 889;
+      controller.prepareRender();
       controller.commitRender();
       vi.advanceTimersToNextFrame();
     },
@@ -86,56 +82,80 @@ function setup() {
 }
 
 describe("transcript arrival scroll ownership", () => {
-  it("coalesces background replies without delaying input or transcript invalidation", () => {
-    const { state, controller, requestUpdate } = setup();
+  it("coalesces streamed replies without delaying the draft or new transcript rows", () => {
+    const { state, controller, published } = setup();
     for (let index = 0; index < 36; index++) {
-      state.assistantName = `Assistant ${index}`;
-      controller.requestBackgroundUpdate();
+      mutateChatRunState(
+        state,
+        () => {
+          state.chatStream = `Reply ${index}`;
+        },
+        "animation-frame",
+      );
     }
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(published).not.toHaveBeenCalled();
     vi.advanceTimersToNextFrame();
-    expect(requestUpdate).toHaveBeenCalledTimes(1);
+    expect(published).toHaveBeenCalledOnce();
+    expect(state.chatStream).toBe("Reply 35");
 
-    controller.requestBackgroundUpdate();
-    state.chatMessage = "Keep this draft";
-    state.requestUpdate?.();
-    expect(requestUpdate).toHaveBeenCalledTimes(2);
+    mutateChatRunState(
+      state,
+      () => {
+        state.chatStream = "A queued reply";
+      },
+      "animation-frame",
+    );
+    state.handleChatDraftChange("Keep this draft");
+    expect(controller.composerDraft.read().draft).toBe("Keep this draft");
+    expect(published).toHaveBeenCalledOnce();
     vi.advanceTimersToNextFrame();
-    expect(requestUpdate).toHaveBeenCalledTimes(2);
+    expect(published).toHaveBeenCalledTimes(2);
 
+    publishChatRunState(state, "animation-frame");
     state.chatMessages = [...state.chatMessages, userMessage("remote")];
-    controller.requestBackgroundUpdate();
-    expect(requestUpdate).toHaveBeenCalledTimes(3);
+    expect(published).toHaveBeenCalledTimes(3);
+    vi.advanceTimersToNextFrame();
+    expect(published).toHaveBeenCalledTimes(3);
   });
 
-  it("absorbs a pending background repaint into an immediate commit and cancels on teardown", async () => {
-    const { controller, dispose, requestUpdate, state } = setup();
-    controller.requestBackgroundUpdate();
+  it("absorbs a pending stream publication into a commit and cancels on teardown", async () => {
+    const { controller, dispose, published, state } = setup();
+    mutateChatRunState(
+      state,
+      () => {
+        state.chatStream = "Waiting for a frame";
+      },
+      "animation-frame",
+    );
     controller.prepareRender();
     vi.advanceTimersToNextFrame();
-    expect(requestUpdate).not.toHaveBeenCalled();
+    expect(published).toHaveBeenCalledOnce();
 
-    controller.requestBackgroundUpdate();
     const effect = vi.fn();
     state.renderLifecycle.afterCommit(effect);
-    expect(requestUpdate).toHaveBeenCalledOnce();
     await Promise.resolve();
     expect(effect).toHaveBeenCalledOnce();
-    controller.requestBackgroundUpdate();
+    mutateChatRunState(
+      state,
+      () => {
+        state.chatStream = "Retired before publication";
+      },
+      "animation-frame",
+    );
     dispose();
+    const publicationsAtDisposal = published.mock.calls.length;
     vi.advanceTimersToNextFrame();
-    expect(requestUpdate).toHaveBeenCalledOnce();
+    expect(published).toHaveBeenCalledTimes(publicationsAtDisposal);
   });
 
   it("preserves follow effects when a host commit consumes a queued stream frame", () => {
-    const { controller, requestUpdate, state } = setup();
+    const { controller, state } = setup();
     const follow = vi.spyOn(state, "chatScrollToEnd");
     state.chatStream = "A response arrived before the property commit.";
-    requestChatPageUpdate(state, "animation-frame");
+    publishChatRunState(state, "animation-frame");
     controller.prepareRender();
     controller.commitRender();
     vi.advanceTimersToNextFrame();
-    expect(requestUpdate).not.toHaveBeenCalled();
     expect(follow).toHaveBeenCalledOnce();
     expect(state.chatStreamRenderFrame).toBeNull();
   });

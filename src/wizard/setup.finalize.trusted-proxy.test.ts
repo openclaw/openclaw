@@ -7,7 +7,9 @@ import type { GatewayTlsConfig } from "../config/types.gateway.js";
 import type { PluginWebSearchProviderEntry } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
 
-type DefaultModelAuthStatus = ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>;
+type DefaultModelAuthStatus = Awaited<
+  ReturnType<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+>;
 type DefaultModelCatalogFacts = ReturnType<
   typeof AuthChoiceModelCheck.resolveDefaultModelCatalogFacts
 >;
@@ -60,7 +62,11 @@ const healthCommand = vi.hoisted(() =>
   vi.fn<typeof import("../commands/health.js").healthCommandNonExiting>(async () => {}),
 );
 const resolveDefaultModelAuthStatus = vi.hoisted(() =>
-  vi.fn<() => DefaultModelAuthStatus>(() => ({
+  vi.fn<
+    (
+      ...args: Parameters<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+    ) => DefaultModelAuthStatus
+  >(() => ({
     provider: "anthropic",
     model: "test-model",
     status: "ready",
@@ -130,8 +136,9 @@ const hasAuthProfileForProvider = vi.hoisted(() =>
   >(() => false),
 );
 const isContainerEnvironment = vi.hoisted(() => vi.fn(() => false));
-const startGatewayServer = vi.hoisted(() =>
+const startOnboardingGatewayProcess = vi.hoisted(() =>
   vi.fn(async () => ({
+    wait: new Promise<void>(() => {}),
     close: vi.fn(async () => {}),
   })),
 );
@@ -241,8 +248,9 @@ vi.mock("../infra/container-environment.js", () => ({
   isContainerEnvironment,
 }));
 
-vi.mock("../gateway/server.js", () => ({
-  startGatewayServer,
+vi.mock("../commands/onboard-gateway-process.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../commands/onboard-gateway-process.js")>()),
+  startOnboardingGatewayProcess,
 }));
 
 vi.mock("../../packages/terminal-core/src/restore.js", () => ({
@@ -255,7 +263,9 @@ vi.mock("../tui/tui.js", () => ({ runTui }));
 vi.mock("../commands/auth-choice.js", () => ({
   applyAuthChoice: vi.fn(),
   resolveDefaultModelCatalogFacts,
-  resolveDefaultModelAuthStatus,
+  resolveDefaultModelAuthStatus: async (
+    ...args: Parameters<typeof AuthChoiceModelCheck.resolveDefaultModelAuthStatus>
+  ) => resolveDefaultModelAuthStatus(...args),
   resolvePreferredProviderForAuthChoice: vi.fn(),
   warnIfModelConfigLooksOff: vi.fn(),
 }));
@@ -400,8 +410,11 @@ describe("finalizeSetupWizard", () => {
     hasAuthProfileForProvider.mockReturnValue(false);
     isContainerEnvironment.mockReset();
     isContainerEnvironment.mockReturnValue(false);
-    startGatewayServer.mockReset();
-    startGatewayServer.mockResolvedValue({ close: vi.fn(async () => {}) });
+    startOnboardingGatewayProcess.mockReset();
+    startOnboardingGatewayProcess.mockResolvedValue({
+      wait: new Promise<void>(() => {}),
+      close: vi.fn(async () => {}),
+    });
     inspectWindowsGatewayFirewall.mockReset();
     inspectWindowsGatewayFirewall.mockResolvedValue({
       applies: false,

@@ -22,6 +22,9 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { copyOxlintConfigFixture } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const scriptsConfig = "config/tsconfig/oxlint.scripts.json";
+const coreConfig = "config/tsconfig/oxlint.core.json";
+const rootTestConfig = "test/tsconfig/tsconfig.test.root.json";
 
 function fixture(prefix: string) {
   const cwd = tempDirs.make(prefix);
@@ -181,10 +184,7 @@ describe("CI changed lint", () => {
     );
     mkdirSync(path.join(cwd, "config/tsconfig"), { recursive: true });
     copyOxlintConfigFixture(cwd);
-    copyFileSync(
-      "config/tsconfig/oxlint.core.json",
-      path.join(cwd, "config/tsconfig/oxlint.core.json"),
-    );
+    copyFileSync(coreConfig, path.join(cwd, coreConfig));
     symlinkSync(path.resolve("node_modules"), path.join(cwd, "node_modules"), "junction");
     mkdirSync(path.join(cwd, "scripts"));
     symlinkSync(path.resolve("scripts/lib"), path.join(cwd, "scripts/lib"), "junction");
@@ -314,20 +314,11 @@ describe("CI changed lint", () => {
       ]);
       expect(central.some(({ args }) => args[0] === "lint:ui:i18n")).toBe(true);
       expect(central.some(({ args }) => args[0] === "check:control-ui-controllers")).toBe(true);
-      expect(
-        central.some(
-          ({ args }) =>
-            args[0] === "scripts/run-oxlint.mjs" &&
-            args.includes("test/tsconfig/tsconfig.test.root.json"),
-        ),
-      ).toBe(true);
-      expect(
-        central.find(
-          ({ args }) =>
-            args[0] === "scripts/run-oxlint.mjs" &&
-            args.includes("test/tsconfig/tsconfig.test.root.json"),
-        )?.args,
-      ).toContain(`--threads=${runnerProfile === "blacksmith" ? 8 : 1}`);
+      const rootLint = central.find(
+        ({ args }) => args[0] === "scripts/run-oxlint.mjs" && args.includes(rootTestConfig),
+      );
+      expect(rootLint).toBeDefined();
+      expect(rootLint?.args).toContain(`--threads=${runnerProfile === "blacksmith" ? 8 : 1}`);
       const selections = [
         plan.central,
         ...[...plan.core, ...plan.extensions].map(
@@ -388,8 +379,8 @@ describe("CI changed lint", () => {
       } else {
         expect(plan.core).toEqual([]);
         expect(plan.extensions).toEqual([]);
-        expect(actual).toContain("config/tsconfig/oxlint.core.json:src/utils.ts");
-        expect(actual).toContain("config/tsconfig/oxlint.scripts.json:scripts/lib/arg-utils.mts");
+        expect(actual).toContain(`${coreConfig}:src/utils.ts`);
+        expect(actual).toContain(`${scriptsConfig}:scripts/lib/arg-utils.mts`);
         expect(plan.central.groups).toEqual(["core", "extensions", "scripts"]);
       }
       for (const row of [...plan.core, ...plan.extensions]) {
@@ -601,7 +592,7 @@ describe("CI changed lint", () => {
       ({ bin, args }) => bin === "node" && args[0] === "scripts/run-oxlint.mjs",
     );
     expect(semantic.map(({ args }) => args)).toEqual([
-      ["scripts/run-oxlint.mjs", "--tsconfig", "config/tsconfig/oxlint.core.json", "src/utils.ts"],
+      ["scripts/run-oxlint.mjs", "--tsconfig", coreConfig, "src/utils.ts"],
       [
         "scripts/run-oxlint.mjs",
         "--tsconfig",
@@ -611,7 +602,7 @@ describe("CI changed lint", () => {
       [
         "scripts/run-oxlint.mjs",
         "--tsconfig",
-        "config/tsconfig/oxlint.scripts.json",
+        scriptsConfig,
         "scripts/lib/ci-check-family-scope.mts",
       ],
     ]);

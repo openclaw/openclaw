@@ -81,7 +81,7 @@ function fakeResponse(kind = "stream") {
         ? { "content-length": kind === "malformed length" ? "1e9" : "268435457" }
         : {},
     ),
-    body: kind === "non-streaming" ? { cancel } : { getReader: () => reader, cancel },
+    body: { getReader: () => reader, cancel },
   } as unknown as Response;
   return { response, reader, cancel, arrayBuffer };
 }
@@ -117,7 +117,6 @@ afterEach(async () => {
 it.each([
   ["empty", "empty response body"],
   ["HTTP", "HTTP 503"],
-  ["non-streaming", "streaming response body unavailable"],
   ["malformed length", "invalid content-length header: 1e9"],
   ["oversized length", "download too large: 268435457 bytes (limit: 268435456 bytes)"],
   ["drive-relative filename", "invalid download filename"],
@@ -138,11 +137,8 @@ it.each([
   expectDownloadFailure(await install(), error);
   expectFetchDownloadCall();
   expect(release).toHaveBeenCalledTimes(1);
-  if (kind === "HTTP" || kind === "non-streaming" || kind.endsWith("length")) {
+  if (kind === "HTTP" || kind.endsWith("length")) {
     expect(fixture.cancel).toHaveBeenCalledTimes(1);
-  }
-  if (kind === "non-streaming") {
-    expect(fixture.arrayBuffer).not.toHaveBeenCalled();
   }
   if (kind.endsWith("length")) {
     expect(fixture.reader.read).not.toHaveBeenCalled();

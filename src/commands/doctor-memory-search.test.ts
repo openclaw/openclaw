@@ -619,29 +619,21 @@ describe("noteMemorySearchHealth", () => {
     expect(note).not.toHaveBeenCalled();
   });
 
-  it.each([
-    {
-      memoryProvider: "custom-memory",
-      activeMemoryConfig: { toolsAllow: ["memory_search"] },
-    },
-  ])(
-    "warns when the $memoryProvider provider lacks protected transcript recall",
-    async ({ memoryProvider, activeMemoryConfig }) => {
-      await runConversationRecallHealth({
-        slots: { memory: memoryProvider },
-        entries: {
-          "active-memory": {
-            enabled: true,
-            ...(activeMemoryConfig ? { config: activeMemoryConfig } : {}),
-          },
+  it("warns when the custom-memory provider lacks protected transcript recall", async () => {
+    await runConversationRecallHealth({
+      slots: { memory: "custom-memory" },
+      entries: {
+        "active-memory": {
+          enabled: true,
+          config: { toolsAllow: ["memory_search"] },
         },
-      });
+      },
+    });
 
-      expect(firstNoteMessage()).toBe(
-        'Remember across conversations is effectively enabled for agent "personal", but the current memory provider does not support protected private transcript recall. Set memory.search.rememberAcrossConversations to false or use that provider\'s own recall path; advanced Active Memory can still use its recall tools.',
-      );
-    },
-  );
+    expect(firstNoteMessage()).toBe(
+      'Remember across conversations is effectively enabled for agent "personal", but the current memory provider does not support protected private transcript recall. Set memory.search.rememberAcrossConversations to false or use that provider\'s own recall path; advanced Active Memory can still use its recall tools.',
+    );
+  });
 
   it("warns when Active Memory excludes memory_search for conversation recall", async () => {
     await runConversationRecallHealth({
@@ -702,17 +694,15 @@ describe("noteMemorySearchHealth", () => {
     },
   );
 
-  it.each([
-    ["resolves provider auth from the default agent directory", "gemini", "google", "GEMINI"],
-  ])("%s", async (_name, provider, authProvider, envPrefix) => {
+  it("resolves provider auth from the default agent directory", async () => {
     resolveApiKeyForProviderCore.mockResolvedValue({
       apiKey: "k",
-      source: `env: ${envPrefix}_API_KEY`,
+      source: "env: GEMINI_API_KEY",
       mode: "api-key",
     });
-    await runMemorySearchHealth(provider);
+    await runMemorySearchHealth("gemini");
     expect(resolveApiKeyForProviderCore).toHaveBeenCalledWith({
-      provider: authProvider,
+      provider: "google",
       cfg,
       agentDir: "/tmp/agent-default",
     });
@@ -789,24 +779,21 @@ describe("noteMemorySearchHealth", () => {
     }
   });
 
-  it.each([["warns for explicit empty auth order when lint skips profile resolution", []]])(
-    "%s",
-    async (_name, profileIds) => {
-      hasAuthProfileStoreSourceForProvider.mockReturnValue(false);
-      const orderedCfg = {
-        ...cfg,
-        auth: { order: { openai: profileIds } },
-      } as OpenClawConfig;
-      await runAuthLintHealth("openai", orderedCfg);
-      expect(hasAuthProfileStoreSourceForProvider).toHaveBeenCalledWith(
-        "openai",
-        "/tmp/agent-default",
-        { profileIds },
-      );
-      expect(firstNoteMessage()).toContain('provider is set to "openai"');
-      expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
-    },
-  );
+  it("warns for explicit empty auth order when lint skips profile resolution", async () => {
+    hasAuthProfileStoreSourceForProvider.mockReturnValue(false);
+    const orderedCfg: OpenClawConfig = {
+      ...cfg,
+      auth: { order: { openai: [] } },
+    };
+    await runAuthLintHealth("openai", orderedCfg);
+    expect(hasAuthProfileStoreSourceForProvider).toHaveBeenCalledWith(
+      "openai",
+      "/tmp/agent-default",
+      { profileIds: [] },
+    );
+    expect(firstNoteMessage()).toContain('provider is set to "openai"');
+    expect(resolveApiKeyForProviderCore).not.toHaveBeenCalled();
+  });
 
   it("does not warn for Bedrock aws-sdk provider auth when lint skips profile resolution", async () => {
     const bedrockCfg = {

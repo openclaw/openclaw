@@ -9,7 +9,6 @@ import { sliceUtf16Safe, truncateUtf16Safe } from "../../utils.js";
 import { resolveAgentConfig } from "../agent-scope.js";
 import type { WorkspaceBootstrapFile } from "../workspace.js";
 import type { EmbeddedContextFile } from "./context-file.js";
-export { sanitizeGoogleAssistantFirstOrdering as sanitizeGoogleTurnOrdering } from "../../shared/google-turn-ordering.js";
 
 type ContentBlockWithSignature = {
   thought_signature?: unknown;

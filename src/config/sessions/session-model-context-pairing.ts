@@ -22,10 +22,7 @@ type CompactFrame = {
   results: Array<{ message: ToolResult; source: ToolResult | undefined }>;
 };
 
-export type ModelContextPairingFacts = {
-  owners: ReadonlyMap<AgentMessage, Owner>;
-  spans: ReadonlyArray<{ assistant: Owner; result: AgentMessage }>;
-};
+export type ModelContextPairingFacts = ReadonlyMap<AgentMessage, Owner>;
 
 type ModelContextPairing = {
   /** False means this append needs the canonical history before the cache can be reused. */
@@ -257,10 +254,7 @@ export function createModelContextPairing(
     read() {
       if (!snapshot) {
         const ordered = [...owned].toSorted((a, b) => a[1].order - b[1].order);
-        snapshot = {
-          owners: new Map(ordered.map(([result, { owner }]) => [result, owner])),
-          spans: ordered.map(([result, { owner }]) => ({ assistant: owner, result })),
-        };
+        snapshot = new Map(ordered.map(([result, { owner }]) => [result, owner]));
       }
       return snapshot;
     },

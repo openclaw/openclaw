@@ -1,4 +1,3 @@
-import { createHash } from "node:crypto";
 import { shouldIncludeAgentHarnessRuntimeContext } from "openclaw/plugin-sdk/agent-harness-attempt-runtime";
 import {
   embeddedAgentLog,
@@ -9,6 +8,7 @@ import {
   type EmbeddedRunAttemptParamsV2 as EmbeddedRunAttemptParams,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import { MESSAGE_TOOL_DELIVERY_HINTS } from "openclaw/plugin-sdk/message-tool-delivery-hints";
+import { sha256Hex as sha256Text } from "openclaw/plugin-sdk/node-crypto-runtime";
 import type { TranscriptTurnAdmission } from "openclaw/plugin-sdk/session-transcript-runtime";
 import {
   normalizeLowercaseStringOrEmpty,
@@ -200,10 +200,6 @@ function buildCodexToolReportEntry(tool: CodexDynamicToolFunctionSpec): CodexToo
     schemaHash: stableJsonHash(schema),
     propertiesCount: properties ? Object.keys(properties).length : null,
   };
-}
-
-function sha256Text(value: string): string {
-  return createHash("sha256").update(value).digest("hex");
 }
 
 function stableJsonHash(value: JsonValue): string {

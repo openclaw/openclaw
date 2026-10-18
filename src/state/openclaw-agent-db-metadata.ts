@@ -115,13 +115,15 @@ export function readExistingAgentSchemaMeta(
     role: typeof row.role === "string" ? row.role : null,
     schemaVersion: typeof row.schema_version === "number" ? row.schema_version : null,
   };
+  const schemaStillCurrent = schema && getAdmittedSqliteSchemaFacts(db) === schema;
   if (
     isPostgresSqlConnection(db) ||
-    (schema &&
-      getAdmittedSqliteSchemaFacts(db) === schema &&
+    (schemaStillCurrent &&
       getSqliteDatabaseAdmission(db, schemaAdmission)?.admissionId === schema.admissionId)
   ) {
     publishAgentSchemaMetadata(db, metadata);
+  } else if (schemaStillCurrent) {
+    publishSqliteDatabaseAdmission(db, schemaMetadataKey(schema.admissionId), metadata);
   }
   // App version can change without DDL; write admission must read it from the current row.
   return options?.includeAppVersion

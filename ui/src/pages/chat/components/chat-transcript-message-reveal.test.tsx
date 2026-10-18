@@ -29,7 +29,7 @@ describe("chat transcript controller", () => {
 
   it("retains a projected reply target until its row commits and prevents automatic follow from taking over", async () => {
     const update = createDeferred<boolean>();
-    const transcript = createChatTranscript(vi.fn(), () => "projected-reply");
+    const transcript = createChatTranscript(() => "projected-reply");
     const tail: TestContentRow = {
       kind: "content",
       key: "tail",
@@ -85,7 +85,7 @@ describe("chat transcript controller", () => {
     "keeps only the current deferred message reveal after %s",
     async (interruption) => {
       const update = createDeferred<boolean>();
-      const transcript = createChatTranscript(vi.fn(), () => `message-reveal-${interruption}`);
+      const transcript = createChatTranscript(() => `message-reveal-${interruption}`);
       const rows: TestContentRow[] = ["first", "second"].map((id) => ({
         kind: "content",
         key: id,

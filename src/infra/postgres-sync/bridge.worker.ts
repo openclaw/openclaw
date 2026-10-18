@@ -33,6 +33,26 @@ async function handleRequest(request: BridgeRequest) {
   let reply: BridgeReply;
   try {
     if (request.operation === "connect") {
+      if (client && !connectionError) {
+        try {
+          // Validate only while idle: user statements are never replayed after a lost connection.
+          await client.query("SELECT 1");
+          reply = {
+            id: request.id,
+            result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
+          };
+          port.postMessage(reply);
+          Atomics.store(control, 0, request.id);
+          Atomics.notify(control, 0);
+          return;
+        } catch (error) {
+          connectionError = error instanceof Error ? error : new Error(String(error));
+        }
+      }
+      if (client) {
+        await client.end().catch(() => {});
+      }
+      connectionError = undefined;
       // URL parsing can throw too; every connect failure must wake the waiting host.
       client = new pg.Client({
         connectionString: url,
@@ -57,15 +77,28 @@ async function handleRequest(request: BridgeRequest) {
         [`${lockTimeoutMs}ms`, `${statementTimeoutMs}ms`],
       );
       await client.query(`SET search_path TO "${schema.replaceAll('"', '""')}"`);
-      reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
+      reply = {
+        id: request.id,
+        result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
+      };
     } else if (request.operation === "close") {
       await client.end();
-      reply = { id: request.id, result: { rows: [], rowCount: 0, fields: [] } };
+      reply = {
+        id: request.id,
+        result: { inTransaction: false, rows: [], rowCount: 0, fields: [] },
+      };
     } else {
       if (connectionError) {
         throw connectionError;
       }
-      if (request.operation === "recovery-generation") {
+      if (request.operation === "release") {
+        // Server status also catches transactions opened later in a multi-statement query.
+        const reusable = client.getTransactionStatus() === "I";
+        if (!reusable) {
+          await client.end();
+        }
+        reply = { id: request.id, reusable };
+      } else if (request.operation === "recovery-generation") {
         if (request.lock) {
           await lockPostgresGeneration(client, schema);
         }
@@ -81,10 +114,25 @@ async function handleRequest(request: BridgeRequest) {
         if (!result) {
           throw new Error("PostgreSQL returned no query result");
         }
+        // A trailing SELECT must not hide an earlier write in the same SQL batch.
+        const commands = (Array.isArray(results) ? results : [results]).map(
+          ({ command }) => command,
+        );
+        const mutation = commands.some((command) =>
+          /^(?:CREATE|ALTER|DROP|TRUNCATE|COMMENT|GRANT|REVOKE|COPY|CALL|DO|REFRESH)$/.test(
+            command,
+          ),
+        )
+          ? "unscoped"
+          : commands.some((command) => /^(?:INSERT|UPDATE|DELETE|MERGE)$/.test(command))
+            ? "scoped"
+            : undefined;
         reply = {
           id: request.id,
           result: {
+            inTransaction: client.getTransactionStatus() !== "I",
             command: result.command,
+            mutation,
             rows: result.rows,
             rowCount: result.rowCount ?? 0,
             fields: result.fields.map(({ name, dataTypeID }) => ({ name, dataTypeID })),
@@ -124,7 +172,11 @@ async function handleRequest(request: BridgeRequest) {
   port.postMessage(reply);
   Atomics.store(control, 0, request.id);
   Atomics.notify(control, 0);
-  if (request.operation === "close" || (request.operation === "connect" && "error" in reply)) {
+  if (
+    request.operation === "close" ||
+    (request.operation === "connect" && "error" in reply) ||
+    ("reusable" in reply && !reply.reusable)
+  ) {
     port.close();
     parentPort?.close();
   }

@@ -442,18 +442,6 @@ export function ensureMemoryIndexSchema(params: {
   `);
   migrateMemoryIndexSourcesIdentity(params.db);
   params.db.exec(`
-    ${[MEMORY_INDEX_SOURCES_TABLE, MEMORY_INDEX_CHUNKS_TABLE]
-      .flatMap((table) =>
-        ["insert", "update", "delete"].map(
-          (event) => `CREATE TRIGGER IF NOT EXISTS ${table}_revision_after_${event}
-            AFTER ${event.toUpperCase()} ON ${table}
-            BEGIN
-              UPDATE ${MEMORY_INDEX_STATE_TABLE} SET revision = revision + 1 WHERE id = 1;
-            END;`,
-        ),
-      )
-      .join("\n")}
-
     CREATE INDEX IF NOT EXISTS idx_memory_index_sources_source
       ON ${MEMORY_INDEX_SOURCES_TABLE}(source);
     CREATE INDEX IF NOT EXISTS idx_memory_index_chunks_path_source

@@ -1,4 +1,7 @@
 // Opt-in production-bundle benchmark; real delays model wire delivery, not test synchronization.
+// --cpu-profile: source-mapped reload/live/streaming tables and per-run/median cpu-profile.json.
+// --cpu-profile-compare <baseline cpu-profile.json>: profile and diff against that report.
+// Sampling inflates timings: never compare profiled runs with unprofiled runs.
 import { execFileSync } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
@@ -25,6 +28,15 @@ import {
 } from "../ui/src/test-helpers/control-ui-streaming-reply.ts";
 import { createControlUiTeamScaleFixture } from "../ui/src/test-helpers/control-ui-team-scale-fixture.ts";
 import {
+  persistColdLoadWarmState,
+  restoreColdLoadWarmState,
+} from "./lib/control-ui-bench-warm-state.ts";
+import {
+  compareCpuTables,
+  formatCpuTables,
+  medianCpuTables,
+  readCpuProfileReport,
+  type ColdLoadCpuTables,
   mapColdLoadCpuProfile,
   prepareColdLoadTraceEvent,
   summarizeColdLoadTrace,
@@ -204,6 +216,8 @@ function summarizeSidebarWindows(
 
 const { values } = parseArgs({
   options: {
+    "cpu-profile": { type: "boolean", default: false },
+    "cpu-profile-compare": { type: "string" },
     "warm-reload": { type: "boolean", default: false },
     "large-snapshot": { type: "boolean", default: false },
     "overlay-probe": { type: "boolean", default: false },
@@ -253,6 +267,15 @@ const sidebarView = values["sidebar-view"];
 if (sidebarView !== "sessions" && sidebarView !== "online") {
   throw new Error("Expected sidebar-view sessions or online");
 }
+const cpuProfile = values["cpu-profile"] || Boolean(values["cpu-profile-compare"]);
+const baselineCpu = values["cpu-profile-compare"]
+  ? readCpuProfileReport(JSON.parse(await readFile(values["cpu-profile-compare"], "utf8")), [
+      "reload",
+      ...(values["live-events"] ? ["live"] : []),
+      ...(values["streaming-reply"] ? ["streaming"] : []),
+    ])
+  : undefined;
+const cpuRuns: Record<string, ColdLoadCpuTables[]> = {};
 const runs = Number(values.runs);
 const latencyMs = Number(values["latency-ms"]);
 const frameGapMs = Number(values["frame-gap-ms"]);
@@ -308,9 +331,7 @@ const streamingReply = values["streaming-reply"] ? createControlUiStreamingReply
 const extraInitScripts = await Promise.all(
   values["init-script"].map((file) => readFile(file, "utf8")),
 );
-let sidebarLists = fixture.sidebarListChurn
-  ? createTeamScaleSidebarListOwner(fixture.sidebarListChurn)
-  : undefined;
+let sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
 let runTransfer: "full" | "delta" = sidebarRowTransfer === "delta" ? "delta" : "full";
 let browser: Browser | undefined;
 const results = [];
@@ -339,31 +360,32 @@ try {
         )
       ).join("\n") + `\nwindow.__readColdLoadRigProbes = ${readRigProbeSnapshot.toString()};`
     : "";
-  if (fixture.sidebarListChurn) {
-    await context.exposeBinding("__teamScaleList", (_source, params: Record<string, unknown>) => {
-      const { result, previousRows } = sidebarLists!.list(params);
-      const response =
-        params.rowMode === "sidebar"
-          ? {
-              ...result,
-              ...shareSidebarSessionRows(
-                result.sessions,
-                typeof params.ifRowsRevision === "string" ? params.ifRowsRevision : undefined,
-                runTransfer === "delta" ? previousRows : undefined,
-              ),
-            }
-          : result;
-      sidebarLists!.recordWire(response);
-      return response;
-    });
-    await context.exposeBinding(
-      "__teamScaleMutate",
-      (
-        _source,
-        mutation: Parameters<ReturnType<typeof createTeamScaleSidebarListOwner>["apply"]>[0],
-      ) => sidebarLists!.apply(mutation),
-    );
-  }
+  await context.exposeBinding("__teamScaleList", (_source, params: Record<string, unknown>) => {
+    const { result, previousRows } = sidebarLists.list(params);
+    const response =
+      params.rowMode === "sidebar"
+        ? {
+            ...result,
+            ...shareSidebarSessionRows(
+              result.sessions,
+              typeof params.ifRowsRevision === "string" ? params.ifRowsRevision : undefined,
+              runTransfer === "delta" && previousRows ? [previousRows] : undefined,
+            ),
+          }
+        : result;
+    sidebarLists.recordWire(response);
+    return response;
+  });
+  await context.exposeBinding(
+    "__teamScaleMutate",
+    (
+      _source,
+      mutation: Parameters<ReturnType<typeof createTeamScaleSidebarListOwner>["apply"]>[0],
+    ) => sidebarLists.apply(mutation),
+  );
+  await context.exposeBinding("__teamScaleCronList", (_source, params: Record<string, unknown>) =>
+    fixture.listCronJobs(params),
+  );
   const errors: string[] = [];
   const harnessWarnings: string[] = [];
   page.on("pageerror", (error) => {
@@ -412,7 +434,7 @@ try {
     });
   }
   await page.addInitScript(
-    ({ key, pins }) => {
+    ({ key, pins, mode }) => {
       if (window !== window.top) {
         return;
       }
@@ -420,7 +442,7 @@ try {
         localStorage.setItem(
           key,
           JSON.stringify({
-            sidebarAgentsMode: "roster",
+            sidebarAgentsMode: mode,
             railShortcuts: pins,
             navigationByProfile: { "team-person-001": { railShortcuts: pins } },
           }),
@@ -430,11 +452,17 @@ try {
     {
       key: controlUiBundledSettingsStorageKey(server.baseUrl),
       pins: fixture.sidebarEntries,
+      mode:
+        values["sidebar-list-churn"] ||
+        values["sidebar-live-churn"] ||
+        values["session-event-churn"]
+          ? "roster"
+          : "chip",
     },
   );
   const warmProbes = values["warm-reload"] ? `\n(${warmReloadProbe.toString()})();` : "";
   await page.addInitScript({
-    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\n${fixture.sidebarListChurn ? `window.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params)));` : ""}\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
+    content: `;(() => { if (window !== window.top) return; const __name = (fn) => fn; (${installWidgetReadiness.toString()})(); ${createControlUiMockGatewayInitScript(prepared.scenario)}\n${rigProbeScript}\nwindow.__teamScaleSidebarLists = { apply: (mutation) => window.__teamScaleMutate(mutation) }; window.openclawControlUiE2eGateway.setRequestHandler("sessions.list", async ({ params, respond }) => respond(await window.__teamScaleList(params))); window.openclawControlUiE2eGateway.setRequestHandler("cron.list", async ({ params, respond }) => respond(await window.__teamScaleCronList(params)));\n${createColdLoadProbeInitScript({ latencyMs, frameGapMs, events: fixture.events, liveEvents: fixture.liveEvents, liveHistory: fixture.liveHistory, ownerProbes: !cpuProfile && !values["session-event-churn"] })}\n${streamingReply ? createStreamingReplyProbeInitScript() : ""}\n${extraInitScripts.join("\n")}\n${warmProbes} })();`,
   });
   const url = controlUiSessionUrl(server.baseUrl, fixture.selectedSessionKey, "dashboard");
   async function settle() {
@@ -446,7 +474,7 @@ try {
         .locator('.sidebar-rail [data-sidebar-entry^="session:"]')
         .nth(29)
         .waitFor({ state: "attached" });
-      await page.locator('[data-sidebar-entry="plugin:team-scale-6/overview"]').waitFor();
+      await page.locator('[data-sidebar-entry="plugin:team-scale-7/overview"]').waitFor();
       if (sidebarView === "online") {
         await page.locator('[data-online-user-id="team-person-120"]').waitFor();
       }
@@ -494,9 +522,7 @@ try {
   try {
     await page.locator("#sidebar-session-owner-title").click();
     await page
-      .locator(
-        `.sidebar-session-owner-filter [role="option"][data-value="${values["sidebar-list-churn"] ? "involving-me" : "all"}"]`,
-      )
+      .locator(`.sidebar-session-owner-filter [role="option"][data-value="involving-me"]`)
       .click();
   } catch (error) {
     await writeFile(
@@ -515,67 +541,43 @@ try {
   }
   await settle();
   await page.locator('aside.sidebar[data-snapshot-saved="true"]').waitFor();
+  const warmInput: Parameters<typeof persistColdLoadWarmState>[0] = {
+    sessionKey: fixture.selectedSessionKey,
+    sidebarView: sidebarView === "online" ? "online" : "sessions",
+  };
+  await page.evaluate("globalThis.__name = (fn) => fn");
+  const { storage: warmStorage, ...snapshotSave } = await page.evaluate(
+    persistColdLoadWarmState,
+    warmInput,
+  );
   for (let run = 0; run < runs; run++) {
-    let snapshotSave: unknown;
-    if (values["warm-reload"]) {
-      snapshotSave = await page
-        .locator(".chat-pane-cache__pane--active")
-        .evaluate(async (element, sessionKey) => {
-          const store = Reflect.get(element, "sessionSnapshotStore");
-          if (!store) {
-            throw new Error("Missing transcript snapshot owner");
-          }
-          const cache = Reflect.get(element, "chatMessagesBySession");
-          const entry = [...cache.entries()].find(([key]) => key.endsWith(`\u0000${sessionKey}`));
-          if (!entry) {
-            throw new Error("Missing live transcript snapshot");
-          }
-          store.write(entry[0], { ...entry[1].snapshot });
-          const writeStarted = performance.now();
-          const flushed = store.flush();
-          const serializeMs = performance.now() - writeStarted;
-          await flushed;
-          const writeMs = performance.now() - writeStarted;
-          const request = indexedDB.open("openclaw-chat-snapshots");
-          const database = await new Promise<IDBDatabase>((resolve, reject) => {
-            request.addEventListener("success", () => resolve(request.result), { once: true });
-            request.addEventListener(
-              "error",
-              () => reject(new Error("Cannot open transcript cache", { cause: request.error })),
-              { once: true },
-            );
-          });
-          try {
-            const read = database.transaction("snapshots").objectStore("snapshots").getAll();
-            const snapshots = await new Promise<unknown[]>((resolve, reject) => {
-              read.addEventListener("success", () => resolve(read.result), { once: true });
-              read.addEventListener(
-                "error",
-                () => reject(new Error("Cannot read transcript cache", { cause: read.error })),
-                { once: true },
-              );
-            });
-            const record = snapshots.find((value) => {
-              const key =
-                typeof value === "object" && value !== null
-                  ? Reflect.get(value, "sessionKey")
-                  : undefined;
-              return typeof key === "string" && key.endsWith(`\u0000${sessionKey}`);
-            });
-            if (!record) {
-              throw new Error("Warm reload requires the selected session's persisted transcript");
-            }
-            return {
-              serializeMs,
-              writeMs,
-              bytes: new TextEncoder().encode(JSON.stringify(record)).byteLength,
-              messages: Reflect.get(record, "snapshot").messages.length,
-            };
-          } finally {
-            database.close();
-          }
-        }, fixture.selectedSessionKey);
+    const cpuPhases: Record<string, ColdLoadCpuTables> = {};
+    async function recordCpu(phase: string, profile: Parameters<typeof mapColdLoadCpuProfile>[0]) {
+      const mapped = await mapColdLoadCpuProfile(profile, {
+        assetBaseUrl: new URL("assets/", server.baseUrl).href,
+        assetDirectory: path.join(bundleDir, "assets"),
+      });
+      const summary = summarizeCpuProfile(mapped.profile, { includeTables: true });
+      const tables = summary.tables!;
+      cpuPhases[phase] = tables;
+      (cpuRuns[phase] ??= []).push(tables);
+      console.log(
+        formatCpuTables(`Run ${run + 1} ${phase} CPU (profiled; timings inflated)`, tables),
+      );
+      console.log(
+        `Mapped frames: ${mapped.mappedFrames}; unmapped asset frames: ${mapped.unmappedFrames}; sampled: ${summary.sampledMs.toFixed(1)} ms; idle: ${summary.idleMs.toFixed(1)} ms`,
+      );
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.${phase}.cpuprofile`),
+        JSON.stringify(profile),
+      );
+      await writeFile(
+        path.join(artifactDir, `run-${run + 1}.cpu-profile.json`),
+        JSON.stringify(cpuPhases, null, 2),
+      );
+      return { ...mapped, summary };
     }
+    await restoreColdLoadWarmState(page, warmStorage);
     runTransfer =
       sidebarRowTransfer === "delta" || (sidebarRowTransfer === "interleaved" && run % 2 === 1)
         ? "delta"
@@ -584,19 +586,19 @@ try {
     const rawTrace: unknown[] = [];
     let collectedTrace = rawTrace;
     cdp.on("Tracing.dataCollected", (data) => collectedTrace.push(...data.value));
-    if (!values.untraced) {
+    if (!values.untraced || cpuProfile) {
       await cdp.send("Profiler.enable");
       await cdp.send("Profiler.setSamplingInterval", { interval: 1000 });
       await cdp.send("Profiler.start");
+    }
+    if (!values.untraced) {
       await cdp.send("Tracing.start", {
         categories:
           "toplevel,loading,blink.user_timing,devtools.timeline,disabled-by-default-devtools.timeline,disabled-by-default-devtools.timeline.stack,disabled-by-default-devtools.screenshot,v8",
         transferMode: "ReportEvents",
       });
     }
-    if (fixture.sidebarListChurn) {
-      sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListChurn);
-    }
+    sidebarLists = createTeamScaleSidebarListOwner(fixture.sidebarListInput);
     await page.reload({ waitUntil: "domcontentloaded" });
     await settle();
     if (captureMs) {
@@ -610,7 +612,7 @@ try {
       ? await page.evaluate(() => Reflect.get(window, "__warmReload").read())
       : undefined;
     await writeFile(path.join(artifactDir, `run-${run + 1}.metrics.json`), JSON.stringify(metrics));
-    const profile = values.untraced ? undefined : await cdp.send("Profiler.stop");
+    const profile = values.untraced && !cpuProfile ? undefined : await cdp.send("Profiler.stop");
     if (!values.untraced) {
       const complete = new Promise<void>((resolve) => {
         cdp.once("Tracing.tracingComplete", () => resolve());
@@ -697,16 +699,18 @@ try {
     }, screenshots);
     const mapped = !profile
       ? undefined
-      : values["sidebar-list-churn"]
-        ? {
-            profile: profile.profile,
-            mappedFrames: 0,
-            unmappedFrames: profile.profile.nodes.length,
-          }
-        : await mapColdLoadCpuProfile(profile.profile, {
-            assetBaseUrl: new URL("assets/", server.baseUrl).href,
-            assetDirectory: path.join(bundleDir, "assets"),
-          });
+      : cpuProfile
+        ? await recordCpu("reload", profile.profile)
+        : values["sidebar-list-churn"]
+          ? {
+              profile: profile.profile,
+              mappedFrames: 0,
+              unmappedFrames: profile.profile.nodes.length,
+            }
+          : await mapColdLoadCpuProfile(profile.profile, {
+              assetBaseUrl: new URL("assets/", server.baseUrl).href,
+              assetDirectory: path.join(bundleDir, "assets"),
+            });
     let streaming;
     if (streamingReply) {
       const composer = page.locator(".agent-chat__composer-combobox textarea").last();
@@ -719,6 +723,9 @@ try {
         deltas: number;
         milliseconds: Record<string, number>;
       }> = [];
+      if (cpuProfile) {
+        await cdp.send("Profiler.start");
+      }
       await page.evaluate((input) => Reflect.get(window, "__streamingReply").start(input), {
         ...streamingReply,
         sessionKey: fixture.selectedSessionKey,
@@ -770,6 +777,9 @@ try {
       } finally {
         streamingInput.abort();
         await nativeInput;
+      }
+      if (cpuProfile) {
+        await recordCpu("streaming", (await cdp.send("Profiler.stop")).profile);
       }
       streaming = {
         ...(await page.evaluate(() => Reflect.get(window, "__streamingReply").finish())),
@@ -835,8 +845,10 @@ try {
       const before = await readLivePresentation();
       const liveTrace: unknown[] = [];
       collectedTrace = liveTrace;
-      if (!values.untraced) {
+      if (!values.untraced || cpuProfile) {
         await cdp.send("Profiler.start");
+      }
+      if (!values.untraced) {
         await cdp.send("Tracing.start", {
           categories:
             "toplevel,blink.user_timing,devtools.timeline,disabled-by-default-v8.cpu_profiler",
@@ -884,12 +896,18 @@ try {
         }
       }
       await page.evaluate(() => Reflect.get(window, "__coldLoad").finishLive());
-      if (!values.untraced) {
+      if (!values.untraced || cpuProfile) {
         const liveProfile = await cdp.send("Profiler.stop");
-        await writeFile(
-          path.join(artifactDir, `run-${run + 1}.live.cpuprofile`),
-          JSON.stringify(liveProfile.profile),
-        );
+        if (cpuProfile) {
+          await recordCpu("live", liveProfile.profile);
+        } else {
+          await writeFile(
+            path.join(artifactDir, `run-${run + 1}.live.cpuprofile`),
+            JSON.stringify(liveProfile.profile),
+          );
+        }
+      }
+      if (!values.untraced) {
         const liveComplete = new Promise<void>((resolve) => {
           cdp.once("Tracing.tracingComplete", () => resolve());
         });
@@ -1003,6 +1021,38 @@ try {
   if (errors.length) {
     throw new Error(`Browser errors: ${errors.join("\n")}`);
   }
+  if (cpuProfile) {
+    const median = Object.fromEntries(
+      Object.entries(cpuRuns).map(([phase, tables]) => [phase, medianCpuTables(tables)]),
+    );
+    await writeFile(path.join(artifactDir, "cpu-profile.json"), JSON.stringify(median, null, 2));
+    const comparisons: Record<string, ReturnType<typeof compareCpuTables>> = {};
+    for (const [phase, tables] of Object.entries(median)) {
+      console.log(
+        formatCpuTables(
+          `Median ${phase} CPU (${runs} profiled runs; missing functions count as zero)`,
+          tables,
+        ),
+      );
+      if (baselineCpu) {
+        // SAFETY: Baseline phases were validated against the enabled benchmark phases.
+        comparisons[phase] = compareCpuTables(baselineCpu[phase]!, tables);
+        console.log(
+          formatCpuTables(
+            `${phase} CPU delta (candidate minus baseline)`,
+            { functions: comparisons[phase], files: [] },
+            true,
+          ),
+        );
+      }
+    }
+    if (baselineCpu) {
+      await writeFile(
+        path.join(artifactDir, "cpu-profile-compare.json"),
+        JSON.stringify(comparisons, null, 2),
+      );
+    }
+  }
   await context.close();
 } finally {
   await browser?.close();
@@ -1025,6 +1075,8 @@ try {
         sidebarLiveChurn: fixture.sidebarLiveChurn,
         duplicateBootReads: values["duplicate-boot-reads"],
         traced: !values.untraced,
+        cpuProfile,
+        cpuProfileCompare: values["cpu-profile-compare"],
         sidebarRowTransfer,
         sidebarComparison: values["sidebar-list-churn"]
           ? "Same final client bundle; full/delta wire response A/B using the production presenter and one synthetic query/history owner. This does not measure real Gateway selection, history reset/fallback lifecycle, or server projection CPU. Node IPC is outside the measured application response task."

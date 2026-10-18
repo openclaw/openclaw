@@ -111,6 +111,15 @@ async function consumeResponse(response: ReturnType<typeof createOpenAIResponses
   response.finish();
 }
 
+function runTurnOutsideCollector(run: () => Promise<void>): Promise<void> {
+  // Do not keep the completed caller promise in the collecting test's async frame.
+  return new Promise<void>((resolve, reject) => {
+    void nextTurn()
+      .then(run)
+      .then(() => resolve(), reject);
+  });
+}
+
 function createStream(request: Record<string, unknown>, overrides: { sessionId?: string } = {}) {
   return createOpenAIResponsesWebSocketStream({
     client,
@@ -315,7 +324,7 @@ describe("native OpenAI Responses WebSocket transport", () => {
       );
     };
     try {
-      await completeTurn();
+      await runTurnOutsideCollector(completeTurn);
       const control = new WeakRef({ unowned: true });
       // Keep real cache timers and ALS alive while collecting the completed turn.
       await nextTurn();
@@ -365,7 +374,9 @@ describe("native OpenAI Responses WebSocket transport", () => {
     };
     try {
       // Vitest's async matcher retains the rejection until the test finishes.
-      await assert.rejects(failTurn(), /failed after request dispatch/);
+      await runTurnOutsideCollector(() =>
+        assert.rejects(failTurn(), /failed after request dispatch/),
+      );
       const control = new WeakRef({ unowned: true });
       await nextTurn();
       queryObjects(WeakRef);

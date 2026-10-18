@@ -2,6 +2,7 @@ import { EventEmitter, getEventListeners } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { WebSocket } from "ws";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
+import { listSystemPresence } from "../infra/system-presence.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
@@ -61,6 +62,39 @@ describe("broadcast transport retirement", () => {
   afterEach(() => {
     vi.restoreAllMocks();
     vi.useRealTimers();
+  });
+
+  it("forgets presence baselines on rejected and asynchronously failed sends", () => {
+    const peers = [controlledPeer("rejected"), controlledPeer("failed")];
+    for (const { client } of peers) {
+      client.connect.caps = [GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS];
+    }
+    const { broadcast } = createGatewayBroadcaster({
+      clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+      preparePresenceProjection: (presence) => () => presence,
+    });
+    const publish = (version: number) =>
+      broadcast(
+        "presence",
+        { presence: listSystemPresence() },
+        {
+          dropIfSlow: true,
+          stateVersion: { presence: version },
+        },
+      );
+    publish(1);
+    for (const peer of peers) {
+      expect(peer.client.presenceSnapshot?.version).toBe(1);
+      peer.callbacks.shift()?.();
+    }
+    peers[0]!.socket.send.mockImplementationOnce(() => {
+      throw new Error("rejected send");
+    });
+    publish(2);
+    expect(peers[0]!.client.presenceSnapshot).toBeUndefined();
+    expect(peers[1]!.client.presenceSnapshot?.version).toBe(2);
+    peers[1]!.callbacks.shift()?.(new Error("failed send"));
+    expect(peers[1]!.client.presenceSnapshot).toBeUndefined();
   });
 
   it("delivers identity invalidations only to agent identity readers", () => {

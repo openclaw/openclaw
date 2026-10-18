@@ -43,7 +43,6 @@ import {
   drainAgentRunTerminalWrites,
 } from "../infra/agent-run-terminal-writes.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { abortChatRunById, registerChatAbortController, type ChatAbortOps } from "./chat-abort.js";
 import { projectChatDisplayMessages } from "./chat-display-projection.core.js";
@@ -794,9 +793,7 @@ async function createCliHistoryFixture() {
       timestamp: 1_000,
     });
   });
-  const scheduler = createTestGatewayScheduler();
-  onTestFinished(() => scheduler.stop());
-  const owner = createSessionLifecyclePersistenceOwner(scheduler);
+  const owner = createSessionLifecyclePersistenceOwner();
   const captured = captureAgentRunTerminalPersistence(cliRunId).writeContext;
   if (!captured) {
     throw new Error("Expected the admitted runtime's terminal write context");

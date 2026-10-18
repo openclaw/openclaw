@@ -414,9 +414,24 @@ const reviewedOperations = new Map([
         operations: [
           "readTranscriptExportSnapshotReadOnlySync",
           "readTranscriptExportSnapshotFromDatabase",
+          "readTranscriptExportSnapshotsFromDatabase",
         ],
         evidence:
           "Transcript hydration, memory-entry export, and reset-recall dispatch run in transcript workers. Main-thread buildSessionEntry supplies a worker snapshot for SQLite; its in-process branch has no SQLite identity. Actor projection also receives a supplied snapshot. Other readers retain native SDK callers.",
+      },
+    ],
+  ],
+  [
+    "src/infra/database-engine/agent-port-descriptor.ts",
+    [
+      {
+        tier: "W",
+        operations: [
+          "loadAgentPortDescriptor.inspectSqliteSource",
+          "loadAgentPortDescriptor.migrateSqliteSource",
+        ],
+        evidence:
+          "inspectSqliteSource is called only by port-command.worker.ts inspectSqliteImage; migrateSqliteSource is called only by port.worker.ts migrateDatabasePortSource on the CLI's private source copy. Other descriptor consumers use admission/export operations, not these SQL callbacks.",
       },
     ],
   ],
@@ -449,13 +464,24 @@ const reviewedOperations = new Map([
     ],
   ],
   [
+    "src/config/sessions/session-accessor.sqlite-closed-reset-interval.ts",
+    [
+      {
+        tier: "W",
+        operations: ["resolveClosedResetInterval"],
+        evidence:
+          "Closed intervals are called only by history-interval's worker-owned ID/anchor readers.",
+      },
+    ],
+  ],
+  [
     "src/config/sessions/session-accessor.sqlite-reset-window.ts",
     [
       {
         tier: "W",
-        operations: ["resolveClosedResetInterval", "hasUnindexedVisibleMessages"],
+        operations: ["hasUnindexedVisibleMessages"],
         evidence:
-          "Closed intervals are called only by history-interval's worker-owned ID/anchor readers. Unindexed-message probing is called only by history-query's lookup reader, constructed by the readonly history reader inside session-transcript.worker.ts.",
+          "Unindexed-message probing is called only by history-query's lookup reader, constructed by the readonly history reader inside session-transcript.worker.ts.",
       },
       {
         tier: "W",
@@ -660,9 +686,12 @@ const reviewedOperations = new Map([
         operations: [
           "everySessionTranscriptUserInputFrom.read",
           "readSessionTranscriptVisibleMessageDeltaCore",
+          "resolveVisibleDeltaRange",
+          "readVisibleDeltaMetadata",
+          "readVisibleDeltaPayload",
         ],
         evidence:
-          "Harness completion reaches the predicate only through session-history-read-operation.worker.ts or openclaw-agent-execution.worker.ts -> session-actor.worker.ts -> session-actor-phase.worker.ts. Visible delta has only session-history-read-operation.worker.ts and the registered execution-worker visibleDelta operation as callers; the accessor reexport adds no native value caller.",
+          "Harness completion reaches the predicate only through session-history-read-operation.worker.ts or openclaw-agent-execution.worker.ts -> session-actor.worker.ts -> session-actor-phase.worker.ts. Visible delta has only session-history-read-operation.worker.ts and the registered execution-worker visibleDelta operation as callers; the accessor reexport adds no native value caller. Its private range, metadata, and payload helpers are called only by the visible delta core.",
       },
     ],
   ],
@@ -1474,24 +1503,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/claws/provenance.ts",
-    [
-      {
-        tier: "T3",
-        operations: [
-          "persistClawInstallRecord",
-          "updateClawInstallRecordStatus",
-          "deleteClawInstallRecord",
-          "updateClawInstallRecord",
-          "persistClawPackageRef",
-          "updateClawPackageRefStatus",
-        ],
-        evidence:
-          "CLI add/update/remove writers; Gateway claws-packages.ts:124 injects worker claimPackageRef; raw Gateway reads remain outside this primitive census",
-      },
-    ],
-  ],
-  [
     "src/gateway/worker-environments/placement-session-tool-operations.kernel.ts",
     [
       {
@@ -2143,15 +2154,10 @@ const reviewedOperations = new Map([
           "seedCanonicalSessionValidation",
           "readPendingCanonicalSessionValidationBatch",
           "compareAndCertifyCanonicalSessionValidationBatch",
+          "hasPendingCanonicalSessionValidation",
         ],
         evidence:
-          "Only session-accessor.sqlite-mutation-worker.runtime.ts:375,280,381 calls these operations in the mutation-worker message handler.",
-      },
-      {
-        tier: "T2",
-        operations: ["hasPendingCanonicalSessionValidation"],
-        evidence:
-          "Native readiness serves startup and Doctor maintenance through startup-migration.ts and session-canonical-validation-readiness.ts. Prepared Gateway row reads consume worker-admitted facts without a native readiness probe; the other caller is the mutation worker's has-pending operation.",
+          "Only session-accessor.sqlite-mutation-worker.runtime.ts calls these operations in the mutation-worker message handler. Startup and Doctor readiness trust the canonical-validation receipt instead of probing pending rows.",
       },
     ],
   ],
@@ -2348,10 +2354,11 @@ const reviewedOperations = new Map([
           "listRegistryWorktreesInDatabase",
           "readProvisionedData",
           "listLiveRegistryWorktreeIdsInDatabase",
+          "listExistingLiveWorktreePathsInDatabase",
           "getRegistryWorktreeProvisionedChunkInDatabase",
         ],
         evidence:
-          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-registry.ts in the read worker. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
+          "Runtime reads and exact-row predicates use worktrees/dispatch.worker.ts and registry-run-end.worker.ts through the shared-state worker registry. Cleanup inventory uses openclaw-state-read-registry.ts in the read worker. Live-path discovery is private to worktreeReadOperations, loaded by openclaw-state-read-operation-registry.ts and executed by openclaw-state-read.worker.ts. Native fixture readers live only in registry.test-support.ts; Doctor migration lists keep their separate registry.ts queries.",
       },
     ],
   ],
@@ -2559,17 +2566,6 @@ const reviewedOperations = new Map([
     ],
   ],
   [
-    "src/claws/package-status.kernel.ts",
-    [
-      {
-        tier: "T3",
-        operations: ["updateClawPackageRefStatusInDatabase"],
-        evidence:
-          "CLI add: src/claws/add.ts:264 → packages.ts:316,395,567,579,656 → provenance.ts:488; worker sibling provenance-write.worker.ts:81.",
-      },
-    ],
-  ],
-  [
     "src/claws/package-update-provenance.ts",
     [
       {
@@ -2587,7 +2583,7 @@ const reviewedOperations = new Map([
         tier: "W",
         operations: ["readClawOrphanWorkspaceInDatabase"],
         evidence:
-          "Only src/state/openclaw-state-read.worker.ts:232 and src/claws/provenance-write.worker.ts:48 execute the reader.",
+          "Legacy read-only worker handler in src/state/openclaw-state-read.worker.ts; retained inventory inspection contract.",
       },
     ],
   ],

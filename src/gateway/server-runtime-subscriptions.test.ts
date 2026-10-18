@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { configureExecutionIdentityAdmissionSink } from "../audit/execution-identity-admission.js";
+import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   type AgentEventPayload,
@@ -25,6 +26,7 @@ import {
   progressCardRefreshRunProjection,
 } from "../sessions/input-provenance.js";
 import { emitSessionLifecycleEvent } from "../sessions/session-lifecycle-events.js";
+import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import {
   waitForChatAbortControllerRemoval,
   waitForChatAbortTerminalPersistence,
@@ -44,7 +46,7 @@ import {
   registerAuditSubscriptionTests,
   registerAssistantTailSubscriptionTests,
 } from "./server-runtime-subscriptions.test-support.js";
-import type { SessionRowProjection } from "./session-row-projection.js";
+import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
 function waitForFast<T>(
   callback: () => T | Promise<T>,
@@ -305,6 +307,60 @@ describe("startGatewayEventSubscriptions", () => {
     },
   );
 
+  it("delivers tool progress without enriching a cold optional session row", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      const query = { agentId: "main", key: "agent:main:tool-progress" };
+      replaceSessionEntrySync(
+        { agentId: query.agentId, sessionKey: query.key },
+        { sessionId: "tool-progress", updatedAt: 1, label: "Progress session" },
+      );
+      const projection = await createSessionRowProjection({ cfg: {}, modelCatalog: [] });
+      const delivered = vi.fn();
+      agentEventHandlerMocks.create.mockImplementation((options: AgentEventHandlerOptions) =>
+        Object.assign(
+          () => delivered(options.loadGatewaySessionLifecycleSnapshotForEvent?.(query.key)),
+          { dispose: vi.fn() },
+        ),
+      );
+      unsubs = startGatewayEventSubscriptions({
+        ...createParams(),
+        getSessionRowProjection: () => projection,
+      });
+      const emit = () =>
+        emitAgentEvent({
+          runId: "cold-tool-progress",
+          stream: "tool",
+          data: { phase: "update" },
+        });
+      try {
+        await projection.ensureMaterialized();
+        expect(projection.needsMaterialization).toBe(false);
+        const materialized = projection.materializedCount;
+        emit();
+        await waitForFast(() => expect(delivered).toHaveBeenCalledTimes(1));
+        expect(delivered).toHaveBeenLastCalledWith({ row: null });
+        expect(projection.materializedCount).toBe(materialized);
+
+        await projection.withPreparedExactRows(
+          () => [query],
+          () => undefined,
+        );
+        emit();
+        await waitForFast(() => expect(delivered).toHaveBeenCalledTimes(2));
+        expect(delivered).toHaveBeenLastCalledWith(
+          expect.objectContaining({ row: expect.objectContaining({ sessionId: "tool-progress" }) }),
+        );
+      } finally {
+        await unsubs.agentUnsub();
+        unsubs.heartbeatUnsub();
+        unsubs.transcriptUnsub();
+        unsubs.lifecycleUnsub();
+        unsubs = undefined;
+        projection.dispose();
+      }
+    });
+  });
+
   registerActivitySummaryPublicationTests(
     (projection, signal) => {
       const params = createParams();
@@ -448,10 +504,18 @@ describe("startGatewayEventSubscriptions", () => {
     expect(handler.dispose).toHaveBeenCalledOnce();
   });
 
-  registerSubscriptionRegistrationTests((params) => {
-    unsubs = startGatewayEventSubscriptions(params);
-    return unsubs;
-  });
+  registerSubscriptionRegistrationTests(
+    (params) => {
+      unsubs = startGatewayEventSubscriptions(params);
+      return unsubs;
+    },
+    (terminal) => {
+      agentEventHandlerMocks.persistLifecycle.mockReturnValue(terminal);
+      agentEventHandlerMocks.create.mockReturnValue(
+        Object.assign(async () => {}, { dispose() {} }),
+      );
+    },
+  );
 
   it("drives a registered chat run through the terminal persistence transition table", async () => {
     const runId = "run-lifecycle-table";

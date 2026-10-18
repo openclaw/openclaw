@@ -125,7 +125,7 @@ export function projectionOperations(
           : undefined,
     });
   };
-  const capture = async (target: Direction) => {
+  const capture = async (target: Direction, preserveDirectories?: ReadonlySet<string>) => {
     const selected = current();
     const root = sourcePath(target);
     await assertOwnedDirectory(root);
@@ -137,6 +137,7 @@ export function projectionOperations(
       root,
       baseCommit: selected.base_commit,
       includePaths,
+      preserveDirectories,
       signal,
     });
     current();
@@ -265,7 +266,8 @@ export function projectionOperations(
                         }
                       : {
                           ...(refresh ? { base_commit: snapshot.current.baseCommit! } : {}),
-                          baseline_json: serializeWorkerWorkspaceManifest(snapshot.current),
+                          // Parsing can filter old runtime paths; retain bytes matching the receipt digest.
+                          baseline_json: snapshot.currentManifestRaw,
                           baseline_ref: snapshot.currentManifestRef,
                           // Retain the accepted ref until its Git cleanup completes.
                           pending_target: null,
@@ -456,7 +458,7 @@ export function projectionOperations(
           throw new Error("Archive restore receipt changed");
         }
         await update({
-          baseline_json: serializeWorkerWorkspaceManifest(receipt.base),
+          baseline_json: receipt.baseManifestRaw,
           baseline_ref: receipt.baseManifestRef,
           pending_target: "canonical",
         });
@@ -561,13 +563,21 @@ export function projectionOperations(
             throw new Error("Archive retention receipt changed");
           }
           accepted = {
-            raw: serializeWorkerWorkspaceManifest(receipt.current),
+            raw: receipt.currentManifestRaw,
             ref: receipt.currentManifestRef,
           };
         }
       }
-      if (accepted && (await capture("canonical")).manifestRef !== accepted.ref) {
-        throw new Error("Local sandbox has unaccepted edits; restore its worktree before cleanup");
+      if (accepted) {
+        // Authenticate the retained bytes, then compare eligible content under
+        // today's exclusions without changing the immutable receipt identity.
+        const acceptedManifest = parseWorkerWorkspaceManifest(accepted.raw, accepted.ref);
+        const actual = await capture("canonical", new Set(acceptedManifest.directories));
+        if (actual.rawManifest !== serializeWorkerWorkspaceManifest(acceptedManifest)) {
+          throw new Error(
+            "Local sandbox has unaccepted edits; restore its worktree before cleanup",
+          );
+        }
       }
       const { readLocalWorkspaceRuntimes } =
         await import("../../agents/sandbox/local-workspace-quiescence.js");

@@ -1,10 +1,14 @@
 /* @vitest-environment jsdom */
 /* @vitest-environment-options {"url":"http://chat-pane-typing.test/"} */
 
+import { createEffect, flush } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { PresencePayload } from "../../app/user-profile.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { projectChatFields } from "./chat-field-projection.ts";
 import {
   createGatewayBrowserClientFixture,
   createSessionCapabilityFixture,
@@ -25,7 +29,12 @@ function createTypingPane() {
     sessions: createSessionCapabilityFixture(),
   });
   const { pane, state } = fixture;
-  pane.presencePayload = { presence: [{ user: { id: "owner" } }, { user: { id: "alice" } }] };
+  pane.presence.update({
+    presence: [
+      { ts: 1, user: { id: "owner" } },
+      { ts: 1, user: { id: "alice" } },
+    ],
+  });
   state.sessionKey = "agent:work:main";
   state.assistantAgentId = "work";
   state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
@@ -93,9 +102,12 @@ describe("chat pane typing presence", () => {
         { key: state.sessionKey, kind: "direct", sessionId: "typing-scroll", updatedAt: 1 },
       ],
     } as never;
-    pane.presencePayload = {
-      presence: [{ user: { id: "owner" } }, { user: { id: "writer" } }],
-    };
+    pane.presence.update({
+      presence: [
+        { ts: 1, user: { id: "owner" } },
+        { ts: 1, user: { id: "writer" } },
+      ],
+    });
     const scrollport = document.createElement("div");
     let extent = 2000;
     Object.defineProperties(scrollport, {
@@ -156,9 +168,13 @@ describe("chat pane typing presence", () => {
     state.agentsList = { defaultId: "main", mainKey: "main", scope: "global", agents: [] };
     state.sessionsResultAgentId = "work";
     const aliceId = "0d9f4c35-d221-49da-9a3f-b8c73921066b";
-    pane.presencePayload = {
-      presence: [{ user: { id: "owner" } }, { user: { id: aliceId } }, { user: { id: "bob" } }],
-    };
+    pane.presence.update({
+      presence: [
+        { ts: 1, user: { id: "owner" } },
+        { ts: 1, user: { id: aliceId } },
+        { ts: 1, user: { id: "bob" } },
+      ],
+    });
     state.sessionsResult = {
       count: 1,
       path: "",
@@ -305,11 +321,12 @@ describe("chat pane typing presence", () => {
         path: "",
         sessions: [{ key: "global", kind: "global", sessionId: "pause", updatedAt: 1 }],
       } as never;
-      const viewer = (id: string) => ({
+      const viewer = (id: string): PresencePayload["presence"][number] => ({
+        ts: 1,
         user: { id, identity: { type: "profile", id } },
         watchedSessions: ["agent:work:global"],
       });
-      pane.presencePayload = { presence: [viewer("alice"), viewer("bob")] };
+      pane.presence.update({ presence: [viewer("alice"), viewer("bob")] });
       for (const id of ["alice", "bob"]) {
         pane.handleSessionTypingEvent({
           sessionKey: state.sessionKey,
@@ -324,7 +341,7 @@ describe("chat pane typing presence", () => {
       vi.advanceTimersByTime(10_000);
       pane.pruneTypingActors();
       expect(pane.typingActors.size).toBe(2);
-      pane.presencePayload = {
+      pane.presence.update({
         presence: [
           viewer("bob"),
           {
@@ -332,7 +349,7 @@ describe("chat pane typing presence", () => {
             user: { id: "alice" },
           },
         ],
-      };
+      });
       pane.pruneTypingActors();
       expect([...pane.typingActors.keys()]).toEqual(["bob"]);
       pane.clearTypingActorForSessionMessage({
@@ -425,7 +442,12 @@ describe("chat pane typing presence", () => {
     const container = document.createElement("div");
     for (let count = 1; count <= 8; count += 1) {
       pane.handleSessionTypingEvent(event(count));
-      renderTypingIndicator(pane.typingActorViews(), container, "gutter", pane.typingOverflow);
+      renderTypingIndicator(
+        pane.typingActorViews(),
+        container,
+        "gutter",
+        pane.collaboration.typingOverflow,
+      );
       expect(container.querySelectorAll(".chat-bubble")).toHaveLength(Math.min(2, count));
       expect(container.querySelectorAll(".agent-chat__typing-person")).toHaveLength(
         Math.min(5, Math.max(0, count - 2)),
@@ -440,17 +462,15 @@ describe("chat pane typing presence", () => {
     expect(container.querySelector("[role=status]")?.textContent).toBe(
       "Several people are typing…",
     );
-    expect(pane.typingOverflow).toEqual({ several: true });
+    expect(pane.collaboration.typingOverflow).toEqual({ several: true });
     const stable = pane.typingActorViews();
-    const requestUpdate = vi.spyOn(pane, "requestUpdate");
     for (let index = 0; index < 100; index += 1) {
       pane.handleSessionTypingEvent({ ...event(9), preview: "Unprojected " + index });
     }
-    expect(requestUpdate).not.toHaveBeenCalled();
     expect(pane.typingActorViews()).toBe(stable);
     pane.handleSessionTypingEvent(event(9, false));
     pane.handleSessionTypingEvent(event(8, false));
-    expect(pane.typingOverflow).toBeUndefined();
+    expect(pane.collaboration.typingOverflow).toBeUndefined();
     renderTypingIndicator(pane.typingActorViews(), container);
     expect(container.querySelector(".agent-chat__typing-summary")?.textContent).toBe(
       "Peer 3, Peer 4, and 3 others are typing…",
@@ -461,7 +481,7 @@ describe("chat pane typing presence", () => {
       { id: "peer-1", label: "Peer 1", preview: "Draft 1", paused: true },
       { id: "peer-2", label: "Peer 2", preview: "Draft 2", paused: true },
     ]);
-    expect(pane.typingOverflow).toBeUndefined();
+    expect(pane.collaboration.typingOverflow).toBeUndefined();
     expect(container.querySelectorAll(".chat-bubble")).toHaveLength(2);
     expect(container.querySelector(".agent-chat__typing-group")).toBeNull();
     expect(container.querySelectorAll(".agent-chat__typing-state")[0]?.textContent).toBe("Draft");
@@ -471,7 +491,12 @@ describe("chat pane typing presence", () => {
       "Peer 7 is typing…",
     );
     expect(container.querySelectorAll(".agent-chat__typing-person")).toHaveLength(1);
-    renderTypingIndicator(pane.typingActorViews(), container, "none", pane.typingOverflow);
+    renderTypingIndicator(
+      pane.typingActorViews(),
+      container,
+      "none",
+      pane.collaboration.typingOverflow,
+    );
     expect(container.querySelector(".agent-chat__typing-overflow")?.getAttribute("title")).toBe(
       "Peer 7 — is typing...",
     );
@@ -500,23 +525,33 @@ describe("chat pane typing presence", () => {
     for (let index = 0; index < 1000; index += 1) {
       pane.handleSessionTypingEvent(event(index));
     }
-    const requestUpdate = vi.spyOn(pane, "requestUpdate");
+    const render = vi.fn();
+    mountSolid(() => {
+      projectChatFields(pane.collaboration);
+      createEffect(() => [pane.typingActorViews(), pane.collaboration.typingOverflow], render);
+      return null;
+    });
+    flush();
+    render.mockClear();
     vi.advanceTimersByTime(10_000);
+    flush();
     // The active-only overflow vanishes in bounded updates even though the
     // first two preview drafts remain retained for their own idle deadline.
-    expect(requestUpdate.mock.calls.length).toBeLessThan(12);
+    expect(render.mock.calls.length).toBeLessThan(12);
     expect(pane.typingActorViews()).toHaveLength(2);
-    expect(pane.typingOverflow).toBeUndefined();
+    expect(pane.collaboration.typingOverflow).toBeUndefined();
     vi.advanceTimersByTime(19_800);
     pane.handleSessionTypingEvent({ ...event(999), preview: "Renewed during exit" });
-    requestUpdate.mockClear();
+    flush();
+    render.mockClear();
     vi.advanceTimersByTime(200);
-    expect(requestUpdate).toHaveBeenCalledTimes(1);
+    flush();
+    expect(render).toHaveBeenCalledTimes(1);
     expect(pane.typingActors.size).toBe(1);
     expect(pane.typingActorViews()).toEqual([
       { id: "peer-999", label: "Peer 999", preview: "Renewed during exit" },
     ]);
-    expect(pane.typingOverflow).toBeUndefined();
+    expect(pane.collaboration.typingOverflow).toBeUndefined();
     expect(vi.getTimerCount()).toBe(1);
     // A boolean-only actor has its own 2.5s deadline, not the draft deadline.
     pane.handleSessionTypingEvent({ ...event(1000), preview: undefined });
@@ -675,7 +710,7 @@ describe("chat pane typing presence", () => {
         row.visibility = "draft";
         break;
       case "solo":
-        pane.presencePayload = { presence: [{ user: { id: "owner" } }] };
+        pane.presence.update({ presence: [{ ts: 1, user: { id: "owner" } }] });
         break;
     }
     vi.advanceTimersByTime(250);

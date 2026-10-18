@@ -1,5 +1,4 @@
 import { randomUUID } from "node:crypto";
-import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import type { SessionRowTranscriptProjection } from "../../gateway/session-row-transcript-preview.js";
 import {
   createSqliteQueryCache,
@@ -25,6 +24,11 @@ import {
 } from "./session-accessor.sqlite-entry-cache.js";
 import { getSessionKysely, type ResolvedTranscriptScope } from "./session-accessor.sqlite-scope.js";
 import { parseSessionEntryJson } from "./session-accessor.sqlite-status.js";
+import {
+  selectTranscriptAppendState,
+  selectTranscriptSessionRoot,
+  type TranscriptSessionRootRow,
+} from "./session-accessor.sqlite-transcript-state.queries.js";
 import { readSessionActorTransactionState } from "./session-actor-transaction.js";
 import {
   assertCanonicalSqliteSessionRootWrite,
@@ -43,11 +47,7 @@ import {
   readTranscriptContextFacts,
   retainTranscriptContextFacts,
 } from "./session-transcript-context-facts.js";
-import {
-  foldedSessionKeyAliasCandidates,
-  normalizeStoreSessionKey,
-  resolveDeliveryProvenCanonicalSessionKey,
-} from "./store-entry.js";
+import { resolveDeliveryProvenCanonicalSessionKey } from "./store-entry.js";
 
 const transcriptContextVersionQuery = createSqliteQueryCache((database: EngineConnection) => {
   const db = getSessionKysely(database);
@@ -221,6 +221,33 @@ function writeTranscriptGeneration(
   });
 }
 
+/** These facts live only for the synchronous append, never across transactions. */
+export function readTranscriptAppendStateInTransaction(
+  database: OpenClawAgentDatabase,
+  scope: ResolvedTranscriptScope,
+) {
+  const query = selectTranscriptAppendState(database, scope);
+  const rows = executeSqliteQuerySync(database.db, query).rows;
+  const row = rows[0]!;
+  return {
+    roots: rows,
+    generation: row.generation,
+    cold: Boolean(row.cold),
+    nextSeq: row.max_seq === null ? 0 : sqliteNumber(row.max_seq) + 1,
+    projection:
+      row.indexed_seq === null
+        ? undefined
+        : {
+            activeEventCount: row.active_event_count!,
+            activeMessageCount: row.active_message_count!,
+            indexedSeq: row.indexed_seq,
+            leafEventId: row.leaf_event_id,
+            needsRebuild: row.needs_rebuild !== 0,
+            hasUnclassifiedEvents: Boolean(row.has_unclassified),
+          },
+  };
+}
+
 export function ensureTranscriptSessionRoot(
   database: OpenClawAgentDatabase,
   scope: ResolvedTranscriptScope,
@@ -229,6 +256,7 @@ export function ensureTranscriptSessionRoot(
     allowStoredAlias?: boolean;
     onPlaceholderInserted?: (placeholder: { sessionKey: string; sessionId: string }) => void;
     deferExistingWindowTouch?: boolean;
+    preparedRoots?: readonly TranscriptSessionRootRow[];
   } = {},
 ): void {
   return withSqliteDatabaseWriteScope(
@@ -248,36 +276,10 @@ export function ensureTranscriptSessionRoot(
         let nodeExists = false;
         if (!options.allowStoredAlias) {
           assertCanonicalSqliteSessionRootWrite(database, scope.sessionKey);
-          const lookupKeys = uniqueStrings([
-            scope.sessionKey,
-            ...foldedSessionKeyAliasCandidates(normalizeStoreSessionKey(scope.sessionKey)),
-          ]);
-          const candidates = executeSqliteQuerySync(
-            database.db,
-            db
-              .selectFrom("session_nodes")
-              .select(["current_session_id", "entry_valid", "session_key", "updated_at"])
-              .select("entry_json")
-              .select((eb) =>
-                eb
-                  .selectFrom("session_windows")
-                  .select("session_key")
-                  .where("session_id", "=", scope.sessionId)
-                  .as("persisted_session_key"),
-              )
-              .where("session_key", "in", lookupKeys),
-          ).rows;
-          // A retained window can outlive its node, so the empty-candidate case still reads its owner.
-          const persistedSessionKey =
-            candidates.length > 0
-              ? candidates[0]!.persisted_session_key
-              : executeSqliteQueryTakeFirstSync(
-                  database.db,
-                  db
-                    .selectFrom("session_windows")
-                    .select("session_key")
-                    .where("session_id", "=", scope.sessionId),
-                )?.session_key;
+          const candidates =
+            options.preparedRoots ??
+            executeSqliteQuerySync(database.db, selectTranscriptSessionRoot(database, scope)).rows;
+          const persistedSessionKey = candidates[0]?.persisted_session_key;
           if (persistedSessionKey && persistedSessionKey !== scope.sessionKey) {
             throw new Error(
               `Transcript session ${scope.sessionId} is owned by ${persistedSessionKey}, not ${scope.sessionKey}; resolve the transcript target again before retrying.`,
@@ -285,19 +287,20 @@ export function ensureTranscriptSessionRoot(
           }
           let retainedRoot = false;
           for (const candidate of candidates) {
-            const entry = parseSessionEntryJson(candidate, "list");
+            if (candidate.session_key === null) {
+              continue;
+            }
+            const entry = parseSessionEntryJson(
+              {
+                ...candidate,
+                entry_json: candidate.entry_json ?? "",
+                current_session_id: candidate.current_session_id ?? undefined,
+                updated_at: candidate.updated_at ?? undefined,
+              },
+              "list",
+            );
             if (!entry) {
-              const retainedWindow =
-                candidate.entry_json === "{}"
-                  ? executeSqliteQueryTakeFirstSync(
-                      database.db,
-                      db
-                        .selectFrom("session_windows")
-                        .select("session_id")
-                        .where("session_id", "=", candidate.current_session_id)
-                        .where("session_key", "=", candidate.session_key),
-                    )
-                  : undefined;
+              const retainedWindow = candidate.entry_json === "{}" && candidate.retained_window;
               if (!retainedWindow) {
                 throw canonicalSessionKeyMigrationRequiredError(
                   `invalid persisted session row requires repair for ${candidate.session_key}`,
@@ -357,6 +360,9 @@ export function ensureTranscriptSessionRoot(
             );
           }
         }
+      }
+      if (options.deferExistingWindowTouch && options.preparedRoots?.[0]?.persisted_session_key) {
+        return;
       }
       preserveSessionEntryCacheAcrossWrite(database, () => {
         executeSqliteQuerySync(
@@ -533,6 +539,7 @@ export function advanceTranscriptMutationAtInTransaction(
         ...(options.rowTranscript
           ? {
               lastMessagePreview: options.rowTranscript.lastMessagePreview,
+              lastAssistantMessage: options.rowTranscript.lastAssistantMessage,
               terminalModel: options.rowTranscript.terminalModel,
             }
           : {}),
@@ -602,6 +609,7 @@ export function advanceTranscriptMutationAtInTransaction(
         ...(options.rowTranscript
           ? {
               lastMessagePreview: options.rowTranscript.lastMessagePreview,
+              lastAssistantMessage: options.rowTranscript.lastAssistantMessage,
               terminalModel: options.rowTranscript.terminalModel,
             }
           : {}),

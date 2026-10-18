@@ -98,7 +98,7 @@ export type CodexStartOrResumeThreadParams = Omit<
   pluginThreadConfig?: CodexPluginThreadConfigProvider;
   contextEngineProjection?: CodexContextEngineThreadBootstrapProjection;
   /** Selected quoted history, injected before turn/start on the admitted idle thread. */
-  historyBootstrapItems?: JsonValue[];
+  historyBootstrapItems?: JsonValue[] | ((assertCurrent: () => void) => Promise<JsonValue[]>);
   /** Acknowledged selection suffix for reuse; fresh threads always receive the full bootstrap. */
   historyDeltaItems?: JsonValue[];
   signal?: AbortSignal;

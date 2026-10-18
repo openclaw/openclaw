@@ -58,7 +58,7 @@ export type SessionRowFacts =
       actorVersion?: { epoch: string; sequence: number };
     }
   | { kind: "category"; sessionId: string; category: string | null }
-  | { kind: "removed" };
+  | { kind: "removed"; transcriptInventoryUnchanged?: true };
 
 export type SessionRowChange =
   | {
@@ -74,6 +74,8 @@ export type SessionRowChange =
   | {
       all: true;
       scope: string | { agentId?: string; storePath?: string; topology?: true };
+      /** Run owners without a logical key retain the identity for indexed row invalidation. */
+      runtimeSession?: { sessionId: string; agentId?: string };
       factsInvalidated?: true;
     };
 

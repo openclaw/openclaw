@@ -84,9 +84,6 @@ END;
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_updated_at
   ON session_nodes(updated_at DESC, session_key);
 
-CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_last_interaction_at
-  ON session_nodes(last_interaction_at DESC, session_key);
-
 CREATE INDEX IF NOT EXISTS idx_agent_session_nodes_label
   ON session_nodes(label, session_key)
   WHERE label IS NOT NULL;
@@ -336,9 +333,6 @@ CREATE TABLE IF NOT EXISTS session_reactions (
   FOREIGN KEY (session_key) REFERENCES session_nodes(session_key) ON DELETE CASCADE
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_agent_session_reactions_message
-  ON session_reactions(session_key, session_id, message_id);
-
 CREATE TABLE IF NOT EXISTS board_tabs (
   session_key TEXT NOT NULL,
   tab_id TEXT NOT NULL,
@@ -544,12 +538,15 @@ CREATE TABLE IF NOT EXISTS trajectory_runtime_events (
   run_id TEXT,
   event_json TEXT NOT NULL,
   created_at INTEGER NOT NULL,
+  event_utf8_bytes INTEGER,
+  event_payload BLOB,
+  event_codec TEXT,
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES "session_windows"(session_id) ON DELETE CASCADE
 ) STRICT;
 
 CREATE INDEX IF NOT EXISTS idx_agent_trajectory_runtime_run
-  ON trajectory_runtime_events(session_id, run_id, created_at, octet_length(event_json));
+  ON trajectory_runtime_events(session_id, run_id, created_at, COALESCE(event_utf8_bytes, octet_length(event_json)));
 
 CREATE TABLE IF NOT EXISTS acp_parent_stream_events (
   session_id TEXT NOT NULL,
@@ -834,42 +831,6 @@ BEGIN
 END;
 
 INSERT OR IGNORE INTO memory_index_state (id, revision) VALUES (1, 0);
-
-CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_insert
-AFTER INSERT ON memory_index_sources
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_update
-AFTER UPDATE ON memory_index_sources
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_sources_revision_after_delete
-AFTER DELETE ON memory_index_sources
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_insert
-AFTER INSERT ON memory_index_chunks
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_update
-AFTER UPDATE ON memory_index_chunks
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
-
-CREATE TRIGGER IF NOT EXISTS memory_index_chunks_revision_after_delete
-AFTER DELETE ON memory_index_chunks
-BEGIN
-  UPDATE memory_index_state SET revision = revision + 1 WHERE id = 1;
-END;
 
 CREATE INDEX IF NOT EXISTS idx_memory_embedding_cache_updated_at
   ON memory_embedding_cache(updated_at);

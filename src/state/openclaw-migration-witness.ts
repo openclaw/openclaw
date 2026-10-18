@@ -13,6 +13,8 @@ import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readSqliteUserVersion } from "../infra/sqlite-user-version.js";
 import { LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES } from "./openclaw-agent-canonical-validation-migration.js";
 import {
+  AGENT_INDEX_RETIREMENT_SCHEMA_VERSION,
+  AGENT_MEMORY_REVISION_SCHEMA_VERSION,
   AGENT_WRITE_LAYOUT_SCHEMA_VERSION,
   MEDIA_ROWS_MIGRATION_META_KEY,
   OPENCLAW_AGENT_SCHEMA_VERSION,
@@ -22,6 +24,7 @@ import {
   getOpenClawAgentMigrationSchema,
 } from "./openclaw-agent-db-schema-helpers.js";
 import { AGENT_JSON_PREDICATE_COLUMNS } from "./openclaw-agent-json-predicate-schema.js";
+import { LEGACY_MEMORY_REVISION_TRIGGER_NAMES } from "./openclaw-agent-memory-revision-migration.js";
 import { withoutOutboxEnqueueSequence } from "./openclaw-agent-outbox-sequence-migration.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import { assertCurrentStateRuntimeSchema } from "./openclaw-state-db-fast-path.js";
@@ -67,6 +70,7 @@ const derivedMigrationColumns = new Map<string, ReadonlySet<string>>(
   Object.entries({
     ...AGENT_JSON_PREDICATE_COLUMNS,
     session_windows: ["row_transcript_json", "row_transcript_updated_at"],
+    trajectory_runtime_events: ["event_utf8_bytes", "event_payload", "event_codec"],
   }).map(([table, columns]) => [table, new Set<string>(columns)]),
 );
 
@@ -81,18 +85,15 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   const witness = witnessSchema.parse(value);
   assertUnique(witness.tables.map((table) => table.name));
   for (const table of witness.tables) {
+    const isRegistryTable =
+      witness.role === "global" &&
+      witness.registryMigrationBinding &&
+      table.name === "agent_databases";
     assertUnique(table.columns);
     if (table.registryRows) {
       assertUnique(table.registryRows.map((row) => row.locator));
     }
-    if (
-      table.registryRows &&
-      !(
-        witness.role === "global" &&
-        witness.registryMigrationBinding &&
-        table.name === "agent_databases"
-      )
-    ) {
+    if (table.registryRows && !isRegistryTable) {
       throw new Error("Migration witness has unexpected registry observations");
     }
     if (
@@ -101,11 +102,7 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
         (["schema_meta", "session_key_contract", "memory_entry_origins"].includes(table.name) ||
           derivedMigrationColumns.has(table.name))
       ) &&
-      !(
-        witness.role === "global" &&
-        witness.registryMigrationBinding &&
-        table.name === "agent_databases"
-      ) &&
+      !isRegistryTable &&
       table.sha256 !== table.migrationSha256
     ) {
       throw new Error("Migration witness has an unsupported content transformation");
@@ -113,7 +110,8 @@ function parseOpenClawMigrationWitness(value: unknown): OpenClawMigrationWitness
   }
   if (
     (witness.role === "agent" &&
-      (witness.agentId === null || ![24, 25, 26, 27, 28].includes(witness.schemaVersion))) ||
+      (witness.agentId === null ||
+        ![24, 25, 26, 27, 28, 29, 30, 31].includes(witness.schemaVersion))) ||
     (witness.role !== "agent" && witness.agentId !== null) ||
     (witness.role !== "agent" && witness.schemaSha256 !== witness.migrationSchemaSha256) ||
     (witness.role !== "global" && witness.registryMigrationBinding !== null) ||
@@ -423,7 +421,7 @@ export function captureOpenClawMigrationWitness(
         throw new Error("Migration witness database owner does not match the backup inventory");
       }
       if (owner.role === "agent") {
-        if (![24, 25, 26, 27, 28].includes(schemaVersion)) {
+        if (![24, 25, 26, 27, 28, 29, 30, 31].includes(schemaVersion)) {
           throw new Error(`Unsupported agent migration witness schema: ${schemaVersion}`);
         }
         assertOpenClawAgentSchemaContains(
@@ -501,26 +499,26 @@ export function captureOpenClawMigrationWitness(
         continue;
       }
       schemaHash.update(JSON.stringify(object)).update("\n");
+      // Admission validates canonical objects before migration-only normalization.
+      const indexKey = `${object.tbl_name}.${object.name}`;
       if (
         role === "agent" &&
-        schemaVersion === 24 &&
-        object.type === "trigger" &&
-        LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES.includes(object.name)
-      ) {
-        continue;
-      }
-      // Admission validates these canonical indexes; v28 changes only their physical layout.
-      if (
-        role === "agent" &&
-        object.type === "index" &&
-        ((object.name === "idx_agent_session_windows_conversation" &&
-          object.tbl_name === "session_windows") ||
-          (schemaVersion < AGENT_WRITE_LAYOUT_SCHEMA_VERSION &&
-            ((object.name === "idx_agent_transcript_event_parent" &&
-              object.tbl_name === "transcript_event_identities") ||
-              (object.name === "sqlite_autoindex_memory_entry_origins_1" &&
-                object.tbl_name === "memory_entry_origins" &&
-                object.sql === null))))
+        ((schemaVersion === 24 &&
+          object.type === "trigger" &&
+          LEGACY_CANONICAL_VALIDATION_TRIGGER_NAMES.includes(object.name)) ||
+          (schemaVersion < AGENT_MEMORY_REVISION_SCHEMA_VERSION &&
+            object.type === "trigger" &&
+            LEGACY_MEMORY_REVISION_TRIGGER_NAMES.includes(object.name)) ||
+          (object.type === "index" &&
+            (indexKey === "session_windows.idx_agent_session_windows_conversation" ||
+              indexKey === "trajectory_runtime_events.idx_agent_trajectory_runtime_run" ||
+              (schemaVersion < AGENT_INDEX_RETIREMENT_SCHEMA_VERSION &&
+                (indexKey === "session_nodes.idx_agent_session_nodes_last_interaction_at" ||
+                  indexKey === "session_reactions.idx_agent_session_reactions_message")) ||
+              (schemaVersion < AGENT_WRITE_LAYOUT_SCHEMA_VERSION &&
+                (indexKey === "transcript_event_identities.idx_agent_transcript_event_parent" ||
+                  (indexKey === "memory_entry_origins.sqlite_autoindex_memory_entry_origins_1" &&
+                    object.sql === null))))))
       ) {
         continue;
       }

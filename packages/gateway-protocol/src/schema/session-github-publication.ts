@@ -46,6 +46,7 @@ export const SessionGitHubPublishParamsSchema = closedObject({
   idempotencyKey: NonEmptyString,
   title: Type.Optional(GitHubPublicationTitleSchema),
   body: Type.Optional(GitHubPublicationBodySchema),
+  draft: Type.Optional(Type.Boolean()),
   selection: Type.Optional(GitHubPublicationSelectionSchema),
 });
 
@@ -78,7 +79,17 @@ export const GitHubPublicationEditSchema = closedObject({
   expectedTitle: Type.Optional(GitHubPublicationTitleSchema),
   expectedBody: Type.Optional(Type.String({ maxLength: 64 * 1024 })),
 });
+export const GitHubPublicationReviewRequestSchema = closedObject({
+  action: Type.Literal("request_review"),
+  requestId: PersonalGitHubGenerationSchema,
+  expectedHeadCommit: Type.String({ pattern: "^[a-f0-9]{40}$" }),
+});
 export const SessionGitHubActionParamsSchema = Type.Union([
+  closedObject({
+    ...GitHubPublicationReviewRequestSchema.properties,
+    sessionKey: NonEmptyString,
+    agentId: Type.Optional(NonEmptyString),
+  }),
   closedObject({
     ...GitHubPublicationEditSchema.properties,
     sessionKey: NonEmptyString,
@@ -150,6 +161,13 @@ export const SessionGitHubActionResultSchema = closedObject({
   mergeCommit: Type.Union([Type.String(), Type.Null()]),
   mergeable: Type.Union([Type.Boolean(), Type.Null()]),
   mergeState: Type.String(),
+  reviewRequest: Type.Optional(
+    closedObject({
+      status: Type.Literal("posted"),
+      url: NonEmptyString,
+      message: NonEmptyString,
+    }),
+  ),
   title: Type.Optional(Type.String()),
   body: Type.Optional(Type.String()),
 });

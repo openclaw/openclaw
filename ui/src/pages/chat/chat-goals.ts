@@ -1,13 +1,11 @@
 import { GatewayProtocolRequestTimeoutError } from "@openclaw/gateway-client/browser";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { Value } from "typebox/value";
-import {
-  SessionsGoalClearParamsSchema,
-  SessionsGoalUpdateParamsSchema,
-  type SessionsGoalClearParams,
-  type SessionsGoalMutationResult,
-  type SessionsGoalUpdateParams,
+import type {
+  SessionsGoalClearParams,
+  SessionsGoalMutationResult,
+  SessionsGoalUpdateParams,
 } from "../../../../packages/gateway-protocol/src/schema/sessions-goal.js";
+import { registerListener } from "../../../../src/shared/listeners.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerChatGoalsEnglish } from "../../i18n/locales/en-chat-goals.ts";
@@ -18,6 +16,10 @@ import {
   goalOperationStorageGeneration,
 } from "../../lib/chat/goal-operation-storage.ts";
 import { formatUiError } from "../../lib/format-error.ts";
+import {
+  isSessionsGoalClearParams,
+  isSessionsGoalUpdateParams,
+} from "../../lib/protocol-validators.generated/session-input.js";
 import {
   scopedAgentIdForSession,
   scopedAgentListParamsForSession,
@@ -50,7 +52,57 @@ type GoalOperation = {
   pending: boolean;
 };
 
-const goalOperations = new WeakMap<ChatHost, Map<string, GoalOperation>>();
+class GoalOperationOwner {
+  private readonly operations = new Map<string, GoalOperation>();
+  private readonly listeners = new Set<() => void>();
+
+  subscribe(listener: () => void): () => void {
+    return registerListener(this.listeners, listener);
+  }
+
+  get(signature: string): GoalOperation | undefined {
+    return this.operations.get(signature);
+  }
+
+  set(signature: string, operation: GoalOperation): void {
+    this.operations.set(signature, operation);
+    this.publish();
+  }
+
+  delete(signature: string): void {
+    if (this.operations.delete(signature)) {
+      this.publish();
+    }
+  }
+
+  setPending(operation: GoalOperation, pending: boolean): void {
+    operation.pending = pending;
+    this.publish();
+  }
+
+  expire(operation: GoalOperation): void {
+    operation.params = undefined;
+    operation.retired = "expired";
+    this.publish();
+  }
+
+  private publish(): void {
+    for (const listener of this.listeners) {
+      listener();
+    }
+  }
+}
+
+const goalOperations = new WeakMap<ChatHost, GoalOperationOwner>();
+
+export function chatGoalOperations(host: ChatHost): GoalOperationOwner {
+  let owner = goalOperations.get(host);
+  if (!owner) {
+    owner = new GoalOperationOwner();
+    goalOperations.set(host, owner);
+  }
+  return owner;
+}
 const GOAL_REQUEST_TIMEOUT_MS = 30_000;
 const rejectedGoalReasons = new Set([
   "expired",
@@ -78,7 +130,7 @@ function rejectedGoalReason(error: unknown): string | undefined {
 }
 
 function rejectGoalOperation(host: ChatHost, message: string): false {
-  setChatError(host, message, true);
+  setChatError(host, message);
   return false;
 }
 
@@ -93,8 +145,7 @@ function goalOperationTarget(host: ChatHost) {
   const incognito = Boolean(host.selectedChatSessionIncognito);
   const storageKey = `${goalOperationScopePrefix(gatewayUrl, host.client.recoveryScope)}${JSON.stringify([sessionKey, agentId, sessionId, incognito])}`;
   const signature = `${goalOperationStorageGeneration(gatewayUrl)}:${storageKey}`;
-  const operations = goalOperations.get(host) ?? new Map<string, GoalOperation>();
-  goalOperations.set(host, operations);
+  const operations = chatGoalOperations(host);
   const storage = incognito ? undefined : globalThis.sessionStorage;
   if (!incognito && !storage) {
     throw new Error(t("chat.goals.recoveryUnavailable"));
@@ -109,15 +160,15 @@ function goalOperationTarget(host: ChatHost) {
       } catch {
         saved = "invalid";
       }
-      const schema =
+      const validate =
         isRecord(saved) && "action" in saved
-          ? SessionsGoalUpdateParamsSchema
-          : SessionsGoalClearParamsSchema;
+          ? isSessionsGoalUpdateParams
+          : isSessionsGoalClearParams;
       operation =
         saved === "expired"
           ? { retired: "expired", pending: false }
           : isRecord(saved) &&
-              Value.Check(schema, saved) &&
+              validate(saved) &&
               saved.sessionKey === sessionKey &&
               saved.agentId === agentId &&
               saved.sessionId === sessionId
@@ -135,8 +186,7 @@ function goalOperationTarget(host: ChatHost) {
     operation.params &&
     goalOperationExpired(operation.params.issuedAtMs)
   ) {
-    operation.params = undefined;
-    operation.retired = "expired";
+    operations.expire(operation);
     storage?.setItem(storageKey, JSON.stringify("expired"));
   }
   return { sessionKey, agentId, sessionId, signature, storageKey, storage, operations, operation };
@@ -324,8 +374,7 @@ async function runGoalOperation(
       return false;
     }
     const marker = JSON.stringify(operation.retired);
-    operation.pending = true;
-    host.requestUpdate?.();
+    operations.setPending(operation, true);
     try {
       if (!(await reconcileCurrentGoal(operation))) {
         return false;
@@ -344,8 +393,7 @@ async function runGoalOperation(
       }
       return false;
     } finally {
-      operation.pending = false;
-      host.requestUpdate?.();
+      operations.setPending(operation, false);
     }
   }
   if (operation && action) {
@@ -385,9 +433,9 @@ async function runGoalOperation(
             : { ...identity, action: action.action },
       pending: false,
     };
-    const schema =
-      action.action === "clear" ? SessionsGoalClearParamsSchema : SessionsGoalUpdateParamsSchema;
-    if (!Value.Check(schema, operation.params)) {
+    const validate =
+      action.action === "clear" ? isSessionsGoalClearParams : isSessionsGoalUpdateParams;
+    if (!validate(operation.params)) {
       return rejectGoalOperation(host, t("chat.goals.invalidRequest"));
     }
     try {
@@ -415,8 +463,8 @@ async function runGoalOperation(
       }
     }
   };
-  operation.pending = true;
-  setChatError(host, null, true);
+  operations.setPending(operation, true);
+  setChatError(host, null);
   try {
     const request = () =>
       client.request<SessionsGoalMutationResult>(
@@ -501,8 +549,7 @@ async function runGoalOperation(
       const retired = reason === "expired" || reason === "goal-expired" ? "expired" : undefined;
       if (retired) {
         // The server's receipt clock wins: expiry cannot prove the original outcome.
-        operation.params = undefined;
-        operation.retired = retired;
+        operations.expire(operation);
       } else {
         operations.delete(signature);
       }
@@ -522,7 +569,6 @@ async function runGoalOperation(
     }
     return false;
   } finally {
-    operation.pending = false;
-    host.requestUpdate?.();
+    operations.setPending(operation, false);
   }
 }

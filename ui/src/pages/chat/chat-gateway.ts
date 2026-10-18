@@ -40,7 +40,6 @@ import { appendChatMessageToCache, readChatMessagesFromCache } from "./session-m
 import { persistedSteerTargetRunId, replaceChatStream } from "./stream-causal-boundary.ts";
 import {
   appendTerminalAssistantMessage,
-  clearToolStreamSegments,
   terminalMessageReplacesVisibleStream,
 } from "./stream-reconciliation.ts";
 import {
@@ -267,7 +266,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
     ) {
       return;
     }
-    clearToolStreamSegments(state);
+    state.chatStreamSegments = [];
     const sessionKeys = [state.sessionKey, payload.sessionKey];
     if (terminalStatus === "yielded") {
       reconcileChatRunLifecycle(state, {
@@ -293,6 +292,8 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
       outcome: terminalStatus === "completed" ? "done" : "interrupted",
       sessionStatus,
       suppressErrorNotice: payload.suppressErrorNotice,
+      localModelMayStillBeFinishing:
+        payload.state === "aborted" && payload.localModelMayStillBeFinishing,
       errorMessage: payload.errorMessage?.trim()
         ? resolveGatewayErrorText(payload, null)
         : undefined,
@@ -545,7 +546,7 @@ export function handleChatGatewayEvent(state: ChatState, incoming?: ChatEventPay
   if (payload.state !== "delta") {
     // Terminal materialization transfers ownership into chatMessages; retaining
     // the stream segments would render the same run output a second time.
-    clearToolStreamSegments(state);
+    state.chatStreamSegments = [];
   }
   return payload.state;
 }

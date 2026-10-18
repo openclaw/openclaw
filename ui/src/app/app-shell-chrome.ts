@@ -24,10 +24,10 @@ import {
 } from "../components/panel-toggle-contract.ts";
 import { focusWithoutTooltip } from "../components/tooltip.ts";
 import type { BoardFace } from "../lib/board/settings.ts";
-import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
+  resolveNewSessionShortcut,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { isTerminalAvailable } from "../lib/terminal-availability.ts";
@@ -75,7 +75,7 @@ import {
   visibleNavDrawerToggle,
   type ShellNavigationElements,
 } from "./navigation-surface.ts";
-import { isHomePanelAvailable } from "./panel-availability.ts";
+import { isCustodianPanelAvailable, isHomePanelAvailable } from "./panel-availability.ts";
 import { NAV_WIDTH_MAX, NAV_WIDTH_MIN } from "./settings.ts";
 import { retryStaleChunkReloadWhenReachable } from "./stale-chunk-reload.ts";
 
@@ -401,10 +401,7 @@ export class ShellChromeOwner {
       host.lazyCustomElements.close();
       return;
     }
-    if (this.palette.handlePendingShortcut(event)) {
-      return;
-    }
-    if (document.openClawModalLayers?.size) {
+    if (this.palette.handlePendingShortcut(event) || document.openClawModalLayers?.size) {
       return;
     }
     if (host.navDrawerOpen && isMobileNavLayout()) {
@@ -441,7 +438,7 @@ export class ShellChromeOwner {
     if (event.defaultPrevented) {
       return;
     }
-    if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.newSession, event)) {
+    if (matchesShortcutCombo(resolveNewSessionShortcut(), event)) {
       if (!event.repeat && openShellNewSession(this.host, "shortcut")) {
         event.preventDefault();
       }
@@ -556,11 +553,7 @@ export class ShellChromeOwner {
       return;
     }
     const home = event.type === HOME_PANEL_TOGGLE_EVENT;
-    if (
-      home
-        ? !isHomePanelAvailable(host.context?.gateway)
-        : !canCallGatewayMethod(host.context?.gateway.snapshot, "openclaw.chat", "operator.admin")
-    ) {
+    if (!(home ? isHomePanelAvailable : isCustodianPanelAvailable)(host.context?.gateway)) {
       event.preventDefault();
       return;
     }

@@ -43,6 +43,8 @@ After a Gateway restart, an agent may need a few minutes to prepare its database
 
 Reloading a previously visited chat restores the last settled sidebar while the Gateway reconnects. Pinned sessions, plugin rows, roster order, filters, and your display identity keep their places until live data is ready. The footer still reports the current connection status. This browser cache is scoped to the Gateway and profile, expires after 30 days, and excludes incognito sessions. The same snapshot provides the saved session rows and routing defaults for the first chat header. Cached rows never authorize session changes. Sidebar snapshot capture coalesces live updates during idle time and flushes pending changes when the page is hidden or left.
 
+A short transcript loads at most one older page automatically when you open or reload a chat. It stops once the visible area is filled, without filling the backscroll buffer. Scroll up or choose **Show earlier** to continue loading older messages, even if the transcript still fits on screen.
+
 The cached transcript also preserves its conversation title when the conversation is outside the saved sidebar page. Live session metadata replaces that display projection when it arrives.
 
 An authenticated same-origin reload includes shared display settings and your profile’s appearance and sidebar preferences in the document. Chat uses this display projection while connecting, without loading the full editable configuration. Preference changes from other tabs refresh through the Gateway’s existing notifications; settings pages and configuration writes still load the full snapshot.
@@ -68,6 +70,8 @@ If the Gateway's request queue is full, automatic sidebar session discovery keep
 While the initial connection or a route loads, shimmer placeholders reserve the chat layout. Home and System busyness open directly in their destination panels, with working headers and Close controls while the content loads. Brief loads do not flash placeholders; slower loads show placeholders inside the panel, and load errors offer Retry in the same place. The rest of the page stays usable. Drag the System busyness title bar to move the panel; its position is remembered in this browser. You can also focus the title bar and use the arrow keys (Shift moves farther). Compact/expanded transitions animate briefly, respect reduced motion, and keep the panel inside the window. Loading indicators respect your theme and reduced-motion preference; Gateway startup progress remains visible when available.
 
 The selected chat loads before automatic sidebar session lists refresh. Live events remain subscribed during startup, and explicit sidebar actions remain available. Background lists resume after the transcript loads or reports an error. Accepted new sessions refresh the visible sidebar immediately, including **Involving me** and owner filters, without waiting for the chat to finish loading or the agent to finish working.
+
+If the selected session changes while its message subscription is being admitted, chat retries that read with fresh access checks for up to one minute. Saved replies load after the subscription succeeds, without resending your message. Switching chats or losing access stops recovery; a persistent failure leaves **Retry** available.
 
 Use **Snooze → Choose another time** in a session menu to pick a future date and time in your browser’s local time zone. After a successful snooze, **Custom** shows that exact date and time in other session menus for one hour. Choosing another custom time replaces it; presets and Undo leave the remembered choice unchanged. The browser stores this choice separately for each Gateway and signed-in account, and removes it when it expires or the wake time passes. If browser storage is unavailable, the choice remains reusable only in the current page.
 
@@ -110,6 +114,13 @@ Failed narration releases use the same backoff, including while the tab is hidde
 Closed Terminal, Browser, and Desktop panels initialize when you open them rather than during initial navigation. Home/Ask OpenClaw and System busyness keep lightweight frames ready and defer their conversation or diagnostic contents until opened. Home preserves its saved dock position and size throughout loading. Panels saved as open still restore after a reload. Settings does not automatically reopen Ask OpenClaw; its control and diagnostic actions can still open it explicitly.
 
 Minimizing and reopening the Dashboard side panel preserves loaded MCP Apps and their unsaved in-app input while the app lease remains valid.
+
+MCP Apps and Canvas previews also retain their loaded frames through a connection
+blip to the same Gateway. Gateway-backed actions pause until reconnection; they
+are not queued for replay. MCP discovery keeps its last results while offline.
+If an app times out during initialization, use **Retry** to load it again.
+Changing Gateway, losing access, or selecting different content retires the old
+frame and its local state.
 
 Hidden retained chats defer command and model metadata refreshes until you return to them. Returning to a recently opened chat reuses its completed metadata on the same connection until a Gateway change invalidates it. Concurrent readers share the same request. Session events with an unchanged model-selection revision retain the model catalog, and session-only changes retain agent commands. Native sessions without a model-selection revision wait for a 2.5-second quiet period after ordinary patches before refreshing the catalog and session facts. Explicit model, account, and runtime selections refresh promptly. Configuration and command changes refresh commands; catalog and session lifecycle changes refresh affected model choices. Agent-specific catalog changes retain other agents’ cached choices and pending catalog requests. Repeated changes during a request share one trailing refresh instead of issuing overlapping requests.
 
@@ -168,7 +179,10 @@ messages. This changes only presentation, not stored messages or run ownership.
 
 When an incoming message causes an unstarted tool call to be skipped, its card
 and work summary show **Skipped**, including after reloading the conversation.
-Approval blocks and tool failures keep their separate outcomes.
+Approval blocks and tool failures keep their separate outcomes. A failed command
+with a reported zero exit code still shows **failed** in its summary and expanded
+result. Nonzero exit codes remain visible as diagnostics; captured output and
+reported exit facts are unchanged.
 
 Failed replies show **Try again** at the right of the heading. A compact
 **Copy error** icon beside the title appears on hover or keyboard focus, and
@@ -424,7 +438,10 @@ After an automatic read, the next waits three times its duration,
 bounded between five and 15 seconds. Navigation, reconnects, and explicit refreshes
 bypass that delay. When both are visible, they share one activity window and
 one refresh, so opening **Agents** while team mode is visible does not duplicate requests. Activity loading
-stops when neither roster is visible. Each refresh reads at most 300 sessions
+stops when neither roster is visible. Team mode's owner and status filters reuse
+this window instead of also loading a separate sidebar list; **Involving me**
+still selects membership on the Gateway. Unchanged rows reuse the sidebar's
+revision-based responses. Each refresh reads at most 300 sessions
 across agents, loading pinned sessions first and then the most recent sessions.
 Pinned sessions count toward that limit; sessions outside the window do not appear
 in the grouped sidebar or contribute to activity summaries, except that the open

@@ -8,6 +8,7 @@ import { createImageLightboxGallery } from "../../../components/image-lightbox-g
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
@@ -17,7 +18,7 @@ import {
   ticketResponse,
 } from "./chat-message-media.test-helpers.ts";
 import {
-  releaseChatMediaResourceSubscriber,
+  releaseChatMediaResourceOwner,
   type ImageBlock,
   type ImageRenderOptions,
 } from "./chat-message-media.ts";
@@ -29,13 +30,13 @@ import {
 } from "./chat-message.test-support.ts";
 
 let container: HTMLDivElement;
-let onRequestUpdate: () => void;
+let onMediaChange: () => void;
 let imageView: ReturnType<typeof mountSolid<MessageImagesProps>> | undefined;
 
 beforeEach(() => {
   container = document.createElement("div");
   document.body.append(container);
-  onRequestUpdate = vi.fn();
+  onMediaChange = vi.fn();
   vi.stubGlobal("devicePixelRatio", 1);
   vi.stubGlobal("innerWidth", 390);
   vi.stubGlobal("innerHeight", 844);
@@ -44,7 +45,7 @@ beforeEach(() => {
 
 afterEach(() => {
   cleanupSolid();
-  releaseChatMediaResourceSubscriber(onRequestUpdate);
+  releaseChatMediaResourceOwner(onMediaChange);
   container.remove();
   vi.useRealTimers();
   vi.unstubAllGlobals();
@@ -135,7 +136,7 @@ describe("message image gallery loading", () => {
         showReasoning: true,
         resourceBasePath: "/openclaw",
         assistantAttachmentAuthToken: "test-auth-token",
-        onRequestUpdate,
+        mediaOwner: onMediaChange,
         onOpenImage,
       }),
     );
@@ -172,7 +173,7 @@ describe("message image gallery loading", () => {
       await whenImageAppears(() =>
         renderImages([{ url: source, mimeType: "image/" + extension }], {
           onOpenImage,
-          onRequestUpdate,
+          mediaOwner: onMediaChange,
         }),
       );
       const image = container.querySelector<HTMLImageElement>("img")!;
@@ -208,7 +209,7 @@ describe("message image gallery loading", () => {
             { url: "data:image/png;base64,cG5n", alt: "First image" },
             { url: source, alt: "Managed neighbor", fileName: "neighbor.png" },
           ],
-          { onOpenImage, onRequestUpdate },
+          { onOpenImage, mediaOwner: onMediaChange },
         );
         await vi.advanceTimersByTimeAsync(0);
         const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
@@ -255,7 +256,12 @@ describe("message image gallery loading", () => {
           { url: "data:image/png;base64,cG5n", alt: "First image" },
           { url: localSource, fileName: "Local neighbor.png" },
         ],
-        { onOpenImage, onRequestUpdate, sessionKey: "main", resourceBasePath: "/openclaw" },
+        {
+          onOpenImage,
+          mediaOwner: onMediaChange,
+          sessionKey: "main",
+          resourceBasePath: "/openclaw",
+        },
       );
       container.querySelector<HTMLButtonElement>(".chat-message-image-button")!.click();
       const opened = onOpenImage.mock.calls[0]?.[0];
@@ -275,7 +281,7 @@ describe("message image gallery loading", () => {
 
       if (removeOwner) {
         imageView?.dispose();
-        releaseChatMediaResourceSubscriber(onRequestUpdate);
+        releaseChatMediaResourceOwner(onMediaChange);
       }
       metadata.resolve(ticketResponse("gallery-neighbor-ticket"));
       const result = await neighbor;
@@ -348,15 +354,17 @@ describe("message attachment image gallery projection", () => {
         { onOpenImage },
       );
 
-      expect(
-        Array.from(
-          container.querySelectorAll(".chat-text strong, .chat-message-image"),
-          (element) =>
-            element instanceof HTMLImageElement
-              ? new URL(element.src).pathname
-              : element.textContent?.replace(/\s+/g, " ").trim(),
-        ),
-      ).toEqual(["Before", "/before.png", "After", "/after.png"]);
+      await waitForSolid(() =>
+        expect(
+          Array.from(
+            container.querySelectorAll(".chat-text strong, .chat-message-image"),
+            (element) =>
+              element instanceof HTMLImageElement
+                ? new URL(element.src).pathname
+                : element.textContent?.replace(/\s+/g, " ").trim(),
+          ),
+        ).toEqual(["Before", "/before.png", "After", "/after.png"]),
+      );
       const text = container.querySelector(".chat-text")?.textContent?.trim() ?? "";
       expect(text.startsWith("Introduction")).toBe(true);
       expect(text.endsWith("Closing paragraph")).toBe(true);
@@ -410,11 +418,16 @@ describe("message attachment image gallery projection", () => {
       }),
       index: 0,
     },
-  ])("projects $name into the gallery", ({ message, index }) => {
+  ])("projects $name into the gallery", async ({ message, index }) => {
     const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
     renderMessage(message, "assistant", { onOpenImage });
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-message-image-button")).toHaveLength(2),
+    );
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-message-image")).toHaveLength(2),
+    );
     const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
-    expect(tiles).toHaveLength(2);
     tiles[index]?.click();
     expect(onOpenImage.mock.calls[0]?.[0].gallery).toMatchObject({
       index,

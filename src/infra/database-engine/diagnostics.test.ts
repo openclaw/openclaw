@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { withLegacyStateHeadLayout } from "../../state/openclaw-state-db-schema-v26-layout.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { inspectDatabaseStore, type DatabaseStoreInspection } from "./diagnostics.js";
@@ -82,8 +83,12 @@ describe("physical store diagnostics", () => {
   });
 
   it.each([
-    { version: 25, pending: 1, issue: "Schema migrations pending" },
-    { version: 27, pending: 0, issue: "newer than supported" },
+    {
+      version: 25,
+      pending: OPENCLAW_STATE_SCHEMA_VERSION - 25,
+      issue: "Schema migrations pending",
+    },
+    { version: OPENCLAW_STATE_SCHEMA_VERSION + 1, pending: 0, issue: "newer than supported" },
   ])(
     "preserves readable state schema $version when port admission refuses it",
     async ({ version, pending, issue }) => {
@@ -109,7 +114,7 @@ describe("physical store diagnostics", () => {
       expect(result.schema).toEqual({
         versioning: "versioned",
         version,
-        expectedVersion: 26,
+        expectedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
         pending,
       });
       expect(result.issues.join(" ")).toContain(issue);

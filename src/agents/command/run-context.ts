@@ -3,7 +3,6 @@ import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { resolveMessageChannel } from "../../utils/message-channel.js";
 import type { AgentCommandOpts, AgentRunContext } from "./types.js";
 
-/** Merges explicit run context with command routing options. */
 export function resolveAgentRunContext(opts: AgentCommandOpts): AgentRunContext {
   const merged: AgentRunContext = opts.runContext ? { ...opts.runContext } : {};
 

@@ -293,29 +293,18 @@ export async function registerConversationAddresses(
   const source: AgentDatabaseRequestExecutionSource = {
     assertCurrent() {},
     createAdmission(binding) {
-      return withConversationPublication(
-        () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            binding.authorize(request);
-            if (request.stage === "transaction" || request.stage === "commit") {
-              assertCurrent();
-            }
-            if (!grant()) {
-              throw new Error("Conversation registration authority expired");
-            }
-          }, binding.attachment),
-        }),
-        () => binding.assertCurrent(),
-        () => execution.captureGenerationClaim(),
-        () => [
-          ...new Set(
-            input.identities.map((identity) =>
-              JSON.stringify(["catalogue", identity.conversationRef]),
-            ),
-          ),
-        ],
-      );
+      return () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          if (request.stage === "transaction" || request.stage === "commit") {
+            assertCurrent();
+          }
+          if (!grant()) {
+            throw new Error("Conversation registration authority expired");
+          }
+        }, binding.attachment),
+      });
     },
   };
   const execution = captureOpenClawAgentDatabaseExecution(options);
@@ -330,8 +319,26 @@ export async function registerConversationAddresses(
       if (!execution.capturePreparedGenerationClaim()) {
         await execution.prepare(source);
       }
-      return await execution.runExisting(source, (worker) =>
-        worker.execute({ type: "conversation.register", input }),
+      return await execution.runExisting(
+        {
+          ...source,
+          createAdmission(binding) {
+            // Preparation commits schema facts before a catalogue generation can be claimed.
+            return withConversationPublication(
+              source.createAdmission(binding),
+              () => binding.assertCurrent(),
+              () => execution.captureGenerationClaim(),
+              () => [
+                ...new Set(
+                  input.identities.map((identity) =>
+                    JSON.stringify(["catalogue", identity.conversationRef]),
+                  ),
+                ),
+              ],
+            );
+          },
+        },
+        (worker) => worker.execute({ type: "conversation.register", input }),
       );
     });
   } finally {

@@ -25,6 +25,7 @@ import {
   type SessionLifecyclePatchInput,
   type SessionLifecyclePatchEffects,
 } from "./session-run-lifecycle-projection.js";
+import { mergeSessionSnapshotChanges } from "./session-snapshot-merge.js";
 import {
   mergeSessionEntry,
   mergeSessionEntryPreserveActivity,
@@ -38,6 +39,7 @@ type ExpectedSession = Pick<SessionEntry, "sessionId"> &
 export type SessionEntryBookkeepingReducer =
   | { kind: "activity"; updatedAt: number }
   | { kind: "usage"; update: SessionEntryUsageUpdate; updatedAt: number }
+  | { kind: "goal-continuation"; goalId: string }
   | { kind: "group-intro"; needsSystemIntro: boolean }
   | { kind: "fallback-notice"; notice: SessionEntry["fallbackNotice"] }
   | {
@@ -63,6 +65,13 @@ export type SessionEntryBookkeepingReducer =
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | {
+      kind: "cron-session";
+      sessionKey: string;
+      initial?: SessionEntry;
+      next: SessionEntry;
+      creation: ReturnType<typeof buildSessionCreationStamp>;
+    }
   | {
       kind: "cron-run-continuation";
       sessionKey: string;
@@ -129,6 +138,23 @@ export type SessionEntryPatchOperation =
   | SessionEntryPatchStep
   | { kind: "compound"; operations: readonly SessionEntryPatchStep[] };
 
+/** Shared by ordinary cron writes and the atomic reset-boundary owner. */
+export function projectCronSessionEntry(
+  operation: Extract<SessionEntryPatchOperation, { kind: "cron-session" }>,
+  current: SessionEntry | undefined,
+): SessionEntry {
+  const { initial, next } = operation;
+  // Serialized admission owns the revision; protect only row replacement or deletion here.
+  if (
+    current ? current.sessionId !== (initial?.sessionId ?? next.sessionId) : initial !== undefined
+  ) {
+    throw createSessionWorkStartChangedError(operation.sessionKey);
+  }
+  return current && initial
+    ? mergeSessionSnapshotChanges({ initial, next, current })
+    : { ...next, ...(!current ? operation.creation : {}) };
+}
+
 /** Each reducer observes its predecessor's postimage; callers persist only the result. */
 export function projectSessionEntryPatch(
   params: Omit<Parameters<typeof mergeSessionEntryPatch>[0], "patch"> & {
@@ -171,6 +197,11 @@ export function reduceSessionBookkeeping(
         : { updatedAt: Math.max(entry.updatedAt, reducer.updatedAt) };
     case "usage":
       return projectSessionEntryUsageUpdate(entry, reducer.update, reducer.updatedAt);
+    case "goal-continuation":
+      // Completion may already have changed status; only the admitted Goal identity matters.
+      return entry.goal?.id === reducer.goalId
+        ? { goal: { ...entry.goal, continuationTurns: entry.goal.continuationTurns + 1 } }
+        : null;
     case "group-intro":
       return { groupActivationNeedsSystemIntro: reducer.needsSystemIntro };
     case "fallback-notice":
@@ -214,6 +245,8 @@ export function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "cron-session":
+      return projectCronSessionEntry(operation, existingEntry);
     case "cron-run-continuation": {
       const { source, continuation, sessionKey } = operation;
       if (

@@ -18,6 +18,7 @@ import type { createAgentTurnService } from "./agent-turn/agent-turn-service.js"
 import type { AgentTurnPrincipal } from "./agent-turn/types.js";
 import { registerChatAbortController } from "./chat-abort.js";
 import { createGatewayMethodRegistry } from "./methods/registry.js";
+import type { OperatorRecoveryTarget } from "./operator-run-recovery.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
 import { createDirectChatContext } from "./server-chat.agent-events.test-helpers.js";
 import { createGatewayInstanceRuntime } from "./server-instance-runtime.js";
@@ -25,8 +26,6 @@ import { authorizeGatewayMethod } from "./server-methods/method-authorization.js
 
 const startTurn = vi.hoisted(() => vi.fn<ReturnType<typeof createAgentTurnService>["startTurn"]>());
 
-// Keep the typed runtime and principal capture real; no model/provider execution is needed
-// to observe its authorization boundary and exact controller-registration lifetime.
 // mock-isolation: Keep request-envelope plumbing isolated; the real method registry authorization is exercised below.
 vi.mock("./server-methods.js", () => ({
   createRequestGatewayMethodRegistry: () => ({ isControlPlaneWrite: () => false }),
@@ -54,35 +53,93 @@ afterEach(() => {
   resetAgentEventsForTest();
 });
 
+const chatContext = () => createDirectChatContext({ trackExecution: trackAsyncWork });
+const createRuntime = (
+  getContext: () => ReturnType<typeof chatContext>,
+  registry = createGatewayMethodRegistry([]),
+) => {
+  const runtime = createGatewayInstanceRuntime({
+    getContext,
+    getMethodRegistry: () => registry,
+    isDispatchAvailable: () => true,
+  });
+  return Object.assign(runtime, { [Symbol.dispose]: runtime.close });
+};
+const recoveryRequest = (target: OperatorRecoveryTarget) => ({
+  message: "Continue the interrupted turn",
+  agentId: target.agentId,
+  sessionKey: target.sessionKey,
+  expectedExistingSessionId: target.sessionId,
+  idempotencyKey: target.recoveryRunId,
+});
+function registerRecovery(
+  context: ReturnType<typeof chatContext>,
+  target: OperatorRecoveryTarget,
+  runId = target.recoveryRunId,
+) {
+  const registration = registerChatAbortController({
+    chatAbortControllers: context.chatAbortControllers,
+    runId,
+    agentId: "main",
+    sessionKey: target.sessionKey,
+    sessionId: target.sessionId,
+    lifecycleGeneration: getAgentEventLifecycleGeneration(),
+    timeoutMs: 60_000,
+    kind: "agent",
+  });
+  if (!registration.registered) {
+    throw new Error("Expected a fresh recovery controller");
+  }
+  return registration;
+}
+async function withRecovery(
+  run: (
+    fixture: Awaited<ReturnType<typeof createOperatorRecoveryFixture>> & {
+      stateDir: string;
+      profileId: string;
+    },
+  ) => Promise<void>,
+  internal = false,
+) {
+  await withOpenClawTestState({ scenario: "minimal" }, async ({ stateDir }) => {
+    if (internal) {
+      setRuntimeConfigSnapshot({});
+    }
+    const context = chatContext();
+    const profile = ensureProfileForEmail("runtime-recovery@example.test");
+    const fixture = await createOperatorRecoveryFixture({
+      stateDir,
+      context,
+      profileId: profile.id,
+      config: {},
+      ...(internal
+        ? { sessionKey: "agent:main:dashboard:repeat-recovery", sourceIngress: "internal" as const }
+        : {}),
+    });
+    await run({ ...fixture, stateDir, profileId: profile.id });
+  });
+}
+
 describe("typed restart recovery operator admission", () => {
   it.each([false, true])(
     "retains an internal operator source across repeated restarts (revoked=%s)",
     async (revoked) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        setRuntimeConfigSnapshot({});
-        const profile = ensureProfileForEmail("repeat-recovery@example.test");
-        const fixture = await createOperatorRecoveryFixture({
-          stateDir: state.stateDir,
-          context: createDirectChatContext({ trackExecution: trackAsyncWork }),
-          profileId: profile.id,
-          config: {},
-          sessionKey: "agent:main:dashboard:repeat-recovery",
-          sourceIngress: "internal",
-        });
-        const source = fixture.entry.restartRecoveryOperatorSource;
-        let runId = fixture.target.recoveryRunId;
+      await withRecovery(async ({ entry, target, stateDir, profileId }) => {
+        const source = entry.restartRecoveryOperatorSource;
+        let runId = target.recoveryRunId;
+        const { sessionKey, sessionId } = target;
         for (let attempt = 0; attempt < 2; attempt += 1) {
-          const context = createDirectChatContext({ trackExecution: trackAsyncWork });
+          const context = chatContext();
           context.getRuntimeConfig = () => ({});
           const generation = getAgentEventLifecycleGeneration();
-          await appendTranscriptMessage(fixture.target, {
+          await appendTranscriptMessage(target, {
             message: {
               role: "user",
               content: "A reviewer has additional findings for the original task.",
               provenance: { kind: "inter_session", sourceTool: "sessions_send" },
             },
           });
-          await appendTranscriptMessage(fixture.target, {
+          await appendTranscriptMessage(target, {
             message: {
               role: "assistant",
               stopReason: "toolUse",
@@ -91,59 +148,32 @@ describe("typed restart recovery operator admission", () => {
           });
           await markRestartAbortedMainSessions({
             resolveGatewayContext: () => context,
-            stateDir: state.stateDir,
-            activeRuns: [
-              {
-                sessionKey: fixture.target.sessionKey,
-                sessionId: fixture.target.sessionId,
-                runId,
-                lifecycleGeneration: generation,
-              },
-            ],
+            stateDir,
+            activeRuns: [{ sessionKey, sessionId, runId, lifecycleGeneration: generation }],
             isActiveRun: () => true,
           });
           rotateAgentEventLifecycleGeneration();
           if (revoked && attempt === 1) {
-            setUserProfileRole(profile.id, "changed-role");
+            setUserProfileRole(profileId, "changed-role");
           }
-          const runtime = createGatewayInstanceRuntime({
-            getContext: () => context,
-            getMethodRegistry: () => createGatewayMethodRegistry([]),
-            isDispatchAvailable: () => true,
-          });
+          const runtime = createRuntime(() => context);
           const finish = createDeferred();
           let registration: ReturnType<typeof registerChatAbortController> | undefined;
-          let execution: Promise<void> | undefined;
-          startTurn.mockImplementation(({ preflight, principal, io }) => {
-            execution = (async () => {
-              runId = expectDefined(preflight.request.idempotencyKey, "recovery run");
-              const authority = expectDefined(
-                principal?.internal?.operatorRunAuthority,
-                "restored source authority",
-              );
-              expect(authority.profileId).toBe(profile.id);
-              expect(authority.assertCurrent).not.toThrow();
-              registration = registerChatAbortController({
-                chatAbortControllers: context.chatAbortControllers,
-                runId,
-                agentId: "main",
-                sessionKey: fixture.target.sessionKey,
-                sessionId: fixture.target.sessionId,
-                lifecycleGeneration: getAgentEventLifecycleGeneration(),
-                timeoutMs: 60_000,
-                kind: "agent",
-              });
-              if (!registration.registered) {
-                throw new Error("Expected a fresh recovery controller");
-              }
-              io.emitStartOwner?.(runId, registration.entry);
-              registration.markExecutionStarted();
-              io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
-              io.emitExecutionStarted?.();
-              await finish.promise;
-              io.emitFinal([true, { runId, status: "ok" }, undefined]);
-            })();
-            return execution;
+          startTurn.mockImplementation(async ({ preflight, principal, io }) => {
+            runId = expectDefined(preflight.request.idempotencyKey, "recovery run");
+            const authority = expectDefined(
+              principal?.internal?.operatorRunAuthority,
+              "restored source authority",
+            );
+            expect(authority.profileId).toBe(profileId);
+            expect(authority.assertCurrent).not.toThrow();
+            registration = registerRecovery(context, target, runId);
+            io.emitStartOwner?.(runId, registration.entry);
+            registration.markExecutionStarted();
+            io.emitAcceptance([true, { runId, status: "accepted" }, undefined]);
+            io.emitExecutionStarted?.();
+            await finish.promise;
+            io.emitFinal([true, { runId, status: "ok" }, undefined]);
           });
           try {
             const denied = revoked && attempt === 1;
@@ -151,10 +181,10 @@ describe("typed restart recovery operator admission", () => {
             const outcome = await recoverStore({
               onSkipped: (reason) => skipped.push(reason),
               cfg: {},
-              storePath: fixture.target.storePath,
-              stateDir: state.stateDir,
+              storePath: target.storePath,
+              stateDir,
               handledSessionKeys: new Set(),
-              expectedTarget: fixture.target,
+              expectedTarget: target,
               gatewayRuntime: runtime.recovery,
             });
             expect(skipped).toEqual([]);
@@ -165,55 +195,33 @@ describe("typed restart recovery operator admission", () => {
               skipped: 0,
             });
             expect(startTurn).toHaveBeenCalledTimes(denied ? 1 : attempt + 1);
-            const retained = loadSessionEntry(fixture.target);
+            const retained = loadSessionEntry(target);
             expect(retained?.restartRecoveryOperatorSource).toEqual(source);
-            expect(retained?.restartRecoveryDeliverySourceRunId).toBe(fixture.target.sourceRunId);
+            expect(retained?.restartRecoveryDeliverySourceRunId).toBe(target.sourceRunId);
             expect(retained?.mainRestartRecovery?.tombstone).toBeUndefined();
           } finally {
             runtime.close();
             finish.resolve();
-            await execution;
+            await startTurn.mock.results.at(-1)?.value;
             registration?.cleanup();
           }
         }
-      });
+      }, true);
     },
   );
   it.each(["agentId", "sessionKey", "expectedExistingSessionId", "idempotencyKey"] as const)(
     "rejects dispatch before authority restoration when %s differs from the original claim",
     async (field) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const context = createDirectChatContext({ trackExecution: trackAsyncWork });
-        const profile = ensureProfileForEmail("target-runtime@example.test");
-        const fixture = await createOperatorRecoveryFixture({
-          stateDir: state.stateDir,
-          context,
-          profileId: profile.id,
-          config: {},
-        });
-        const runtime = createGatewayInstanceRuntime({
-          getContext: () => context,
-          getMethodRegistry: () => createGatewayMethodRegistry([]),
-          isDispatchAvailable: () => true,
-        });
-        const request = {
-          message: "Continue the interrupted turn",
-          agentId: fixture.target.agentId,
-          sessionKey: fixture.target.sessionKey,
-          expectedExistingSessionId: fixture.target.sessionId,
-          idempotencyKey: fixture.target.recoveryRunId,
-        };
+      await withRecovery(async ({ target, context }) => {
+        using runtime = createRuntime(() => context);
+        const request = recoveryRequest(target);
         request[field] = "another-claim";
-        try {
-          await expect(
-            runtime.recovery.dispatchAgent(request, undefined, {
-              restartRecoveryOperatorTarget: fixture.target,
-            }),
-          ).rejects.toThrow("dispatch does not match its operator claim");
-          expect(startTurn).not.toHaveBeenCalled();
-        } finally {
-          runtime.close();
-        }
+        await expect(
+          runtime.recovery.dispatchAgent(request, undefined, {
+            restartRecoveryOperatorTarget: target,
+          }),
+        ).rejects.toThrow("dispatch does not match its operator claim");
+        expect(startTurn).not.toHaveBeenCalled();
       });
     },
   );
@@ -221,15 +229,7 @@ describe("typed restart recovery operator admission", () => {
   it.each(["authenticated operator", "legacy claim"] as const)(
     "applies the actual admin-method fence to a %s principal",
     async (source) => {
-      await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const context = createDirectChatContext({ trackExecution: trackAsyncWork });
-        const profile = ensureProfileForEmail("runtime-recovery@example.test");
-        const fixture = await createOperatorRecoveryFixture({
-          stateDir: state.stateDir,
-          context,
-          profileId: profile.id,
-          config: {},
-        });
+      await withRecovery(async ({ target, context }) => {
         const registry = createGatewayMethodRegistry([
           {
             name: "cron.add",
@@ -238,11 +238,7 @@ describe("typed restart recovery operator admission", () => {
             handler: vi.fn(),
           },
         ]);
-        const runtime = createGatewayInstanceRuntime({
-          getContext: () => context,
-          getMethodRegistry: () => registry,
-          isDispatchAvailable: () => true,
-        });
+        using runtime = createRuntime(() => context, registry);
         startTurn.mockImplementation(async ({ principal, io }) => {
           const authorization = authorizeGatewayMethod(
             "cron.add",
@@ -254,29 +250,17 @@ describe("typed restart recovery operator admission", () => {
           io.emitAcceptance(
             authorization.error
               ? [false, undefined, authorization.error]
-              : [true, { runId: fixture.target.recoveryRunId, status: "ok" }, undefined],
+              : [true, { runId: target.recoveryRunId, status: "ok" }, undefined],
           );
         });
-        const request = {
-          message: "Continue the interrupted turn",
-          agentId: "main",
-          sessionKey: fixture.target.sessionKey,
-          expectedExistingSessionId: fixture.target.sessionId,
-          idempotencyKey: fixture.target.recoveryRunId,
-        };
         const options = {
-          restartRecoveryOperatorTarget:
-            source === "authenticated operator" ? fixture.target : undefined,
+          restartRecoveryOperatorTarget: source === "authenticated operator" ? target : undefined,
         };
-        try {
-          const result = runtime.recovery.dispatchAgent(request, undefined, options);
-          if (source === "authenticated operator") {
-            await expect(result).resolves.toMatchObject({ status: "ok" });
-          } else {
-            await expect(result).rejects.toThrow("missing scope: operator.admin");
-          }
-        } finally {
-          runtime.close();
+        const result = runtime.recovery.dispatchAgent(recoveryRequest(target), undefined, options);
+        if (source === "authenticated operator") {
+          await expect(result).resolves.toMatchObject({ status: "ok" });
+        } else {
+          await expect(result).rejects.toThrow("missing scope: operator.admin");
         }
       });
     },
@@ -289,65 +273,23 @@ describe("typed restart recovery operator admission", () => {
     "Gateway closed",
     "Gateway context replaced",
   ] as const)("refuses retained operator work after its exact %s", async (boundary) => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const context = createDirectChatContext({ trackExecution: trackAsyncWork });
+    await withRecovery(async ({ target, context }) => {
       let activeContext = context;
-      const profile = ensureProfileForEmail("retained-runtime@example.test");
-      const fixture = await createOperatorRecoveryFixture({
-        stateDir: state.stateDir,
-        context,
-        profileId: profile.id,
-        config: {},
-      });
-      const registration = registerChatAbortController({
-        chatAbortControllers: context.chatAbortControllers,
-        runId: fixture.target.recoveryRunId,
-        agentId: "main",
-        sessionKey: fixture.target.sessionKey,
-        sessionId: fixture.target.sessionId,
-        lifecycleGeneration: getAgentEventLifecycleGeneration(),
-        timeoutMs: 60_000,
-        kind: "agent",
-      });
-      if (!registration.registered) {
-        throw new Error("Expected a fresh controller registration");
-      }
-      const runtime = createGatewayInstanceRuntime({
-        getContext: () => activeContext,
-        getMethodRegistry: () => createGatewayMethodRegistry([]),
-        isDispatchAvailable: () => true,
-      });
+      const registration = registerRecovery(context, target);
+      using runtime = createRuntime(() => activeContext);
       const entered = createDeferred<AgentTurnPrincipal>();
       const finish = createDeferred();
-      let execution: Promise<void> | undefined;
-      startTurn.mockImplementation(({ principal, io }) => {
-        execution = (async () => {
-          const currentPrincipal = expectDefined(principal, "typed recovery principal");
-          io.emitStartOwner?.(fixture.target.recoveryRunId, registration.entry);
-          io.emitAcceptance(
-            [true, { runId: fixture.target.recoveryRunId, status: "accepted" }, undefined],
-            {
-              runId: fixture.target.recoveryRunId,
-            },
-          );
-          entered.resolve(currentPrincipal);
-          await finish.promise;
-          io.emitFinal([true, { runId: fixture.target.recoveryRunId, status: "ok" }, undefined]);
-        })();
-        return execution;
+      startTurn.mockImplementation(async ({ principal, io }) => {
+        const currentPrincipal = expectDefined(principal, "typed recovery principal");
+        const runId = target.recoveryRunId;
+        io.emitStartOwner?.(runId, registration.entry);
+        io.emitAcceptance([true, { runId, status: "accepted" }, undefined], { runId });
+        entered.resolve(currentPrincipal);
+        await finish.promise;
+        io.emitFinal([true, { runId, status: "ok" }, undefined]);
       });
-      const options = { restartRecoveryOperatorTarget: fixture.target, expectFinal: true };
-      const pending = runtime.recovery.dispatchAgent(
-        {
-          message: "Continue the interrupted turn",
-          agentId: "main",
-          sessionKey: fixture.target.sessionKey,
-          expectedExistingSessionId: fixture.target.sessionId,
-          idempotencyKey: fixture.target.recoveryRunId,
-        },
-        undefined,
-        options,
-      );
+      const options = { restartRecoveryOperatorTarget: target, expectFinal: true };
+      const pending = runtime.recovery.dispatchAgent(recoveryRequest(target), undefined, options);
       try {
         const principal = await awaitGateBeforeSettlement(
           entered.promise,
@@ -361,7 +303,7 @@ describe("typed restart recovery operator admission", () => {
         expect(authority.assertCurrent).not.toThrow();
         if (boundary === "registration replaced") {
           // Same correlation identity cannot transfer the old registration's authority.
-          context.chatAbortControllers.set(fixture.target.recoveryRunId, {
+          context.chatAbortControllers.set(target.recoveryRunId, {
             ...registration.entry,
             controller: new AbortController(),
           });
@@ -372,20 +314,19 @@ describe("typed restart recovery operator admission", () => {
         } else if (boundary === "Gateway closed") {
           runtime.close();
         } else {
-          activeContext = createDirectChatContext({ trackExecution: trackAsyncWork });
+          activeContext = chatContext();
         }
         expect(authority.assertCurrent).toThrow();
         if (boundary === "registration replaced") {
           // Once refusal is observed, putting the same old row back cannot revive tools.
-          context.chatAbortControllers.set(fixture.target.recoveryRunId, registration.entry);
+          context.chatAbortControllers.set(target.recoveryRunId, registration.entry);
           expect(authority.assertCurrent).toThrow();
         }
       } finally {
         finish.resolve();
         await pending.catch(() => undefined);
-        await execution;
+        await startTurn.mock.results.at(-1)?.value;
         registration.cleanup();
-        runtime.close();
       }
     });
   });

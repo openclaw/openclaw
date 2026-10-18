@@ -132,7 +132,7 @@ function createSelectedAgentHarnessMock(params: {
     runAttempt: vi.fn(),
   };
 }
-export const selectAgentHarnessMock = vi.fn(createSelectedAgentHarnessMock);
+const selectAgentHarnessMock = vi.fn(createSelectedAgentHarnessMock);
 export const selectAgentHarnessForPreparedModelProvidersMock = vi.fn(
   createSelectedAgentHarnessMock,
 );
@@ -943,11 +943,12 @@ export async function loadCompactHooksHarness(options: { durableSession?: boolea
     };
   });
 
-  vi.doMock("../embedded-agent-helpers.js", async () => {
-    const { pickFallbackThinkingLevel } = await import("../embedded-agent-helpers/thinking.js");
+  vi.doMock("../embedded-agent-helpers/turns.js", async () => {
+    const actual = await vi.importActual<typeof import("../embedded-agent-helpers/turns.js")>(
+      "../embedded-agent-helpers/turns.js",
+    );
     return {
-      ensureSessionHeader: vi.fn(async () => {}),
-      pickFallbackThinkingLevel,
+      ...actual,
       validateAnthropicTurns: vi.fn((m: unknown[]) => m),
       validateGeminiTurns: vi.fn((m: unknown[]) => m),
     };

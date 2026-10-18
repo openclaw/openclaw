@@ -97,7 +97,11 @@ it("keeps Layout hints aligned before and after panel styles load, and hidden on
   ));
   await userEvent.click(page.getByRole("button", { name: "Layout", exact: true }));
   const menu = page.getByRole("menu", { name: "Layout", exact: true }).element();
-  await waitForSolid(() => expect(menu.getAttribute("data-phase")).toBe("open"));
+  await waitForSolid(() => {
+    expect(menu.getAttribute("data-phase")).toBe("open");
+    // The opening transition scales DOM bounds; measure its final geometry.
+    expect(getComputedStyle(menu).scale).toBe("1");
+  });
   const hints = [...menu.querySelectorAll<HTMLElement>(".shortcut-kbd")];
   expect(hints).toHaveLength(4);
   const bounds = () => hints.map((hint) => hint.getBoundingClientRect());
@@ -106,9 +110,13 @@ it("keeps Layout hints aligned before and after panel styles load, and hidden on
     Math.max(...before.map((rect) => rect.right)) - Math.min(...before.map((rect) => rect.right)),
   ).toBeLessThan(1);
   await import("../../styles/chat/side-panel.css");
-  expect(bounds().map((rect) => [rect.right, rect.width])).toEqual(
-    before.map((rect) => [rect.right, rect.width]),
-  );
+  const after = bounds();
+  expect(after).toHaveLength(before.length);
+  // WebKit can retain subpixel transform rounding after the opening scale settles.
+  for (const [index, rect] of after.entries()) {
+    expect(rect.right).toBeCloseTo(before[index]!.right, 3);
+    expect(rect.width).toBeCloseTo(before[index]!.width, 3);
+  }
   const check = menu.querySelector<HTMLElement>('[aria-checked="true"] > .oc-menu-item__check')!;
   expect(check.getBoundingClientRect().left).toBeGreaterThan(before[3]!.right);
   await page.viewport(390, 800);

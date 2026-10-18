@@ -1,11 +1,11 @@
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import type {
   BackupRunRecord,
   BackupRunLocation,
   BackupRunRetention,
 } from "../../packages/gateway-protocol/src/schema/backup.js";
+import { truncateOptionalText } from "../shared/text-truncate.js";
 import type { DB as OpenClawStateDatabase } from "./openclaw-state-db.generated.js";
 
 export type {
@@ -30,10 +30,6 @@ export function resolveBackupRunNamespace(run: BackupRunManifest): string | unde
   return run.kind === "archive" ? (run.location?.namespace ?? run.namespace) : undefined;
 }
 
-function boundedText(value: string | undefined, maxLength: number): string | undefined {
-  const trimmed = value?.trim();
-  return trimmed ? truncateUtf16Safe(trimmed, maxLength) : undefined;
-}
 function isBytes(value: unknown): value is number {
   return typeof value === "number" && Number.isSafeInteger(value) && value >= 0;
 }
@@ -114,9 +110,9 @@ export function parseBackupRun(
 export function serializeBackupRunManifest(manifest: BackupRunManifest): string {
   return JSON.stringify({
     kind: manifest.kind,
-    target: boundedText(manifest.target, 512),
-    namespace: boundedText(resolveBackupRunNamespace(manifest), 128),
-    error: boundedText(manifest.error, BACKUP_RUN_ERROR_MAX_LENGTH),
+    target: truncateOptionalText(manifest.target, 512),
+    namespace: truncateOptionalText(resolveBackupRunNamespace(manifest), 128),
+    error: truncateOptionalText(manifest.error, BACKUP_RUN_ERROR_MAX_LENGTH),
     ...(manifest.pushFailed ? { pushFailed: true } : {}),
     ...(isBytes(manifest.bytes) ? { bytes: manifest.bytes } : {}),
     ...(manifest.location ? { location: manifest.location } : {}),

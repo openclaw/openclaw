@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { Worker } from "node:worker_threads";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, expect, it, vi } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import { stopChildProcess } from "../../test/helpers/stop-child-process.js";
@@ -16,6 +17,8 @@ import {
   readSqliteDatabaseCleanClose,
 } from "../infra/sqlite-database-admission.js";
 import { createSqliteWorkerOperationAdmission } from "../infra/sqlite-worker-operation-admission.js";
+import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js";
+import * as sqliteWorkerStore from "../infra/sqlite-worker-store.js";
 import { assertAgentDatabaseAdmitted } from "./agent-database-admission.js";
 import { stateNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import {
@@ -164,6 +167,51 @@ function createNativeSource(assertCurrent: () => void): AgentDatabaseRequestExec
     }),
   };
 }
+
+it("keeps retained borrowers after a caller is refused before native promotion", async () => {
+  const env = { OPENCLAW_STATE_DIR: fs.realpathSync(tempDirs.make("agent-pre-promotion-")) };
+  const options = { agentId: "main", env };
+  const database = openOpenClawAgentDatabase(options);
+  closeOpenClawAgentDatabaseByPath(database.path);
+  const initiator = captureOpenClawAgentDatabaseExecution(options);
+  const retained = captureOpenClawAgentDatabaseExecution(options);
+  const refusal = new Error("Caller revoked before native promotion");
+  let current = true;
+  const source = createNativeSource(() => {
+    if (!current) {
+      throw refusal;
+    }
+  });
+  const runOperation = sqliteWorkerStore.runSqliteWorkerStoreOperation;
+  const preparation = vi
+    .spyOn(sqliteWorkerStore, "runSqliteWorkerStoreOperation")
+    .mockImplementationOnce((...args) => {
+      // The lazy native owner exists, but its first write promotion has not entered.
+      current = false;
+      preparation.mockRestore();
+      return runOperation(...args);
+    });
+  const operation = vi.fn(async () => "not admitted");
+  try {
+    await expect(initiator.runExisting(source, operation)).rejects.toBe(refusal);
+    expect(current).toBe(false);
+    expect(operation).not.toHaveBeenCalled();
+    expect(() => retained.assertCurrent()).not.toThrow();
+    await expect(
+      retained.runExisting(
+        createNativeSource(() => {}),
+        (scope) =>
+          scope.execute({
+            type: "session.transcript.initialize",
+            input: { sessionKey: "agent:main:retained", sessionId: "retained" },
+          }),
+      ),
+    ).resolves.toMatchObject({ kind: "session-transcript-initialized" });
+  } finally {
+    preparation.mockRestore();
+    await Promise.all([initiator.release(), retained.release()]);
+  }
+});
 
 it.for(["revoked", "aborted"] as const)(
   "keeps shared integrity preparation alive after its initiating caller is %s",
@@ -415,36 +463,33 @@ it("retires every borrower when native open refusal retains admission cleanup fa
   closeOpenClawAgentDatabaseByPath(database.path);
   const rejected = captureOpenClawAgentDatabaseExecution(options);
   const retained = captureOpenClawAgentDatabaseExecution(options);
-  const refusal = new Error("Original caller revoked before native agent open");
-  const cleanupError = new Error("Original caller cleanup failed after granting open");
-  let sourceCurrent = true;
+  const refusal = new Error("Physical owner refused native agent open");
+  const cleanupError = new Error("Physical owner cleanup failed after granting open");
+  let nativeCurrent = true;
   let domainOpenRequests = 0;
-  const source: AgentDatabaseRequestExecutionSource = {
-    assertCurrent() {
-      if (!sourceCurrent) {
-        throw refusal;
+  const source = createNativeSource(() => {});
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const fault = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) => {
+      if (!isRecord(attachment) || attachment.kind !== "agent-execution") {
+        return createAdmission(admit, attachment);
       }
-    },
-    createAdmission(binding) {
-      return () => ({
-        nativeLocations: binding.nativeLocations,
-        admission: createSqliteWorkerOperationAdmission((request, grant) => {
-          if (request.stage === "open") {
-            domainOpenRequests += 1;
-          }
-          binding.authorize(request);
-          if (!grant()) {
-            throw new Error("Cleanup refusal fixture lost its admission");
-          }
-          if (request.stage === "open" && domainOpenRequests === 1) {
-            // The broker granted factory entry; the factory must still admit its native open.
-            sourceCurrent = false;
-            throw cleanupError;
-          }
-        }, binding.attachment),
-      });
-    },
-  };
+      return createAdmission((request, grant) => {
+        if (!nativeCurrent) {
+          throw refusal;
+        }
+        if (request.stage === "open") {
+          domainOpenRequests += 1;
+        }
+        admit(request, grant);
+        if (request.stage === "open" && domainOpenRequests === 1) {
+          // The broker granted factory entry; the factory must still admit its native open.
+          nativeCurrent = false;
+          throw cleanupError;
+        }
+      }, attachment);
+    });
   try {
     const opening = rejected.runExisting(source, async () => "not admitted");
     await expect(opening).rejects.toBeInstanceOf(AggregateError);
@@ -452,15 +497,16 @@ it("retires every borrower when native open refusal retains admission cleanup fa
       cause: refusal,
       errors: [refusal, { errors: [cleanupError] }],
     });
-    // The broker refuses the factory open before re-entering the domain callback.
+    // Physical-owner refusal precedes the second domain admission.
     expect(domainOpenRequests).toBe(1);
-    sourceCurrent = true;
+    nativeCurrent = true;
     expect(() => retained.assertCurrent()).toThrow("Agent database execution admission is closed");
     await expect(retained.runExisting(source, async () => "not admitted")).rejects.toThrow(
       "Agent database execution admission is closed",
     );
   } finally {
-    sourceCurrent = true;
+    fault.mockRestore();
+    nativeCurrent = true;
     const released = await Promise.allSettled([rejected.release(), retained.release()]);
     await closeOpenClawAgentDatabasesAsync();
     expect(released).toEqual([
@@ -477,25 +523,21 @@ it("retires every borrower when native opening reports a protocol failure", asyn
   closeOpenClawAgentDatabaseByPath(database.path);
   const rejected = captureOpenClawAgentDatabaseExecution(options);
   const retained = captureOpenClawAgentDatabaseExecution(options);
-  const source: AgentDatabaseRequestExecutionSource = {
-    assertCurrent: () => {},
-    createAdmission(binding) {
-      return () => {
-        const admission = createSqliteWorkerOperationAdmission((request, grant) => {
-          binding.authorize(request);
-          if (!grant()) {
-            throw new Error("Protocol failure fixture lost admission");
-          }
-        }, binding.attachment);
+  const source = createNativeSource(() => {});
+  const createAdmission = workerAdmission.createSqliteWorkerOperationAdmission;
+  const fault = vi
+    .spyOn(workerAdmission, "createSqliteWorkerOperationAdmission")
+    .mockImplementation((admit, attachment) => {
+      const admission = createAdmission(admit, attachment);
+      if (isRecord(attachment) && attachment.kind === "agent-execution") {
         admission.port.postMessage(
           { kind: "native-settlement", settlement: { kind: "invalid" } },
           [],
         );
         admission.service();
-        return { nativeLocations: binding.nativeLocations, admission };
-      };
-    },
-  };
+      }
+      return admission;
+    });
   const operation = vi.fn(async () => "not admitted");
   try {
     await expect(rejected.runExisting(source, operation)).rejects.toThrow(
@@ -508,6 +550,7 @@ it("retires every borrower when native opening reports a protocol failure", asyn
     );
     expect(operation).not.toHaveBeenCalled();
   } finally {
+    fault.mockRestore();
     const released = await Promise.allSettled([rejected.release(), retained.release()]);
     expect(released).toEqual([
       { status: "fulfilled", value: undefined },

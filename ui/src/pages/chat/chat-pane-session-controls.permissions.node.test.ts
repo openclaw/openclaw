@@ -8,6 +8,7 @@ import type { Model } from "../../../../src/llm/types.js";
 import { buildProviderStreamFamilyHooks } from "../../../../src/plugin-sdk/provider-stream.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import { beginModelCatalogRead, publishModelCatalogResult } from "../../lib/model-catalog-cache.ts";
 import { createSessionsListResult } from "../../test-helpers/chat-model.ts";
 import { sessionMutationGatewayHello } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
@@ -20,7 +21,7 @@ import { createInitializationContext, createRenderTestChatPane } from "./chat-pa
 import { switchChatModel, switchChatSetting } from "./chat-session.ts";
 import { getPendingChatPickerPatch, patchChatSessionSettings } from "./chat-settings-patches.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { selectedChatSessionRow } from "./chat-state-route.ts";
+import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import { setChatRunOwner } from "./history-merge.ts";
 
 // mock-isolation: Vite's jsdom URLs are not file URLs; load the unchanged SQL as a raw asset.
@@ -159,9 +160,17 @@ function createControlsFixture(
   });
   const pane = createRenderTestChatPane();
   const state = Object.assign(pane.initialize(createInitializationContext()), fixtureHost, {
-    // This fixture supplies a complete model catalog, rather than a pending first load.
     chatModelCatalogInitialized: true,
   });
+  const catalogScope = {
+    agentId: resolveChatAgentId(state) ?? undefined,
+    sessionKey: state.sessionKey,
+  };
+  expect(
+    publishModelCatalogResult(beginModelCatalogRead(state.client!, catalogScope), catalogScope, {
+      models: state.chatModelCatalog,
+    }),
+  ).toBe(true);
   const visibleSession = selectedChatSessionRow(state);
   const access = readChatPaneMutationAccess(
     {
@@ -183,7 +192,7 @@ function createControlsFixture(
   });
   const container = document.createElement("div");
   document.body.append(container);
-  renderPaneModelControl(controls.composerControls, container);
+  renderPaneModelControl(controls.composerControls, container, true);
   const effort = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
   effort.open = true;
   effort.dispatchEvent(new Event("toggle"));

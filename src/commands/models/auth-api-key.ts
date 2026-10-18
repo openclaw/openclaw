@@ -4,15 +4,15 @@ import {
   normalizeProviderId,
 } from "@openclaw/model-catalog-core/provider-id";
 import {
-  ensureAuthProfileStoreWithoutExternalProfiles,
+  ensureAuthProfileStoreWithoutExternalProfilesAsync,
   resolveAuthProfileOrder,
-  resolvePersistedAuthProfileOwnerAgentDir,
+  resolvePersistedAuthProfileOwnerAgentDirAsync,
 } from "../../agents/auth-profiles.js";
 import {
   listCandidateAuthProfileStores,
-  loadCandidateAuthProfileStore,
+  prepareCandidateAuthProfileCredentialRead,
 } from "../../agents/auth-profiles/candidate-stores.js";
-import { resolveNativeSharedAuthStorePath as resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.native.js";
+import { resolveSharedAuthStorePath } from "../../agents/auth-profiles/path-resolve.js";
 import { upsertAuthProfileWithLockOrThrow } from "../../agents/auth-profiles/profiles.js";
 import type { AuthProfileCredential } from "../../agents/auth-profiles/types.js";
 import {
@@ -90,7 +90,7 @@ export async function saveModelProviderApiKey(params: {
   const connectionId = params.profileId ? undefined : configuredKey(config);
   const connectionBinding =
     connectionId === undefined ? undefined : configuredBinding(config, connectionId);
-  const store = ensureAuthProfileStoreWithoutExternalProfiles(params.agentDir);
+  const store = await ensureAuthProfileStoreWithoutExternalProfilesAsync(params.agentDir);
   const replacementId = !connectionId
     ? resolveAuthProfileOrder({ cfg: config, store, provider }).find((id) => {
         const credential = store.profiles[id];
@@ -117,7 +117,10 @@ export async function saveModelProviderApiKey(params: {
   const agentDir = connectionId
     ? undefined
     : store.profiles[profileId]
-      ? resolvePersistedAuthProfileOwnerAgentDir({ agentDir: params.agentDir, profileId })
+      ? await resolvePersistedAuthProfileOwnerAgentDirAsync({
+          agentDir: params.agentDir,
+          profileId,
+        })
       : params.agentDir;
   const localCandidates = connectionId
     ? (await listCandidateAuthProfileStores({ cfg: config })).filter(
@@ -126,12 +129,13 @@ export async function saveModelProviderApiKey(params: {
           resolvePathViaExistingAncestorSync(resolveSharedAuthStorePath()),
       )
     : [];
+  const readLocalCredentials = await Promise.all(
+    localCandidates.map((candidate) =>
+      prepareCandidateAuthProfileCredentialRead(candidate, profileId),
+    ),
+  );
   const validateSharedBinding = () => {
-    if (
-      localCandidates.some(
-        (candidate) => loadCandidateAuthProfileStore(candidate)?.profiles[profileId],
-      )
-    ) {
+    if (readLocalCredentials.some((reader) => reader.readCurrentCredential())) {
       throw new Error(
         "An agent already overrides this shared key. Remove that agent's override before replacing the shared key.",
       );
@@ -139,8 +143,8 @@ export async function saveModelProviderApiKey(params: {
   };
   const validateReplacement = (existing: AuthProfileCredential | undefined) => {
     params.assertCurrent?.();
-    validateCurrentCredential(existing);
     validateSharedBinding();
+    validateCurrentCredential(existing);
   };
   validateReplacement(store.profiles[profileId]);
   await upsertAuthProfileWithLockOrThrow({
@@ -157,7 +161,10 @@ export async function saveModelProviderApiKey(params: {
   );
   let configChanged = false;
   await updateConfig(
-    (current) => {
+    async (current) => {
+      // A catalog may publish credentials after the key write and before config preparation.
+      await Promise.all(readLocalCredentials.map((reader) => reader.waitUntilCurrent()));
+      validateSharedBinding();
       params.assertCurrent?.();
       const id = params.profileId ? undefined : configuredKey(current);
       if (
@@ -170,7 +177,6 @@ export async function saveModelProviderApiKey(params: {
           "The provider connection changed during the key update. Reopen the connection and save the key again",
         );
       }
-      validateSharedBinding();
       let next = applyAuthProfileConfig(current, {
         ...current.auth?.profiles?.[profileId],
         profileId,

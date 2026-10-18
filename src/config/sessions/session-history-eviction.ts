@@ -559,11 +559,6 @@ async function enforceSessionHistoryMaintenanceForDatabase(
             },
             plan: reclamationPlan,
           });
-          if (reclaimed.kind !== reclamationPlan.kind) {
-            throw new Error(
-              `SQLite session reclamation returned ${reclaimed.kind} for ${reclamationPlan.kind}`,
-            );
-          }
           if (!reclaimed.value.deleted) {
             return null;
           }

@@ -7,7 +7,7 @@ import {
 } from "../app-navigation.ts";
 import { isSessionRouteId } from "../app-route-paths.ts";
 import "../components/app-topbar-solid.tsx";
-import "../components/assistant-panel.ts";
+import "../components/assistant-panel-solid.tsx";
 import type { RouteId } from "../app-routes.ts";
 import "../components/resizable-divider.ts";
 import type { AppSidebarBase } from "../components/app-sidebar-base.ts";
@@ -91,7 +91,7 @@ export class ShellOwner
   readonly onboardingMemoryImportElement = {
     tagName: "openclaw-onboarding-memory-import",
     label: t("onboarding.memoryImport.title"),
-    loadModule: () => import("../components/onboarding-memory-import.ts"),
+    loadModule: () => import("../components/onboarding-memory-import-solid.tsx"),
   } satisfies OptionalCustomElement;
   readonly lazyCustomElements = createLazyCustomElementRequests(
     this,
@@ -151,7 +151,9 @@ export class ShellOwner
   // Settings navigation is needed only after entering the settings takeover.
   // Keep its search, update-card, and sidebar rendering graph off the startup path.
   readonly settingsSidebar = createLazyRenderer(() =>
-    import("../components/settings-sidebar.tsx").then((module) => module.renderSettingsSidebar),
+    import("../components/settings-sidebar-shell.tsx").then(
+      (module) => module.ShellSettingsSidebar,
+    ),
   );
   readonly debugOverlayFrame = createLazyRenderer(() =>
     import("../pages/debug/debug-overlay-frame.ts").then(
@@ -589,6 +591,7 @@ export class ShellOwner
     const chatPage = this.routeOutlet?.querySelector<ChatPage>("openclaw-chat-page");
     if (chatPage) {
       chatPage.navDrawerOpen = this.navDrawerOpen && !this.onboardingMode;
+      chatPage.gatewayStatus = this.mobileGatewayStatus;
     }
     const context = this.context;
     if (!context) {

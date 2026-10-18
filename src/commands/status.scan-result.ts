@@ -1,4 +1,3 @@
-// Normalized full status scan result shape.
 // Builders flatten the gateway snapshot so downstream text/JSON code reads one stable object.
 
 import type { PluginCompatibilityNotice } from "../plugins/status.js";
@@ -49,7 +48,6 @@ export type StatusScanResult<
 
 export type StatusJsonScanResult = StatusScanResult<StatusJsonAgentStatuses>;
 
-/** Flattens overview, gateway, channel, summary, memory, and compatibility inputs into a scan result. */
 export function buildStatusScanResult<
   AgentStatus extends StatusJsonAgentStatuses = AgentLocalStatusesResult,
 >(

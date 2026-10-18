@@ -1,6 +1,5 @@
 // Channel MCP server tests cover channel tool registration and requests.
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import { z } from "zod";
 import { OpenClawChannelBridge } from "./channel-bridge.js";
@@ -290,12 +289,20 @@ describe("openclaw channel mcp server", () => {
         const mcp = await connectMcpWithoutGateway({
           claudeChannelMode: "on",
         });
-        mcp.client.setNotificationHandler(ClaudeChannelNotificationSchema, ({ params }) => {
-          channelNotifications.push(params);
-        });
-        mcp.client.setNotificationHandler(ClaudePermissionNotificationSchema, ({ params }) => {
-          permissionNotifications.push(params);
-        });
+        mcp.client.setNotificationHandler(
+          "notifications/claude/channel",
+          { params: ClaudeChannelNotificationSchema.shape.params },
+          (params) => {
+            channelNotifications.push(params);
+          },
+        );
+        mcp.client.setNotificationHandler(
+          "notifications/claude/channel/permission",
+          { params: ClaudePermissionNotificationSchema.shape.params },
+          (params) => {
+            permissionNotifications.push(params);
+          },
+        );
 
         await receiveMessage(mcp.bridge, {
           sessionKey,
@@ -557,7 +564,6 @@ describe("openclaw channel mcp server", () => {
           name: "events_wait",
           arguments: { after_cursor: 0, timeout_ms: 300_000 },
         },
-        undefined,
         { signal: controller.signal },
       );
       await vi.waitFor(() => expect(vi.getTimerCount()).toBeGreaterThan(timerBaseline));

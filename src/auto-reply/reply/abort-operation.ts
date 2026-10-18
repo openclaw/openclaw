@@ -101,6 +101,12 @@ export function prepareSessionRunTargetAbort(params: {
       selectedSessionIds.add(selectedSessionId);
     }
     let active = selectedOperations.some((operation) => !operation.result);
+    // The first cancellation signal clears the provider's live wait.
+    const hadLocalModelWait = runs.some(
+      (run) =>
+        (!selectedSessionId || run.sessionId === selectedSessionId) &&
+        run.abort.isWaitingForLocalModel(),
+    );
     const failures: unknown[] = [];
     let aborted =
       commands?.cancel(
@@ -158,7 +164,12 @@ export function prepareSessionRunTargetAbort(params: {
             }
           })
         : undefined;
-    return { active, aborted, retirement };
+    return {
+      active,
+      aborted,
+      retirement,
+      ...(aborted && hadLocalModelWait ? { localModelMayStillBeFinishing: true as const } : {}),
+    };
   };
   return Object.assign(abort, { requestRunIds });
 }
@@ -337,6 +348,7 @@ export async function executeFastAbortRequest(
     let authorized = false;
     let aborted = false;
     let activeAbortRejected = false;
+    let localModelMayStillBeFinishing = false;
     const acpCancellations: Promise<void>[] = [];
     try {
       const { stopped, failed, execAborted } = await stopSubagentsForRequester({
@@ -427,27 +439,30 @@ export async function executeFastAbortRequest(
               }
               activeAbortRejected ||= outcome.active && !outcome.aborted;
               aborted = outcome.aborted || aborted;
+              localModelMayStillBeFinishing ||= outcome.localModelMayStillBeFinishing === true;
             }
           } finally {
             // The tree already holds queued reservations. Initiate ACP without awaiting
             // either backend so native cleanup cannot delay signal-less ACP steer turns.
             const acpManager = getAcpSessionManager();
             for (const acpTargetKey of abortTargetKeys) {
-              const resolution = acpManager.resolveSession({
-                cfg,
-                sessionKey: acpTargetKey,
-                agentId: acpTargetKey === resolvedTargetKey ? agentId : undefined,
-              });
-              if (resolution.kind === "none") {
-                continue;
-              }
               acpCancellations.push(
                 acpManager
-                  .cancelSession({
+                  .resolveSessionAsync({
                     cfg,
-                    sessionKey: resolution.sessionKey,
-                    agentId: resolution.agentId,
-                    reason: "fast-abort",
+                    sessionKey: acpTargetKey,
+                    agentId: acpTargetKey === resolvedTargetKey ? agentId : undefined,
+                  })
+                  .then((resolution) => {
+                    if (resolution.kind === "none") {
+                      return undefined;
+                    }
+                    return acpManager.cancelSession({
+                      cfg,
+                      sessionKey: resolution.sessionKey,
+                      agentId: resolution.agentId,
+                      reason: "fast-abort",
+                    });
                   })
                   .catch((error: unknown) => {
                     logVerbose(
@@ -500,6 +515,7 @@ export async function executeFastAbortRequest(
         handled: true,
         aborted,
         ...(rejectionReason ? { rejectionReason } : {}),
+        ...(localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
         stoppedSubagents: stopped,
         failedSubagents: failed,
       };

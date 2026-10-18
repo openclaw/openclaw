@@ -1,4 +1,7 @@
-import { asNullableRecord as recordOrNull } from "@openclaw/normalization-core/record-coerce";
+import {
+  asNullableRecord as recordOrNull,
+  isStringArray,
+} from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as stringValue } from "@openclaw/normalization-core/string-coerce";
 import type { GatewaySessionRow, SessionRunStatus } from "../../api/types.ts";
 import { isSessionRunActive } from "../session-run-state.ts";
@@ -99,7 +102,9 @@ export function preserveRosterPresentationMetadata(
     !existing ||
     !incoming.sessionId ||
     incoming.sessionId !== existing.sessionId ||
-    (incoming.derivedTitle !== undefined && incoming.lastMessagePreview !== undefined)
+    (incoming.derivedTitle !== undefined &&
+      incoming.lastMessagePreview !== undefined &&
+      incoming.lastAssistantMessage !== undefined)
   ) {
     return incoming;
   }
@@ -109,12 +114,12 @@ export function preserveRosterPresentationMetadata(
     return incoming;
   }
   let row = incoming;
-  for (const field of ["derivedTitle", "lastMessagePreview"] as const) {
+  for (const field of ["derivedTitle", "lastMessagePreview", "lastAssistantMessage"] as const) {
     if (incoming[field] === undefined && existing[field] !== undefined) {
       if (row === incoming) {
         row = { ...incoming };
       }
-      row[field] = existing[field];
+      Object.assign(row, { [field]: existing[field] });
     }
   }
   return row;
@@ -317,11 +322,7 @@ export function parseSessionChangedEvent(payload: unknown): ParsedSessionChanged
       clientRunId:
         recordString(event, "clientRunId") ?? recordString(source, "clientRunId") ?? null,
       hasActiveRun: typeof hasActiveRun === "boolean" ? hasActiveRun : null,
-      activeRunIds:
-        activeRunIds === null ||
-        (Array.isArray(activeRunIds) && activeRunIds.every((id) => typeof id === "string"))
-          ? activeRunIds
-          : undefined,
+      activeRunIds: activeRunIds === null || isStringArray(activeRunIds) ? activeRunIds : undefined,
       status:
         sessionRunStatus(recordValue(source, "status")) ??
         sessionRunStatus(recordValue(event, "status")),
@@ -412,6 +413,7 @@ export type SessionRowObservation = {
 
 type SessionRowReconcileOptions = SessionReconcileOptions & {
   preserveExisting?: boolean;
+  clearedFields?: readonly string[];
 };
 
 type RejectedRowDisposition =
@@ -485,6 +487,9 @@ export function reconcileSessionRow(
     ),
     existing,
   );
+  for (const field of options.clearedFields ?? []) {
+    Reflect.deleteProperty(admittedRow, field);
+  }
   if (isStaleForActiveSession(admittedRow, previous)) {
     return reject("stale-active");
   }
@@ -612,10 +617,12 @@ export function reconcileParsedSessionChangedRow(
     ...(sessionId ? { sessionId } : {}),
     ...(fullSnapshot && snapshotAgentId ? { agentId: snapshotAgentId } : {}),
   };
+  const clearedFields: string[] = [];
   // Optional wire fields use null as a tombstone; the explicit nullable fields keep null.
   for (const [field, value] of Object.entries(rowFields)) {
     if (value === null && !NULLABLE_SESSION_ROW_FIELDS.has(field)) {
       Reflect.deleteProperty(offered, field);
+      clearedFields.push(field);
     }
   }
   const fields = [
@@ -628,6 +635,7 @@ export function reconcileParsedSessionChangedRow(
     {
       ...options,
       selectedGlobalAgentId: info.agentId ?? options.selectedGlobalAgentId ?? null,
+      clearedFields,
     },
     project && existing
       ? {

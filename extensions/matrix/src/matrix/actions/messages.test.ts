@@ -2,9 +2,11 @@
 import { M_POLL_KIND_DISCLOSED, M_POLL_KIND_UNDISCLOSED } from "matrix-js-sdk/lib/@types/polls.js";
 import { PollResponseEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollResponseEvent.js";
 import { PollStartEvent } from "matrix-js-sdk/lib/extensible_events_v1/PollStartEvent.js";
+import { MatrixError } from "matrix-js-sdk/lib/http-api/errors.js";
 import { describe, expect, it, vi } from "vitest";
 import { setMatrixRuntime } from "../../runtime.js";
 import type { MatrixClient } from "../sdk.js";
+import { buildHttpError } from "../sdk/event-helpers.js";
 import { editMatrixMessage, readMatrixMessages } from "./messages.js";
 
 const MATRIX_ACTION_TEST_CFG = {
@@ -737,5 +739,72 @@ describe("matrix message actions", () => {
     expect(getEvent).toHaveBeenCalledWith("!room:example.org", "$thread-root");
     expect(result.messages.map((message) => message.eventId)).toEqual(["$thread-reply"]);
     expect(result.nextBatch).toBeNull();
+  });
+
+  it.each([
+    {
+      page: "room history",
+      threadId: undefined,
+      serverText: "invalid digit found in string",
+      failure: buildHttpError(
+        500,
+        JSON.stringify({ errcode: "M_UNKNOWN", error: "invalid digit found in string" }),
+      ),
+    },
+    {
+      page: "thread relations",
+      threadId: "$thread-root",
+      serverText: "'from' parameter is invalid",
+      failure: new MatrixError(
+        { errcode: "M_INVALID_PARAM", error: "'from' parameter is invalid" },
+        400,
+      ),
+    },
+  ])(
+    "names the cursor contract when the homeserver rejects a $page cursor",
+    async ({ threadId, serverText, failure }) => {
+      const { client, doRequest, getRelations } = createMessagesClient({ chunk: [] });
+      (threadId ? getRelations : doRequest).mockRejectedValueOnce(failure);
+
+      const error = await readMatrixMessages("room:!room:example.org", {
+        client,
+        threadId,
+        after: "$event-id",
+      }).catch((err: unknown) => err);
+
+      expect(error).toBeInstanceOf(Error);
+      expect((error as Error).message).toContain(serverText);
+      expect((error as Error).message).toContain("nextBatch or prevBatch, not an event id");
+      expect((error as Error).cause).toBe(failure);
+    },
+  );
+
+  it("leaves first-page and non-cursor read failures unchanged", async () => {
+    const serverError = buildHttpError(
+      500,
+      JSON.stringify({ errcode: "M_UNKNOWN", error: "boom" }),
+    );
+    const firstPage = createMessagesClient({ chunk: [] });
+    firstPage.doRequest.mockRejectedValueOnce(serverError);
+    await expect(
+      readMatrixMessages("room:!room:example.org", { client: firstPage.client }),
+    ).rejects.toBe(serverError);
+
+    const forbidden = buildHttpError(403, JSON.stringify({ errcode: "M_FORBIDDEN", error: "no" }));
+    const pagedRead = createMessagesClient({ chunk: [] });
+    pagedRead.doRequest.mockRejectedValueOnce(forbidden);
+    await expect(
+      readMatrixMessages("room:!room:example.org", { client: pagedRead.client, before: "t1" }),
+    ).rejects.toBe(forbidden);
+  });
+
+  it("rejects before and after together instead of paging one token in the other direction", async () => {
+    const { client, doRequest, getRelations } = createMessagesClient({ chunk: [] });
+
+    await expect(
+      readMatrixMessages("room:!room:example.org", { client, before: "t1", after: "t2" }),
+    ).rejects.toThrow("Matrix read accepts either before or after, not both.");
+    expect(doRequest).not.toHaveBeenCalled();
+    expect(getRelations).not.toHaveBeenCalled();
   });
 });

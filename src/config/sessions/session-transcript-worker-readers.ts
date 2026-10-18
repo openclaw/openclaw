@@ -226,6 +226,7 @@ export function createSessionHistoryWorkerReaders(
           }
           return {
             kind: "full",
+            ...(value.compaction ? { compaction: value.compaction } : {}),
             snapshot: {
               events,
               version: value.version,

@@ -3,10 +3,13 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { requireNodeSqlite } from "./node-sqlite.js";
+import { createOpenClawDatabaseMaintenanceScope } from "../state/openclaw-state-db-async-lifecycle.js";
+import { openNodeSqliteDatabase, requireNodeSqlite } from "./node-sqlite.js";
 import {
   assertSqliteIntegrity,
+  assertSqliteTableIntegrity,
   isTerminalSqliteIntegrityError,
   runSqliteIntegrityOperationSync,
   sqliteIntegrityCheckSteps,
@@ -15,6 +18,141 @@ import {
 } from "./sqlite-integrity.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+
+async function withMaintenanceCheck(check: "quick" | "full", run: () => void) {
+  const scope = createOpenClawDatabaseMaintenanceScope({
+    schemaMaintenance: true,
+    sqliteIntegrityCheck: check,
+    assertOwnerCurrent() {},
+  });
+  try {
+    scope.run(run);
+  } finally {
+    await scope.close();
+  }
+}
+
+describe("maintenance table integrity", () => {
+  it("shares passing table checks across handles until a write, and retains QUICK and FK", async () => {
+    const filename = path.join(tempDirs.make("sqlite-table-receipt-"), "database.sqlite");
+    using database = openNodeSqliteDatabase(filename);
+    database.exec("CREATE TABLE items(value INTEGER CHECK(value > 0))");
+    using sibling = openNodeSqliteDatabase(filename);
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    const scoped = () =>
+      observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');");
+    try {
+      await withMaintenanceCheck("quick", () => {
+        for (const handle of [database, sibling]) {
+          assertSqliteIntegrity(handle, "items", { check: "quick", tables: ["items"] });
+        }
+        expect(scoped()).toHaveLength(1);
+        expect(observer.queries.filter((sql) => sql === "PRAGMA quick_check;")).toHaveLength(2);
+        expect(observer.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(
+          2,
+        );
+        database.exec("PRAGMA ignore_check_constraints = ON; INSERT INTO items VALUES (-1)");
+        expect(() => assertSqliteTableIntegrity(sibling, "items", "items")).toThrow(
+          /CHECK constraint/u,
+        );
+        expect(scoped()).toHaveLength(2);
+        database.exec("DELETE FROM items");
+        assertSqliteTableIntegrity(sibling, "items", "items");
+        expect(scoped()).toHaveLength(3);
+      });
+      await withMaintenanceCheck("quick", () =>
+        assertSqliteTableIntegrity(database, "items", "items"),
+      );
+      expect(scoped()).toHaveLength(4);
+    } finally {
+      observer.restore();
+    }
+  });
+
+  it("rechecks transaction-local writes, DDL, and rollback", async () => {
+    const filename = path.join(tempDirs.make("sqlite-table-transaction-"), "database.sqlite");
+    using database = openNodeSqliteDatabase(filename);
+    database.exec("CREATE TABLE items(value INTEGER)");
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    const scoped = () =>
+      observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');");
+    const check = () => assertSqliteTableIntegrity(database, "items", "items");
+    try {
+      await withMaintenanceCheck("quick", () => {
+        database.exec("BEGIN");
+        check();
+        check();
+        expect(scoped()).toHaveLength(1);
+        database.exec("INSERT INTO items VALUES (1)");
+        check();
+        expect(scoped()).toHaveLength(2);
+        database.exec("CREATE INDEX idx_items ON items(value)");
+        check();
+        expect(scoped()).toHaveLength(3);
+        database.exec("ROLLBACK");
+        check();
+        expect(scoped()).toHaveLength(4);
+        expect(database.prepare("SELECT * FROM items").all()).toEqual([]);
+      });
+    } finally {
+      observer.restore();
+    }
+  });
+
+  it("retains every explicit FULL check", async () => {
+    const filename = path.join(tempDirs.make("sqlite-table-full-"), "database.sqlite");
+    using database = openNodeSqliteDatabase(filename);
+    database.exec("CREATE TABLE items(value INTEGER)");
+    const observer = observeSqliteReadSql(requireNodeSqlite().StatementSync.prototype);
+    try {
+      await withMaintenanceCheck("full", () => {
+        for (let i = 0; i < 2; i += 1) {
+          assertSqliteIntegrity(database, "items", { check: "full", tables: ["items"] });
+          assertSqliteTableIntegrity(database, "items", "items");
+        }
+      });
+      expect(observer.queries.filter((sql) => sql === "PRAGMA integrity_check;")).toHaveLength(2);
+      expect(
+        observer.queries.filter((sql) => sql === "PRAGMA integrity_check('items');"),
+      ).toHaveLength(2);
+      expect(observer.queries.filter((sql) => sql === "PRAGMA foreign_key_check;")).toHaveLength(2);
+    } finally {
+      observer.restore();
+    }
+  });
+});
+
+function withDatabase(sql: string, run: (database: DatabaseSync) => void) {
+  const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
+  try {
+    database.exec(sql);
+    run(database);
+  } finally {
+    database.close();
+  }
+}
+
+function caught(run: () => unknown): unknown {
+  try {
+    run();
+  } catch (error) {
+    return error;
+  }
+  return undefined;
+}
+
+function taskOrphans(parent = "task_id", child = "task_id", action = "CASCADE", extra = "") {
+  return `
+    PRAGMA foreign_keys = OFF;
+    CREATE TABLE task_runs (task_id TEXT PRIMARY KEY, other_id TEXT UNIQUE);
+    CREATE TABLE task_delivery_state (
+      ${child} TEXT PRIMARY KEY REFERENCES task_runs(${parent}) ON DELETE ${action}
+    );
+    INSERT INTO task_delivery_state (${child})
+    VALUES ('missing-1'), ('missing-2'), ('missing-3'), ('missing-4'), ('missing-5'), ('missing-6');
+    ${extra}
+  `;
+}
 
 describe("assertSqliteIntegrity", () => {
   it("refuses structural damage in a table outside the migration scope", () => {
@@ -75,25 +213,8 @@ describe("assertSqliteIntegrity", () => {
   );
 
   it("classifies cascade-owned task delivery orphans without admitting writes", () => {
-    const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
-    try {
-      database.exec(`
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE task_runs (task_id TEXT PRIMARY KEY);
-        CREATE TABLE task_delivery_state (
-          task_id TEXT PRIMARY KEY REFERENCES task_runs(task_id) ON DELETE CASCADE
-        );
-        INSERT INTO task_delivery_state (task_id)
-        VALUES ('missing-1'), ('missing-2'), ('missing-3'), ('missing-4'),
-               ('missing-5'), ('missing-6');
-      `);
-
-      let failure: unknown;
-      try {
-        assertSqliteIntegrity(database, "test database");
-      } catch (error) {
-        failure = error;
-      }
+    withDatabase(taskOrphans(), (database) => {
+      const failure = caught(() => assertSqliteIntegrity(database, "test database"));
       expect(failure).toMatchObject({
         name: "SqliteRepairableForeignKeyError",
         repair: {
@@ -111,78 +232,42 @@ describe("assertSqliteIntegrity", () => {
       expect(database.prepare("SELECT count(*) AS count FROM task_delivery_state").get()).toEqual({
         count: 6,
       });
-    } finally {
-      database.close();
-    }
+    });
   });
 
-  it.each([
-    {
-      label: "non-cascade deletion",
-      parent: "task_id",
-      child: "task_id",
-      action: "NO ACTION",
-      extra: "",
-    },
-    {
-      label: "different parent column",
-      parent: "other_id",
-      child: "task_id",
-      action: "CASCADE",
-      extra: "",
-    },
-    {
-      label: "different child column",
-      parent: "task_id",
-      child: "other_id",
-      action: "CASCADE",
-      extra: "",
-    },
+  it.each<{
+    label: string;
+    parent?: string;
+    child?: string;
+    action?: string;
+    extra?: string;
+  }>([
+    { label: "non-cascade deletion", action: "NO ACTION" },
+    { label: "different parent column", parent: "other_id" },
+    { label: "different child column", child: "other_id" },
     {
       label: "unrelated violation beyond the diagnostic sample",
-      parent: "task_id",
-      child: "task_id",
-      action: "CASCADE",
       extra: `CREATE TABLE unrelated (id TEXT REFERENCES task_runs(task_id));
               INSERT INTO unrelated (id) VALUES ('missing');`,
     },
     {
       label: "structural damage alongside otherwise repairable orphans",
-      parent: "task_id",
-      child: "task_id",
-      action: "CASCADE",
       extra: `CREATE TABLE damaged (id INTEGER CHECK (id > 0));
               PRAGMA ignore_check_constraints = ON;
               INSERT INTO damaged (id) VALUES (-1);
               PRAGMA ignore_check_constraints = OFF;`,
     },
   ])("refuses task delivery violations with $label", ({ parent, child, action, extra }) => {
-    const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
-    try {
-      database.exec(`
-        PRAGMA foreign_keys = OFF;
-        CREATE TABLE task_runs (task_id TEXT PRIMARY KEY, other_id TEXT UNIQUE);
-        CREATE TABLE task_delivery_state (
-          ${child} TEXT PRIMARY KEY REFERENCES task_runs(${parent}) ON DELETE ${action}
-        );
-        INSERT INTO task_delivery_state (${child})
-        VALUES ('missing-1'), ('missing-2'), ('missing-3'), ('missing-4'),
-               ('missing-5'), ('missing-6');
-        ${extra}
-      `);
-
+    withDatabase(taskOrphans(parent, child, action, extra), (database) => {
       expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
         expect.objectContaining({ name: "SqliteIntegrityError" }),
       );
-    } finally {
-      database.close();
-    }
+    });
   });
 
   it("does not classify a component of a composite foreign key as repairable", () => {
-    const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
-    try {
-      database.exec(`
+    withDatabase(
+      `
         PRAGMA foreign_keys = OFF;
         CREATE TABLE task_runs (task_id TEXT, revision INTEGER, PRIMARY KEY (task_id, revision));
         CREATE TABLE task_delivery_state (
@@ -191,14 +276,13 @@ describe("assertSqliteIntegrity", () => {
           FOREIGN KEY (task_id, revision) REFERENCES task_runs(task_id, revision) ON DELETE CASCADE
         );
         INSERT INTO task_delivery_state (task_id, revision) VALUES ('missing', 1);
-      `);
-
-      expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
-        expect.objectContaining({ name: "SqliteIntegrityError" }),
-      );
-    } finally {
-      database.close();
-    }
+      `,
+      (database) => {
+        expect(() => assertSqliteIntegrity(database, "test database")).toThrow(
+          expect.objectContaining({ name: "SqliteIntegrityError" }),
+        );
+      },
+    );
   });
 
   function expectForeignKeyViolation(
@@ -206,14 +290,10 @@ describe("assertSqliteIntegrity", () => {
     expected: RegExp,
     beforeCheck?: (database: DatabaseSync) => void,
   ) {
-    const database = new (requireNodeSqlite().DatabaseSync)(":memory:");
-    try {
-      database.exec(sql);
+    withDatabase(sql, (database) => {
       beforeCheck?.(database);
       expect(() => assertSqliteIntegrity(database, "test database")).toThrow(expected);
-    } finally {
-      database.close();
-    }
+    });
   }
 
   it("reports violations deterministically without truncating 64-bit rowids", () => {
@@ -275,6 +355,14 @@ describe("assertSqliteIntegrity", () => {
     );
   });
 });
+
+const syncDiagnostics = {
+  integrityGateMode: "full",
+  integrityGateMs: 4,
+  integrityGateOutcome: "healthy",
+  integrityCheckSyncMs: 4,
+  integrityOutsideCheckMs: 0,
+};
 
 describe("integrity gate attribution", () => {
   afterEach(() => vi.restoreAllMocks());
@@ -340,12 +428,7 @@ describe("integrity gate attribution", () => {
       }
 
       try {
-        let failure: unknown;
-        try {
-          runSqliteIntegrityOperationSync(operation());
-        } catch (error) {
-          failure = error;
-        }
+        const failure = caught(() => runSqliteIntegrityOperationSync(operation()));
         if (foreignKeyViolation) {
           expect(failure).toMatchObject({
             name: "SqliteIntegrityError",
@@ -383,13 +466,7 @@ describe("integrity gate attribution", () => {
           runSqliteIntegrityOperationSync(
             sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
           );
-          expect(diagnostics).toEqual({
-            integrityGateMode: "full",
-            integrityGateMs: 4,
-            integrityGateOutcome: "healthy",
-            integrityCheckSyncMs: 4,
-            integrityOutsideCheckMs: 0,
-          });
+          expect(diagnostics).toEqual(syncDiagnostics);
 
           const worker = sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
           const step = worker.next();
@@ -402,13 +479,7 @@ describe("integrity gate attribution", () => {
           }
           advance(lifetimeMs + 4.5);
           if (outcome === "failed") {
-            let thrown: unknown;
-            try {
-              worker.throw(failure);
-            } catch (error) {
-              thrown = error;
-            }
-            expect(thrown).toBe(failure);
+            expect(caught(() => worker.throw(failure))).toBe(failure);
           } else {
             expect(worker.next().done).toBe(true);
           }
@@ -425,26 +496,14 @@ describe("integrity gate attribution", () => {
             runSqliteIntegrityOperationSync(
               sqliteIntegrityCheckSteps(database, "timed database", diagnostics),
             );
-            expect(diagnostics).toEqual({
-              integrityGateMode: "full",
-              integrityGateMs: 4,
-              integrityGateOutcome: "healthy",
-              integrityCheckSyncMs: 4,
-              integrityOutsideCheckMs: 0,
-            });
+            expect(diagnostics).toEqual(syncDiagnostics);
             continue;
           }
           const manual = sqliteIntegrityCheckSteps(database, "timed database", diagnostics);
           expect(manual.next().done).toBe(false);
           advance(12.5);
           if (outcome === "failed") {
-            let thrown: unknown;
-            try {
-              manual.throw(failure);
-            } catch (error) {
-              thrown = error;
-            }
-            expect(thrown).toBe(failure);
+            expect(caught(() => manual.throw(failure))).toBe(failure);
           } else {
             expect(manual.next().done).toBe(true);
           }

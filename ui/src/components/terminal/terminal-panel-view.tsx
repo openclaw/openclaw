@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo, untrack } from "solid-js";
+import { For, Show, createEffect, createMemo } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -15,7 +15,7 @@ import {
   terminalPanelTabIcon,
   terminalPanelHostedTabs,
   type TerminalPanelTab,
-} from "./terminal-panel-tabs.ts";
+} from "./terminal-panel-tabs.tsx";
 import type { TerminalPanelUpload } from "./terminal-panel-upload.ts";
 import type { createTerminalSessionPicker } from "./terminal-session-picker.ts";
 
@@ -43,12 +43,14 @@ export type TerminalPanelViewState = {
   tabs: TerminalPanelTab[];
   activeId: string | null;
   booting: boolean;
+  connected: boolean;
   connecting: boolean;
   error: { text: string; retry?: () => void } | null;
   dockDisabled: boolean;
   picker: TerminalSessionPickerState;
   upload: TerminalPanelUpload;
   fileInputRef: (element: HTMLInputElement) => void;
+  viewportRef: (element: HTMLDivElement) => void;
   onSelect: (id: string) => void;
   onClose: (id: string) => Promise<void>;
   onNew: () => void;
@@ -60,7 +62,7 @@ export type TerminalPanelViewState = {
 function SessionPickerTrigger(props: { state: TerminalSessionPickerState; dialogId: string }) {
   return (
     <button
-      ref={(element) => untrack(() => props.state.triggerRef(element))}
+      ref={(element) => props.state.triggerRef(element)}
       class={props.state.hosted ? "rail-header__action" : "rail-header__action tp-icon"}
       type="button"
       title={props.state.hosted ? undefined : t("terminal.sessions")}
@@ -89,7 +91,7 @@ export function TerminalPanelHostedActions(props: {
     () => props.view().hosted,
     (hosted) => {
       if (hosted) {
-        untrack(() => props.view().picker.triggerRef(trigger));
+        props.view().picker.triggerRef(trigger);
       }
     },
   );
@@ -101,7 +103,7 @@ export function TerminalPanelHostedActions(props: {
             trigger = element;
             toggle(element);
             focusOut(element);
-            untrack(() => props.view().picker.triggerRef(element));
+            props.view().picker.triggerRef(element);
           }}
           class="rail-header__action"
           type="button"
@@ -119,7 +121,11 @@ export function TerminalPanelHostedActions(props: {
             class="rail-header__action"
             type="button"
             aria-label={t("terminal.addFiles")}
-            disabled={!props.view().upload.hasActiveTab() || props.view().upload.hasPendingBatch()}
+            disabled={
+              !props.view().connected ||
+              !props.view().upload.hasActiveTab() ||
+              props.view().upload.hasPendingBatch()
+            }
           >
             <Icon name="paperclip" />
           </button>
@@ -173,6 +179,7 @@ function SessionMenu(props: { state: TerminalSessionPickerState; dialogId: strin
           <span>{t("terminal.sessions")}</span>
           <button
             ref={(element) => props.state.refreshRef(element)}
+            disabled={!props.state.connected}
             class="tp-session-refresh"
             type="button"
             onClick={() => props.state.onRefresh()}
@@ -201,7 +208,7 @@ function SessionMenu(props: { state: TerminalSessionPickerState; dialogId: strin
                   <button
                     class="tp-session"
                     type="button"
-                    disabled={current()}
+                    disabled={!props.state.connected || current()}
                     title={current() ? label() : t("terminal.attachSession")}
                     onClick={() => props.state.onAttach(session().sessionId, session().owner)}
                   >
@@ -254,7 +261,11 @@ function Actions(props: { state: TerminalPanelViewState; dialogId: string }) {
           class="rail-header__action tp-icon tp-upload"
           label={t("terminal.addFiles")}
           icon="paperclip"
-          disabled={props.state.upload.hasPendingBatch() || !props.state.upload.hasActiveTab()}
+          disabled={
+            !props.state.connected ||
+            props.state.upload.hasPendingBatch() ||
+            !props.state.upload.hasActiveTab()
+          }
           onClick={props.state.upload.chooseFiles}
         />
       </Show>
@@ -338,6 +349,7 @@ function UploadLayer(props: { state: TerminalPanelViewState }) {
                   <button
                     class="tp-upload-card__action tp-upload-retry"
                     type="button"
+                    disabled={!props.state.connected}
                     onClick={props.state.upload.retry}
                   >
                     {t("terminal.retryUpload")}
@@ -376,6 +388,7 @@ function UploadLayer(props: { state: TerminalPanelViewState }) {
                 <button
                   class="tp-upload-card__action tp-upload-insert"
                   type="button"
+                  disabled={!props.state.connected}
                   onClick={props.state.upload.insertCompleted}
                 >
                   {t("terminal.insertUploadedPaths")}
@@ -394,7 +407,7 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
   const viewportId = `${idPrefix}-panel`;
   const dialogId = `${idPrefix}-session-picker-dialog`;
   const tabs = createMemo(() =>
-    terminalPanelHostedTabs(props.view().tabs).map((tab) =>
+    terminalPanelHostedTabs(props.view().tabs, props.view().connected).map((tab) =>
       Object.assign(tab, {
         icon: terminalPanelTabIcon(),
         domId: `${idPrefix}-tab-${tab.id}`,
@@ -429,17 +442,27 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
               onClose={props.view().onClose}
               onNew={props.view().onNew}
               newLabel={t("terminal.newSession")}
-              newDisabled={props.view().booting}
+              newDisabled={!props.view().connected || props.view().booting}
             />
             <Actions state={props.view()} dialogId={dialogId} />
           </header>
+        </Show>
+        <Show when={!props.view().connected}>
+          <div class="tp-error" role="status">
+            {t("terminal.inputPaused")}
+          </div>
         </Show>
         <Show when={props.view().error}>
           {(error) => (
             <div class="tp-error" role="alert">
               <span>{error().text}</span>
               <Show when={error().retry}>
-                <button class="btn btn--sm" type="button" onClick={() => error().retry?.()}>
+                <button
+                  class="btn btn--sm"
+                  type="button"
+                  disabled={!props.view().connected}
+                  onClick={() => error().retry?.()}
+                >
                   {t("common.retry")}
                 </button>
               </Show>
@@ -448,9 +471,11 @@ export function TerminalPanelView(props: { view: () => TerminalPanelViewState })
         </Show>
         <div
           id={viewportId}
+          ref={(element) => props.view().viewportRef(element)}
           class="tp-viewport"
           role="tabpanel"
           aria-hidden="false"
+          aria-disabled={props.view().connected ? "false" : "true"}
           aria-labelledby={
             props.view().activeId && !props.view().hosted
               ? `${idPrefix}-tab-${props.view().activeId}`

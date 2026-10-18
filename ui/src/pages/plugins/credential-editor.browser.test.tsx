@@ -31,6 +31,7 @@ async function mount(state: PluginCredentialInspection = { kind: "literal" }, wi
     epoch: 1,
   };
   const gateway = {
+    client: scope.client,
     epoch: 1,
     connected: true,
     capture: () => scope,
@@ -107,6 +108,46 @@ function editInput(element: HTMLInputElement, value: string) {
 }
 
 describe("plugin credential authoring controls", () => {
+  it("keeps entered credentials and a reference dialog through same-client reconnects", async () => {
+    const { editor, context, field, scope, update } = await mount();
+    const input = editor.querySelector<HTMLInputElement>("input")!;
+    editInput(input, "synthetic-unsaved-key");
+    await open(editor, "Use a secret reference");
+    const referenceInput = editor.querySelectorAll<HTMLInputElement>(
+      ".plugin-credential__dialog input",
+    )[1]!;
+    editInput(referenceInput, "DRAFT_KEY");
+    const gateway = context.gateway;
+    Object.assign(gateway, {
+      epoch: 2,
+      connected: false,
+      capture: () => null,
+      isCurrent: () => false,
+    });
+    field.disabled = true;
+    await update();
+    expect(input.value).toBe("synthetic-unsaved-key");
+    expect(referenceInput.value).toBe("DRAFT_KEY");
+    expect(editor.querySelector("openclaw-modal-dialog")).not.toBeNull();
+    expect(button(editor, "Save").disabled).toBe(true);
+    Object.assign(gateway, {
+      epoch: 3,
+      connected: true,
+      capture: () => scope,
+      isCurrent: (candidate: unknown) => candidate === scope,
+    });
+    field.disabled = false;
+    await update();
+    await vi.waitFor(() => expect(button(editor, "Save").disabled).toBe(false));
+    expect(input.value).toBe("synthetic-unsaved-key");
+    expect(referenceInput.value).toBe("DRAFT_KEY");
+    expect(context.onCommit).not.toHaveBeenCalled();
+    context.pluginId = "replacement";
+    await update();
+    expect(input.value).toBe("");
+    expect(editor.querySelector("openclaw-modal-dialog")).toBeNull();
+  });
+
   it.each(["button", "modal"])(
     "keeps the dialog open for a pending Save via %s dismissal",
     async (dismissal) => {

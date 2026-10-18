@@ -4,8 +4,11 @@ import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { captureI18nStateForTesting } from "../../i18n/lib/translate.test-support.ts";
 import { i18n } from "../../i18n/lib/translate.ts";
+import { captureChatOutboxAdmission } from "../../lib/chat/outbox-store.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
+import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   createComposerContainer,
   createComposerProps,
@@ -13,14 +16,17 @@ import {
   renderComposerInto,
   resetComposerFixture,
 } from "./chat-composer.test-support.ts";
-import { createInitializationContext } from "./chat-pane.test-support.ts";
-import { createChatState } from "./chat-state-controller.ts";
-import type { ChatPageHost } from "./chat-state-host.ts";
-import { createPageState } from "./chat-state-page.ts";
+import { createTestChatPane, getPaneTestRuntime } from "./chat-pane.test-support.ts";
+import { keepVolatileQueuedMessage } from "./chat-queue.ts";
+import { clearSubmittedComposerState, cancelChatDelivery } from "./chat-send-composer.ts";
 import { ComposerDictationSendAction } from "./components/chat-composer-controls.tsx";
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import { reviewPrivateComposerDraft } from "./components/private-composer-recovery-dialog.tsx";
 import { ComposerDictationOwner } from "./composer-dictation.ts";
+import {
+  admitStoredChatComposerQueueItem,
+  persistChatComposerState,
+} from "./composer-persistence.ts";
 
 afterEach(() => resetComposerFixture());
 
@@ -42,18 +48,12 @@ function mountComposer(initial: ChatComposerProps) {
 }
 
 function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
-  const invalidate = vi.fn();
-  const owner = createChatState<ChatPageHost>({ invalidate, updateComplete: Promise.resolve() });
-  const state = createPageState(
-    createInitializationContext(),
-    owner.createRenderLifecycle(),
-    document.createElement("div"),
-  );
+  const { pane, state } = createTestChatPane({ client: createTestGatewayClient(async () => ({})) });
+  const owner = getPaneTestRuntime(pane).chatState;
   state.sessionKey = "agent:main:draft-source";
   state.chatMessage = overrides.draft ?? "";
   state.chatGoalDraftMode = overrides.goalDraftMode ?? null;
-  owner.attach(state);
-  onTestFinished(owner.dispose);
+  state.handleChatDraftChange(state.chatMessage);
   const view = mountComposer(
     createComposerProps({
       ...overrides,
@@ -83,11 +83,11 @@ function mountOwnedComposer(overrides: Partial<ChatComposerProps> = {}) {
       .dispatchEvent(
         new KeyboardEvent("keydown", { key: "Enter", bubbles: true, cancelable: true }),
       );
-  return { owner, state, view, invalidate, input, enter };
+  return { owner, state, view, input, enter };
 }
 
-it("updates edits and history from the draft owner without redrawing the pane", () => {
-  const { owner, state, view, invalidate } = mountOwnedComposer();
+it("updates edits and history from the draft owner without remounting the input", () => {
+  const { owner, state, view } = mountOwnedComposer();
   const textarea = view.container.querySelector("textarea")!;
   textarea.value = "An ordinary edit";
   textarea.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText" }));
@@ -111,14 +111,70 @@ it("updates edits and history from the draft owner without redrawing the pane", 
   });
   flush();
   expect(textarea.value).toBe("Earlier input");
-  expect(invalidate).not.toHaveBeenCalled();
+  expect(view.container.querySelector("textarea")).toBe(textarea);
 
   const draftChanged = vi.fn();
   onTestFinished(owner.composerDraft.subscribe(draftChanged));
   state.chatStream = "An unrelated response";
-  state.requestUpdate?.();
   flush();
   expect(draftChanged).not.toHaveBeenCalled();
+  expect(view.container.querySelector("textarea")).toBe(textarea);
+});
+
+it("publishes submitted and restored drafts without remounting the input", () => {
+  const { state, view } = mountOwnedComposer({ draft: "A recoverable draft" });
+  state.client = createTestGatewayClient(async () => ({}));
+  state.connected = true;
+  const textarea = view.container.querySelector("textarea")!;
+  const snapshot = clearSubmittedComposerState(state, state.chatMessage, [], [], null);
+  expect(state.chatMessage).toBe("");
+  flush();
+  expect(textarea.value).toBe("");
+
+  const queued = {
+    id: "recover-draft",
+    text: "A recoverable draft",
+    createdAt: 1,
+    sendState: "held" as const,
+  };
+  keepVolatileQueuedMessage(state, state.sessionKey, queued);
+  expect(cancelChatDelivery(state, queued, snapshot)).toBe(true);
+  expect(state.chatMessage).toBe("A recoverable draft");
+  flush();
+  expect(textarea.value).toBe("A recoverable draft");
+  expect(view.container.querySelector("textarea")).toBe(textarea);
+});
+
+it("publishes a restored persisted draft and queue after adopting their revision", () => {
+  vi.stubGlobal("sessionStorage", createStorageMock());
+  const { owner, state, view } = mountOwnedComposer();
+  state.client = createTestGatewayClient(async () => ({}));
+  state.connected = true;
+  expect(persistChatComposerState(state, state.sessionKey, { draft: "Saved draft" })).toBe(true);
+  expect(
+    admitStoredChatComposerQueueItem(state, captureChatOutboxAdmission(state, state.sessionKey), {
+      id: "saved-input",
+      text: "Saved queued input",
+      createdAt: 1,
+      sendState: "held",
+    }),
+  ).toBe(true);
+  state.chatQueue = [];
+  const queue = mountSolid(() => (
+    <output>{state.chatQueue.map((item) => item.text).join(";")}</output>
+  ));
+  onTestFinished(queue.unmount);
+  flush();
+  expect(queue.container.textContent).toBe("");
+  expect(view.container.querySelector("textarea")!.value).toBe("");
+  const textarea = view.container.querySelector("textarea")!;
+
+  expect(owner.composerPersistence.restore()).toBe(true);
+  expect(state.chatMessage).toBe("Saved draft");
+  expect(state.chatQueue[0]?.text).toBe("Saved queued input");
+  flush();
+  expect(queue.container.textContent).toBe("Saved queued input");
+  expect(view.container.querySelector("textarea")!.value).toBe("Saved draft");
   expect(view.container.querySelector("textarea")).toBe(textarea);
 });
 

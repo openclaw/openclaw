@@ -224,7 +224,7 @@ export function resolveDurableChatClaim(params: {
   })();
 }
 
-function isRestartSafeChatSession(params: {
+export function isDirectChatGoalSession(params: {
   entry?: SessionEntry;
   acpMeta: SessionEntry["acp"] | null;
   requestedSessionId?: string;
@@ -238,7 +238,6 @@ function isRestartSafeChatSession(params: {
     entry.archivedAt === undefined &&
     entry.initializationPending !== true &&
     entry.pendingFinalDelivery === undefined &&
-    (entry.agentHarnessId === undefined || entry.agentHarnessId === OPENCLAW_AGENT_RUNTIME_ID) &&
     entry.pluginOwnerId === undefined &&
     entry.spawnedBy === undefined &&
     entry.subagentRole === undefined &&
@@ -341,7 +340,12 @@ export function resolveRestartSafeChatAdmission(params: {
   if (params.cfg.cloudWorkers?.requiredProfile || (placement && placement.state !== "local")) {
     return undefined;
   }
-  if (!request || !entry || !isRestartSafeChatSession({ ...params, entry })) {
+  if (
+    !request ||
+    !entry ||
+    !isDirectChatGoalSession({ ...params, entry }) ||
+    (entry.agentHarnessId !== undefined && entry.agentHarnessId !== OPENCLAW_AGENT_RUNTIME_ID)
+  ) {
     return undefined;
   }
   if (!params.initialSessionEntry) {

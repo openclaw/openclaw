@@ -255,8 +255,8 @@ it("joins scheduled plugin work before closing stores while retaining a deleted 
       | undefined;
     const createPersistenceOwner = lifecyclePersistence.createSessionLifecyclePersistenceOwner;
     vi.spyOn(lifecyclePersistence, "createSessionLifecyclePersistenceOwner").mockImplementation(
-      (scheduler) => {
-        persistenceOwner = createPersistenceOwner(scheduler);
+      () => {
+        persistenceOwner = createPersistenceOwner();
         return persistenceOwner;
       },
     );

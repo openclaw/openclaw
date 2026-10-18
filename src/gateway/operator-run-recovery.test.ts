@@ -36,6 +36,7 @@ import {
   invalidateGatewayDeviceRevocation,
 } from "./device-revocation.js";
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
+import { publishOperatorRoleConfigChange } from "./operator-role-policy.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import {
   readGatewayOperatorRecoverySource,
@@ -588,6 +589,46 @@ describe("restart recovery authenticated operator source", () => {
         expect(restored.authority.assertCurrent).toThrow();
       }),
   );
+
+  it("restores only the admitted scopes and keeps them live until a role removes one", () =>
+    withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const profile = ensureProfileForEmail("role-recovery@example.test");
+      const cfg: OpenClawConfig = {
+        gateway: {
+          roles: {
+            default: "operator",
+            definitions: {
+              operator: { agents: "*", sessions: { others: "none" }, scopes: ["operator.admin"] },
+            },
+          },
+        },
+      };
+      const fixture = await recoveryFixture(state.stateDir, profile.id, {
+        config: cfg,
+        scopes: ["operator.write"],
+      });
+      const current = structuredClone(cfg);
+      current.gateway!.roles!.definitions.operator!.scopes = ["operator.write"];
+      fixture.setConfig(current);
+      const restored = expectDefined(await fixture.restore(), "restored role authority");
+      using _ = { [Symbol.dispose]: restored.release };
+
+      expect(restored.authority.scopes).toEqual(["operator.write"]);
+      expectCurrent(restored.authority);
+      const widened = structuredClone(cfg);
+      fixture.setConfig(widened);
+      publishOperatorRoleConfigChange(fixture.context);
+      expectCurrent(restored.authority);
+      const narrowed = structuredClone(cfg);
+      narrowed.gateway!.roles!.definitions.operator!.scopes = ["operator.read"];
+      fixture.setConfig(narrowed);
+      publishOperatorRoleConfigChange(fixture.context);
+      expect(restored.authority.signal?.aborted).toBe(true);
+      expect(restored.authority.assertCurrent).toThrow();
+      fixture.setConfig(cfg);
+      publishOperatorRoleConfigChange(fixture.context);
+      expect(restored.authority.assertCurrent).toThrow();
+    }));
 
   it("intersects the original model ceiling with current policy without widening the admitted role", () =>
     withOpenClawTestState({ scenario: "minimal" }, async (state) => {

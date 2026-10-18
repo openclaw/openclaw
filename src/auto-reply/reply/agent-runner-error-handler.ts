@@ -3,11 +3,9 @@ import {
   classifyOAuthRefreshFailure,
   classifyOAuthRefreshFailureError,
 } from "../../agents/auth-profiles/oauth-refresh-failure.js";
-import {
-  isCompactionFailureError,
-  isLikelyContextOverflowError,
-} from "../../agents/embedded-agent-helpers.js";
+import { isCompactionFailureError } from "../../agents/embedded-agent-helpers/context-overflow-observation.js";
 import { findCliTimeoutError, isFailoverError } from "../../agents/failover-error.js";
+import { isLikelyContextOverflowError } from "../../agents/failover/context-overflow.js";
 import { isCliPartialOutputRejected } from "../../agents/failover/error.js";
 import { resolveReplyFailoverFacts } from "../../agents/failover/request-error-facts.js";
 import {

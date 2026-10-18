@@ -1,6 +1,7 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
+import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   chatSessionListResponse,
   captureUiProofEnabled,
@@ -61,6 +62,19 @@ suite.define(() => {
           await header.waitFor();
           await header.locator(".workspace-icon").waitFor();
 
+          if (captureUiProofEnabled) {
+            const frame = await takeControlUiScreenshotFrame(
+              page,
+              header,
+              [header.locator(".workspace-icon"), header.locator(".chat-pane__session-title-text")],
+              { animations: "disabled" },
+            );
+            await writeFile(
+              path.join(suite.artifactDir, `project-icon-${viewport.label}-${colorScheme}.png`),
+              frame.png,
+            );
+          }
+
           const geometry = await header.evaluate((root) => {
             const main = root
               .closest("openclaw-chat-pane")
@@ -109,6 +123,10 @@ suite.define(() => {
           expect(geometry.contentTop).toBeGreaterThanOrEqual(geometry.headerBottom - 0.1);
           expect(geometry.headerOverflow).toBeLessThanOrEqual(1);
           expect(geometry.titleWidth).toBeGreaterThan(0);
+          expect(geometry.projectIcon, JSON.stringify(geometry)).toBeCloseTo(
+            geometry.projectText,
+            1,
+          );
           if (viewport.label === "desktop") {
             for (const center of [
               geometry.projectIcon,

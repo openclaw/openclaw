@@ -383,6 +383,144 @@
   -webkit-user-select: none;
 }
 
+.chat-pane__header--agent {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, auto) minmax(0, 1fr);
+  padding-inline: 8px;
+}
+
+.chat-pane__header-agent {
+  grid-column: 2;
+  min-width: 0;
+  max-width: min(360px, 100%);
+  justify-self: center;
+}
+
+.chat-pane__header--agent > .chat-pane__header-leading {
+  grid-column: 1;
+  justify-self: start;
+}
+
+.chat-pane__header--agent > .chat-pane__header-trailing {
+  grid-column: 3;
+  margin-left: 0;
+}
+
+.chat-pane__agent-identity {
+  position: relative;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.chat-pane__agent-identity > button:not(.chat-pane__agent-settings) {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  min-height: 36px;
+  padding: 4px 32px 4px 4px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--secondary);
+  color: var(--text);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: var(--cursor-action);
+}
+
+.chat-pane__agent-avatar {
+  width: 26px;
+  height: 26px;
+  flex: 0 0 26px;
+  border-radius: var(--radius-sm);
+}
+
+.chat-pane__agent-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.chat-pane__agent-identity > button:not(.chat-pane__agent-settings) > svg {
+  position: absolute;
+  right: 12px;
+  width: 12px;
+  height: 12px;
+  flex: 0 0 12px;
+  color: var(--muted);
+}
+
+.chat-pane__agent-settings {
+  position: absolute;
+  top: 50%;
+  right: 4px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  height: 28px;
+  padding: 0;
+  transform: translateY(-50%);
+  border: 0;
+  background: transparent;
+  color: var(--muted);
+  cursor: var(--cursor-action);
+  opacity: 0;
+  pointer-events: none;
+}
+
+.chat-pane__agent-settings svg {
+  width: 16px;
+  height: 16px;
+}
+
+.chat-pane__agent-identity:is(:hover, :focus-within)
+  > button:not(.chat-pane__agent-settings)
+  > svg {
+  opacity: 0;
+}
+
+.chat-pane__agent-identity:is(:hover, :focus-within) > .chat-pane__agent-settings {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+.chat-pane__agent-settings:is(:hover, :focus-visible) {
+  background: transparent;
+  color: var(--text);
+}
+
+@media (hover: none) {
+  .chat-pane__agent-identity > button:not(.chat-pane__agent-settings) > svg {
+    opacity: 0;
+  }
+
+  .chat-pane__agent-settings {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
+
+.chat-pane__agent-context .chat-pane__crumbs {
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 8px;
+  transform: none;
+}
+
+.chat-pane__agent-context .chat-pane__workspace-chip span {
+  display: block;
+}
+
+.chat-pane__agent-context
+  .chat-pane__project-row
+  + .chat-pane__session-trail
+  > .chat-pane__crumb-sep:first-child {
+  display: none;
+}
+
 .chat-pane__header-leading,
 .chat-pane__header-trailing {
   display: flex;
@@ -528,7 +666,7 @@
   object-fit: contain;
 }
 
-.chat-pane__workspace-chip span {
+.chat-pane__workspace-chip > .oc-menu-item__label > span {
   min-width: 0;
   overflow: hidden;
   white-space: nowrap;
@@ -593,7 +731,11 @@
     display: none;
   }
 
-  .sidebar-region__header .chat-pane__header .chat-pane__workspace-chip span {
+  .sidebar-region__header
+    .chat-pane__header
+    .chat-pane__workspace-chip
+    > .oc-menu-item__label
+    > span {
     display: block;
   }
 }
@@ -605,7 +747,7 @@
 
   /* The project name is gone at this width, so the separator would trail an
      icon-only pill and read as punctuation with nothing on its left. */
-  .chat-pane__workspace-chip span,
+  .chat-pane__workspace-chip > .oc-menu-item__label > span,
   .chat-pane__project-row + .chat-pane__session-trail > .chat-pane__crumb-sep:first-child {
     display: none;
   }

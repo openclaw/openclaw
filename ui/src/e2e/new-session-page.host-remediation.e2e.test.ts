@@ -91,7 +91,7 @@ suite.define(() => {
         if (width === 390) {
           await tapRow(row);
         } else {
-          await page.keyboard.press("Tab");
+          // An unscoped Tab can leave the popover and dismiss it before row.focus().
           await row.focus();
           expect(await row.evaluate((element) => document.activeElement === element)).toBe(true);
           await row.press("Enter");

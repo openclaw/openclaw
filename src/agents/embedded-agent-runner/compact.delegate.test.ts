@@ -305,33 +305,65 @@ describe("direct compactor through the context-engine delegate", () => {
   );
 
   it.each([
-    { operation: "summary", ownsCompaction: false },
-    { operation: "endpoint", ownsCompaction: false },
-    { operation: "summary", ownsCompaction: true },
-    { operation: "endpoint", ownsCompaction: true },
+    { operation: "summary", ownsCompaction: false, prepared: false },
+    { operation: "endpoint", ownsCompaction: false, prepared: false },
+    { operation: "summary", ownsCompaction: true, prepared: false },
+    { operation: "endpoint", ownsCompaction: true, prepared: false },
+    { operation: "summary", ownsCompaction: false, prepared: true },
   ] as const)(
-    "runs one queued delegated $operation lifecycle (ownsCompaction=$ownsCompaction)",
-    async ({ operation, ownsCompaction }) => {
+    "runs one queued delegated $operation lifecycle (ownsCompaction=$ownsCompaction, prepared=$prepared)",
+    async ({ operation, ownsCompaction, prepared }) => {
       const fixture = await createFixture(operation);
       const backend = vi.fn<ContextEngine["compact"]>(delegate);
+      const info = {
+        id: prepared ? "legacy" : "fixture",
+        name: "Compaction fixture",
+        ownsCompaction,
+      } satisfies ContextEngine["info"];
       resolveContextEngineMock.mockResolvedValueOnce({
-        info: { ownsCompaction },
+        info,
         compact: backend,
       });
+      const sessionManagerCore = await import("../sessions/session-manager-core.js");
+      const { persistCompactionBoundaryWithSessionEntryAsync } =
+        await import("../../config/sessions/session-accessor.sqlite-compaction-runtime.js");
+      const preparation = prepared
+        ? await sessions.SessionManager[sessionManagerCore.sessionManagerOpenCompaction](
+            fixture.target,
+          )
+        : undefined;
+      const persistBoundary = vi.fn(
+        async (
+          append: import("../sessions/session-compaction-persistence.js").PreparedCompactionAppend,
+        ) =>
+          persistCompactionBoundaryWithSessionEntryAsync(append.scope, {
+            prepared: append,
+            tokensAfter: append.event.tokensAfter,
+            transcriptByteCompactionLatch: null,
+          }),
+      );
       const effects = vi.spyOn(compactionHooks, "runPostCompactionSideEffects");
       try {
-        const result = await compactQueued({
-          ...fixture.target,
-          sessionTarget: fixture.target,
-          sessionFile: fixture.target.sessionKey,
-          workspaceDir,
-          config: fixture.runtimeContext.config,
-          provider: model.provider,
-          model: model.id,
-          agentHarnessId: "openclaw",
-          trigger: "manual",
-          enqueue: async (task) => await task(),
-        });
+        const result = await compactQueued(
+          {
+            ...fixture.target,
+            sessionTarget: fixture.target,
+            sessionFile: fixture.target.sessionKey,
+            workspaceDir,
+            config: fixture.runtimeContext.config,
+            provider: model.provider,
+            model: model.id,
+            agentHarnessId: "openclaw",
+            trigger: "manual",
+            enqueue: async (task) => await task(),
+          },
+          preparation?.runtimeEntry
+            ? {
+                preparedSession: { ...preparation, entry: preparation.runtimeEntry },
+                withCompactionPersistenceAsync: persistBoundary,
+              }
+            : undefined,
+        );
         expect(result, JSON.stringify(result)).toMatchObject({ ok: true, compacted: true });
         expect(backend).toHaveBeenCalledOnce();
         expect.soft(hookRunner.runBeforeCompaction).toHaveBeenCalledOnce();
@@ -343,6 +375,14 @@ describe("direct compactor through the context-engine delegate", () => {
           expect.objectContaining({ action: "compact:before" }),
           expect.objectContaining({ action: "compact:after" }),
         ]);
+        if (prepared) {
+          expect(persistBoundary).toHaveBeenCalledOnce();
+          const { readSessionEntryReadOnlyInWorker } =
+            await import("../../config/sessions/session-entry-read-runtime.js");
+          expect(await readSessionEntryReadOnlyInWorker(fixture.target)).toMatchObject({
+            compactionCount: 1,
+          });
+        }
         const manager = sessions.SessionManager.open(fixture.target);
         if (operation === "summary") {
           expect(manager.getBranch().filter((entry) => entry.type === "compaction")).toHaveLength(

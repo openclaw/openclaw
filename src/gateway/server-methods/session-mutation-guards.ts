@@ -173,13 +173,13 @@ export function bindInProcessRequestMutationAuthority<T extends GatewayRequestOp
     ) {
       const captured = captureRequestMutationOptions(options);
       const assertLifetimeCurrent = captureRequestAuthorityAssertion(captured, false);
-      const assertWorkerCurrent = () => assertRequestTransportCurrent(captured);
       bindRequestMutationAuthority(options, {
         family: "worker",
-        assertPreparationCurrent: assertWorkerCurrent,
+        assertPreparationCurrent: () => assertRequestTransportCurrent(captured),
         assertCurrent: assertLifetimeCurrent,
         assertLifetimeCurrent,
-        assertWorkerCurrent,
+        // Worker routing must retain the complete in-process guard at commit.
+        assertWorkerCurrent: assertLifetimeCurrent,
       });
     }
   }

@@ -20,6 +20,7 @@ import {
 } from "../infra/agent-events.js";
 import { registerAgentRunDeadlineRenewer } from "../infra/agent-run-deadline.js";
 import {
+  getAgentRunContext,
   releaseAgentRunDelegatedAuthority,
   type AgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
@@ -411,6 +412,7 @@ function broadcastChatAborted(
     stopReason?: string;
     message?: Record<string, unknown>;
     errorMessage?: string;
+    localModelMayStillBeFinishing?: boolean;
     liveTextGroup?: AbortSignal;
   },
 ) {
@@ -430,6 +432,7 @@ function broadcastChatAborted(
     seq: (ops.agentRunSeq.get(runId) ?? 0) + 1,
     state: "aborted" as const,
     stopReason,
+    ...(params.localModelMayStillBeFinishing ? { localModelMayStillBeFinishing: true } : {}),
     ...(errorMessage ? { errorMessage } : {}),
     message: params.message ? { ...params.message, timestamp: Date.now() } : undefined,
   };
@@ -487,6 +490,7 @@ export function abortChatRunById(
 
   const bufferedText = ops.chatRunState.resolveBuffer(runId, { final: true }).text;
   const run = ops.chatRunState.runs.get(runId);
+  const localModelMayStillBeFinishing = Boolean(getAgentRunContext(runId)?.localModelWait);
   const liveTextGroup = run?.liveTextGroup?.signal;
   const partialText = bufferedText && bufferedText.trim() ? bufferedText : undefined;
   const canvasBlocks =
@@ -547,6 +551,7 @@ export function abortChatRunById(
       stopReason,
       message,
       errorMessage: active.toolErrorSummary,
+      localModelMayStillBeFinishing,
       liveTextGroup,
     });
   }

@@ -12,9 +12,12 @@ import {
 import {
   addSafeTimeoutDelayGraceMs,
   addTimerTimeoutGraceMs,
+  asFiniteNumberInRange,
+  floorPositiveFiniteNumber as readPositiveFiniteTimeoutMs,
   parseStrictNonNegativeInteger,
+  MAX_TIMER_TIMEOUT_MS,
 } from "openclaw/plugin-sdk/number-runtime";
-import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { truncateWithMarker } from "openclaw/plugin-sdk/string-normalization-runtime";
 import {
   createFailedDynamicToolResponse,
   failedToolResult,
@@ -64,9 +67,11 @@ function normalizeLogField(value: unknown): string | undefined {
   if (!normalized) {
     return undefined;
   }
-  return normalized.length > LOG_FIELD_MAX_LENGTH
-    ? `${truncateUtf16Safe(normalized, LOG_FIELD_MAX_LENGTH - 3)}...`
-    : normalized;
+  return truncateWithMarker(normalized, LOG_FIELD_MAX_LENGTH, {
+    marker: "...",
+    reserve: 3,
+    trimEnd: false,
+  });
 }
 
 function readNumericTimeoutMs(value: unknown): number | undefined {
@@ -139,7 +144,8 @@ type DynamicToolCallExecutionParams = {
   toolBridge: Pick<CodexDynamicToolBridge, "handleToolCall" | "consumeToolExecutionSnapshot"> &
     Partial<Pick<CodexDynamicToolBridge, "sideEffectOwnerKeyForTool">>;
   signal: AbortSignal;
-  timeoutMs: number;
+  /** Null retains an admitted unlimited parent wait, still subject to cancellation. */
+  timeoutMs: number | null;
   toolMeta?: string;
   toolCallOrdinal?: number;
   onAgentToolResult?: EmbeddedRunAttemptParams["onAgentToolResult"];
@@ -286,6 +292,9 @@ export async function handleDynamicToolCallWithTimeout(
     });
     const timeoutPromise = new Promise<CodexDynamicToolRuntimeResponse>((resolve) => {
       const { timeoutMs } = params;
+      if (timeoutMs === null) {
+        return;
+      }
       timeout = setTimeout(() => {
         timedOut = true;
         const timeoutDetails = formatDynamicToolTimeoutDetails({ call: params.call, timeoutMs });
@@ -394,7 +403,18 @@ export function resolveDynamicToolCallTimeoutMs(params: {
   call: CodexDynamicToolCallParams;
   config: EmbeddedRunAttemptParams["config"];
   toolBridge?: Pick<CodexDynamicToolBridge, "availableTools">;
-}): number {
+  parentTimeoutMs?: number;
+}): number | null {
+  if (params.call.tool === "autoreview" && params.parentTimeoutMs !== undefined) {
+    // The canonical helper plans passes after preparation. The admitted parent
+    // owns their total lifetime; its original deadline and abort signal stay live.
+    return params.parentTimeoutMs >= MAX_TIMER_TIMEOUT_MS
+      ? null
+      : addSafeTimeoutDelayGraceMs(
+          params.parentTimeoutMs,
+          CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
+        );
+  }
   const args = isJsonObject(params.call.arguments) ? params.call.arguments : undefined;
   if (params.call.tool === "node_exec") {
     const executionTimeoutMs = params.toolBridge?.availableTools
@@ -452,7 +472,7 @@ export function resolveDynamicToolServerRequestTimeoutMs(
   return (
     Math.max(
       CODEX_DYNAMIC_TOOL_MAX_TIMEOUT_MS + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS,
-      call ? resolveDynamicToolCallTimeoutMs({ call, config: undefined }) : 0,
+      call ? (resolveDynamicToolCallTimeoutMs({ call, config: undefined }) ?? 0) : 0,
     ) + CODEX_DYNAMIC_TOOL_TIMEOUT_SECONDS_GRACE_MS
   );
 }
@@ -532,21 +552,8 @@ function readTimeoutSecondsAsMs(value: unknown): number | undefined {
 function readDynamicToolTimeoutSecondsAsMs(value: unknown): number | undefined {
   // Model-facing timeoutSeconds schemas use integers. Reject malformed
   // fractions instead of silently shortening the caller's budget.
-  if (
-    typeof value !== "number" ||
-    !Number.isFinite(value) ||
-    !Number.isInteger(value) ||
-    value <= 0
-  ) {
-    return undefined;
-  }
-  return value * 1000;
-}
-
-function readPositiveFiniteTimeoutMs(value: unknown): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  const seconds = asFiniteNumberInRange(value, { min: 1 });
+  return seconds !== undefined && Number.isInteger(seconds) ? seconds * 1000 : undefined;
 }
 
 function clampDynamicToolTimeoutMs(

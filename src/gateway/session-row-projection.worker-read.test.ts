@@ -117,6 +117,9 @@ it.each([{ workMs: 20, rowCount: 65 }])(
         try {
           await projection.ensureMaterialized();
           expect(projection.dirtyRowCount).toBe(0);
+          for (const key of keys) {
+            projection.describe({ agentId: "main", key });
+          }
           const before = projection.materializedCount;
           const reads: Array<{ sessionKeys: string[]; rows: SessionRowDatabaseFacts[] }> = [];
           const databases = observeRowFacts((owner) => async (input) => {

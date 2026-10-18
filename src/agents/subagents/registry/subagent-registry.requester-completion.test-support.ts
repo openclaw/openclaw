@@ -63,6 +63,7 @@ import {
   replaceSubagentRunAfterSteerCore,
 } from "./subagent-registry.js";
 import { settleSubagentRegistryPersistenceWork } from "./subagent-registry.persistence.test-support.js";
+import { preparePrivateReplay } from "./subagent-registry.private-input-replay.test-support.js";
 import { resetSubagentRegistryForTests, testing } from "./subagent-registry.test-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { buildRequesterSettleWakeIdentity } from "./subagent-requester-settle-identity.js";
@@ -125,6 +126,8 @@ export function registerRequesterCompletionCustodyTests({
           profileName: "restart-requester",
           scopes: ["operator.admin"],
         });
+        expectDefined(client.authenticatedUserProfile, "requester profile").displayName =
+          "restart-requester";
         client.connect.client.id = "openclaw-control-ui";
         client.connect.client.mode = "webchat";
         client.internal = { authenticatedOperator: true, controlUiAdmin: true };
@@ -246,6 +249,7 @@ export function registerRequesterCompletionCustodyTests({
             });
           }
           const stale = currentChild();
+          const replay = await preparePrivateReplay(recovery === "current" ? stale : undefined);
           source.release();
           getGatewayContextLifetime(context.resolveGatewayContext).abort();
           await resetSubagentRegistryForTests({ persist: false });
@@ -297,6 +301,7 @@ export function registerRequesterCompletionCustodyTests({
             expect(loadSubagentRegistryFromSqlite()).toEqual(unbound);
           }
           await activateSubagentRegistry(() => replacement);
+          await replay?.();
           if (terminalRecovery) {
             if (recovery === "missing source") {
               // Registry binding already settled the unavailable continuation.

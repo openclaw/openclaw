@@ -36,14 +36,6 @@ function resolveContractMessageDiscovery(params: {
   };
 }
 
-export function installChannelPluginContractSuite(params: {
-  plugin: Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config">;
-}) {
-  it("satisfies the base channel plugin contract", () => {
-    expectChannelPluginContract(params.plugin);
-  });
-}
-
 export function expectChannelPluginContract(
   plugin: Pick<ChannelPlugin, "id" | "meta" | "capabilities" | "config">,
 ) {

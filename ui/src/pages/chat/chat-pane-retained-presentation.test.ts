@@ -11,6 +11,7 @@ import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { createApplicationContextProvider } from "../../test-helpers/application-context.ts";
 import { createMockBoardProvider } from "../../test-helpers/board-provider.ts";
 import { installDialogPolyfill } from "../../test-helpers/modal-dialog.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import { renderComposerFixture } from "./chat-composer.test-support.ts";
 import type { ChatHistoryResult } from "./chat-history-snapshot.ts";
@@ -33,11 +34,9 @@ import {
   createTestChatPane,
   createPaneTestHost,
   connectPaneTestView,
-  getPaneTestRuntime,
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
-import { createPageState } from "./chat-state-page.ts";
 import { resetChatComposerState } from "./components/chat-composer.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import {
@@ -263,13 +262,7 @@ describe("chat pane retained presentation lifecycle", () => {
       const history = createDeferred<ChatHistoryResult>();
       const request = vi.fn((method: string) => (method === "chat.startup" ? history.promise : {}));
       const client = createGatewayBrowserClientFixture({ request });
-      const { pane } = createTestChatPane({ client });
-      const state = createPageState(
-        pane.context,
-        { invalidate: vi.fn(), afterCommit: () => () => {} },
-        document.createElement("div"),
-      );
-      pane.state = state;
+      const { pane, state } = createTestChatPane({ client });
       pane.paneId = "catalog-continuation";
       pane.sessionKey = "agent:main:continued";
       state.sessionKey = pane.sessionKey;
@@ -370,28 +363,37 @@ describe("chat pane retained presentation lifecycle", () => {
     },
   );
 
-  it("schedules renders when an actual retained pane is hidden and reactivated", () => {
+  it("parks presentation updates while hidden and renders the current active state on reveal", async () => {
     const { pane } = createTestChatPane({
-      client: {} as GatewayBrowserClient,
-      sessions: {} as SessionCapability,
+      client: createGatewayBrowserClientFixture(),
     });
+    const rendered: Array<[boolean, boolean]> = [];
+    const render = vi.fn(() => {
+      rendered.push([pane.presented, pane.active]);
+      return { layout: null, capabilityDialogs: undefined, providerReviewSource: undefined };
+    });
+    pane.render = render;
     pane.active = true;
-    const updates: Array<[boolean, boolean]> = [];
-    vi.spyOn(getPaneTestRuntime(pane), "invalidate").mockImplementation(() => {
-      updates.push([pane.presented, pane.active]);
-    });
+    connectPaneTestView(pane);
+    await pane.updateComplete;
+    expect(rendered.at(-1)).toEqual([true, true]);
 
+    render.mockClear();
     pane.presented = false;
     pane.active = false;
-    pane.presented = true;
-    pane.active = true;
+    await Promise.resolve();
+    flush();
+    expect(render).not.toHaveBeenCalled();
 
-    expect(updates).toEqual([
-      [false, true],
-      [false, false],
-      [true, false],
-      [true, true],
-    ]);
+    pane.presented = true;
+    await pane.updateComplete;
+    expect(rendered.at(-1)).toEqual([true, false]);
+
+    render.mockClear();
+    pane.active = true;
+    await pane.updateComplete;
+    expect(render).toHaveBeenCalledOnce();
+    expect(rendered.at(-1)).toEqual([true, true]);
   });
 
   it("ignores an open shortcut menu in an inactive retained pane", () => {
@@ -434,7 +436,7 @@ describe("chat pane retained presentation lifecycle", () => {
       const restoreDialog = installDialogPolyfill();
       const key = "agent:main:retained-modal";
       const fixture = createMountedPanes([{ key, kind: "direct", updatedAt: 1 }]);
-      // SAFETY: The test host forwards the controller properties consumed by this fixture.
+      // SAFETY: The test host forwards the runtime properties consumed by this fixture.
       const pane = createPaneTestHost(
         "openclaw-chat-runtime-test",
         ChatPaneRuntime,
@@ -453,13 +455,16 @@ describe("chat pane retained presentation lifecycle", () => {
         const state = pane.state;
         const stop = vi.fn();
         const release = vi.fn();
-        state.realtimeTalkSession = { stop } as unknown as ChatPageHost["realtimeTalkSession"];
-        state.realtimeTalkActive = true;
+        state.realtimeTalk.update({
+          realtimeTalkSession: {
+            stop,
+          } as unknown as ChatPageHost["realtimeTalk"]["snapshot"]["realtimeTalkSession"],
+        });
+        state.realtimeTalk.update({ realtimeTalkActive: true });
         state.sidebarContent = { kind: "markdown", content: "Review selection" };
         let pending: Promise<boolean> | undefined;
         if (overlay === "image") {
           state.imageLightbox = { release, src: "blob:test", title: "preview" };
-          state.requestUpdate();
         } else {
           pane.boardProvider = createMockBoardProvider(key);
           pending = pane.confirmConversationReset();
@@ -480,8 +485,11 @@ describe("chat pane retained presentation lifecycle", () => {
         announcement!.setAttribute("aria-live", "polite");
         pane.presented = false;
         let completed = false;
-        const completion = pane.updateComplete.then(() => {
-          completed = true;
+        const completion = new Promise<void>((resolve) => {
+          state.renderLifecycle.afterCommit(() => {
+            completed = true;
+            resolve();
+          });
         });
         await Promise.resolve();
 
@@ -516,21 +524,15 @@ describe("chat pane retained presentation lifecycle", () => {
       const file = createDeferred<SessionWorkspaceGetResult>();
       const getFile = vi.fn(() => file.promise);
       const client = createGatewayBrowserClientFixture();
-      const { pane, requestUpdate } = createTestChatPane({
+      const { pane, state } = createTestChatPane({
         client,
         sessions: createSessionCapabilityFixture({ getFile }),
       });
-      const state = createPageState(
-        pane.context,
-        { invalidate: requestUpdate, afterCommit: () => () => {} },
-        pane,
-      );
       state.client = client;
       state.connected = true;
       state.connectionEpoch = pane.connectionGeneration;
       state.sessionKey = "agent:main:current";
       pane.sessionKey = state.sessionKey;
-      pane.state = state;
       pane.chatState.attach(state);
       pane.active = true;
 

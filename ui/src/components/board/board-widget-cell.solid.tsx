@@ -53,7 +53,7 @@ import {
   BoardWidgetRejected,
 } from "./board-widget-cell-render.solid.tsx";
 import { BoardWidgetError } from "./board-widget-error.tsx";
-import { BoardWidgetFrameOwner } from "./board-widget-frame.tsx";
+import { createBoardWidgetFrame, BoardWidgetFrame } from "./board-widget-frame.tsx";
 import { BoardWidgetMenu } from "./board-widget-menu.tsx";
 
 const loadMcpAppView = () => import("../mcp-app-view-registration.ts");
@@ -123,7 +123,7 @@ function BoardWidgetCellContent(
     sessionKey: () => props.sessionKey ?? "",
     widget: () => props.widget,
   });
-  const frame = new BoardWidgetFrameOwner({
+  const frame = createBoardWidgetFrame({
     active,
     connected: () => connected,
     loadingCovered: () => props.loadingCovered ?? false,
@@ -136,12 +136,11 @@ function BoardWidgetCellContent(
     resolveFrameUrl: () => props.widgetFrameUrl,
     widget: () => props.widget,
   });
-  const frameError = projectOwner(frame.changes, () => frame.error);
+  const frameState = projectOwner(frame, (owner) => owner);
   const state = createMemo(() => ({
     ...appView.snapshot(),
     error: actionError(),
     pending: actionPending(),
-    frameError: frameError.read(),
   }));
   const activeKinds = () => gateway.read()?.hello?.controlUiWidgetKinds ?? [];
   const contribution = createMemo(() =>
@@ -253,7 +252,7 @@ function BoardWidgetCellContent(
     () =>
       [
         widgetRoot(),
-        frameError.revision(),
+        frameState.revision(),
         props.widget,
         props.boardRevision,
         props.callbacks,
@@ -332,13 +331,12 @@ function BoardWidgetCellContent(
       />
     </Show>
   );
-  const Frame = () =>
-    frame.render(() => {
-      // Reused widget objects still change with board and gateway bindings.
-      void props.boardRevision;
-      gatewayBinding();
-      return props.widget!;
-    });
+  const currentFrameWidget = () => {
+    // Reused widget objects still change with board and gateway bindings.
+    void props.boardRevision;
+    gatewayBinding();
+    return props.widget!;
+  };
   const Plugin = () => {
     const pluginId = () => pluginIdForWidgetKind(props.widget?.pluginKind);
     const key = () => `${pluginId()}/${props.widget?.pluginKind?.slice(pluginId().length + 1)}`;
@@ -444,9 +442,9 @@ function BoardWidgetCellContent(
     );
   };
   const Body = () => (
-    <Switch fallback={<Frame />}>
-      <Match when={state().frameError}>
-        <BoardWidgetError error={state().frameError} />
+    <Switch fallback={<BoardWidgetFrame state={frameState.read} current={currentFrameWidget} />}>
+      <Match when={frameState.read().error}>
+        <BoardWidgetError error={frameState.read().error} />
       </Match>
       <Match when={renderedMcp()}>
         <BoardMcpAppContent

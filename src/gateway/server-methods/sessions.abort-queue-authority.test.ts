@@ -2,7 +2,7 @@
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { resolveEmbeddedSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import {
@@ -19,8 +19,6 @@ import {
   enqueueCommandInLane,
   getQueueSize,
 } from "../../process/command-queue.js";
-import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { ensureUserProfilesSchema } from "../../state/user-profiles-schema.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import {
@@ -30,6 +28,7 @@ import {
 } from "../session-sharing.test-utils.js";
 import { createActiveRun } from "./chat.abort.test-helpers.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
+import { revocableAuthority } from "./sessions.abort-lifecycle.test-support.js";
 
 useChatAbortRegistryFixture();
 const key = "agent:main:queued-stop";
@@ -43,8 +42,6 @@ afterEach(() => {
 });
 
 async function setup() {
-  ensureUserProfilesSchema({});
-  onTestFinished((await prepareUserProfileCatalog()).release);
   const client = roleClient("view", "queued-stop-owner");
   client.connId = "queued-stop-connection";
   client.connect.scopes = ["operator.sessions.write"];
@@ -63,19 +60,17 @@ async function setup() {
     },
   );
   const context = createDirectChatContext({ getRuntimeConfig: () => cfg });
-  const active = createActiveRun(key, {
-    agentId: "main",
-    sessionId,
-    owner: { connId: client.connId },
-  });
-  const queued = createActiveRun(key, {
-    agentId: "main",
-    sessionId,
-    owner: { connId: client.connId },
-  });
+  const ownedRun = (targetSessionId = sessionId) =>
+    createActiveRun(key, {
+      agentId: "main",
+      sessionId: targetSessionId,
+      owner: { connId: client.connId },
+    });
+  const active = ownedRun();
+  const queued = ownedRun();
   context.chatAbortControllers.set("active", active);
   context.chatQueuedTurns.set("queued", queued);
-  let current = true;
+  const authority = revocableAuthority("original queue authority revoked");
   const respond = vi.fn();
   const stop = () =>
     handleGatewayRequest({
@@ -89,47 +84,22 @@ async function setup() {
       context,
       respond,
       isWebchatConnect: () => false,
-      sessionMutationCommitGuard: () => {
-        if (!current) {
-          throw new Error("original queue authority revoked");
-        }
-      },
+      sessionMutationCommitGuard: authority.assertCurrent,
       extraHandlers: { "sessions.abort": sessionAbortHandlers["sessions.abort"]! },
     });
   return {
-    client,
+    ownedRun,
     context,
     active,
     queued,
     respond,
     stop,
-    revoke: () => {
-      current = false;
-    },
+    revoke: authority.revoke,
   };
 }
 
-function followup(prompt: string, targetSessionId = sessionId) {
-  const run = createQueueTestRun({ prompt });
-  Object.assign(run.run, { agentId: "main", sessionKey: key, sessionId: targetSessionId });
-  const settled = vi.fn();
-  run.turnAdoptionLifecycle = { admission: "cancel-only", onAdopted: () => {}, onSettled: settled };
-  enqueueFollowupRun(key, run, createQueueSettings(), "none", undefined, false);
-  return { run, settled };
-}
-
-it("UI-style narrow Stop clears owned lane entries through their signals and preserves foreign work", async () => {
-  const fixture = await setup();
-  const foreign = createActiveRun(key, {
-    agentId: "main",
-    sessionId: "previous-incarnation",
-    owner: { connId: fixture.client.connId },
-  });
-  fixture.context.chatQueuedTurns.set("foreign", foreign);
-  const ownFollowup = followup("owned");
-  const foreignFollowup = followup("foreign", "previous-incarnation");
-  const queue = FOLLOWUP_QUEUES.get(key);
-  const lane = resolveEmbeddedSessionLane(key);
+async function blockLane(queueKey: string) {
+  const lane = resolveEmbeddedSessionLane(queueKey);
   const entered = createDeferred();
   const release = createDeferred();
   const blocker = enqueueCommandInLane(lane, async () => {
@@ -137,16 +107,42 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
     await release.promise;
   });
   await entered.promise;
-  const activeTask = vi.fn(async () => "active");
-  const queuedTask = vi.fn(async () => "queued");
-  const foreignTask = vi.fn(async () => "foreign");
-  const maintenanceTask = vi.fn(async () => "maintenance");
-  const queuedTasks = [
-    enqueueCommandInLane(lane, activeTask, { abortSignal: fixture.active.controller.signal }),
-    enqueueCommandInLane(lane, queuedTask, { abortSignal: fixture.queued.controller.signal }),
-    enqueueCommandInLane(lane, foreignTask, { abortSignal: foreign.controller.signal }),
-    enqueueCommandInLane(lane, maintenanceTask),
-  ];
+  return { lane, release, blocker };
+}
+
+function followup(
+  prompt: string,
+  targetSessionId = sessionId,
+  agentId = "main",
+  sessionKey = key,
+  admissionSessionId?: string,
+) {
+  const run = createQueueTestRun({ prompt });
+  Object.assign(run.run, { agentId, sessionKey, sessionId: targetSessionId });
+  run.admissionSessionId = admissionSessionId;
+  const settled = vi.fn();
+  run.turnAdoptionLifecycle = { admission: "cancel-only", onAdopted: () => {}, onSettled: settled };
+  enqueueFollowupRun(sessionKey, run, createQueueSettings(), "none", undefined, false);
+  return { run, settled };
+}
+
+it("UI-style narrow Stop clears owned lane entries through their signals and preserves foreign work", async () => {
+  const fixture = await setup();
+  const foreign = fixture.ownedRun("previous-incarnation");
+  fixture.context.chatQueuedTurns.set("foreign", foreign);
+  const ownFollowup = followup("owned");
+  const foreignFollowup = followup("foreign", "previous-incarnation");
+  const queue = FOLLOWUP_QUEUES.get(key);
+  const { lane, release, blocker } = await blockLane(key);
+  const tasks = ["active", "queued", "foreign", "maintenance"].map((label) =>
+    vi.fn(async () => label),
+  );
+  const signals = [fixture.active, fixture.queued, foreign].map(
+    ({ controller }) => controller.signal,
+  );
+  const queuedTasks = tasks.map((task, index) =>
+    enqueueCommandInLane(lane, task, { abortSignal: signals[index] }),
+  );
   const settled = Promise.allSettled(queuedTasks);
   try {
     await fixture.stop();
@@ -155,9 +151,7 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
       { ok: true, abortedRunId: "queued", status: "aborted" },
       undefined,
     ]);
-    expect(fixture.active.controller.signal.aborted).toBe(true);
-    expect(fixture.queued.controller.signal.aborted).toBe(true);
-    expect(foreign.controller.signal.aborted).toBe(false);
+    expect(signals.map((signal) => signal.aborted)).toEqual([true, true, false]);
     expect(fixture.context.chatQueuedTurns.get("foreign")).toBe(foreign);
     expect(ownFollowup.settled).toHaveBeenCalledOnce();
     expect(foreignFollowup.settled).not.toHaveBeenCalled();
@@ -165,8 +159,7 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
     expect(queue?.items).toEqual([foreignFollowup.run]);
     expect(queue?.abortController.signal.aborted).toBe(false);
     expect(getQueueSize(lane)).toBe(3);
-    expect(activeTask).not.toHaveBeenCalled();
-    expect(queuedTask).not.toHaveBeenCalled();
+    expect(tasks.slice(0, 2).map((task) => task.mock.calls.length)).toEqual([0, 0]);
     release.resolve();
     await blocker;
     expect((await settled).map((result) => result.status)).toEqual([
@@ -175,8 +168,7 @@ it("UI-style narrow Stop clears owned lane entries through their signals and pre
       "fulfilled",
       "fulfilled",
     ]);
-    expect(foreignTask).toHaveBeenCalledOnce();
-    expect(maintenanceTask).toHaveBeenCalledOnce();
+    expect(tasks.slice(2).map((task) => task.mock.calls.length)).toEqual([1, 1]);
   } finally {
     release.resolve();
     await Promise.allSettled([blocker, ...queuedTasks]);
@@ -204,53 +196,27 @@ it.each([true, false])(
         { sessionId: researchSessionId, updatedAt: 1 },
       );
     }
-    const enqueueSharedFollowup = (
-      agentId: string,
-      targetSessionId: string,
-      admissionSessionId?: string,
-    ) => {
-      const run = createQueueTestRun({ prompt: agentId });
-      Object.assign(run.run, { agentId, sessionKey: sharedKey, sessionId: targetSessionId });
-      run.admissionSessionId = admissionSessionId;
-      const settled = vi.fn();
-      run.turnAdoptionLifecycle = {
-        admission: "cancel-only",
-        onAdopted: () => {},
-        onSettled: settled,
-      };
-      enqueueFollowupRun(sharedKey, run, createQueueSettings(), "none", undefined, false);
-      return { run, settled };
-    };
-    const foreign = enqueueSharedFollowup("main", "main-shared");
-    const owned = enqueueSharedFollowup("research", researchSessionId);
-    const otherIncarnation = enqueueSharedFollowup(
+    const foreign = followup("main", "main-shared", "main", sharedKey);
+    const owned = followup("research", researchSessionId, "research", sharedKey);
+    const otherIncarnation = followup(
       "research",
       "research-previous",
+      "research",
+      sharedKey,
       "research-next",
     );
-    const entered = createDeferred();
-    const release = createDeferred();
-    const lane = resolveEmbeddedSessionLane(sharedKey);
-    const blocker = enqueueCommandInLane(lane, async () => {
-      entered.resolve();
-      await release.promise;
-    });
-    await entered.promise;
+    const { lane, release, blocker } = await blockLane(sharedKey);
+    const command = (label: string, target?: { agentId: string; sessionId: string }) =>
+      enqueueCommandInLane(
+        lane,
+        async () => label,
+        target ? { sessionTarget: { ...target, sessionKey: sharedKey } } : undefined,
+      );
     const commands = [
-      enqueueCommandInLane(lane, async () => "main tagged", {
-        sessionTarget: { agentId: "main", sessionKey: sharedKey, sessionId: "main-shared" },
-      }),
-      enqueueCommandInLane(lane, async () => "main untagged"),
-      enqueueCommandInLane(lane, async () => "research", {
-        sessionTarget: { agentId: "research", sessionKey: sharedKey, sessionId: researchSessionId },
-      }),
-      enqueueCommandInLane(lane, async () => "research previous", {
-        sessionTarget: {
-          agentId: "research",
-          sessionKey: sharedKey,
-          sessionId: "research-previous",
-        },
-      }),
+      command("main tagged", { agentId: "main", sessionId: "main-shared" }),
+      command("main untagged"),
+      command("research", { agentId: "research", sessionId: researchSessionId }),
+      command("research previous", { agentId: "research", sessionId: "research-previous" }),
     ];
     const settled = Promise.allSettled(commands);
     try {

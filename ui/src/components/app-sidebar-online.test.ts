@@ -216,7 +216,7 @@ describe("sidebar people workload", () => {
 
   it("ignores heartbeat and offscreen watching packets while retaining visible activity and viewers", async () => {
     const { sidebar, gateway } = await mountWorkload();
-    const update = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "requestUpdate");
+    const update = vi.spyOn(getAppSidebarOwner(sidebar.hostElement)!, "invalidate");
     const heartbeat = presence().map((entry) =>
       Object.assign({}, entry, {
         ts: NOW + 1,
@@ -349,7 +349,7 @@ describe("sidebar people workload", () => {
     async (mode) => {
       const { sidebar } = await mountWorkload();
       sidebar.sidebarAgentsMode = mode;
-      const view = sidebar.sidebarMenus.host.people;
+      const view = sidebar.people;
       view.set("statusFilter", "running");
       view.set("sortMode", "running");
       await settle(sidebar);
@@ -396,7 +396,7 @@ describe("sidebar people workload", () => {
     sidebar.setSessionOwnerFilter("cy");
     context.agentSelection.state.selectedId = "research";
     context.agentSelection.state.scopeId = "research";
-    sidebar.requestUpdate();
+    sidebar.invalidate();
     await settle(sidebar);
     pending.resolve(summary());
     await settle(sidebar);
@@ -416,7 +416,7 @@ describe("sidebar people workload", () => {
       presence: [...presence(), { instanceId: "raw", ts: NOW, user: { id: "raw", name: "Aaron" } }],
     });
     const reads = request.mock.calls.length;
-    const view = sidebar.sidebarMenus.host.people;
+    const view = sidebar.people;
     view.set("sortMode", "running");
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["bea", "ada", "cy", "Aaron"]);
@@ -437,7 +437,7 @@ describe("sidebar people workload", () => {
   it("keeps the filter recoverable for unavailable counts and empty matches", async () => {
     const pending = createDeferred<SessionsListResult>();
     const { sidebar } = await mountWorkload(() => pending.promise);
-    sidebar.sidebarMenus.host.people.set("statusFilter", "running");
+    sidebar.people.set("statusFilter", "running");
     await settle(sidebar);
     expect(names(sidebar)).toEqual([]);
     expect(sidebar.querySelector(".sidebar-session-empty-hint")?.textContent).toBe(
@@ -450,7 +450,7 @@ describe("sidebar people workload", () => {
       "No people match this filter",
     );
     expect(sidebar.querySelector(".sidebar-online [aria-haspopup=dialog]")).not.toBeNull();
-    sidebar.sidebarMenus.host.people.resetView();
+    sidebar.people.resetView();
     await settle(sidebar);
     expect(names(sidebar)).toEqual(["ada", "cy", "bea"]);
   });
