@@ -1,6 +1,7 @@
 import { resolveGatewayWebSocketUrl } from "../../lib/gateway-websocket-url.ts";
 import { isApplePlatform } from "../../lib/keyboard-shortcut-contract.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createDesktopViewport } from "./desktop-viewport.ts";
 
 export type DesktopDisconnectDetail = {
   clean: boolean;
@@ -13,7 +14,7 @@ type DesktopSecurityFailureDetail = {
   status?: number;
 };
 
-export type DesktopSizingMode = "fit" | "actual" | "match";
+export type DesktopSizingMode = "fit" | "actual" | "fit-height" | "fit-width" | "match";
 
 /** noVNC creates and owns the canvas inside the retained desktop surface. */
 export function desktopCanvas(surface: HTMLElement | undefined): HTMLCanvasElement | null {
@@ -83,11 +84,18 @@ export class DesktopClient {
     };
     socket.addEventListener("close", trackSocketClose, { once: true });
     const stopSocketClose = () => socket.removeEventListener("close", trackSocketClose);
-    const rfb = new Rfb(
-      options.target,
-      socket,
-      options.credentials ? { credentials: options.credentials } : undefined,
-    );
+    const viewport = createDesktopViewport(options.target);
+    let rfb: RfbClient;
+    try {
+      rfb = new Rfb(
+        viewport.target,
+        socket,
+        options.credentials ? { credentials: options.credentials } : undefined,
+      );
+    } catch (error) {
+      viewport.dispose();
+      throw error;
+    }
     rfb.background = options.background ?? getComputedStyle(options.target).backgroundColor;
     rfb.viewOnly = options.viewOnly;
     rfb.resizeSession = false;
@@ -166,6 +174,7 @@ export class DesktopClient {
       if (retired || !options.isCurrent()) {
         return;
       }
+      viewport.setMode(sizingMode);
       rfb.scaleViewport = sizingMode !== "actual";
       rfb.resizeSession =
         presented &&
@@ -193,6 +202,7 @@ export class DesktopClient {
         stopInputTracking();
         stopSocketClose();
         stopRfb.forEach((stop) => stop());
+        viewport.dispose();
         // SAFETY: noVNC's public disconnect event carries clean, even before the socket closes.
         const { clean } = (event as CustomEvent<{ clean: boolean }>).detail;
         options.onDisconnect?.({ ...closeDetail, clean });
@@ -210,6 +220,7 @@ export class DesktopClient {
           disableInput();
           stopInputTracking();
           rfb.disconnect();
+          viewport.dispose();
         }
       },
       disableInput,
