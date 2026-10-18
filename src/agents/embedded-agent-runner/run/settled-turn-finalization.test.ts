@@ -10,11 +10,15 @@ import {
 import { prepareAgentRunTerminalReply } from "../../agent-run-terminal-reply.js";
 import { runAgentHarnessLifecycleFinalization } from "../../harness/lifecycle.js";
 import type { AgentHarness } from "../../harness/types.js";
-import { SETTLED_TOOL_TERMINAL_CONTINUATION_BODY } from "../../recovery-nudge-text.js";
+import {
+  SETTLED_TOOL_TERMINAL_CONTINUATION_BODY,
+  withRecoveryDeliveryContract,
+} from "../../recovery-nudge-text.js";
 import {
   buildEmbeddedRunnerAssistant,
   makeEmbeddedRunnerAttempt,
 } from "../../test-helpers/embedded-agent-runner-e2e-fixtures.js";
+import { TOOL_FAILURE_INSTRUCTION } from "../../tool-outcome-instructions.js";
 import type { EmbeddedRunAttemptWithReceiptEvidence } from "./attempt-result.js";
 import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "./lane-runtime.js";
 import {
@@ -488,7 +492,7 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
       content: [
         {
           type: "text",
-          text: `I'll gather the last facts. ${SETTLED_TOOL_TERMINAL_CONTINUATION_BODY} Let me write the summary.`,
+          text: `I'll gather the last facts. ${withRecoveryDeliveryContract(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY)} ${TOOL_FAILURE_INSTRUCTION} Let me write the summary.`,
         },
       ],
     });
@@ -513,6 +517,58 @@ describe("prepareTerminalWithSettledTurnFinalization", () => {
     expect(result.prepared.payloadsWithToolMedia?.[0]?.text).not.toContain(
       "Continue from the current transcript",
     );
+  });
+
+  it("does not deliver rejected echo text when both finalizer attempts echo", async () => {
+    const attempt = settledSuccessfulAttempt();
+    const echoedAssistant = buildEmbeddedRunnerAssistant({
+      content: [
+        {
+          type: "text",
+          text: `I'll gather the last facts. ${withRecoveryDeliveryContract(SETTLED_TOOL_TERMINAL_CONTINUATION_BODY)} Let me write the summary.`,
+        },
+      ],
+    });
+    backendMocks.runSettledFinalization.mockImplementation(
+      async (params: EmbeddedRunAttemptParams) => settleThroughHarness(echoedAssistant, params),
+    );
+    const input = finalizationInput(attempt);
+    Object.assign(input.terminalBase.runParams, {
+      trigger: "user",
+      terminalReplyExpectation: "required",
+      sourceReplyDeliveryMode: "automatic",
+    });
+
+    const result = await prepareTerminalWithSettledTurnFinalization(input);
+
+    expect(backendMocks.runSettledFinalization).toHaveBeenCalledTimes(2);
+    expect(result.finalizationOutcome).toBe("failed");
+    expect(result.attempt.assistantTexts).toEqual([]);
+    expect(result.attempt.preparedTerminalReply).toMatchObject({
+      text: "",
+      terminalReply: { disposition: "empty" },
+    });
+    expect(result.prepared.payloadsWithToolMedia ?? []).toEqual([]);
+
+    const terminalInput = makeTerminalInput({
+      ...result.prepared,
+      attempt: result.attempt,
+      attemptAssistant: result.attemptAssistant,
+      terminalState: result.terminalState,
+      runParams: input.terminalBase.runParams,
+      settledTurnFinalizationOutcome: result.finalizationOutcome,
+      replayState: { hadPotentialSideEffects: true, replayInvalid: false },
+    });
+    const terminal = await resolveEmbeddedRunTerminal(terminalInput);
+    expect(terminal.action).toBe("complete");
+    if (terminal.action !== "complete") {
+      throw new Error("expected echo rejection to complete the turn");
+    }
+    const payloadText = (terminal.result.payloads ?? [])
+      .map((payload) => payload.text ?? "")
+      .join("\n");
+    expect(payloadText).not.toContain("Continue from the current transcript");
+    expect(terminal.result.meta.finalAssistantVisibleText).toBeUndefined();
   });
 
   it("normalizes an unlimited budget when the finalizer publishes no deadline", async () => {

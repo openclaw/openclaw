@@ -49,13 +49,11 @@ export const BEFORE_AGENT_FINALIZE_RETRY_PROMPT_PREFIX = withRecoveryDeliveryCon
   BEFORE_AGENT_FINALIZE_RETRY_PROMPT_BODY,
 );
 
-// Eight consecutive words are long enough that an ordinary answer will not
-// contain the runner's wording. Two of them are required, and they must not
-// overlap: overlapping windows of a single shared sentence collapse into one
-// run, so a genuine answer that merely shares a phrase with a nudge survives.
-const RECOVERY_INSTRUCTION_ECHO_RUN_WORDS = 8;
-const RECOVERY_INSTRUCTION_ECHO_MIN_MATCHES = 2;
-const RECOVERY_NUDGE_TEXTS = [
+// A restatement repeats the instruction that was actually injected. Small
+// framing around it ("Let me plan this out…") is still an echo, but a genuine
+// answer that quotes one sentence or fragment of the instruction is not.
+const RECOVERY_INSTRUCTION_ECHO_MAX_FRAMING_WORDS = 12;
+const RECOVERY_NUDGE_BODIES = [
   REASONING_ONLY_RETRY_BODY,
   EMPTY_RESPONSE_RETRY_BODY,
   REQUIRED_RESULT_RETRY_BODY,
@@ -66,10 +64,12 @@ const RECOVERY_NUDGE_TEXTS = [
   REQUIRED_RESULT_TOOL_TERMINAL_CONTINUATION_BODY,
   COMPACTION_CONTINUATION_RETRY_BODY,
   BEFORE_AGENT_FINALIZE_RETRY_PROMPT_BODY,
+];
+const RECOVERY_NUDGE_TEXTS = [
+  ...RECOVERY_NUDGE_BODIES,
+  ...RECOVERY_NUDGE_BODIES.map(withRecoveryDeliveryContract),
   RECOVERY_REPLY_DELIVERY_CONTRACT,
 ];
-const RECOVERY_INSTRUCTION_ECHO_RUNS = buildRecoveryInstructionEchoRuns(RECOVERY_NUDGE_TEXTS);
-
 function normalizeRecoveryInstructionWords(text: string): string[] {
   return text
     .toLowerCase()
@@ -79,74 +79,52 @@ function normalizeRecoveryInstructionWords(text: string): string[] {
     .filter(Boolean);
 }
 
-function spreadRecoveryInstructionRuns(words: string[]): string[] {
-  const runs: string[] = [];
-  for (let index = 0; index + RECOVERY_INSTRUCTION_ECHO_RUN_WORDS <= words.length; index += 1) {
-    runs.push(words.slice(index, index + RECOVERY_INSTRUCTION_ECHO_RUN_WORDS).join(" "));
+const RECOVERY_NUDGE_WORDS = RECOVERY_NUDGE_TEXTS.map(normalizeRecoveryInstructionWords);
+
+function findInstructionWords(words: string[], instruction: string[]): number {
+  for (let index = 0; index + instruction.length <= words.length; index += 1) {
+    if (instruction.every((word, offset) => words[index + offset] === word)) {
+      return index;
+    }
   }
-  return runs;
+  return -1;
 }
 
-function buildRecoveryInstructionEchoRuns(texts: readonly string[]): Set<string> {
-  const nudgeCounts = new Map<string, number>();
-  for (const text of texts) {
-    for (const run of new Set(
-      spreadRecoveryInstructionRuns(normalizeRecoveryInstructionWords(text)),
-    )) {
-      nudgeCounts.set(run, (nudgeCounts.get(run) ?? 0) + 1);
-    }
+function repeatsInjectedInstruction(words: string[], instruction: string[]): boolean {
+  if (instruction.length === 0) {
+    return false;
   }
-  // Wording shared by every nudge is universal boilerplate ("do not restart
-  // from scratch") and never on its own proof of a restatement. Wording shared
-  // by only some variants still identifies the family they belong to; with a
-  // single text every run is unique to it, so nothing is filtered out.
-  if (texts.length === 1) {
-    return new Set(nudgeCounts.keys());
+  let remaining = words;
+  let removed = 0;
+  for (;;) {
+    const index = findInstructionWords(remaining, instruction);
+    if (index < 0) {
+      break;
+    }
+    remaining = [...remaining.slice(0, index), ...remaining.slice(index + instruction.length)];
+    removed += instruction.length;
   }
-  return new Set(
-    [...nudgeCounts].filter(([, nudges]) => nudges < texts.length).map(([run]) => run),
-  );
-}
-
-function countNonOverlappingEchoRuns(words: string[], runs: ReadonlySet<string>): number {
-  let matches = 0;
-  let coveredUntil = 0;
-  for (let index = 0; index + RECOVERY_INSTRUCTION_ECHO_RUN_WORDS <= words.length; index += 1) {
-    // Skip windows that overlap an already-accepted run so one shared passage
-    // can never satisfy the match count on its own.
-    if (index < coveredUntil) {
-      continue;
-    }
-    const run = words.slice(index, index + RECOVERY_INSTRUCTION_ECHO_RUN_WORDS).join(" ");
-    if (!runs.has(run)) {
-      continue;
-    }
-    matches += 1;
-    coveredUntil = index + RECOVERY_INSTRUCTION_ECHO_RUN_WORDS;
-    if (matches >= RECOVERY_INSTRUCTION_ECHO_MIN_MATCHES) {
-      return matches;
-    }
-  }
-  return matches;
+  return removed > 0 && remaining.length <= RECOVERY_INSTRUCTION_ECHO_MAX_FRAMING_WORDS;
 }
 
 /**
  * Detects a reply that restates an injected recovery nudge. The runner knows the
- * exact wording it injected, so a reply that reproduces two separate runs of it
- * is transport noise rather than an answer.
+ * exact wording it injected, so only a reply that reproduces the complete
+ * instruction (with at most a short amount of framing) is transport noise.
  *
  * Pass the injected instruction whenever it is known: only that wording can
  * then count as an echo, so an answer quoting some other recovery prompt stays a
- * genuine answer. Without it every nudge is matched. Either way the two matched
- * runs must not overlap, so planning prose that reuses a single phrase is kept.
+ * genuine answer. Without it every nudge is matched. Quoting one sentence or a
+ * shorter fragment keeps the answer substantive.
  */
 export function isRecoveryInstructionEcho(text: string, instruction?: string): boolean {
-  const runs =
+  const words = normalizeRecoveryInstructionWords(text);
+  if (words.length === 0) {
+    return false;
+  }
+  const instructions =
     instruction && instruction.trim().length > 0
-      ? buildRecoveryInstructionEchoRuns([instruction])
-      : RECOVERY_INSTRUCTION_ECHO_RUNS;
-  return (
-    countNonOverlappingEchoRuns(normalizeRecoveryInstructionWords(text), runs) >=
-    RECOVERY_INSTRUCTION_ECHO_MIN_MATCHES
-  );
+      ? [normalizeRecoveryInstructionWords(instruction)]
+      : RECOVERY_NUDGE_WORDS;
+  return instructions.some((candidate) => repeatsInjectedInstruction(words, candidate));
 }

@@ -102,7 +102,13 @@ describe("assertSettledTurnFinalizationResult", () => {
       throw new Error("expected recovery-echo classification");
     } catch (error) {
       expect(error).toBeInstanceOf(EmptySettledTurnFinalizationError);
-      expect((error as EmptySettledTurnFinalizationError).result).toMatchObject(result);
+      const rejected = (error as EmptySettledTurnFinalizationError).result;
+      expect(rejected.assistant.content).toEqual([]);
+      expect(rejected.preparedTerminalReply).toMatchObject({
+        text: "",
+        terminalReply: { disposition: "empty" },
+      });
+      expect((error as EmptySettledTurnFinalizationError).reason).toBe("echo");
     }
   });
 

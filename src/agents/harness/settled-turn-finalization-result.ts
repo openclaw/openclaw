@@ -105,11 +105,19 @@ export function assertSettledTurnFinalizationResult(
   if (isRecoveryInstructionEcho(preparedTerminalReply.text, instruction)) {
     // The finalizer restated the recovery nudge the runner injected instead of
     // answering the run, so the turn is unanswered and re-enters the existing
-    // bounded tool-free recovery rather than publishing the restatement.
+    // bounded tool-free recovery rather than publishing the restatement. Keep
+    // the rejected bytes out of both the terminal reply and the attempt result.
     log.warn(
       "settled-turn finalization echoed the recovery instruction — refusing it as an answer",
     );
-    throw new EmptySettledTurnFinalizationError(preparedResult);
+    throw new EmptySettledTurnFinalizationError(
+      {
+        ...preparedResult,
+        assistant: { ...preparedResult.assistant, content: [] },
+        preparedTerminalReply: prepareAgentRunTerminalReply({}),
+      },
+      "echo",
+    );
   }
   return preparedResult;
 }

@@ -35,6 +35,7 @@ import { applyAgentHarnessResultClassification } from "./result-classification.j
 import {
   EmptySettledTurnFinalizationError,
   type PreparedSettledTurnFinalizationResult,
+  type SettledTurnFinalizationEmptyReason,
 } from "./settled-turn-finalization-outcome.js";
 import { assertSettledTurnFinalizationResult } from "./settled-turn-finalization-result.js";
 import type {
@@ -48,6 +49,7 @@ import type {
 
 type AgentHarnessLifecycleFinalizationOutcome = {
   outcome: "answered" | "empty";
+  reason?: SettledTurnFinalizationEmptyReason;
   result: PreparedSettledTurnFinalizationResult;
 };
 
@@ -428,7 +430,11 @@ export async function runAgentHarnessLifecycleFinalization(
         };
       } catch (error) {
         if (error instanceof EmptySettledTurnFinalizationError) {
-          return { outcome: "empty" as const, result: error.result };
+          return {
+            outcome: "empty" as const,
+            reason: error.reason,
+            result: error.result,
+          };
         }
         throw error;
       }

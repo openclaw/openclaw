@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   RECOVERY_REPLY_DELIVERY_CONTRACT,
+  SETTLED_TOOL_TERMINAL_CONTINUATION_BODY,
   isRecoveryInstructionEcho,
 } from "../../recovery-nudge-text.js";
 import {
@@ -291,6 +292,24 @@ describe("incomplete-turn recovery policy", () => {
       ),
     ).toBe(false);
     expect(isRecoveryInstructionEcho("Do not restart from scratch.")).toBe(false);
+  });
+
+  it("keeps a substantive answer that quotes part of the injected instruction", () => {
+    expect(
+      isRecoveryInstructionEcho(
+        'The log says "Continue from the current transcript. Do not repeat completed tool calls or restart from scratch." The disk has 12 GB free; nothing needs cleanup.',
+        SETTLED_TOOL_TERMINAL_CONTINUATION_BODY,
+      ),
+    ).toBe(false);
+  });
+
+  it("flags repeated copies of the complete injected instruction", () => {
+    expect(
+      isRecoveryInstructionEcho(
+        `${SETTLED_TOOL_TERMINAL_CONTINUATION_BODY} ${SETTLED_TOOL_TERMINAL_CONTINUATION_BODY}`,
+        SETTLED_TOOL_TERMINAL_CONTINUATION_BODY,
+      ),
+    ).toBe(true);
   });
 
   it("keeps planning prose and a plain answer", () => {

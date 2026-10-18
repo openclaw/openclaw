@@ -9,7 +9,10 @@ import { formatErrorMessage } from "../../../infra/errors.js";
 import { resolveAdmittedRunActiveAssertion } from "../../admitted-run-context.js";
 import { classifyAgentRunTerminalOutcome } from "../../agent-run-terminal-outcome.js";
 import { runAgentHarnessSettledTurnFinalization } from "../../harness/selection.js";
-import type { PreparedSettledTurnFinalizationResult } from "../../harness/settled-turn-finalization-outcome.js";
+import type {
+  PreparedSettledTurnFinalizationResult,
+  SettledTurnFinalizationEmptyReason,
+} from "../../harness/settled-turn-finalization-outcome.js";
 import type { AgentHarness } from "../../harness/types.js";
 import { observeReplyDelivery, resolveReplyExpectation } from "../../reply-completion.js";
 import { resolveAgentTimeoutMs } from "../../timeout.js";
@@ -228,6 +231,7 @@ export async function prepareTerminalWithSettledTurnFinalization(input: {
       lastRunPromptUsage = attempt.attemptUsage ?? lastRunPromptUsage;
       if (
         finalization.outcome === "empty" &&
+        finalization.reason !== "echo" &&
         shouldTreatEmptyAssistantReplyAsSilent({
           terminalReplyExpectation: resolveReplyExpectation(runParams),
           payloadCount: 0,
@@ -388,7 +392,11 @@ async function runPreparedSettledTurnFinalization(input: {
   prompt: string;
   createAttemptControls: CreateAttemptControls;
   abortSignal: AbortSignal;
-}): Promise<{ outcome: "answered" | "empty"; attempt: EmbeddedRunAttemptWithReceiptEvidence }> {
+}): Promise<{
+  outcome: "answered" | "empty";
+  reason?: SettledTurnFinalizationEmptyReason;
+  attempt: EmbeddedRunAttemptWithReceiptEvidence;
+}> {
   // The original attempt is closed. Each tool-free retry owns its own deadline
   // and Stop callbacks, while queue cancellation remains authoritative throughout.
   const controls = input.createAttemptControls({
@@ -429,6 +437,7 @@ async function runPreparedSettledTurnFinalization(input: {
     );
     return {
       outcome: finalization.outcome,
+      ...(finalization.outcome === "empty" ? { reason: finalization.reason } : {}),
       attempt: buildSettledTurnFinalizationAttemptResult({
         result: finalization.result,
         settledAttempt: input.settledAttempt,

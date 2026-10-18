@@ -3,9 +3,14 @@ import type { AgentHarnessSettledTurnFinalizationResult } from "./types.js";
 export type PreparedSettledTurnFinalizationResult = AgentHarnessSettledTurnFinalizationResult &
   Required<Pick<AgentHarnessSettledTurnFinalizationResult, "preparedTerminalReply">>;
 
+export type SettledTurnFinalizationEmptyReason = "empty" | "echo";
+
 /** A normally stopped finalizer exhausted its visible answer without failing or using tools. */
 export class EmptySettledTurnFinalizationError extends Error {
-  constructor(readonly result: PreparedSettledTurnFinalizationResult) {
+  constructor(
+    readonly result: PreparedSettledTurnFinalizationResult,
+    readonly reason: SettledTurnFinalizationEmptyReason = "empty",
+  ) {
     super("Settled-turn finalization completed without a visible answer");
     this.name = "EmptySettledTurnFinalizationError";
   }
