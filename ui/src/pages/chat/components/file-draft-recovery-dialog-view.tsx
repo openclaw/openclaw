@@ -22,7 +22,8 @@ export function FileDraftRecoveryDialog(props: {
   finish: () => void;
 }) {
   // Review the opening batch; successful discards remove entries from this dialog.
-  const [remaining, setRemaining] = createSignal(untrack(() => [...props.drafts]));
+  const initialDrafts = untrack(() => [...props.drafts]);
+  const [remaining, setRemaining] = createSignal(initialDrafts);
   const [error, setError] = createSignal("");
   const [copied, setCopied] = createSignal<FileDraft>();
   const current = (draft: FileDraft) => {

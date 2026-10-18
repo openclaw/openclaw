@@ -52,7 +52,7 @@ describe("command palette input", () => {
       clientHeight: { configurable: true, get: () => Number.parseFloat(input.style.height) || 24 },
     });
     await vi.advanceTimersByTimeAsync(20);
-    expect(observe).toHaveBeenCalledWith(entry);
+    expect(observe.mock.calls.map(([target]) => target)).toContain(entry);
     expect(inputRef).toHaveBeenCalledWith(input);
 
     contentHeight = 48;

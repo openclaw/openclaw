@@ -6,6 +6,7 @@ import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/help
 import { getRuntimeConfig } from "../../../config/config.js";
 import { loadExactSessionEntryReadOnly } from "../../../config/sessions/session-accessor.js";
 import { reactivateCompletedSubagentSession } from "../../../gateway/session-subagent-reactivation.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import type { AgentWaitResult } from "../../run-wait.js";
 import * as killSession from "./subagent-control-session.js";
 import {
@@ -204,17 +205,27 @@ it.each([
       await runs.seed(runId, {
         childSessionKey: sessionKey,
         requesterSessionKey: rootKey,
+        requesterTurnRunId: b0.runId,
         collect: true,
         queued: true,
       });
     }
     const entered = createDeferred();
-    const childAdmission = await beginControlAdmission(
-      storePath,
-      childKey,
-      "publication-child-session",
-      () => entered.resolve(),
-    );
+    const childAdmission = await beginSessionEffect({
+      scope: storePath,
+      identities: [childKey, "publication-child-session"],
+      run: {
+        runId: "publication-child",
+        sessionKey: childKey,
+        sessionId: "publication-child-session",
+        agentId: "main",
+      },
+      assertAllowed: () => {},
+      onInterrupt: () => {
+        entered.resolve();
+        return { runId: "publication-child" };
+      },
+    });
     const markerCleared = createDeferred();
     const releaseMarker = createDeferred();
     let markerWaits = 0;

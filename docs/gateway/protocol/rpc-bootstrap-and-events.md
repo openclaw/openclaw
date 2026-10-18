@@ -47,7 +47,7 @@ Sidebar replies include an opaque `rowsRevision`. A client can send it as
 facets still describe the current full window.
 
 Clients that also accept row deltas send `ifRowsRevision: "delta:<revision>"`.
-When that query's previous row vector is still retained, `sessions` contains only
+When that query's previous row identities are still retained, `sessions` contains only
 changed or inserted rows, and `rowsDelta` contains `baseRevision` and `order`.
 Expand response-local shared facts, concatenate the cached base rows with those
 changed rows, then select the complete window by the integer indexes in `order`.
@@ -56,15 +56,20 @@ still counts the complete window, including owner-first rows. Require a matching
 base revision before applying a delta. Revision misses, retired views, and reads
 without a useful delta return the normal full row array. Current authorization
 and selection always precede this comparison. The Gateway retains up to 32 prior
-vectors per bounded query view, including across runtime activity and selection
+identity vectors per bounded query view, including across runtime activity and selection
 revision updates such as membership changes. A selection revision refreshes the
-current selection without discarding previously served comparison rows.
+current selection without discarding previously served comparison identities.
+Each historical vector stores its revision and eight-byte numeric row identities;
+it does not retain the old row objects or their encoded JSON.
 Configuration, identity, and explicit selection resets retire the view and its history.
 Views are retained in least-recently-used order, with limits of 512 cache slots
 (selection and row presentation use separate slots) and 32 MiB of estimated
-retention per projection. The estimate counts row/history references, selection
-and partition entries, query keys, and view overhead; it is not a heap-size limit
-for shared row objects or their encodings. A response exceeding the budget is
+retention per projection. The estimate counts history identities, current row
+references and cached row/fact encodings, serialized array buffers, selection and
+partition entries, query keys, and view overhead. Shared current row encodings are
+counted once per projection, while packed replies are charged per view. This is a
+retention estimate rather than whole-heap
+attribution. A response exceeding the budget is
 served without retaining its baseline. Eviction does not change authorization
 or selection; a later read can return full rows to establish a new baseline.
 
