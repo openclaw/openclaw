@@ -389,17 +389,16 @@ function mutateRequesterBatch(
       }
       const changedOwner = () =>
         new Error("subagent completion owner changed before settlement: " + expected.runId);
-      // An exact requester receipt can arrive after expiry transferred this result to its wake.
-      const acknowledgeExpiredDelivery =
-        params.outcome.delivered &&
-        subagent.delivery?.status === "suspended" &&
-        subagent.delivery.suspendedReason === "expiry";
+      // Expiry transferred this result to its wake, so the wake's outcome settles it:
+      // an exact receipt delivers it, and a failed wake leaves no other retry owner.
+      const expiredToWake =
+        subagent.delivery?.status === "suspended" && subagent.delivery.suspendedReason === "expiry";
       let mutation: CompletionMutation = { subagent };
       if (
         subagent.pauseReason !== "sessions_yield" &&
         subagent.expectsCompletionMessage === true &&
         (["pending", "in_progress"].includes(subagent.delivery?.status ?? "pending") ||
-          acknowledgeExpiredDelivery)
+          expiredToWake)
       ) {
         if (params.outcome.delivered) {
           const delivery = ensureDeliveryState(subagent);

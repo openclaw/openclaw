@@ -22,6 +22,7 @@ import {
   records,
   requesterWakeDriver,
   admitCompletionFixtureDatabase,
+  readCompletionSystemEvents,
   seedSubagentCompletionDelivery,
 } from "./subagent-completion-admission.test-helpers.js";
 
@@ -146,18 +147,42 @@ describe("requester receipts after completion expiry", () => {
     },
   );
 
-  it.each([
-    { reason: "expiry" as const, delivered: false },
-    { reason: "permanent_failure" as const, delivered: true },
-  ])(
-    "does not recover $reason without an eligible successful receipt",
-    async ({ reason, delivered }) => {
-      const input = await suspend({ reason });
-      await settle(input, delivered);
+  it("does not recover permanent_failure from a successful receipt", async () => {
+    const input = await suspend({ reason: "permanent_failure" });
+    await settle(input, true);
+    database = await reopenCompletionFixtureOwners();
+    expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
+  });
+
+  it("fails the expired delivery when its requester wake ends undelivered", async () => {
+    const input = await suspend();
+    expect(readCompletionSystemEvents(database)).toHaveLength(1);
+    const driver = requesterWakeDriver([input]);
+    driver.wake.mockImplementation(async (params) => {
+      await params.completeBatch([input.subagent], 1, {
+        delivered: false,
+        path: "direct",
+        error: "requester turn failed",
+      });
+      return true;
+    });
+    try {
+      await driver.run();
       database = await reopenCompletionFixtureOwners();
-      expect(isDeliverySuspended(subagentRuns.get(input.subagent.runId)!)).toBe(true);
-    },
-  );
+      const stored = subagentRuns.get(input.subagent.runId);
+      // The wake was the last owner; the row must not wait suspended for the age discard.
+      expect(isDeliverySuspended(stored!)).toBe(false);
+      expect(stored?.delivery?.status).toBe("failed");
+      expect(stored?.delivery?.lastError).toBe("requester turn failed");
+      expect(stored?.suppressCompletionDelivery).toBe(true);
+      expect(stored?.requesterSettleWake).toBeUndefined();
+      expect(stored?.completion?.resultText).toBe("canonical result");
+      // Suspension already queued this generation's blocked notice.
+      expect(readCompletionSystemEvents(database)).toHaveLength(1);
+    } finally {
+      driver.controller.clearScheduledResumeTimers();
+    }
+  });
 
   it.each([
     "run",
