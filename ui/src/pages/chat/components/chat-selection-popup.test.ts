@@ -62,8 +62,16 @@ function scrollTranscript() {
   transcript.className = "chat-transcript";
   transcript.dispatchEvent(new Event("scroll", { bubbles: false }));
 }
-function key(input: EventTarget, value: string, options: KeyboardEventInit = {}) {
+function key(
+  input: EventTarget,
+  value: string,
+  options: KeyboardEventInit = {},
+  timeStamp?: number,
+) {
   const event = new KeyboardEvent("keydown", { key: value, bubbles: true, ...options });
+  if (timeStamp !== undefined) {
+    Object.defineProperty(event, "timeStamp", { value: timeStamp });
+  }
   input.dispatchEvent(event);
   return event;
 }
@@ -125,14 +133,6 @@ describe("chat selection popup", () => {
     expect(popup()).toBeNull();
   });
 
-  it("does not restore the popup after its owner tears down", () => {
-    const thread = selection("tear down before the selection settles", 9);
-    pointerUp(thread, undefined, false);
-    removeChatSelectionPopup("pane-a");
-    vi.runAllTimers();
-    expect(popup()).toBeNull();
-  });
-
   it("keeps only the latest pending selection popup", () => {
     const thread = selection("replacement selection", 11);
     const firstAskSideChat = vi.fn();
@@ -150,32 +150,32 @@ describe("chat selection popup", () => {
     );
   });
 
-  it.each([
-    ["the transcript scrolls", scrollTranscript],
-    [
-      "the selection collapses",
-      () => {
-        window.getSelection()?.removeAllRanges();
-        document.dispatchEvent(new Event("selectionchange"));
-      },
-    ],
-  ] as const)("dismisses the selection toolbar when %s", (_name, dismiss) => {
+  it.each(["scroll", "collapse"])("dismisses the toolbar on %s", (action) => {
     const thread = selection("dismiss me later", 7);
     pointerUp(thread);
     expect(popup()).not.toBeNull();
-    dismiss();
+    if (action === "scroll") {
+      scrollTranscript();
+    } else {
+      window.getSelection()?.removeAllRanges();
+      document.dispatchEvent(new Event("selectionchange"));
+    }
     expect(popup()).toBeNull();
   });
 
-  it.each(["pending", "mounted"])("keeps a %s selection when another pane retires", (phase) => {
+  it.each([
+    ["pending", "pane-a", false],
+    ["pending", "pane-b", true],
+    ["mounted", "pane-b", true],
+  ] as const)("retiring %s selection owner %s leaves popup=%s", (phase, pane, retained) => {
     const thread = selection("Keep this selection", 4);
     pointerUp(thread, { onAskSideChat: onAskSideChatSpy }, false);
     if (phase === "mounted") {
       vi.runAllTimers();
     }
-    removeChatSelectionPopup("pane-b");
+    removeChatSelectionPopup(pane);
     vi.runAllTimers();
-    expect(popup()).not.toBeNull();
+    expect(popup() !== null).toBe(retained);
     removeChatSelectionPopup("pane-a");
     expect(popup()).toBeNull();
   });
@@ -183,70 +183,69 @@ describe("chat selection popup", () => {
 
 describe("chat annotation editor", () => {
   function editor(options: Partial<Parameters<typeof showChatAnnotationEditor>[0]> = {}) {
-    const onSave = vi.fn();
-    const onCancel = vi.fn();
+    const callbacks = { onSave: vi.fn(), onCancel: vi.fn() };
     showChatAnnotationEditor({
       paneId: "pane-a",
       anchorRect: new DOMRect(100, 100, 100, 20),
       comment: "",
-      onSave,
-      onCancel,
+      ...callbacks,
       ...options,
     });
-    const input = document.querySelector("textarea")!;
-    return { input, onSave, onCancel };
+    return { input: document.querySelector("textarea")!, ...callbacks };
   }
 
   it.each([
-    { modifiers: {}, release: "keyup" },
-    { modifiers: { ctrlKey: true }, release: "blur" },
-    { modifiers: { metaKey: true }, release: "timeout" },
-  ])(
-    "keeps the comment editor open on Safari composition-confirm Enter: %j",
-    ({ modifiers, release }) => {
-      const { input, onSave } = editor({ comment: "日本語" });
-      input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
-      const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
-      input.dispatchEvent(end);
-      for (const offset of [1, 100]) {
-        const enter = new KeyboardEvent("keydown", {
-          key: "Enter",
-          keyCode: 13,
-          bubbles: true,
-          cancelable: true,
-          ...modifiers,
-        });
-        Object.defineProperty(enter, "timeStamp", {
-          value: end.timeStamp + (release === "timeout" ? offset : 1),
-        });
-        if (offset === 100 && release !== "timeout") {
-          input.dispatchEvent(
-            release === "blur"
-              ? new FocusEvent("blur")
-              : new KeyboardEvent("keyup", { key: "Enter" }),
-          );
-        }
-        input.dispatchEvent(enter);
-        expect(enter.defaultPrevented).toBe(offset === 100);
-        expect(onSave).toHaveBeenCalledTimes(offset === 100 ? 1 : 0);
-        expect(dialog() !== null).toBe(offset !== 100);
+    [{}, "keyup"],
+    [{ ctrlKey: true }, "blur"],
+    [{ metaKey: true }, "timeout"],
+  ] as const)("ignores Safari composition Enter (%j, %s)", (modifiers, release) => {
+    const { input, onSave } = editor({ comment: "日本語" });
+    input.dispatchEvent(new CompositionEvent("compositionstart", { bubbles: true }));
+    const end = new CompositionEvent("compositionend", { bubbles: true, data: "日本語" });
+    input.dispatchEvent(end);
+    for (const offset of [1, 100]) {
+      if (offset === 100 && release !== "timeout") {
+        input.dispatchEvent(
+          release === "blur"
+            ? new FocusEvent("blur")
+            : new KeyboardEvent("keyup", { key: "Enter" }),
+        );
       }
-      expect(onSave).toHaveBeenCalledWith("日本語");
-    },
-  );
+      const enter = key(
+        input,
+        "Enter",
+        { keyCode: 13, cancelable: true, ...modifiers },
+        end.timeStamp + (release === "timeout" ? offset : 1),
+      );
+      expect(enter.defaultPrevented).toBe(offset === 100);
+      expect(onSave).toHaveBeenCalledTimes(offset === 100 ? 1 : 0);
+      expect(dialog() !== null).toBe(offset !== 100);
+    }
+    expect(onSave).toHaveBeenCalledWith("日本語");
+  });
 
-  it("preserves unsaved comments when legacy Escape dismisses IME candidates", () => {
-    const { input, onSave, onCancel } = editor({ expanded: true });
-    input.value = "変換中のコメント";
-    const escape = key(input, "Escape", { cancelable: true, keyCode: 229 });
-    expect(escape.defaultPrevented).toBe(false);
+  it.each(["legacy IME Escape", "layout scroll"])("preserves unsaved comments on %s", (action) => {
+    const ime = action === "legacy IME Escape";
+    const { input, onSave, onCancel } = editor({ expanded: ime });
+    const text = ime ? "変換中のコメント" : "Short layout control.";
+    input.value = text;
+    if (ime) {
+      expect(key(input, "Escape", { cancelable: true, keyCode: 229 }).defaultPrevented).toBe(false);
+    } else {
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      scrollTranscript();
+      expect(document.querySelector(".chat-annotation-editor")).not.toBeNull();
+      expect(document.activeElement).toBe(input);
+    }
     expect(dialog()).not.toBeNull();
-    expect(input.value).toBe("変換中のコメント");
+    expect(input.value).toBe(text);
     expect(onSave).not.toHaveBeenCalled();
     expect(onCancel).not.toHaveBeenCalled();
-    key(input, "Escape");
-    expect(dialog()).toBeNull();
-    expect(onCancel).toHaveBeenCalledOnce();
+    if (ime) {
+      key(input, "Escape");
+      expect(dialog()).toBeNull();
+      expect(onCancel).toHaveBeenCalledOnce();
+    }
   });
 
   it("keeps rejected saves editable and retires a stale owner", () => {
@@ -267,20 +266,6 @@ describe("chat annotation editor", () => {
     expect(onDelete).toHaveBeenCalledOnce();
     expect(onSave).not.toHaveBeenCalled();
     expect(dialog()).toBeNull();
-  });
-
-  it("keeps an unsaved comment when a layout change scrolls the transcript", () => {
-    const { input, onSave, onCancel } = editor();
-    input.value = "Short layout control.";
-    input.dispatchEvent(new Event("input", { bubbles: true }));
-
-    // Layout compensation is not a user dismissal.
-    scrollTranscript();
-    expect(document.querySelector(".chat-annotation-editor")).not.toBeNull();
-    expect(input.value).toBe("Short layout control.");
-    expect(document.activeElement).toBe(input);
-    expect(onSave).not.toHaveBeenCalled();
-    expect(onCancel).not.toHaveBeenCalled();
   });
 
   it("keeps an unsaved comment when resizing the viewport", () => {

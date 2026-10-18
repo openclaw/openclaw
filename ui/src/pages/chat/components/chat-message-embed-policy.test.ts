@@ -1,5 +1,6 @@
 /* @vitest-environment jsdom */
 
+import type { JSX } from "@solidjs/web";
 import { createComponent } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
@@ -11,8 +12,28 @@ import { prepareChatMessageRender } from "./chat-message-markdown-view.tsx";
 import { StreamGroupParts, type StreamGroupPart } from "./chat-message-stream-view.tsx";
 import { createCanvasPreview } from "./chat-message.test-support.ts";
 
-function createEmbedHarness(surface: "persisted" | "streaming") {
+function createHarness<Props extends object>(Content: (props: Props) => JSX.Element) {
   const host = document.createElement("div");
+  let root: ReturnType<typeof mountSolid<Props>> | undefined;
+  onTestFinished(async () => {
+    await vi.dynamicImportSettled();
+    root?.dispose();
+    host.remove();
+    vi.unstubAllGlobals();
+  });
+  return {
+    host,
+    render(next: Props) {
+      if (root) {
+        root.update(next);
+      } else {
+        root = mountSolid(Content, next, host);
+      }
+    },
+  };
+}
+
+function createEmbedHarness(surface: "persisted" | "streaming") {
   type Props = {
     text: string;
     options: Pick<
@@ -45,27 +66,11 @@ function createEmbedHarness(surface: "persisted" | "streaming") {
             return { ...props.options, isStreaming: false, showReasoning: false };
           },
         });
-  let root: ReturnType<typeof mountSolid<Props>> | undefined;
-  onTestFinished(() => {
-    root?.dispose();
-    host.remove();
-    vi.unstubAllGlobals();
-  });
-  return {
-    host,
-    render(text: string, options: Props["options"]) {
-      const next = { text, options };
-      if (root) {
-        root.update(next);
-      } else {
-        root = mountSolid(Content, next, host);
-      }
-    },
-  };
+  return createHarness(Content);
 }
 
 it.each(["persisted", "streaming"] as const)(
-  "retains YouTube on refresh; revokes on policy/session/source changes (%s)",
+  "revokes YouTube on policy/session/source changes (%s)",
   async (surface) => {
     vi.stubGlobal(
       "ResizeObserver",
@@ -81,10 +86,9 @@ it.each(["persisted", "streaming"] as const)(
       sessionKey = "agent:main:first",
       url = "https://youtu.be/AbCdEfGhI_1",
     ) => {
-      render(`[embed url="${url}" title="Video" /]`, {
-        allowExternalEmbedUrls: false,
-        embedSandboxMode,
-        sessionKey,
+      render({
+        text: `[embed url="${url}" title="Video" /]`,
+        options: { allowExternalEmbedUrls: false, embedSandboxMode, sessionKey },
       });
       await vi.dynamicImportSettled();
       const card = host.querySelector("openclaw-youtube-video");
@@ -126,13 +130,13 @@ it.each(["persisted", "streaming"] as const)(
 );
 
 it.each(["persisted", "streaming"] as const)(
-  "applies external embed policy changes to an existing %s message",
+  "updates external embed policy in %s messages",
   (surface) => {
     const { host, render } = createEmbedHarness(surface);
     const url = "https://example.test/widget";
     const text = `[embed url="${url}" title="Widget" /]\nRead the widget.`;
     for (const allowed of [false, true, false]) {
-      render(text, { allowExternalEmbedUrls: allowed, embedSandboxMode: "scripts" });
+      render({ text, options: { allowExternalEmbedUrls: allowed, embedSandboxMode: "scripts" } });
       const frame = host.querySelector("iframe");
       expect(frame).not.toBeNull();
       expect(frame?.getAttribute("src")).toBe(allowed ? url : null);
@@ -145,13 +149,7 @@ it.each([
   { label: "grouped messages", renderGroup: MessageGroup },
   { label: "run-frame message contents", renderGroup: MessageGroupContent },
 ])("updates the authenticated widget's script policy when $label rerender", ({ renderGroup }) => {
-  const container = document.createElement("div");
-  type GroupProps = Parameters<typeof MessageGroup>[0];
-  let root: ReturnType<typeof mountSolid<GroupProps>> | undefined;
-  onTestFinished(async () => {
-    await vi.dynamicImportSettled();
-    root?.dispose();
-  });
+  const { host: container, render } = createHarness(renderGroup);
   let timestamp = 1000;
   const renderCanvas = (embedSandboxMode: "strict" | "scripts", prepend = false) => {
     const message = {
@@ -178,7 +176,7 @@ it.each([
     if (group?.kind !== "group") {
       throw new Error("expected an assistant message group");
     }
-    const next = {
+    render({
       group,
       options: {
         showReasoning: true,
@@ -186,36 +184,29 @@ it.each([
         sessionKey: "agent:main:canvas",
         canvasPluginSurfaceUrl: "http://127.0.0.1:19003/__openclaw__/cap/cap_123",
       },
-    };
-    if (root) {
-      root.update(next);
-    } else {
-      root = mountSolid(renderGroup, next, container);
-    }
+    });
   };
 
-  renderCanvas("strict");
-  expect(container.querySelectorAll("openclaw-canvas-widget-view")).toHaveLength(1);
-  const widget = container.querySelector("openclaw-canvas-widget-view");
-  expect(widget).toBeInstanceOf(HTMLElement);
-  expect(widget).toMatchObject({
-    docId: "cv_test",
-    title: "Scoped preview",
-    preferredHeight: 320,
-    sessionKey: "agent:main:canvas",
-    allowScripts: false,
-  });
-  expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
-
+  let widget: Element | null = null;
   for (const [mode, prepend] of [
+    ["strict", false],
     ["scripts", false],
     ["strict", false],
     ["scripts", true],
     ["strict", false],
   ] as const) {
     renderCanvas(mode, prepend);
+    widget ??= container.querySelector("openclaw-canvas-widget-view");
+    expect(container.querySelectorAll("openclaw-canvas-widget-view")).toHaveLength(1);
+    expect(widget).toBeInstanceOf(HTMLElement);
     expect(container.querySelector("openclaw-canvas-widget-view")).toBe(widget);
-    expect(widget).toMatchObject({ allowScripts: mode === "scripts" });
+    expect(widget).toMatchObject({
+      docId: "cv_test",
+      title: "Scoped preview",
+      preferredHeight: 320,
+      sessionKey: "agent:main:canvas",
+      allowScripts: mode === "scripts",
+    });
     expect(container.querySelector(".chat-tool-card__preview-panel > iframe")).toBeNull();
     expect(
       [...container.querySelectorAll(".chat-text")].map((node) => node.textContent?.trim()),

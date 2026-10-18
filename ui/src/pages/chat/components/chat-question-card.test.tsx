@@ -19,10 +19,7 @@ function gatewayPrompt(
         questionId: "format",
         header: "Format",
         question: "Which format should I use?",
-        options: [
-          { label: "Compact", description: "Keep it brief" },
-          { label: "Detailed", description: "Include rationale" },
-        ],
+        options: [{ label: "Compact" }, { label: "Detailed" }],
         isOther: true,
       },
     ],
@@ -98,8 +95,7 @@ describe("shared question panel", () => {
   }
 
   beforeEach(() => {
-    container = document.createElement("div");
-    document.body.append(container);
+    container = document.body.appendChild(document.createElement("div"));
   });
 
   afterEach(() => {
@@ -113,14 +109,12 @@ describe("shared question panel", () => {
     callbacks: Pick<QuestionPanelProps, "onSubmit" | "onSkip"> = {},
   ) {
     let collapsed = false;
-    const redraw = () => {
+    const redraw = (nextCollapsed = collapsed) => {
+      collapsed = nextCollapsed;
       drawPanel(
         createGatewayQuestionPanelProps(prompt, {
           collapsed,
-          onCollapsedChange: (nextCollapsed) => {
-            collapsed = nextCollapsed;
-            redraw();
-          },
+          onCollapsedChange: redraw,
           onChange: redraw,
           onSubmit: callbacks.onSubmit ?? vi.fn(),
           onSkip: callbacks.onSkip ?? vi.fn(),
@@ -138,11 +132,6 @@ describe("shared question panel", () => {
     drawGateway(Array.isArray(prompt) ? gatewayPrompt(prompt) : prompt, { onSubmit, ...callbacks });
     await panelIn(container);
     return onSubmit;
-  }
-
-  function drawUncontrolled(options: Parameters<typeof createGatewayQuestionPanelProps>[1]) {
-    drawPanel(createGatewayQuestionPanelProps(gatewayPrompt(), options));
-    return panelIn(container);
   }
 
   it("steps from single-select to multi-select and preserves array answers", async () => {
@@ -408,26 +397,20 @@ describe("shared question panel", () => {
     );
   });
 
-  it("supports numeric selection and Enter submission while focused", async () => {
+  it.each([false, true])("handles numeric selection with Ctrl=%s", async (ctrlKey) => {
     const onSubmit = await showGateway();
-
-    press("2");
+    press("2", { ctrlKey });
     flush();
-    expect(
-      container.querySelectorAll<HTMLElement>('[role="radio"]')[1]?.getAttribute("aria-checked"),
-    ).toBe("true");
-
-    press("Enter");
-    expect(onSubmit).toHaveBeenCalledWith({ format: ["Detailed"] });
-  });
-
-  it("leaves modified numeric shortcuts to the browser", async () => {
-    const onSubmit = await showGateway();
-
-    press("2", { ctrlKey: true });
-    flush();
-    expect(find('[aria-checked="true"]')).toBeNull();
-    expect(onSubmit).not.toHaveBeenCalled();
+    if (ctrlKey) {
+      expect(find('[aria-checked="true"]')).toBeNull();
+      expect(onSubmit).not.toHaveBeenCalled();
+    } else {
+      expect(container.querySelectorAll('[role="radio"]')[1]?.getAttribute("aria-checked")).toBe(
+        "true",
+      );
+      press("Enter");
+      expect(onSubmit).toHaveBeenCalledWith({ format: ["Detailed"] });
+    }
   });
 
   it("does not expose an Other shortcut for optionless free text", async () => {
@@ -487,7 +470,8 @@ describe("shared question panel", () => {
   });
 
   it("manages collapse state when no controlled callback is supplied", async () => {
-    await drawUncontrolled({});
+    drawPanel(createGatewayQuestionPanelProps(gatewayPrompt(), {}));
+    await panelIn(container);
     click(".chat-question-panel__collapse");
     expect(find(".chat-question-panel--collapsed")).not.toBeNull();
     click(".chat-question-panel__collapsed-button");

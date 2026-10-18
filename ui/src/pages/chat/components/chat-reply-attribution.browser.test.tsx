@@ -2,8 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
 import { resolveTypefaces, syncTypefaceStylesheets } from "../../../app/typography.ts";
 import type { MessageGroup as MessageGroupData } from "../../../lib/chat/chat-types.ts";
-import { mountSolid } from "../../../test-helpers/solid-render.tsx";
-import { MessageGroup } from "./chat-message-group-view.tsx";
+import type { NativeMessageGroupOptions } from "./chat-message-group-view.tsx";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createReplyPreviewResolver } from "./chat-reply-preview.ts";
 import "../../../styles/base.css";
 import "../../../styles/chat/startup-layout.css";
@@ -12,22 +12,14 @@ import "../../../styles/chat/grouped.css";
 import "../../../styles/chat/text.css";
 
 let host: HTMLDivElement;
-type ReplyProps = Parameters<typeof MessageGroup>[0] & { after?: boolean };
-function ReplyFixture(props: ReplyProps) {
-  return (
-    <>
-      <MessageGroup group={props.group} options={props.options} />
-      {props.after ? <div class="after">Next</div> : undefined}
-    </>
-  );
-}
-let view: ReturnType<typeof mountSolid<ReplyProps>> | undefined;
-function drawGroup(group: MessageGroupData, options: ReplyProps["options"], after = false) {
-  const props = { group, options, after };
-  if (view) {
-    view.update(props);
-  } else {
-    view = mountSolid(ReplyFixture, props, host);
+let view: ReturnType<typeof createMessageGroupHarness>;
+function drawGroup(group: MessageGroupData, options: NativeMessageGroupOptions, after = false) {
+  view.render(group, options);
+  if (after && !host.querySelector(".after")) {
+    const sibling = document.createElement("div");
+    sibling.className = "after";
+    sibling.textContent = "Next";
+    host.append(sibling);
   }
 }
 
@@ -39,14 +31,13 @@ beforeEach(async () => {
       Boolean(document.querySelector<HTMLLinkElement>(`#openclaw-typeface-${typefaces.ui}`)?.sheet),
     )
     .toBe(true);
-  view = undefined;
   host = document.body.appendChild(document.createElement("div"));
   host.className = "chat-thread";
+  view = createMessageGroupHarness(host);
 });
 
 afterEach(async () => {
-  view?.dispose();
-  view = undefined;
+  view.unmount();
   host.remove();
   await page.viewport(1280, 720);
 });
@@ -67,19 +58,11 @@ function messageGroup(
     ...overrides,
   };
 }
-type Quote = { senderLabel: string; text: string };
-function ownReply(content: string, id: string, replyToId: string, replyToPreview?: Quote) {
-  return messageGroup(
-    { role: "user", content, __openclaw: { id, replyToId, replyToPreview } },
-    { role: "user", timestamp: 1 },
-    id,
-  );
-}
 const replyOptions = {
   showReasoning: false,
   showToolCalls: false,
   avatarPlacement: "gutter",
-} satisfies ReplyProps["options"];
+} satisfies NativeMessageGroupOptions;
 const bounds = (element: Element) => element.getBoundingClientRect();
 const select = <T extends Element = HTMLElement>(selector: string, root: ParentNode = host) =>
   root.querySelector<T>(selector)!;
@@ -91,16 +74,34 @@ const replyText = (row: HTMLElement) =>
   [...row.querySelectorAll(".chat-reply-attribution__name, .chat-reply-attribution__unavailable")]
     .map((element) => element.textContent)
     .join("");
+function ownReply(missing: boolean) {
+  const replyToPreview = missing
+    ? undefined
+    : {
+        senderLabel: "Casey Morgan",
+        text: "Please review the release checklist. ".repeat(20),
+      };
+  return messageGroup(
+    {
+      role: "user",
+      content: missing ? "Follow up on the earlier synthetic answer." : "OK",
+      __openclaw: { id: "reply", replyToId: "source", replyToPreview },
+    },
+    { role: "user", timestamp: 1 },
+    "reply",
+  );
+}
 async function viewport(width: number) {
   await page.viewport(width, 800);
   host.style.width = `${width - 32}px`;
 }
 
 async function draw(name: string, source = true, onOpenReply = vi.fn()) {
+  const sender = { id: "casey", name };
   const group = messageGroup(
     { role: "assistant", content: "OK." },
     {
-      replyToSender: { id: "casey", name, identity: { type: "agent", id: "casey" } },
+      replyToSender: { ...sender, identity: { type: "agent", id: "casey" } },
       replyToMessage: {
         key: "prompt",
         message: source
@@ -116,7 +117,7 @@ async function draw(name: string, source = true, onOpenReply = vi.fn()) {
       messageId: "prompt",
       sourceMessageId: "prompt",
       senderLabel: name,
-      sender: { id: "casey", name },
+      sender,
       agentAvatar: { avatar: null, textAvatar: "🦀" },
       text: "Original question",
     }),
@@ -160,61 +161,58 @@ function expectSingleLine(row: HTMLElement) {
 describe.each([1440, 360])("reply attribution (%d px)", (width) => {
   beforeEach(() => viewport(width));
 
-  it.each(["ltr", "rtl"])(
-    "shows the viewport-appropriate reply cue in %s layout",
-    async (direction) => {
-      host.dir = direction;
-      const { row } = await draw("Casey Morgan");
-      const group = row.closest(".chat-group")!;
-      const icon = part("mobile-icon", row);
-      const face = select(".chat-author-avatar .identity-avatar__fallback", row);
-      expect([bounds(face).width, bounds(face).height]).toEqual([16, 16]);
-      if (width < 768) {
-        const avatar = select(avatarSelector, group);
-        expect(bounds(avatar).width).toBe(0);
-        expect(bounds(select(".chat-reply-connector", group)).width).toBe(0);
-        expect(bounds(icon)).toMatchObject({ width: 14, height: 14 });
-        const transform = new DOMMatrixReadOnly(getComputedStyle(icon).transform);
-        expect(transform.a).toBe(direction === "rtl" ? -1 : 1);
-        const groupBounds = bounds(group);
-        const rowBounds = bounds(row);
-        expect(Math.abs(rowBounds.left - groupBounds.left)).toBeLessThanOrEqual(1);
-        expect(Math.abs(rowBounds.right - groupBounds.right)).toBeLessThanOrEqual(1);
-        const bubble = select(".chat-bubble", group);
-        const content = bounds(select(".chat-text", bubble));
-        expect(content.top - bounds(bubble).top).toBeCloseTo(4, 1);
-        expect(content.top - rowBounds.bottom).toBeCloseTo(12, 1);
-        return;
-      }
-      expect(bounds(icon).width).toBe(0);
-      const speaker = select(avatarSelector, group);
-      const text = select(".chat-bubble > .chat-text", group);
-      const speakerBounds = bounds(speaker);
-      const textBounds = bounds(text);
-      const lineHeight = Number.parseFloat(getComputedStyle(text).lineHeight);
-      expect(
-        Math.abs(speakerBounds.top + speakerBounds.height / 2 - textBounds.top - lineHeight / 2),
-      ).toBeLessThanOrEqual(1);
-      await expect
-        .poll(() => {
-          const path = select<SVGPathElement>(".chat-reply-connector path", group);
-          const svg = bounds(path.ownerSVGElement!);
-          const avatar = bounds(speaker);
-          const label = bounds(part("label", row));
-          const start = path.getPointAtLength(0);
-          const end = path.getPointAtLength(path.getTotalLength());
-          const labelEdge = direction === "rtl" ? label.right : label.left;
-          const expectedEndX = labelEdge + (direction === "rtl" ? 5 : -5);
-          return Math.max(
-            Math.abs(svg.left + start.x - avatar.left - avatar.width / 2),
-            Math.abs(svg.top + start.y - avatar.top),
-            Math.abs(svg.left + end.x - expectedEndX),
-            Math.abs(svg.top + end.y - label.top - label.height / 2),
-          );
-        })
-        .toBeLessThanOrEqual(1);
-    },
-  );
+  it.each(["ltr", "rtl"])("shows the responsive reply cue in %s", async (direction) => {
+    host.dir = direction;
+    const { row } = await draw("Casey Morgan");
+    const group = row.closest(".chat-group")!;
+    const icon = part("mobile-icon", row);
+    const face = select(".chat-author-avatar .identity-avatar__fallback", row);
+    expect([bounds(face).width, bounds(face).height]).toEqual([16, 16]);
+    if (width < 768) {
+      const avatar = select(avatarSelector, group);
+      expect(bounds(avatar).width).toBe(0);
+      expect(bounds(select(".chat-reply-connector", group)).width).toBe(0);
+      expect(bounds(icon)).toMatchObject({ width: 14, height: 14 });
+      const transform = new DOMMatrixReadOnly(getComputedStyle(icon).transform);
+      expect(transform.a).toBe(direction === "rtl" ? -1 : 1);
+      const groupBounds = bounds(group);
+      const rowBounds = bounds(row);
+      expect(Math.abs(rowBounds.left - groupBounds.left)).toBeLessThanOrEqual(1);
+      expect(Math.abs(rowBounds.right - groupBounds.right)).toBeLessThanOrEqual(1);
+      const bubble = select(".chat-bubble", group);
+      const content = bounds(select(".chat-text", bubble));
+      expect(content.top - bounds(bubble).top).toBeCloseTo(4, 1);
+      expect(content.top - rowBounds.bottom).toBeCloseTo(12, 1);
+      return;
+    }
+    expect(bounds(icon).width).toBe(0);
+    const speaker = select(avatarSelector, group);
+    const text = select(".chat-bubble > .chat-text", group);
+    const speakerBounds = bounds(speaker);
+    const textBounds = bounds(text);
+    const lineHeight = Number.parseFloat(getComputedStyle(text).lineHeight);
+    expect(
+      Math.abs(speakerBounds.top + speakerBounds.height / 2 - textBounds.top - lineHeight / 2),
+    ).toBeLessThanOrEqual(1);
+    await expect
+      .poll(() => {
+        const path = select<SVGPathElement>(".chat-reply-connector path", group);
+        const svg = bounds(path.ownerSVGElement!);
+        const avatar = bounds(speaker);
+        const label = bounds(part("label", row));
+        const start = path.getPointAtLength(0);
+        const end = path.getPointAtLength(path.getTotalLength());
+        const labelEdge = direction === "rtl" ? label.right : label.left;
+        const expectedEndX = labelEdge + (direction === "rtl" ? 5 : -5);
+        return Math.max(
+          Math.abs(svg.left + start.x - avatar.left - avatar.width / 2),
+          Math.abs(svg.top + start.y - avatar.top),
+          Math.abs(svg.left + end.x - expectedEndX),
+          Math.abs(svg.top + end.y - label.top - label.height / 2),
+        );
+      })
+      .toBeLessThanOrEqual(1);
+  });
 
   it.each([
     { name: "Casey Morgan 👩🏽‍💻", source: true, fits: true },
@@ -248,64 +246,53 @@ it("updates a mounted reply across the mobile breakpoint without losing navigati
   expect(onOpenReply).toHaveBeenCalledTimes(6);
 });
 
-it("keeps the unavailable-original label visible inside an own reply without a sender name", async () => {
-  await page.viewport(1440, 800);
-  host.style.width = "720px";
-  drawGroup(
-    ownReply("Follow up on the earlier synthetic answer.", "reply-paged", "earlier-answer"),
-    { showReasoning: false, resolveReplyPreview: () => ({ missing: true }) },
-  );
-  await document.fonts.ready;
-  const fallback = part("unavailable", select(".chat-reply-attribution--inline"));
-  expect(fallback.textContent?.trim()).toBe("Original message unavailable");
-  expect(getComputedStyle(fallback).visibility).toBe("visible");
-  const fallbackBounds = bounds(fallback);
-  const bubble = fallback.closest(".chat-bubble")!.getBoundingClientRect();
-  expect(fallbackBounds.width).toBeGreaterThan(0);
-  expect(fallbackBounds.height).toBeGreaterThan(0);
-  expect(fallbackBounds.left).toBeGreaterThanOrEqual(bubble.left);
-  expect(fallbackBounds.right).toBeLessThanOrEqual(bubble.right);
+it.each([
+  [1440, true],
+  [1440, false],
+  [390, false],
+] as const)("own reply at %d px, missing=%s", async (width, missing) => {
+  await viewport(width);
+  if (missing) {
+    host.style.width = "720px";
+  }
+  const onOpenReply = vi.fn();
+  for (const direction of missing ? ["ltr"] : ["ltr", "rtl"]) {
+    host.dir = direction;
+    drawGroup(ownReply(missing), {
+      showReasoning: false,
+      onOpenReply,
+      resolveReplyPreview: missing ? () => ({ missing: true }) : undefined,
+    });
+    await document.fonts.ready;
+    const row = select(".chat-reply-attribution--inline");
+    const target = missing ? part("unavailable", row) : select<HTMLButtonElement>("button", row);
+    const box = bounds(target),
+      bubble = bounds(row.closest(".chat-bubble")!);
+    // The padded hit area may extend past the row, but not its containing bubble.
+    expect(box.left).toBeGreaterThanOrEqual(bubble.left);
+    expect(box.right).toBeLessThanOrEqual(bubble.right);
+    if (missing) {
+      expect(target.textContent?.trim()).toBe("Original message unavailable");
+      expect(getComputedStyle(target).visibility).toBe("visible");
+      expect(box.width).toBeGreaterThan(0);
+      expect(box.height).toBeGreaterThan(0);
+    } else {
+      for (const text of [part("name", row), part("label", row)]) {
+        expect(text.scrollWidth - text.clientWidth).toBeLessThanOrEqual(1);
+      }
+      const label = bounds(part("label", row));
+      expect(label.right <= box.left || box.right <= label.left).toBe(true);
+      target.click();
+      expect(onOpenReply).toHaveBeenLastCalledWith("source");
+    }
+  }
 });
 
 it.each([1440, 390])(
-  "keeps a short own reply readable without overlapping its label at %d px",
+  "reserves reply-strip height across all lookup outcomes at %d px",
   async (width) => {
     await viewport(width);
-    const onOpenReply = vi.fn();
-    for (const direction of ["ltr", "rtl"]) {
-      host.dir = direction;
-      drawGroup(
-        ownReply("OK", "reply", "source", {
-          senderLabel: "Casey Morgan",
-          text: "Please review the release checklist. ".repeat(20),
-        }),
-        { showReasoning: false, onOpenReply },
-      );
-      await document.fonts.ready;
-      const row = select(".chat-reply-attribution--inline");
-      const name = part("name", row);
-      const label = part("label", row);
-      const button = select<HTMLButtonElement>("button", row);
-      expect(name.scrollWidth - name.clientWidth).toBeLessThanOrEqual(1);
-      expect(label.scrollWidth - label.clientWidth).toBeLessThanOrEqual(1);
-      const a = bounds(label),
-        b = bounds(button);
-      const bubble = row.closest(".chat-bubble")!.getBoundingClientRect();
-      // The padded hit area may extend past the row, but not its containing bubble.
-      expect(b.left).toBeGreaterThanOrEqual(bubble.left);
-      expect(b.right).toBeLessThanOrEqual(bubble.right);
-      expect(a.right <= b.left || b.right <= a.left).toBe(true);
-      button.click();
-      expect(onOpenReply).toHaveBeenLastCalledWith("source");
-    }
-  },
-);
-
-it.each([1440, 390])(
-  "keeps a reserved reply strip row at a fixed height through every lookup outcome at %d px",
-  async (width) => {
-    await viewport(width);
-    type Lookup = ReturnType<NonNullable<ReplyProps["options"]["resolveReplyPreview"]>>;
+    type Lookup = ReturnType<NonNullable<NativeMessageGroupOptions["resolveReplyPreview"]>>;
     const pending: Lookup = { pending: true };
     const missing: Lookup = { missing: true };
     const found: Lookup = {
@@ -344,10 +331,7 @@ it.each([1440, 390])(
     if (layoutShift) {
       observer.observe({ type: "layout-shift", buffered: true });
     }
-    const frame = () =>
-      new Promise((resolve) => {
-        requestAnimationFrame(() => resolve(null));
-      });
+    const frame = () => new Promise(requestAnimationFrame);
     try {
       for (const [name, snapshot, steps, text] of outcomes) {
         const group = messageGroup(
@@ -381,8 +365,7 @@ it.each([1440, 390])(
             after: bounds(select(".after")).top,
           };
         };
-        view?.dispose();
-        view = undefined;
+        view.unmount();
         drawLookup(steps[0]);
         await document.fonts.ready;
         await frame();
@@ -400,11 +383,12 @@ it.each([1440, 390])(
         for (const step of steps.slice(1)) {
           drawLookup(step);
           // Same geometry in the committing frame and the frames after it.
-          expect(measure(), name).toEqual(reserved);
-          await frame();
-          expect(measure(), name).toEqual(reserved);
-          await frame();
-          expect(measure(), name).toEqual(reserved);
+          for (let frameIndex = 0; frameIndex < 3; frameIndex++) {
+            if (frameIndex) {
+              await frame();
+            }
+            expect(measure(), name).toEqual(reserved);
+          }
         }
         const row = replyRow();
         expect(getComputedStyle(row).visibility, name).toBe("visible");

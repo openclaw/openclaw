@@ -3,9 +3,8 @@ import type { MessageReactionSummary } from "../../../../../packages/gateway-pro
 /* @vitest-environment jsdom */
 import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
-import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { flush } from "../../../test-helpers/solid-settle.ts";
-import { MessageGroup } from "./chat-message-group-view.tsx";
+import { createMessageGroupHarness } from "./chat-message-native.test-support.tsx";
 import { createMessageGroup } from "./chat-message.test-support.ts";
 
 const reactions: MessageReactionSummary[] = [
@@ -46,18 +45,14 @@ function show(
     timestamp: 1,
     ...(options.persisted === false ? {} : { __openclaw: { id: "message-1" } }),
   };
-  mountSolid(
-    MessageGroup,
+  createMessageGroupHarness(host).render(
+    createMessageGroup(message, role, { isStreaming: options.streaming ?? false }),
     {
-      group: createMessageGroup(message, role, { isStreaming: options.streaming ?? false }),
-      options: {
-        showReasoning: false,
-        userId: "self",
-        messageReactions: new Map([["message-1", reactions]]),
-        onReact: options.writable === false ? undefined : onReact,
-      },
+      showReasoning: false,
+      userId: "self",
+      messageReactions: new Map([["message-1", reactions]]),
+      onReact: options.writable === false ? undefined : onReact,
     },
-    host,
   );
   return {
     onReact,
