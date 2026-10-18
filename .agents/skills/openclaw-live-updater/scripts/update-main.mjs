@@ -3882,8 +3882,8 @@ export async function maintainMain(options, dependencies = {}) {
           "mac.restart",
           "env",
           [
-            "SKIP_TSC=1",
-            "SKIP_UI_BUILD=1",
+            "OPENCLAW_MAC_REUSE_BUILD=1",
+            "SKIP_PNPM_INSTALL=1",
             "bash",
             "scripts/restart-mac.sh",
             "--sign",

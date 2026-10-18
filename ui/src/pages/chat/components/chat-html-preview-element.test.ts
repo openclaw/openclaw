@@ -463,7 +463,7 @@ describe("ordinary HTML preview transport", () => {
     expect(await frameFor(view)).not.toBe(frame);
   });
 
-  it("keeps read and transport failures terminal until an explicit retry", async () => {
+  it("keeps failures terminal until retry or a replacement frame mode", async () => {
     const request = vi
       .fn()
       .mockRejectedValueOnce(new Error("Preview denied"))
@@ -484,6 +484,14 @@ describe("ordinary HTML preview transport", () => {
     view.title += " ";
     await view.updateComplete;
     expect(request).toHaveBeenCalledTimes(2);
+    view.embedSandboxMode = "strict";
+    const replacement = await frameFor(view);
+    expect(replacement).not.toBe(frame);
+    expect(view.querySelector('[role="alert"]')).toBeNull();
+    expect(request).toHaveBeenCalledTimes(2);
+    replacement.dispatchEvent(new Event("error"));
+    await view.updateComplete;
+    expect(view.querySelector('[role="alert"]')).not.toBeNull();
     view.querySelector("button")!.click();
     await frameFor(view);
     expect(request).toHaveBeenCalledTimes(3);
