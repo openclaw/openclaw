@@ -190,7 +190,7 @@ function reactionCompletesInCurrentSource(
   const sourceThreadId = normalizeOptionalString(source.currentThreadTs);
   const requestedThreadId = normalizeOptionalStringifiedId(args.threadId);
   if (args.topLevel === true || args.threadId === null) {
-    return sourceThreadId === undefined;
+    return sourceThreadId === undefined && explicitTargetsMatchSource(args, source);
   }
   if (requestedThreadId && requestedThreadId !== sourceThreadId) {
     return false;
@@ -239,6 +239,7 @@ export function messageToolCallCompletesBeforeSteering(params: {
   const source = {
     ...params,
     channel: sourceChannel,
+    threadId: normalizeOptionalString(params.currentThreadTs),
     targets: sourceTargets,
   };
   if (action === "send") {

@@ -193,7 +193,6 @@ function* createMessageToolSteps(
   const actions = discovered?.actions;
   // A source-bound completion keeps the session's message definition so its
   // prompt prefix stays cached; the source-reply policy is enforced per call.
-  const baseSchema = discovered?.schema ?? MessageToolSchema;
   const description =
     buildMessageToolDescription(actions) +
     (supportsPromptReactions && (!actions || actions.includes("react"))
@@ -220,7 +219,7 @@ function* createMessageToolSteps(
     name: "message",
     displaySummary: "Send and manage messages across configured channels.",
     description,
-    parameters: addSourceReplyFinalControl(baseSchema),
+    parameters: addSourceReplyFinalControl(discovered?.schema ?? MessageToolSchema),
     prepareBeforeToolCallParams: explicitTargetGuard?.prepareBeforeToolCallParams,
     finalizeBeforeToolCallParams: explicitTargetGuard?.finalizeBeforeToolCallParams,
     execute: async (toolCallId, args, signal) => {
@@ -730,6 +729,7 @@ function* createMessageToolSteps(
   };
   return installMessageToolSteeringAllowance(messageTool, {
     ...inferredCurrentChannel,
+    accountId: agentAccountId,
     sourceReplyDeliveryMode: sourceReplySinkDeliveryMode,
     currentThreadTs,
     currentMessageId: options?.currentMessageId,
