@@ -483,25 +483,23 @@ export async function prepareCronRunContext(params: {
         job: input.job,
         agentId,
       });
-      // A wake into a persistent session binds like its chat turns and heartbeats
-      // (#121485); the announce target rule stays a per-turn setting, so the wake
-      // and the next chat turn keep resuming the same CLI session.
-      const cliSessionBindingFacts = usesExactRunSession
-        ? {
-            extraSystemPromptStatic: deliverySystemPrompt,
-            sourceReplyDeliveryMode: sourceDelivery.sourceReplyDeliveryMode,
-            requireExplicitMessageTarget: sourceDelivery.messageTool.requireExplicitTarget,
-          }
-        : {
-            extraSystemPromptStatic: deliverySystemPrompt,
-            sourceReplyDeliveryMode: await resolveSessionStableReplyMode({
+      // Persistent wakes share chat's binding policy; announce targeting is turn-local.
+      const cliSessionBindingFacts = {
+        extraSystemPromptStatic: deliverySystemPrompt,
+        sourceReplyDeliveryMode: usesExactRunSession
+          ? sourceDelivery.sourceReplyDeliveryMode
+          : await resolveSessionStableReplyMode({
               cfg: admittedConfig,
+              metadataSnapshot: preparedModelRuntimeLease.snapshot.metadataSnapshot,
               ctx: { CommandAuthorized: false },
               sessionEntry: cronSession.sessionEntry,
               sessionAgentId: agentId,
               sessionKey: runSessionKey,
             }),
-          };
+        requireExplicitMessageTarget: usesExactRunSession
+          ? sourceDelivery.messageTool.requireExplicitTarget
+          : undefined,
+      };
 
       const { formattedTime, timeLine } = resolveCronStyleNow(runtimeCfg, now);
       // Current jobs stay detached; a bounded tail preserves context without transcript continuation.
