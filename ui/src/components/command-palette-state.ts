@@ -9,6 +9,7 @@ import { GatewayPageBinding } from "../lib/gateway-page-binding.ts";
 import { modelCatalogEventInvalidation } from "../lib/model-catalog-cache.ts";
 import { ModelCatalogReader } from "../lib/model-catalog-reader.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { resolveUiSelectedGlobalAgentId } from "../lib/sessions/session-key.ts";
 import { searchVisibleSessionTranscripts } from "../lib/sessions/transcript-search.ts";
 import {
@@ -95,6 +96,7 @@ export class CommandPaletteState {
   private initialInput: CommandPaletteOpenInput | undefined;
   private takeInitialInput: CommandPaletteInputHandoff | undefined;
   private inputElement: HTMLTextAreaElement | undefined;
+  private stopInputFocus: (() => void) | undefined;
   private readonly mentionMenu = createHumanMentionMenu();
   private hasOpened = false;
   private mentionInput: HumanMentionInput | undefined;
@@ -213,7 +215,8 @@ export class CommandPaletteState {
     this.connected = false;
     this.initialInput = undefined;
     this.takeInitialInput = undefined;
-    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
+    this.stopInputFocus?.();
+    this.stopInputFocus = undefined;
     this.inputElement = undefined;
     this.open = false;
     this.gateway.dispose();
@@ -303,9 +306,11 @@ export class CommandPaletteState {
     if (previous && previous !== this.inputElement) {
       return;
     }
-    this.inputElement?.removeEventListener("focus", this.adoptInitialInput);
+    this.stopInputFocus?.();
     this.inputElement = element instanceof HTMLTextAreaElement ? element : undefined;
-    this.inputElement?.addEventListener("focus", this.adoptInitialInput);
+    this.stopInputFocus = this.inputElement
+      ? listen(this.inputElement, "focus", this.adoptInitialInput)
+      : undefined;
     // The dialog may have focused the field before its committed ref arrived.
     this.adoptInitialInput();
   };
