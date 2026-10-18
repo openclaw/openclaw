@@ -1,23 +1,10 @@
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { ExtensionRelayBridge } from "./relay-bridge.js";
-import {
-  FakeSocket,
-  flush,
-  replyFor,
-  sendHello,
-  wireExtension,
-} from "./relay-bridge.test-support.js";
+import { flush, replyFor, sendHello, wireExtension } from "./relay-bridge.test-support.js";
 import type { RelayCommandBody } from "./relay-protocol.js";
+import { createRelayClient, autoAttachParams as enabled } from "./relay-runtime.test-support.js";
 
-const enabled = { autoAttach: true, waitForDebuggerOnStart: true, flatten: true };
-function readSessionId(value: unknown) {
-  const id = asOptionalRecord(value)?.sessionId;
-  if (typeof id !== "string") {
-    throw new Error("Missing logical attachment");
-  }
-  return id;
-}
 function fixture() {
   const bridge = new ExtensionRelayBridge();
   onTestFinished(() => bridge.dispose());
@@ -50,58 +37,20 @@ function fixture() {
   const native = (message: unknown) => extension.handlers.onMessage(JSON.stringify(message));
   const event = (method: string, params: unknown, sessionId?: string) =>
     native({ type: "cdpEvent", tabId: 1, method, params, sessionId });
-  const child = (id: string, parent?: string, type = "worker") =>
+  const child = (id: string, parent?: string, type = "worker") => {
+    const targetInfo = { targetId: `target-${id}`, type, url: "https://example.com/child" };
     event(
       "Target.attachedToTarget",
-      {
-        sessionId: id,
-        targetInfo: { targetId: `target-${id}`, type, url: "https://example.com/child" },
-        waitingForDebugger: true,
-      },
+      { sessionId: id, targetInfo, waitingForDebugger: true },
       parent,
     );
+  };
   const commands = (method: string) =>
     extension.socket
       .frames()
       .filter((f) => f.type === method || (f.type === "cdp" && f.method === method));
-  const client = () => {
-    const socket = new FakeSocket();
-    const handlers = bridge.attachCdpClientSocket(socket);
-    let nextRequest = 0;
-    const send = (method: string, sessionId?: string, params?: Record<string, unknown>) => {
-      const next = ++nextRequest;
-      handlers.onMessage(JSON.stringify({ id: next, method, sessionId, params }));
-      return next;
-    };
-    const response = async (id: number) =>
-      await vi.waitFor(() => {
-        const frame = socket.frames().find((f) => f.id === id);
-        expect(frame).toBeDefined();
-        return frame!;
-      });
-    const request = async (method: string, sessionId?: string, params?: Record<string, unknown>) =>
-      await response(send(method, sessionId, params));
-    const attached = (parent?: string) =>
-      socket
-        .frames()
-        .filter((f) => f.method === "Target.attachedToTarget" && f.sessionId === parent)
-        .map((f) => asOptionalRecord(f.params)!);
-    const attach = async () => {
-      await request("Target.setAutoAttach", undefined, enabled);
-      return readSessionId(attached().at(-1));
-    };
-    const alias = async () => {
-      const result = await request("Target.attachToTarget", undefined, {
-        targetId: "target-1",
-        flatten: true,
-      });
-      return readSessionId(result.result);
-    };
-    return { socket, send, response, request, attached, attach, alias, close: handlers.onClose };
-  };
+  const client = () => createRelayClient(bridge, enabled, (read) => vi.waitFor(read));
   return {
-    bridge,
-    extension,
     native,
     event,
     child,
@@ -136,11 +85,6 @@ function expectChildMessage(c: Client, root: string, child: string, message: unk
     method: "Target.receivedMessageFromTarget",
     params: { sessionId: child, targetId: "target-child", message: JSON.stringify(message) },
   });
-}
-function childId(c: Client, parent: string) {
-  const id = c.attached(parent).at(-1)?.sessionId;
-  expect(typeof id).toBe("string");
-  return String(id);
 }
 
 describe("pending tab acquisition claims", () => {
@@ -199,8 +143,7 @@ describe("pending tab acquisition claims", () => {
     await peer.response(pending);
     expect.soft(c.attached()).toHaveLength(2);
     expect(c.attached()[1]).toMatchObject({ targetInfo: { targetId: "target-2" } });
-    expect(peer.attached()).toHaveLength(1);
-    expect(peer.attached()[0]).toMatchObject({ targetInfo: { targetId: "target-2" } });
+    expect(peer.attached()).toMatchObject([{ targetInfo: { targetId: "target-2" } }]);
     expect(f.commands("detach")).toEqual([]);
   });
 
@@ -243,39 +186,38 @@ describe("logical Target interests", () => {
   async function attachChild(flatten = true) {
     await autoAttach(root, { flatten });
     f.child("child");
-    return childId(c, root);
+    return c.latestChild(root);
   }
-  const attached = () => c.attached(root);
+  const sendChild = (target: { sessionId: string } | { targetId: string }, message: unknown) =>
+    c.request("Target.sendMessageToTarget", root, { ...target, message: JSON.stringify(message) });
 
   it("keeps distinct child aliases and the surviving parent's Runtime/Fetch after parent detach", async () => {
-    const s1 = root;
     const s2 = await c.alias();
-    for (const parent of [s1, s2]) {
+    for (const parent of [root, s2]) {
       await autoAttach(parent);
     }
     f.child("child");
-    const a = childId(c, s1);
-    const b = childId(c, s2);
+    const a = c.latestChild(root);
+    const b = c.latestChild(s2);
     expect(a).not.toBe(b);
     await c.request("Fetch.enable", b, {});
     expect(await error("Fetch.enable", a, {})).toBeDefined();
-    await c.request("Target.detachFromTarget", undefined, { sessionId: s1 });
+    await c.request("Target.detachFromTarget", undefined, { sessionId: root });
     for (const method of ["Runtime.enable", "Runtime.evaluate", "Fetch.disable"]) {
       expect(await error(method, b)).toBeUndefined();
     }
     expect(f.commands("Target.detachFromTarget")).toEqual([]);
     expect(c.socket.frames()).toContainEqual({
-      sessionId: s1,
+      sessionId: root,
       method: "Target.detachedFromTarget",
       params: { sessionId: a, targetId: "target-child" },
     });
   });
 
   it("replays late children and grandchildren only after current admission with current waiting state", async () => {
-    const s1 = root;
-    await autoAttach(s1);
+    await autoAttach(root);
     f.child("child");
-    const a = childId(c, s1);
+    const a = c.latestChild(root);
     await autoAttach(a);
     f.child("grandchild", "child");
     await c.request("Runtime.runIfWaitingForDebugger", a);
@@ -286,49 +228,47 @@ describe("logical Target interests", () => {
     expect(c.attached(s2)).toEqual([]);
     f.release();
     await c.response(pending);
-    const b = childId(c, s2);
+    const b = c.latestChild(s2);
     expect(c.attached(s2)[0]).toMatchObject({ waitingForDebugger: false });
     expect(c.attached(b)).toEqual([]);
     await autoAttach(b);
     expect(c.attached(b)).toHaveLength(1);
-    expect(childId(c, a)).not.toBe(childId(c, b));
+    expect(c.latestChild(a)).not.toBe(c.latestChild(b));
   });
 
   it("admits a broader filter before replaying its newly included children", async () => {
-    const first = root;
     const peer = await c.alias();
-    await autoAttach(first, { filter: [{ type: "worker" }] });
+    await autoAttach(root, { filter: [{ type: "worker" }] });
     await autoAttach(peer, { filter: [{}] });
     f.child("frame", undefined, "iframe");
-    expect(c.attached(first)).toEqual([]);
+    expect(c.attached(root)).toEqual([]);
     expect(c.attached(peer)).toHaveLength(1);
     f.hold("Target.setAutoAttach");
-    const pending = c.send("Target.setAutoAttach", first, { ...enabled, filter: [{}] });
+    const pending = c.send("Target.setAutoAttach", root, { ...enabled, filter: [{}] });
     await vi.waitFor(() => expect(f.held).toHaveLength(1));
-    expect.soft(c.attached(first)).toEqual([]);
+    expect.soft(c.attached(root)).toEqual([]);
     f.release();
     expect((await c.response(pending)).error).toBeUndefined();
-    expect(c.attached(first)).toHaveLength(1);
-    expect(childId(c, first)).not.toBe(childId(c, peer));
+    expect(c.attached(root)).toHaveLength(1);
+    expect(c.latestChild(root)).not.toBe(c.latestChild(peer));
   });
 
   it("unions ordered native filters without conflating omitted filter and catch-all", async () => {
-    const s1 = root;
     const s2 = await c.alias();
-    expect((await autoAttach(s1)).error).toBeUndefined();
+    expect((await autoAttach(root)).error).toBeUndefined();
     expect((await autoAttach(s2, { filter: [{}] })).error).toBeUndefined();
     f.child("tab", undefined, "tab");
     f.child("worker");
-    expect.soft(c.attached(s1)).toHaveLength(1);
+    expect.soft(c.attached(root)).toHaveLength(1);
     expect(c.attached(s2)).toHaveLength(2);
-    await autoAttach(s1, { waitForDebuggerOnStart: false });
+    await autoAttach(root, { waitForDebuggerOnStart: false });
     expect(f.commands("Target.setAutoAttach").at(-1)?.params).toMatchObject({
       waitForDebuggerOnStart: false,
       filter: [{}],
     });
     await autoAttach(s2, { filter: [{ type: "worker", exclude: true }, {}] });
     f.child("next-worker");
-    expect(c.attached(s1)).toHaveLength(2);
+    expect(c.attached(root)).toHaveLength(2);
     expect(c.attached(s2)).toHaveLength(2);
   });
 
@@ -340,14 +280,7 @@ describe("logical Target interests", () => {
         f.child("child");
       }
       f.fail("Target.setAutoAttach");
-      expect(
-        (
-          await c.request("Target.setAutoAttach", root, {
-            ...enabled,
-            autoAttach: transition === "enable",
-          })
-        ).error,
-      ).toBeDefined();
+      expect((await autoAttach(root, { autoAttach: transition === "enable" })).error).toBeDefined();
       expect.soft(await error("Runtime.evaluate", root)).toBeDefined();
       expect(c.socket.closed).toBe(false);
       await flush();
@@ -358,14 +291,7 @@ describe("logical Target interests", () => {
   it("routes non-flat child commands by targetId through the same logical owner", async () => {
     const child = await attachChild(false);
     expect(child).not.toBe("child");
-    await c.request("Target.sendMessageToTarget", root, {
-      targetId: "target-child",
-      message: JSON.stringify({
-        id: 71,
-        method: "Runtime.evaluate",
-        params: { expression: "1" },
-      }),
-    });
+    await sendChild({ targetId: "target-child" }, { id: 71, method: "Runtime.evaluate" });
     await vi.waitFor(() =>
       expectChildMessage(c, root, child, {
         id: 71,
@@ -375,21 +301,20 @@ describe("logical Target interests", () => {
     expect(f.commands("Runtime.evaluate").at(-1)?.sessionId).toBe("child");
   });
   it("projects and updates child metadata only for interested parents", async () => {
-    const unenabled = root;
     const parent = await c.alias();
     await autoAttach(parent);
     f.child("child");
-    expect.soft(c.attached(unenabled)).toEqual([]);
+    expect.soft(c.attached(root)).toEqual([]);
     expect(c.attached(parent)).toHaveLength(1);
     const info = { targetId: "target-child", type: "worker", url: "https://example.com/updated" };
     f.event("Target.targetInfoChanged", { targetInfo: info });
     expect
-      .soft(c.socket.frames().filter((frame) => frame.method === "Target.targetInfoChanged"))
+      .soft(c.frames("Target.targetInfoChanged"))
       .toEqual([
         { sessionId: parent, method: "Target.targetInfoChanged", params: { targetInfo: info } },
       ]);
-    await autoAttach(unenabled);
-    expect(c.attached(unenabled)[0]).toMatchObject({ targetInfo: info });
+    await autoAttach(root);
+    expect(c.attached(root)[0]).toMatchObject({ targetInfo: info });
   });
 
   it("does not serialize ordinary commands or an independent child behind a parent transition", async () => {
@@ -415,11 +340,11 @@ describe("logical Target interests", () => {
     const pending = c.send("Target.setAutoAttach", root, enabled);
     await vi.waitFor(() => expect(f.held).toHaveLength(1));
     f.child("child");
-    expect(attached()).toEqual([]);
+    expect(c.attached(root)).toEqual([]);
     f.native({ type: "error", seq: f.held[0]!.seq, message: "post-command admission failed" });
     expect((await c.response(pending)).error).toBeDefined();
     f.child("late-child");
-    expect(attached()).toEqual([]);
+    expect(c.attached(root)).toEqual([]);
     expect(await error("Runtime.evaluate", root)).toBeDefined();
     expect(c.socket.closed).toBe(false);
   });
@@ -430,7 +355,7 @@ describe("logical Target interests", () => {
     const next = await c.attach();
     await autoAttach(next);
     f.child("child");
-    const fresh = childId(c, next);
+    const fresh = c.latestChild(next);
     expect(fresh).not.toBe(old);
     expect(await error("Runtime.evaluate", old)).toBeDefined();
     expect(await error("Runtime.evaluate", fresh)).toBeUndefined();
@@ -438,23 +363,22 @@ describe("logical Target interests", () => {
 
   it("routes a flat descendant through its non-flat ancestor transport", async () => {
     const child = await attachChild(false);
-    await c.request("Target.sendMessageToTarget", root, {
-      sessionId: child,
-      message: JSON.stringify({ id: 101, method: "Target.setAutoAttach", params: enabled }),
-    });
+    await sendChild(
+      { sessionId: child },
+      { id: 101, method: "Target.setAutoAttach", params: enabled },
+    );
     await flush();
     f.child("grandchild", "child");
-    const nested = c.socket
-      .frames()
-      .filter((frame) => frame.method === "Target.receivedMessageFromTarget")
+    const nested = c
+      .frames("Target.receivedMessageFromTarget")
       .map((frame) => JSON.parse(String(asOptionalRecord(frame.params)?.message)));
     const grandchild = nested.find((frame) => frame.method === "Target.attachedToTarget")?.params
       .sessionId;
     expect(typeof grandchild).toBe("string");
-    await c.request("Target.sendMessageToTarget", root, {
-      sessionId: child,
-      message: JSON.stringify({ id: 102, sessionId: grandchild, method: "Runtime.evaluate" }),
-    });
+    await sendChild(
+      { sessionId: child },
+      { id: 102, sessionId: grandchild, method: "Runtime.evaluate" },
+    );
     await flush();
     expect.soft(f.commands("Runtime.evaluate").at(-1)?.sessionId).toBe("grandchild");
     expectChildMessage(c, root, child, {
