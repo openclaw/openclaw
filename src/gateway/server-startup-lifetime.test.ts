@@ -25,17 +25,14 @@ import {
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
 import { getActiveSecretsRuntimeConfigSnapshot } from "../secrets/runtime-state.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
 import { createGatewayKernel } from "./server-kernel.js";
-import type { GatewayServer, GatewayServerOptions } from "./server-public.js";
+import type { GatewayServer } from "./server-public.js";
+import { createStartupTestState, gatewayStartupOptions } from "./server-startup.test-support.js";
 
 const startupTraceEventLoopDelay = vi.hoisted(() => ({
   instances: [] as Array<{
     disable: ReturnType<typeof vi.fn>;
-    enable: ReturnType<typeof vi.fn>;
-    percentile: ReturnType<typeof vi.fn>;
-    reset: ReturnType<typeof vi.fn>;
   }>,
 }));
 
@@ -56,35 +53,8 @@ vi.mock("node:perf_hooks", async (importOriginal) => {
   };
 });
 
-function createStartupTestState(label: string) {
-  return createOpenClawTestState({
-    label,
-    layout: "home",
-    env: {
-      OPENCLAW_GATEWAY_PASSWORD: undefined,
-      OPENCLAW_GATEWAY_TOKEN: undefined,
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      VITEST: "1",
-    },
-  });
-}
-
 const token = "gateway-startup-lifetime-token";
-
-function startupOptions(): GatewayServerOptions {
-  return {
-    auth: { mode: "token", token },
-    bind: "loopback",
-    controlUiEnabled: false,
-    sidecarStartup: "defer",
-  };
-}
+const startupOptions = () => gatewayStartupOptions(token);
 
 async function configureStartup(
   state: Awaited<ReturnType<typeof createStartupTestState>>,

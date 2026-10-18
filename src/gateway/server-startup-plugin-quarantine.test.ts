@@ -67,10 +67,7 @@ async function disposeFixturePlugins(): Promise<void> {
       .map((cache) => retirePluginCache(cache)),
   );
   for (const result of [...registryResults, ...cacheResults]) {
-    expect.soft(result.status).toBe("fulfilled");
-    if (result.status === "fulfilled") {
-      expect.soft(result.value.failures).toEqual([]);
-    }
+    expect.soft(result).toMatchObject({ status: "fulfilled", value: { failures: [] } });
   }
 }
 
@@ -121,13 +118,14 @@ module.exports = { id: '${id}', register() {} };`,
     setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
   }
 
-  function explicitPluginConfig(pluginId: string, root: string) {
+  function explicitPluginConfig(roots: Record<string, string>) {
+    const ids = Object.keys(roots);
     return {
       plugins: {
         enabled: true,
-        load: { paths: [root] },
-        allow: [pluginId],
-        entries: { [pluginId]: { enabled: true } },
+        load: { paths: Object.values(roots) },
+        allow: ids,
+        entries: Object.fromEntries(ids.map((id) => [id, { enabled: true }])),
       },
     };
   }
@@ -191,16 +189,11 @@ module.exports = { id: '${id}', register() {} };`,
     ]);
     setActiveDegradedPlugins(buildDegradedPluginsFromVerificationFailures(smoke.failures));
 
-    const pluginConfig = {
-      enabled: true,
-      load: { paths: [brokenRoot, validRoot] },
-      allow: [brokenPluginId, validPluginId],
-      entries: {
-        [brokenPluginId]: { enabled: true },
-        [validPluginId]: { enabled: true },
-      },
-    };
-    const registry = await loadRegistry({ plugins: pluginConfig }, [brokenPluginId, validPluginId]);
+    const config = explicitPluginConfig({
+      [brokenPluginId]: brokenRoot,
+      [validPluginId]: validRoot,
+    });
+    const registry = await loadRegistry(config, [brokenPluginId, validPluginId]);
     expect(registry.plugins.find((plugin) => plugin.id === brokenPluginId)).toMatchObject({
       status: "error",
       activated: false,
@@ -227,7 +220,7 @@ module.exports = { id: '${id}', register() {} };`,
     const { writeConfigFile } = await import("../config/config.js");
     await writeConfigFile({
       gateway: { mode: "local", bind: "loopback", auth: { mode: "none" } },
-      plugins: pluginConfig,
+      ...config,
     });
 
     const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
@@ -248,7 +241,7 @@ module.exports = { id: '${id}', register() {} };`,
       const selectedRoot = fixturePlugin(pluginId, { fails });
       await quarantine(pluginId, brokenRoot);
 
-      const config = explicitPluginConfig(pluginId, selectedRoot);
+      const config = explicitPluginConfig({ [pluginId]: selectedRoot });
       const registry = await loadRegistry(config, [pluginId]);
 
       expect(registry.plugins.find((plugin) => plugin.id === pluginId)?.status).toBe(

@@ -17,56 +17,25 @@ import {
   getSkillsSnapshotVersion,
   resetSkillsRefreshStateForTest,
 } from "../skills/runtime/refresh-state.js";
-import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { getFreePort } from "../test-utils/ports.js";
+import { createStartupTestState, gatewayStartupOptions } from "./server-startup.test-support.js";
 
 // Allow loaded CI headroom while catching stalls here instead of in UI e2e.
 const BOOT_BUDGET_MS = 90_000;
-const auth = { mode: "token" as const, token: "gateway-minimal-boot-smoke-token" };
-const bootOptions = {
-  auth,
-  bind: "loopback" as const,
-  controlUiEnabled: false,
-  sidecarStartup: "defer" as const,
-};
-let cleanupState: (() => Promise<void>) | undefined;
+const bootOptions = gatewayStartupOptions("gateway-minimal-boot-smoke-token");
+const { auth } = bootOptions;
 
-async function createBootState(label: string, env: Record<string, string | undefined>) {
-  const state = await createOpenClawTestState({
-    label,
-    layout: "home",
-    env: {
-      OPENCLAW_SKIP_BROWSER_CONTROL_SERVER: "1",
-      OPENCLAW_SKIP_CANVAS_HOST: "1",
-      OPENCLAW_SKIP_CHANNELS: "1",
-      OPENCLAW_SKIP_CRON: "1",
-      OPENCLAW_SKIP_GMAIL_WATCHER: "1",
-      OPENCLAW_SKIP_PROVIDERS: "1",
-      OPENCLAW_TEST_MINIMAL_GATEWAY: "1",
-      VITEST: "1",
-      ...env,
-    },
-  });
-  cleanupState = state.cleanup;
-  return state;
-}
-
-afterEach(async () => {
-  try {
-    await cleanupState?.();
-  } finally {
-    cleanupState = undefined;
-    resetLogger();
-    vi.unstubAllEnvs();
-    resetConfigRuntimeState();
-    clearPluginMetadataLifecycleCaches();
-    resetSkillsRefreshStateForTest();
-  }
+afterEach(() => {
+  resetLogger();
+  vi.unstubAllEnvs();
+  resetConfigRuntimeState();
+  clearPluginMetadataLifecycleCaches();
+  resetSkillsRefreshStateForTest();
 });
 
 it("suppresses ambient channel triggers and awaits subagent recovery", async ({ signal }) => {
   const port = await getFreePort();
-  const state = await createBootState("gateway-bootstrap-ambient-default", {
+  await using state = await createStartupTestState("gateway-bootstrap-ambient-default", {
     OPENCLAW_GATEWAY_RESTART_TRACE: "0",
   });
   await state.writeConfig({
@@ -150,7 +119,7 @@ it(
   { timeout: BOOT_BUDGET_MS * 2 },
   async () => {
     const port = await getFreePort();
-    const state = await createBootState("gateway-minimal-boot-smoke", {
+    await using state = await createStartupTestState("gateway-minimal-boot-smoke", {
       OPENCLAW_GATEWAY_PASSWORD: undefined,
       OPENCLAW_GATEWAY_TOKEN: undefined,
     });

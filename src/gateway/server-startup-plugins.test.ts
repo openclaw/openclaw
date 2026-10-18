@@ -113,37 +113,16 @@ vi.mock("../agents/agent-scope.js", () => ({
   tryResolveSystemAgentWorkspaceDir: () => "/workspace",
 }));
 
-vi.mock("../agents/workspace-state-dirs.js", () => ({
-  assertConfiguredWorkspaceStateReady: () => {},
-}));
-
-vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
-  runChannelPluginStartupMaintenance,
-}));
-
-vi.mock("../config/plugin-auto-enable.js", () => ({
-  applyPluginAutoEnable,
-}));
-
-vi.mock("../infra/openclaw-root.js", () => ({
-  resolveOpenClawPackageRootSync,
-}));
-
+vi.mock("../agents/workspace-state-dirs.js", () => ({ assertConfiguredWorkspaceStateReady() {} }));
+vi.mock("../channels/plugins/lifecycle-startup.js", () => ({ runChannelPluginStartupMaintenance }));
+vi.mock("../config/plugin-auto-enable.js", () => ({ applyPluginAutoEnable }));
+vi.mock("../infra/openclaw-root.js", () => ({ resolveOpenClawPackageRootSync }));
 vi.mock("../infra/device-pairing-node-desktop-migration.js", () => ({
   migrateLegacyDesktopStreamOptOuts: async () => 0,
 }));
-
-vi.mock("../infra/pairing-files.js", () => ({
-  listLegacyPairingStoreFiles,
-}));
-
-vi.mock("../plugins/channel-presence-policy.js", () => ({
-  listAmbientOnlyConfiguredChannelIds,
-}));
-
-vi.mock("../plugins/plugin-lookup-table.js", () => ({
-  loadPluginLookUpTable,
-}));
+vi.mock("../infra/pairing-files.js", () => ({ listLegacyPairingStoreFiles }));
+vi.mock("../plugins/channel-presence-policy.js", () => ({ listAmbientOnlyConfiguredChannelIds }));
+vi.mock("../plugins/plugin-lookup-table.js", () => ({ loadPluginLookUpTable }));
 
 vi.mock("../plugins/registry.js", () => import("../plugins/registry-empty.js"));
 
@@ -162,30 +141,34 @@ vi.mock("../plugins/runtime.js", async (importOriginal) => ({
   setActivePluginRegistry,
 }));
 
-vi.mock("./server-methods-list.js", () => ({
-  listGatewayMethods: () => ["ping"],
-}));
-
-vi.mock("./server-plugin-bootstrap.js", () => ({
-  prepareGatewayPluginLoad,
-}));
+vi.mock("./server-methods-list.js", () => ({ listGatewayMethods: () => ["ping"] }));
+vi.mock("./server-plugin-bootstrap.js", () => ({ prepareGatewayPluginLoad }));
 
 // mock-isolation: Maintenance composition uses a controlled session repair lifetime.
-vi.mock("./server-startup-session-migration.js", () => ({
-  runGatewaySessionStartupMaintenance,
-}));
+vi.mock("./server-startup-session-migration.js", () => ({ runGatewaySessionStartupMaintenance }));
 
 function createLog() {
-  return {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
+  return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
 }
 
 function slackConfig(): OpenClawConfig {
   return { channels: { slack: { enabled: true, token: "token" } } } as OpenClawConfig;
+}
+
+function maintenanceParams(
+  log: ReturnType<typeof createLog>,
+  signal = new AbortController().signal,
+  cfg: OpenClawConfig = {},
+  derived = false,
+) {
+  return {
+    getConfig: () => cfg,
+    getPluginRegistry: createEmptyPluginRegistry,
+    pluginMetadataSnapshot: derived ? { registrySource: "derived" as const } : undefined,
+    databases: [],
+    signal,
+    log,
+  };
 }
 
 async function prepareBootstrapWithRuntimeConfig(
@@ -228,14 +211,9 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
       });
       const log = createLog();
       let settled = false;
-      const maintenance = runGatewayPostReadyStartupMaintenance({
-        getConfig: () => ({}),
-        getPluginRegistry: createEmptyPluginRegistry,
-        pluginMetadataSnapshot: { registrySource: "derived" },
-        databases: [],
-        signal: controller.signal,
-        log,
-      }).finally(() => {
+      const maintenance = runGatewayPostReadyStartupMaintenance(
+        maintenanceParams(log, controller.signal, {}, true),
+      ).finally(() => {
         settled = true;
       });
       try {
@@ -266,13 +244,7 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
       }),
     );
     listLegacyPairingStoreFiles.mockResolvedValueOnce(["synthetic-pairing.json"]);
-    await runGatewayPostReadyStartupMaintenance({
-      getConfig: () => cfg,
-      getPluginRegistry: createEmptyPluginRegistry,
-      databases: [],
-      signal: new AbortController().signal,
-      log,
-    });
+    await runGatewayPostReadyStartupMaintenance(maintenanceParams(log, undefined, cfg));
     expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({ cfg, env: process.env, log });
     expect(log.warn).toHaveBeenCalledWith(
       "Gateway post-ready sessions maintenance failed: synthetic repair failure | synthetic storage failure | SQLITE_BUSY",
@@ -285,14 +257,9 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     const controller = new AbortController();
     controller.abort();
     const log = createLog();
-    await runGatewayPostReadyStartupMaintenance({
-      getConfig: () => ({}),
-      getPluginRegistry: createEmptyPluginRegistry,
-      pluginMetadataSnapshot: { registrySource: "derived" },
-      databases: [],
-      signal: controller.signal,
-      log,
-    });
+    await runGatewayPostReadyStartupMaintenance(
+      maintenanceParams(log, controller.signal, {}, true),
+    );
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
     expect(runGatewaySessionStartupMaintenance).not.toHaveBeenCalled();
     expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
