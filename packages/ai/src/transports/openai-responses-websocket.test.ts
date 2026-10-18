@@ -47,9 +47,7 @@ vi.mock("openai/resources/responses/ws.js", () => ({
     }
 
     emitError(error: Error) {
-      for (const listener of this.errorListeners) {
-        listener(error);
-      }
+      this.errorListeners.forEach((listener) => listener(error));
     }
 
     async *stream() {
@@ -90,16 +88,12 @@ const assistantOutput = {
   phase: "final_answer",
 };
 
-function completion(responseId: string, output: Array<Record<string, unknown>> = []) {
-  return {
-    type: "response.completed",
-    response: {
-      id: responseId,
-      status: "completed",
-      output,
-      usage: { input_tokens: 5, output_tokens: 3, total_tokens: 8 },
-    },
-  };
+function completion(
+  responseId: string,
+  output: Array<Record<string, unknown>> = [],
+  status = "completed",
+) {
+  return { type: `response.${status}`, response: { id: responseId, status, output } };
 }
 
 function queueCompletions(...ids: string[]) {
@@ -191,58 +185,39 @@ describe("native OpenAI Responses WebSocket transport", () => {
     });
   });
 
-  it("does not retain a continuation after a terminal incomplete response", async () => {
-    websocketState.responseBatches.push(
-      [completion("resp_1", [assistantOutput])],
-      [
-        {
-          type: "response.incomplete",
-          response: { id: "resp_2", status: "incomplete", output: [] },
-        },
-      ],
-      [completion("resp_3")],
-    );
-    await consumeResponse(createStream());
-    const secondRequest = request([
-      firstUser,
-      assistantOutput,
-      { role: "user", content: "second" },
-    ]);
-    const second = createStream(secondRequest);
-    expect(second.continuationStatus).toBe("continued");
-    await consumeResponse(second);
-
-    const third = createStream(
-      request([...secondRequest.input, { role: "user", content: "third" }]),
-    );
-    expect(third.continuationStatus).toBe("no_previous_response");
-    expect(third.request).not.toHaveProperty("previous_response_id");
-    await consumeResponse(third);
-    expect(websocketState.instances).toHaveLength(1);
-  });
-
-  it.each([
-    { name: "history rewrite", input: [{ role: "user", content: "rewritten" }] },
-    {
-      name: "assistant phase change",
-      input: [
-        firstUser,
-        { ...assistantOutput, phase: "commentary" },
-        { role: "user", content: "second" },
-      ],
+  it.each(["terminal incomplete response", "history rewrite", "assistant phase change"])(
+    "resets continuation after %s",
+    async (change) => {
+      const incomplete = change === "terminal incomplete response";
+      const history = [firstUser, assistantOutput, { role: "user", content: "second" }];
+      websocketState.responseBatches.push(
+        [completion("resp_1", [assistantOutput])],
+        [completion("resp_2", [], incomplete ? "incomplete" : "completed")],
+        [completion("resp_3")],
+      );
+      await consumeResponse(createStream());
+      const input =
+        change === "history rewrite"
+          ? [{ role: "user", content: "rewritten" }]
+          : change === "assistant phase change"
+            ? [firstUser, { ...assistantOutput, phase: "commentary" }, history[2]]
+            : history;
+      const changed = createStream(request(input));
+      if (incomplete) {
+        expect(changed.continuationStatus).toBe("continued");
+        await consumeResponse(changed);
+        const third = createStream(request([...history, { role: "user", content: "third" }]));
+        expect(third.continuationStatus).toBe("no_previous_response");
+        expect(third.request).not.toHaveProperty("previous_response_id");
+        await consumeResponse(third);
+      } else {
+        expect(changed.continuationStatus).not.toBe("continued");
+        expect(changed.request).not.toHaveProperty("previous_response_id");
+        await consumeResponse(changed);
+      }
+      expect(websocketState.instances).toHaveLength(1);
     },
-  ])("resets continuation on $name", async ({ input }) => {
-    websocketState.responseBatches.push(
-      [completion("resp_1", [assistantOutput])],
-      [completion("resp_2")],
-    );
-    await consumeResponse(createStream());
-    const changed = createStream(request(input));
-    expect(changed.continuationStatus).not.toBe("continued");
-    expect(changed.request).not.toHaveProperty("previous_response_id");
-    await consumeResponse(changed);
-    expect(websocketState.instances).toHaveLength(1);
-  });
+  );
 
   it("uses a transient socket for a concurrent request and preserves the cached owner", async () => {
     queueCompletions("resp_cached", "resp_transient", "resp_reused");
@@ -275,24 +250,18 @@ describe("native OpenAI Responses WebSocket transport", () => {
     const host = createAiTransportHost({ runInDetachedAsyncContext: runDetached });
     const callers = new AsyncLocalStorage<object>();
     const references: WeakRef<object>[] = [];
-    if (!failed) {
-      queueCompletions("resp_1", "resp_2");
-    }
+    queueCompletions(...(failed ? [] : ["resp_1", "resp_2"]));
     const turn = () => {
       const caller = { turn: 1 };
       const body = request();
       const restoreRequest = () => body;
-      references.push(new WeakRef(caller));
-      if (failed) {
-        references.push(new WeakRef(body), new WeakRef(restoreRequest));
-      }
-      return runWithAiTransportHost(host, () =>
-        callers.run(caller, () =>
-          consumeResponse(
-            createStream(body, failed ? { restoreRequest, degradeCooldownMs: 60_000 } : {}),
-          ),
-        ),
-      );
+      const tracked = failed ? [caller, body, restoreRequest] : [caller];
+      references.push(...tracked.map((value) => new WeakRef(value)));
+      const consume = () =>
+        consumeResponse(
+          createStream(body, failed ? { restoreRequest, degradeCooldownMs: 60_000 } : {}),
+        );
+      return runWithAiTransportHost(host, () => callers.run(caller, consume));
     };
     try {
       // Vitest's async matcher retains the rejection until the test finishes.

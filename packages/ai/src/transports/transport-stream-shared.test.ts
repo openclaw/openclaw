@@ -11,8 +11,6 @@ import {
   withProviderAcceptanceObserver,
 } from "./transport-stream-shared.js";
 
-const MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE =
-  "Provider completed tool call with malformed JSON arguments";
 const REPAIR = { repairStringLiterals: true } as const;
 const initialHost = getAiTransportHost();
 const model = { provider: "openai", id: "fixture-model", api: "openai-responses" } as Model;
@@ -72,142 +70,135 @@ function captureError(run: () => unknown): Error & { errorCode?: string; errorBo
   throw new Error("expected a throw");
 }
 
-describe("parseTerminalToolCallArguments", () => {
-  it("repairs invalid escapes by preserving the backslash the model meant", () => {
-    // JS string is: {"command":"grep -E \d+ file"} — an unescaped regex backslash.
-    expect(parseArguments('{"command":"grep -E \\d+ file"}', undefined, REPAIR)).toEqual({
-      command: "grep -E \\d+ file",
-    });
-  });
-
-  it.each([
-    null,
-    // Never turn a truncated command into a shorter executable command.
-    '{"command":"rm -rf /srv/app/tmp/bu',
-  ])("rejects non-object or malformed terminal input %# without exposing it", (value) => {
-    for (const options of [undefined, REPAIR]) {
-      const thrown = captureError(() => parseArguments(value, undefined, options));
-      const diagnostics = {
-        code: "malformed_tool_call_arguments",
-        argumentChars: value?.length ?? 0,
-        argumentHash: value === null ? "" : expect.stringMatching(/^[0-9a-z]+$/),
-        repairAttempted: options === REPAIR && typeof value === "string",
-      };
-      expect(thrown).toMatchObject({
-        message: MALFORMED_TOOL_CALL_TERMINAL_ERROR_MESSAGE,
-        errorCode: "malformed_tool_call_arguments",
-      });
-      expect(thrown.cause).toEqual(diagnostics);
-      expect(JSON.parse(thrown.errorBody ?? "{}")).toEqual(diagnostics);
-      const surfaced = `${String(thrown)}${JSON.stringify(thrown.cause ?? null)}${thrown.errorBody ?? ""}`;
-      expect(surfaced).not.toContain("rm -rf");
-    }
+it("repairs invalid escapes by preserving the backslash the model meant", () => {
+  // JS string is: {"command":"grep -E \d+ file"} — an unescaped regex backslash.
+  expect(parseArguments('{"command":"grep -E \\d+ file"}', undefined, REPAIR)).toEqual({
+    command: "grep -E \\d+ file",
   });
 });
 
-describe("private provider acceptance", () => {
-  it("does not wait for unread response cancellation after the observer fails", async () => {
-    const hookError = new Error("acceptance failed");
-    const { promise: cancelStarted, resolve: markCancelStarted } = Promise.withResolvers<void>();
-    const response = new Response(
-      new ReadableStream<Uint8Array>({
-        cancel() {
-          markCancelStarted();
-          return new Promise<void>(() => {});
-        },
-      }),
-      { status: 200 },
-    );
-    const options = withProviderAcceptanceObserver({}, () => {
-      throw hookError;
+it.each([
+  null,
+  // Never turn a truncated command into a shorter executable command.
+  '{"command":"rm -rf /srv/app/tmp/bu',
+])("rejects non-object or malformed terminal input %# without exposing it", (value) => {
+  for (const options of [undefined, REPAIR]) {
+    const thrown = captureError(() => parseArguments(value, undefined, options));
+    const diagnostics = {
+      code: "malformed_tool_call_arguments",
+      argumentChars: value?.length ?? 0,
+      argumentHash: value === null ? "" : expect.stringMatching(/^[0-9a-z]+$/),
+      repairAttempted: options === REPAIR && typeof value === "string",
+    };
+    expect(thrown).toMatchObject({
+      message: "Provider completed tool call with malformed JSON arguments",
+      errorCode: "malformed_tool_call_arguments",
     });
-    const notification = notifyProviderHttpResponse({ options, response, model });
-
-    await cancelStarted;
-    await expect(notification).rejects.toBe(hookError);
-  });
-
-  it.each(["resolve", "reject"] as const)(
-    "observes actual callback and cancellation work when a callback later %ss",
-    async (outcome) => {
-      const observed: Promise<unknown>[] = [];
-      const events: string[] = [];
-      const controller = new AbortController();
-      const { promise: started, resolve: callbackStarted } = Promise.withResolvers<void>();
-      const lateCallbackError = new Error("late response failure");
-      const cleanupError = new Error("cancellation failure");
-      const callback = Promise.withResolvers<void>();
-      const finishCallback = () =>
-        outcome === "resolve" ? callback.resolve() : callback.reject(lateCallbackError);
-      const cleanup = Promise.withResolvers<void>();
-      configureAiTransportHost({
-        ...initialHost,
-        observePendingProviderWork: (pending) => {
-          events.push("observed");
-          observed.push(pending);
-        },
-      });
-      const cancelStream = vi.fn(() => {
-        events.push("cancel");
-        return cleanup.promise;
-      });
-      const onResponse = vi.fn(() => {
-        events.push("callback");
-        callbackStarted();
-        return callback.promise;
-      });
-      const notification = notifyProviderHttpMetadata({
-        options: { signal: controller.signal, onResponse },
-        response: { status: 200, headers: {} },
-        model,
-        cancelStream,
-      });
-      try {
-        expect(onResponse).not.toHaveBeenCalled();
-        await started;
-        controller.abort();
-        await expect(notification).rejects.toThrow("Request was aborted");
-        expect(events).toEqual(["observed", "callback", "cancel", "observed"]);
-        expect(cancelStream).toHaveBeenCalledOnce();
-        expect(observed[1]).toBe(cleanup.promise);
-        finishCallback();
-        if (outcome === "resolve") {
-          await expect(observed[0]).resolves.toBeUndefined();
-        } else {
-          await expect(observed[0]).rejects.toBe(lateCallbackError);
-        }
-        cleanup.reject(cleanupError);
-        await expect(observed[1]).rejects.toBe(cleanupError);
-      } finally {
-        controller.abort();
-        finishCallback();
-        cleanup.reject(cleanupError);
-        await Promise.allSettled([notification, callback.promise, cleanup.promise, ...observed]);
-      }
-    },
+    expect(thrown.cause).toEqual(diagnostics);
+    expect(JSON.parse(thrown.errorBody ?? "{}")).toEqual(diagnostics);
+    const surfaced = `${String(thrown)}${JSON.stringify(thrown.cause ?? null)}${thrown.errorBody ?? ""}`;
+    expect(surfaced).not.toContain("rm -rf");
+  }
+});
+it("does not wait for unread response cancellation after the observer fails", async () => {
+  const hookError = new Error("acceptance failed");
+  const { promise: cancelStarted, resolve: markCancelStarted } = Promise.withResolvers<void>();
+  const response = new Response(
+    new ReadableStream<Uint8Array>({
+      cancel() {
+        markCancelStarted();
+        return new Promise<void>(() => {});
+      },
+    }),
   );
-
-  it("preserves the lifecycle failure when cancellation throws synchronously", async () => {
-    const callbackError = new Error("response failure");
-    const cancelStream = vi.fn(() => {
-      throw new Error("cancel failure");
-    });
-    await expect(
-      notifyProviderHttpMetadata({
-        options: {
-          onResponse: () => {
-            throw callbackError;
-          },
-        },
-        response: { status: 200, headers: {} },
-        model,
-        cancelStream,
-      }),
-    ).rejects.toBe(callbackError);
-    expect(cancelStream).toHaveBeenCalledOnce();
+  const options = withProviderAcceptanceObserver({}, () => {
+    throw hookError;
   });
+  const notification = notifyProviderHttpResponse({ options, response, model });
+
+  await cancelStarted;
+  await expect(notification).rejects.toBe(hookError);
 });
 
+it.each(["resolve", "reject"] as const)(
+  "observes actual callback and cancellation work when a callback later %ss",
+  async (outcome) => {
+    const observed: Promise<unknown>[] = [];
+    const events: string[] = [];
+    const controller = new AbortController();
+    const { promise: started, resolve: callbackStarted } = Promise.withResolvers<void>();
+    const lateCallbackError = new Error("late response failure");
+    const cleanupError = new Error("cancellation failure");
+    const callback = Promise.withResolvers<void>();
+    const finishCallback = () =>
+      outcome === "resolve" ? callback.resolve() : callback.reject(lateCallbackError);
+    const cleanup = Promise.withResolvers<void>();
+    configureAiTransportHost({
+      ...initialHost,
+      observePendingProviderWork: (pending) => {
+        events.push("observed");
+        observed.push(pending);
+      },
+    });
+    const cancelStream = vi.fn(() => {
+      events.push("cancel");
+      return cleanup.promise;
+    });
+    const onResponse = vi.fn(() => {
+      events.push("callback");
+      callbackStarted();
+      return callback.promise;
+    });
+    const notification = notifyProviderHttpMetadata({
+      options: { signal: controller.signal, onResponse },
+      response: { status: 200, headers: {} },
+      model,
+      cancelStream,
+    });
+    try {
+      expect(onResponse).not.toHaveBeenCalled();
+      await started;
+      controller.abort();
+      await expect(notification).rejects.toThrow("Request was aborted");
+      expect(events).toEqual(["observed", "callback", "cancel", "observed"]);
+      expect(cancelStream).toHaveBeenCalledOnce();
+      expect(observed[1]).toBe(cleanup.promise);
+      finishCallback();
+      if (outcome === "resolve") {
+        await expect(observed[0]).resolves.toBeUndefined();
+      } else {
+        await expect(observed[0]).rejects.toBe(lateCallbackError);
+      }
+      cleanup.reject(cleanupError);
+      await expect(observed[1]).rejects.toBe(cleanupError);
+    } finally {
+      controller.abort();
+      finishCallback();
+      cleanup.reject(cleanupError);
+      await Promise.allSettled([notification, callback.promise, cleanup.promise, ...observed]);
+    }
+  },
+);
+
+it("preserves the lifecycle failure when cancellation throws synchronously", async () => {
+  const callbackError = new Error("response failure");
+  const cancelStream = vi.fn(() => {
+    throw new Error("cancel failure");
+  });
+  await expect(
+    notifyProviderHttpMetadata({
+      options: {
+        onResponse: () => {
+          throw callbackError;
+        },
+      },
+      response: { status: 200, headers: {} },
+      model,
+      cancelStream,
+    }),
+  ).rejects.toBe(callbackError);
+  expect(cancelStream).toHaveBeenCalledOnce();
+});
 describe("model stream cooperative scheduler", { concurrent: false }, () => {
   let now = 0;
 
