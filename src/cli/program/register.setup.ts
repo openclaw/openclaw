@@ -16,7 +16,7 @@ import {
   resolveOnboardCommandOptions,
 } from "./register.onboard.js";
 
-const SYSTEM_AGENT_OPTION_NAMES = new Set(["message", "yes", "json"]);
+const NON_ONBOARDING_OPTION_NAMES = new Set(["message", "yes", "json", "tailscaleResetOnExit"]);
 const BASELINE_OPTION_NAMES = new Set(["baseline", "workspace", "skipBootstrap", "json"]);
 
 async function runSystemAgentEntry(
@@ -121,8 +121,18 @@ export function registerSetupCommand(program: Command): void {
     await runCommandWithRuntime(defaultRuntime, async () => {
       const options = rawOptions as Record<string, unknown>;
       const hasOnboardingFlag =
-        listExplicitOptionFlagsExcept(commandRuntime, SYSTEM_AGENT_OPTION_NAMES).length > 0;
+        listExplicitOptionFlagsExcept(commandRuntime, NON_ONBOARDING_OPTION_NAMES).length > 0;
       const hasSystemAgentRequest = hasExplicitOptions(commandRuntime, ["message", "yes"]);
+      if (hasOnboardingFlag && hasSystemAgentRequest) {
+        const { rejectOnboardingOption } = await import("../../commands/onboard-options.js");
+        rejectOnboardingOption(
+          { json: options.json === true },
+          defaultRuntime,
+          "--message/--yes cannot be combined with onboarding options. " +
+            "Run openclaw setup with either --message/--yes or onboarding options, not both.",
+        );
+        return;
+      }
       let configured = false;
       if (!hasOnboardingFlag && !hasSystemAgentRequest) {
         const { readConfigFileSnapshot } = await import("../../config/config.js");

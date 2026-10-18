@@ -27,14 +27,20 @@ service owner, wait for it to exit, then rerun the command.
 
 Routing order:
 
-1. Any onboarding option (`--wizard`, `--baseline`, workspace, reset,
+1. Combining `-m`/`--message` or `--yes` with an onboarding option is rejected
+   before either flow starts. Choose one setup flow; `--json` preserves structured
+   error output for conflicting options.
+2. Any onboarding option (`--wizard`, `--baseline`, workspace, reset,
    non-interactive, flow, mode, Gateway, daemon, skip, import, remote, or auth
    options) runs onboarding exactly as `openclaw onboard` does.
-2. `-m`/`--message` or `--yes` runs the system agent.
-3. With no routing option, a configured interactive system opens OpenClaw. A
+3. `-m`/`--message` or `--yes` runs the system agent.
+4. With no routing option, a configured interactive system opens OpenClaw. A
    fresh system runs onboarding. On a configured system, `--json` prints the
    system overview even without a TTY; an onboarding option keeps onboarding's
    JSON summary.
+
+The retired `--tailscale-reset-on-exit` and `--no-tailscale-reset-on-exit`
+compatibility flags do not select a setup flow.
 
 In guided mode, `--workspace <dir>` is the workspace proposed to OpenClaw;
 it is persisted only after you approve that proposal. Baseline, classic, and

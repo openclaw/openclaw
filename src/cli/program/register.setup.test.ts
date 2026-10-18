@@ -153,6 +153,45 @@ describe("registered setup routing", () => {
     );
   });
 
+  it.each([
+    ["--message", "status", "--wizard"],
+    ["--message", "status", "--wizard", "--json"],
+    ["--yes", "--baseline", "--json"],
+    ["--message", "status", "--no-install-daemon"],
+  ])("rejects mixed setup modes: %j", async (...args) => {
+    await runCli(args);
+    expect(runtime.exit).toHaveBeenCalledExactlyOnceWith(1);
+    expect(runtime.error).toHaveBeenCalledWith(expect.stringContaining("cannot be combined"));
+    if (args.includes("--json")) {
+      expect(runtime.log).toHaveBeenCalledTimes(1);
+      expect(JSON.parse(String(runtime.log.mock.calls[0]?.[0]))).toEqual({
+        ok: false,
+        error: { type: "cli_error", message: expect.any(String) },
+        phase: "options",
+        message: expect.stringContaining("cannot be combined"),
+      });
+    } else {
+      expect(runtime.log).not.toHaveBeenCalled();
+    }
+    expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    expect(setupCommandMock).not.toHaveBeenCalled();
+    expect(setupWizardCommandMock).not.toHaveBeenCalled();
+    expect(runSystemAgentMock).not.toHaveBeenCalled();
+  });
+
+  it.each([[], ["--tailscale-reset-on-exit"], ["--no-tailscale-reset-on-exit"]])(
+    "keeps retired flags neutral for system-agent requests: %j",
+    async (...flags) => {
+      await runCli(["--message", "status", ...flags]);
+      expect(runSystemAgentMock).toHaveBeenCalledExactlyOnceWith(
+        { message: "status", yes: false, json: false },
+        runtime,
+      );
+      expect(setupWizardCommandMock).not.toHaveBeenCalled();
+      expect(readConfigFileSnapshotMock).not.toHaveBeenCalled();
+    },
+  );
+
   it("rejects onboarding options in baseline mode", async () => {
     await runCli("--baseline --mode remote --json".split(" "));
     const message = "--baseline cannot be combined with: --mode.";
