@@ -112,9 +112,6 @@ describe("handleQaInbound", () => {
   });
 
   it("keeps block deliveries separate and retains tool calls discovered after a preview", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
     await startQaInbound(runtime, createQaInboundParams());
 
     const assembled = firstRunAssembledParams(runtime);
@@ -226,9 +223,6 @@ describe("handleQaInbound", () => {
   });
 
   it("allows direct messages from configured senders", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
     await handleQaInbound(
       createQaInboundParams({
         accountConfig: {
@@ -305,9 +299,6 @@ describe("handleQaInbound", () => {
   });
 
   it("uses allowFrom as the group sender fallback for allowlist policy", async () => {
-    const runtime = createPluginRuntimeMock();
-    setQaChannelRuntime(runtime);
-
     await handleQaInbound(
       createQaInboundParams({
         accountConfig: {
