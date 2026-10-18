@@ -43,10 +43,7 @@ export function openShellNewSession(
   }
   host.openNewSession(context.agentSelection.state.selectedId ?? "");
   if (source === "shortcut") {
-    // The destination page owns its composer; the shell only knows the route outlet.
-    host.routeOutlet
-      ?.querySelector<HTMLElement & { focusComposer(): void }>("openclaw-new-session-page")
-      ?.focusComposer();
+    host.routeOutlet?.renderedElement?.("openclaw-new-session-page")?.focusComposer();
   }
   return true;
 }

@@ -22,6 +22,33 @@ Calling with `{}` preserves the acknowledgment-only response
 List parameters select the snapshot; they do not filter the connection's session
 event subscription.
 
+`sessions.subscribe` also accepts `includeMessageBodies: true` to retain complete
+roster `session.message` bodies on that connection, or `false` to release that
+preference. Omitting the option preserves the current preference. This option
+alone returns the acknowledgment without reading a list. Clients can set the
+initial preference with `includeSessionMessageBodies: true` in `connect`.
+
+The web Control UI advertises the additive `roster-message-bodies-optional`
+connect capability. For these clients, the Gateway omits only `message` from a
+visible `session.message` when the connection has no exact subscription for the
+resolved session and agent, and has not requested `includeMessageBodies`.
+Every exact subscription counts, including narration, approvals, and any
+`subscriptionId`. The event name, routing, message ID and sequence, run and
+ownership receipts, clocks, full session row, and ancestor coverage remain
+unchanged. Rows still use the connection's negotiated row codec. Clients without
+the capability, including native apps, continue receiving complete messages.
+Diagnostic event logs on opted-in roster-only clients consequently omit bodies.
+
+The Control UI plugin host retains complete roster bodies while any plugin has
+an `onEvent("session.message", ...)` listener. Listeners present before connect
+set the initial preference; runtime registration requests it with
+`sessions.subscribe`. Plugin delivery begins once the Gateway confirms full-body
+delivery for the connection. Bodyless frames already in flight are delivered to
+core UI consumers but never to plugin listeners. Removing the last listener
+releases the preference without reconnecting. Pending shared-reader canvas
+widgets retain their own exact subscription, including while parked, until their
+document loads or their lifetime ends.
+
 List views can pass `rowMode: "compact"` to omit repeated detail-only metadata:
 `contextWindows`, `contextWindowDefault`, `thinkingLevels`, `thinkingOptions`,
 `thinkingDefault`, `toolOverrides`, `providerReview`, `nativeRuntimeConsent`,

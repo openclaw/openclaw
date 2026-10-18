@@ -1,12 +1,4 @@
-import {
-  createEffect,
-  createMemo,
-  onCleanup,
-  onSettled,
-  Show,
-  untrack,
-  useContext,
-} from "solid-js";
+import { createEffect, createMemo, onCleanup, onSettled, Show, useContext } from "solid-js";
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
@@ -62,7 +54,7 @@ function CanvasWidgetHost(props: { properties: WidgetProperties; widgetKey: stri
     if (!customElements.get("openclaw-canvas-widget-view")) {
       view.style.cssText = `display:block;min-height:${props.properties.preferredHeight ?? 420}px`;
     }
-    view.presentationActive = untrack(presented);
+    view.presentationActive = presented();
     if (parked) {
       container.moveBefore(view, null);
       releaseParking(props.widgetKey, parked);
