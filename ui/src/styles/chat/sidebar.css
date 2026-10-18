@@ -1975,6 +1975,86 @@ openclaw-chat-files-panel,
 .sidebar-file-view__workspace-body {
   container-type: inline-size;
 }
+/* The Files panel retains one catalog while individual document tabs change. */
+.chat-files-panel__content--reading {
+  position: relative;
+  container-type: inline-size;
+  --file-tree-width: min(
+    var(--file-tree-preferred-width, 240px),
+    max(0px, calc(100cqi - var(--file-column-min-width, 176px)))
+  );
+}
+.chat-files-panel__content--reading > .chat-files-panel__catalog {
+  position: absolute;
+  z-index: 1;
+  inset-block: 40px 0;
+  inset-inline-start: 0;
+  width: var(--file-tree-width);
+  height: auto;
+  transition:
+    width 260ms var(--ease-out),
+    opacity 260ms var(--ease-out);
+}
+.chat-files-panel__tree-divider {
+  position: absolute;
+  z-index: 2;
+  inset-block: 40px 0;
+  inset-inline-start: calc(var(--file-tree-width) - 3px);
+}
+/* Every page reserves the catalog column by default, including lazy failures.
+   A framed reader owns its full-width rail; every other direct child is body. */
+.chat-files-panel__content--reading .chat-files-panel__reader {
+  display: flex;
+  flex: 1 1 0;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+.chat-files-panel__content--reading
+  > .chat-files-panel__page:not(:has(.sidebar-file-view--desktop))
+  > .chat-files-panel__fallback-rail {
+  display: flex;
+}
+.chat-files-panel__content--reading
+  .chat-files-panel__reader:not(:has(.sidebar-file-view--desktop)),
+.chat-files-panel__content--reading
+  .sidebar-file-view--desktop
+  > :not(.sidebar-file-view__path-bar) {
+  margin-inline-start: var(--file-tree-width);
+}
+.chat-files-panel__content--reading
+  .sidebar-file-view--desktop
+  > :not(.sidebar-file-view__path-bar) {
+  transition: margin-inline-start 260ms var(--ease-out);
+}
+.chat-files-panel__content--reading .file-view__save-notice {
+  flex-wrap: wrap;
+  overflow-wrap: anywhere;
+}
+.chat-files-panel__content--reading[data-tree-open="false"] {
+  --file-tree-width: 0px;
+}
+.chat-files-panel__content--reading[data-tree-open="false"] > .chat-files-panel__catalog {
+  opacity: 0;
+  border-inline-end-width: 0;
+}
+.chat-files-panel__content[data-tree-motion="instant"] > .chat-files-panel__catalog,
+.chat-files-panel__content[data-tree-motion="instant"] .chat-files-panel__reader,
+.chat-files-panel__content[data-tree-motion="instant"]
+  .sidebar-file-view--desktop
+  > :not(.sidebar-file-view__path-bar) {
+  transition: none;
+}
+@media (prefers-reduced-motion: reduce) {
+  .chat-files-panel__content--reading > .chat-files-panel__catalog,
+  .chat-files-panel__content--reading .chat-files-panel__reader,
+  .chat-files-panel__content--reading
+    .sidebar-file-view--desktop
+    > :not(.sidebar-file-view__path-bar) {
+    transition: none;
+  }
+}
 .sidebar-file-view__path-field > .workspace-breadcrumb {
   flex: 1;
   min-width: 0;

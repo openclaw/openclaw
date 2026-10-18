@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { SessionWorkspaceGetResult } from "../../../api/types.ts";
 import { registerMcpAppUnmountTarget } from "../../../components/mcp-app-unmount.ts";
@@ -6,6 +6,7 @@ import {
   PANEL_HOSTED_TABS_CHANGE_EVENT,
   readPanelHostedTabs,
 } from "../../../components/panel-hosted-tabs.ts";
+import { installResizeObserverStub } from "../../../test-helpers/resize-observer.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import {
   createGatewayBrowserClientFixture,
@@ -78,6 +79,7 @@ function nextWorkspaceUpdate(state: SessionWorkspaceHost) {
   return updated.promise.finally(stop);
 }
 
+beforeEach(installResizeObserverStub);
 afterEach(() => document.body.replaceChildren());
 describe("workspace file tabs", () => {
   it("revalidates a clean file on explicit reopen without replacing its tab", async () => {
@@ -549,7 +551,13 @@ describe("workspace file tabs", () => {
       warning.mockRestore();
     });
     const state = host();
-    const a = openSessionWorkspacePreview(state, "a", "a.md", { kind: "markdown", content: "A" });
+    const a = openSessionWorkspacePreview(
+      state,
+      "a",
+      "a.md",
+      { kind: "markdown", content: "A" },
+      "preview",
+    );
     const b = openSessionWorkspacePreview(state, "b", "b.txt", { kind: "markdown", content: "B" });
     const Draft = () => Object.assign(document.createElement("textarea"), { textContent: "draft" });
     const panel = document.createElement("openclaw-chat-files-panel");
@@ -564,6 +572,11 @@ describe("workspace file tabs", () => {
     await panel.updateComplete;
     const textarea = panel.querySelector("textarea")!;
     textarea.value = "unsaved";
+    pinSessionWorkspacePreview(state, a.id);
+    panel.previews = getSessionWorkspace(state).previews;
+    await panel.updateComplete;
+    expect(panel.querySelector("textarea")).toBe(textarea);
+    expect(a.pinned).toBe(true);
     const hosted = readPanelHostedTabs(panel)!;
     expect(hosted.hostedTabs.map((tab) => tab.label)).toEqual(["a.md", "b.txt"]);
     hosted.selectHostedTab("b");
