@@ -71,6 +71,12 @@ export async function settleInterruptedRestartRecovery(params: {
   reason: string;
 }): Promise<{ outcome: "settled" | "changed" | "failed" }> {
   const { entry, reason } = params;
+  // Legacy interrupted inputs can lack both run IDs. The recovery cycle still
+  // identifies their settlement; this receipt never authorizes execution.
+  const terminalRunId =
+    entry.restartRecoveryDeliveryRunId ??
+    entry.restartRecoveryDeliverySourceRunId ??
+    `main-session-restart-recovery:${params.observation.cycleId}:interrupted`;
   const endedAt = Date.now();
   const capturedReply =
     entry.pendingFinalDelivery?.kind === "replayable"
@@ -87,7 +93,7 @@ export async function settleInterruptedRestartRecovery(params: {
       pendingFinalDelivery: entry.pendingFinalDelivery ?? null,
     },
     assertCurrent: params.assertCurrent,
-    idempotencyKey: `main-session-restart-recovery:${entry.restartRecoveryDeliverySourceRunId ?? entry.restartRecoveryDeliveryRunId ?? entry.sessionId}:interrupted`,
+    idempotencyKey: `main-session-restart-recovery:${entry.restartRecoveryDeliverySourceRunId ?? terminalRunId}:interrupted`,
     text:
       `This interrupted turn could not resume after the Gateway restarted: ${reason}. ` +
       "Your session and transcript are preserved. Send a new authenticated message to continue." +
@@ -96,15 +102,12 @@ export async function settleInterruptedRestartRecovery(params: {
       ...buildMainSessionRecoverySettlementPatch({
         entry,
         recordTerminalSource: true,
-        terminalRunId: entry.restartRecoveryDeliveryRunId,
+        terminalRunId,
       }),
       status: "interrupted",
       pendingFinalDelivery: undefined,
       lifecycleRunId: undefined,
-      lastRunId:
-        resolveRestartRecoveryTerminalClientRunId(entry) ??
-        entry.restartRecoveryDeliveryRunId ??
-        entry.restartRecoveryDeliverySourceRunId,
+      lastRunId: resolveRestartRecoveryTerminalClientRunId(entry) ?? terminalRunId,
       lastRunError: reason,
       endedAt,
       runtimeMs: Math.max(0, endedAt - (entry.startedAt ?? endedAt)),

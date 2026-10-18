@@ -14,6 +14,7 @@ import { buildCurrentRunRestartRecoveryClaim } from "../agent-command-restart-re
 import { readAdmittedHarnessCompletionInputAsync } from "../agent-harness-completion-recovery.js";
 import { captureAdmittedHarnessCompletionForTest } from "../agent-harness-completion.test-support.js";
 import type { SessionEntryFixture } from "../subagent-test-fixtures.test-helpers.js";
+import { markOrphanedMainSessionForRecovery } from "./main-session-restart-recovery-marking.js";
 
 type HarnessRecoveryFixture = {
   tmpDir: string;
@@ -440,6 +441,19 @@ export function registerHarnessCompletionRecoveryCases(
         expect(saved?.mainRestartRecovery).toBeUndefined();
         expect(saved?.restartRecoveryTerminalDeliveryEvidence).toBeUndefined();
         expect(sendRecoveryNotice).not.toHaveBeenCalled();
+        expect(saved?.sessionId).toBeDefined();
+        if (!saved) {
+          throw new Error("Missing settled session");
+        }
+        expect(
+          await markOrphanedMainSessionForRecovery({
+            target: { agentId: "main", storePath, sessionKey },
+            expectedSessionId: saved.sessionId,
+            cfg: {},
+          }),
+        ).toEqual({ marked: 0, skipped: 0 });
+        expect(saved.lastRunId).toBeDefined();
+        expect(saved.restartRecoveryTerminalRunIds).toContain(saved.lastRunId);
       } else {
         expect(saved?.mainRestartRecovery?.tombstone).toEqual(expect.any(Object));
         if (pending) {
