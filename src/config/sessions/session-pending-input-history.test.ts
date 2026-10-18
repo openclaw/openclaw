@@ -28,7 +28,7 @@ import {
   type SessionPendingInputReceipt,
 } from "./session-accessor.pending-inputs.js";
 import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
-import { createDurableSessionActorFactory } from "./session-actor-durable.js";
+import { createSessionActorFactory } from "./session-actor-durable.js";
 import { readSessionPendingInputContext } from "./session-pending-input-history.js";
 import { readPendingInputHistoryInDatabase } from "./session-pending-input-history.kernel.js";
 import * as historyRuntime from "./session-transcript-worker-runtime.js";
@@ -48,7 +48,7 @@ it("skips covered empty history and reads a newly staged input after its owner c
     if (typeof identity.identity !== "string") {
       throw new Error("Pending history fixture requires a durable database");
     }
-    const actor = await createDurableSessionActorFactory({
+    const actor = await createSessionActorFactory({
       agentId: scope.agentId,
       path: database.path,
       env,

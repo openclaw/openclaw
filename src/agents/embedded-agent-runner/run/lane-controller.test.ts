@@ -183,37 +183,49 @@ describe("embedded run session lane", () => {
   });
 
   it("keeps a session alive while another run's stalled global task times out", async () => {
-    const { sessionLane, globalLane, ...controller } = createLaneController("global-successor");
-    setCommandLaneConcurrency(globalLane, 1);
+    await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      const { sessionLane, globalLane, ...controller } = createLaneController("global-successor");
+      setCommandLaneConcurrency(globalLane, 1);
 
-    const stalledGlobalTaskStarted = createDeferred();
-    const stalledController = createLaneController("stalled-global-owner", {
-      globalLane,
+      const stalledGlobalTaskStarted = createDeferred();
+      const stalledController = createLaneController("stalled-global-owner", {
+        globalLane,
+      });
+      // Placement preparation is real I/O; only the lane budgets use the controlled clock.
+      await controller.enqueueGlobal(async () => result(0));
+      vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+      try {
+        const run = runSession(controller, async () => {
+          const stalledGlobalAdmission = stalledController.enqueueGlobal(
+            async () => {
+              stalledGlobalTaskStarted.resolve();
+              return await neverSettles();
+            },
+            { taskTimeoutMs: 25 },
+          );
+          const stalledGlobalFailure = expectTimeout(stalledGlobalAdmission);
+          const successorGlobalAdmission = controller.enqueueGlobal(async () => result());
+
+          await stalledGlobalFailure;
+          return await successorGlobalAdmission;
+        });
+        const completedRun = expect(run).resolves.toEqual({ meta: { durationMs: 1 } });
+
+        await stalledGlobalTaskStarted.promise;
+        await vi.advanceTimersByTimeAsync(24);
+        await expectLaneCounts(sessionLane, 1, 0);
+        await expectLaneCounts(globalLane, 1, 1);
+        expect(stalledController.abortSignal.aborted).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(1);
+        await completedRun;
+        expect(stalledController.abortSignal.aborted).toBe(true);
+        expect(controller.abortSignal.aborted).toBe(false);
+        await expectLaneCounts(sessionLane);
+        await expectLaneCounts(globalLane);
+      } finally {
+        vi.useRealTimers();
+      }
     });
-    const run = runSession(controller, async () => {
-      const stalledGlobalAdmission = stalledController.enqueueGlobal(
-        async () => {
-          stalledGlobalTaskStarted.resolve();
-          return await neverSettles();
-        },
-        { taskTimeoutMs: 25 },
-      );
-      const stalledGlobalFailure = expectTimeout(stalledGlobalAdmission);
-      const successorGlobalAdmission = controller.enqueueGlobal(async () => result());
-
-      await stalledGlobalFailure;
-      return await successorGlobalAdmission;
-    });
-    const completedRun = expect(run).resolves.toEqual({ meta: { durationMs: 1 } });
-
-    await stalledGlobalTaskStarted.promise;
-    await expectLaneCounts(sessionLane, 1, 0);
-    await expectLaneCounts(globalLane, 1, 1);
-
-    await completedRun;
-    expect(stalledController.abortSignal.aborted).toBe(true);
-    expect(controller.abortSignal.aborted).toBe(false);
-    await expectLaneCounts(sessionLane);
-    await expectLaneCounts(globalLane);
   });
 });
