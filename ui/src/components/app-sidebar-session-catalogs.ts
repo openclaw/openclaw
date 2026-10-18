@@ -154,11 +154,7 @@ export function catalogErrorMessages(catalog: SessionCatalog): string[] {
   for (const host of catalog.hosts) {
     // A disconnected empty host is normal fleet state, not a provider failure.
     // Cached rows still expose the host-level offline badge when the host is visible.
-    if (host.error?.code === "NODE_OFFLINE") continue;
-    // An expanded page replays its own pending error onto the host
-    // (mergeSessionCatalogPage, refetchExpandedSessionCatalogPages), so this second
-    // error source needs the same exclusion or the amber triangle survives (#172473).
-    if (!isPendingCatalogError(host.error)) {
+    if (host.error?.code !== "NODE_OFFLINE" && !isPendingCatalogError(host.error)) {
       add(host.error);
     }
   }
@@ -211,14 +207,10 @@ export function projectSidebarSessionCatalogs(
   });
 }
 
-export type CatalogRowControls = Partial<
-  Record<"link" | "children" | "pin" | "archive" | "menu" | "catalogMenu", HTMLElement>
->;
-
 export type CatalogBackingSessionDisplay = {
   catalogIdentityKey: string;
   catalogMenu: CatalogSessionMenuRequest;
-  rowRef?: (element: Element | undefined, controls: CatalogRowControls) => void;
+  rowRef?: (element: Element | undefined) => void;
   pullRequest?: SessionCatalogSession["pullRequest"];
 };
 

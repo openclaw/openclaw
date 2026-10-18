@@ -185,7 +185,7 @@ it.each([false, true])(
 );
 
 describe("catalogErrorMessages", () => {
-  const host = (overrides: Partial<SessionCatalogHost> = {}): SessionCatalogHost => ({
+  const catalogHost = (overrides: Partial<SessionCatalogHost> = {}): SessionCatalogHost => ({
     hostId: "gateway:codex",
     label: "Local Codex",
     kind: "gateway",
@@ -193,23 +193,23 @@ describe("catalogErrorMessages", () => {
     sessions: [],
     ...overrides,
   });
-  const catalog = (overrides: Partial<SessionCatalog> = {}): SessionCatalog => ({
+  const sessionCatalog = (overrides: Partial<SessionCatalog> = {}): SessionCatalog => ({
     id: "codex",
     label: "Codex",
     capabilities: { continueSession: true, archive: true },
-    hosts: [host()],
+    hosts: [catalogHost()],
     ...overrides,
   });
 
   it("treats a pending catalog as a healthy in-flight discovery", () => {
     expect(
       catalogErrorMessages(
-        catalog({
+        sessionCatalog({
           error: {
             code: "catalog_pending",
             message: "Catalog refresh is still pending; retry shortly.",
           },
-          hosts: [host({ pending: true })],
+          hosts: [catalogHost({ pending: true })],
         }),
       ),
     ).toEqual([]);
@@ -218,9 +218,9 @@ describe("catalogErrorMessages", () => {
   it("treats a pending error replayed onto a host as a healthy in-flight discovery", () => {
     expect(
       catalogErrorMessages(
-        catalog({
+        sessionCatalog({
           hosts: [
-            host({
+            catalogHost({
               pending: true,
               error: {
                 code: "catalog_pending",
@@ -236,7 +236,7 @@ describe("catalogErrorMessages", () => {
   it("still reports a stale catalog", () => {
     expect(
       catalogErrorMessages(
-        catalog({ error: { code: "catalog_stale", message: "Showing stale results." } }),
+        sessionCatalog({ error: { code: "catalog_stale", message: "Showing stale results." } }),
       ),
     ).toEqual([expect.stringContaining("[catalog_stale]")]);
   });
@@ -244,7 +244,9 @@ describe("catalogErrorMessages", () => {
   it("keeps an offline host out of the provider failure list", () => {
     expect(
       catalogErrorMessages(
-        catalog({ hosts: [host({ error: { code: "NODE_OFFLINE", message: "offline" } })] }),
+        sessionCatalog({
+          hosts: [catalogHost({ error: { code: "NODE_OFFLINE", message: "offline" } })],
+        }),
       ),
     ).toEqual([]);
   });
