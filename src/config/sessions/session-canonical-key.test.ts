@@ -126,10 +126,11 @@ it.each([false, true])(
       closeOpenClawAgentDatabasesForTest();
     }
     open(scope);
-    const writer = openNodeSqliteDatabase(scope.storePath);
+    using writer = openNodeSqliteDatabase(scope.storePath);
     const originalParse = JSON.parse;
     let committed = false;
-    const parse = vi.spyOn(JSON, "parse").mockImplementation((text, reviver) => {
+    using parse = vi.spyOn(JSON, "parse");
+    parse.mockImplementation((text, reviver) => {
       const value = originalParse(text, reviver);
       if (!committed && value?.sessionId === entry.sessionId && value?.label === "before") {
         committed = true;
@@ -147,14 +148,9 @@ it.each([false, true])(
       }
       return value;
     });
-    try {
-      expect(list(scope)[0]?.entry.label).toBe("after");
-      expect(committed).toBe(true);
-      expect(list(scope)[0]?.entry.label).toBe("after");
-    } finally {
-      parse.mockRestore();
-      writer.close();
-    }
+    expect(list(scope)[0]?.entry.label).toBe("after");
+    expect(committed).toBe(true);
+    expect(list(scope)[0]?.entry.label).toBe("after");
   },
 );
 
@@ -201,9 +197,7 @@ it("revalidates a changed policy before writing a literal main transcript root",
   seed(scope, otherEntry, otherKey);
   const database = open(scope);
   runOpenClawAgentWriteTransaction(
-    (writer) => {
-      ensureTranscriptSessionRoot(writer, { ...scope, sessionId: "cold-key" }, 1);
-    },
+    (writer) => ensureTranscriptSessionRoot(writer, { ...scope, sessionId: "cold-key" }, 1),
     { ...scope, path: scope.storePath },
   );
   const append = () =>
@@ -217,24 +211,20 @@ it("revalidates a changed policy before writing a literal main transcript root",
       { ...scope, path: scope.storePath },
     );
   // Config publication invalidates the previously admitted policy before another write.
-  const external = new DatabaseSync(scope.storePath);
-  try {
-    setCanonicalSqliteSessionMainKey(database, "custom");
-    external.exec("BEGIN IMMEDIATE");
-    updateRow(external, otherKey, "entry_json = '{'");
-    markCanonicalSessionValidationPending({ agentId: scope.agentId, db: external }, [otherKey]);
-    external.exec("COMMIT");
-    expect(append).toThrow("invalid persisted session row requires repair for agent:main:z-later");
-    expect(rootRows(database.db)).toEqual({ root: undefined, events: [] });
-    updateRow(external, otherKey, "entry_json = ?, entry_valid = 1", JSON.stringify(otherEntry));
-    expect(append()).toEqual(expect.any(String));
-    expect(rootRows(database.db)).toEqual({
-      root: { session_key: "agent:main:main" },
-      events: [{ seq: 0 }],
-    });
-  } finally {
-    external.close();
-  }
+  using external = new DatabaseSync(scope.storePath);
+  setCanonicalSqliteSessionMainKey(database, "custom");
+  external.exec("BEGIN IMMEDIATE");
+  updateRow(external, otherKey, "entry_json = '{'");
+  markCanonicalSessionValidationPending({ agentId: scope.agentId, db: external }, [otherKey]);
+  external.exec("COMMIT");
+  expect(append).toThrow("invalid persisted session row requires repair for agent:main:z-later");
+  expect(rootRows(database.db)).toEqual({ root: undefined, events: [] });
+  updateRow(external, otherKey, "entry_json = ?, entry_valid = 1", JSON.stringify(otherEntry));
+  expect(append()).toEqual(expect.any(String));
+  expect(rootRows(database.db)).toEqual({
+    root: { session_key: "agent:main:main" },
+    events: [{ seq: 0 }],
+  });
 });
 
 it("decodes cold list metadata once and preserves projected values with a retained handle", () => {

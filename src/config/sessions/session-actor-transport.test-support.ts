@@ -16,10 +16,7 @@ import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWorkerWrite } from "../../state/openclaw-agent-write-admission.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import {
-  readExactSessionEntryRow,
-  writeSessionEntry,
-} from "./session-accessor.sqlite-entry-store.js";
+import { writeSessionEntry } from "./session-accessor.sqlite-entry-store.js";
 import type { SessionActorOperations } from "./session-actor-contract.js";
 import { createSessionActorReplica } from "./session-actor-replica.js";
 import {
@@ -45,11 +42,8 @@ type Fault = {
 /** Real transaction kernels and native receipts with publication and transport faults. */
 function createFixture() {
   const fixture = createSessionCompoundWorkerFixture();
-  const database = fixture.database;
+  const { database } = fixture;
   const identity = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity.identity !== "string") {
-    throw new Error("Fixture requires durable storage");
-  }
   const target = sessionActorFileTarget(database, fixture.scope.sessionKey);
   const options = { agentId: "main", path: database.path };
   const commands: string[] = [];
@@ -77,8 +71,6 @@ function createFixture() {
   let admit: (stage: "transaction" | "commit", publication?: unknown) => void = () => {
     throw new Error("No active transport admission");
   };
-  let admittedOutcomeDataFrames = 0;
-  let interruptedOutcomeTransferFrame = false;
   const createKernel = () =>
     createSessionActorWorker(
       {
@@ -106,8 +98,8 @@ function createFixture() {
         async function execute(
           command: SqliteWorkerCommand<SessionActorOperations>,
         ): Promise<SessionActorOperations[keyof SessionActorOperations]["output"]> {
-          admittedOutcomeDataFrames = 0;
-          interruptedOutcomeTransferFrame = false;
+          let admittedOutcomeDataFrames = 0;
+          let interruptedOutcomeTransferFrame = false;
           commands.push(command.type);
           const completion = Promise.withResolvers<SqliteWorkerOperationSettlement>();
           const retained = { settled: completion.promise };
@@ -205,7 +197,7 @@ function createFixture() {
       commands,
       fault,
       seedTransferEntry: () => seedSessionActorOutcomeTransferEntry(fixture),
-      readEntry: () => readExactSessionEntryRow(database, fixture.scope.sessionKey)?.entry,
+      readEntry: fixture.read,
       retireGeneration(this: void) {
         epoch += 1;
         kernel.close();

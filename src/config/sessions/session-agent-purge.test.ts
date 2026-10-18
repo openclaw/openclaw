@@ -102,15 +102,11 @@ it("purges only entry-referenced generations off the host and retains history an
     const f = fixture(state.statePath("shared.sqlite"));
     await state.writeConfig(f.cfg);
     const sql = observeHostDataSql();
+    const sessionData =
+      /\b(?:session_nodes|session_windows|session_events|session_transcript_archives)\b/i;
     try {
       await f.purge();
-      expect(
-        sql.queries.filter((query) =>
-          /\b(?:session_nodes|session_windows|session_events|session_transcript_archives)\b/i.test(
-            query,
-          ),
-        ),
-      ).toEqual([]);
+      expect(sql.queries.filter((query) => sessionData.test(query))).toEqual([]);
     } finally {
       sql.restore();
     }
@@ -224,14 +220,12 @@ it.each([false, true])(
     withNativeBindingFixture("codex", async (f) => {
       const previous = f.readBinding();
       const error = new Error("purge commit refused");
-      let refused = false;
       onCommit((publication) => {
         if (
           refuse &&
           publication.kind === "session-native-binding" &&
           publication.agent === "committed"
         ) {
-          refused = true;
           throw error;
         }
       });
@@ -246,7 +240,6 @@ it.each([false, true])(
       );
       if (refuse) {
         await expect(purge).rejects.toThrow("purge commit refused");
-        expect(refused).toBe(true);
         expect(f.readEntry()).toBeDefined();
         expect(f.readBinding()).toEqual(previous);
       } else {

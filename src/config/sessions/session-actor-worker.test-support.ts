@@ -1,6 +1,6 @@
 import { MessageChannel, MessagePort, receiveMessageOnPort } from "node:worker_threads";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { vi } from "vitest";
+import { assert, vi } from "vitest";
 import {
   runSqliteImmediateTransactionSync,
   type SqliteTransactionOptions,
@@ -44,6 +44,7 @@ import type { SessionParticipantRecordInput } from "./session-sharing-store.type
 import { bindSqliteWorkerBackend as bindSharingBackend } from "./session-sharing-store.worker.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
+type Outcome = SessionActorOutcome<SessionActorPhaseResults[SessionActorPhase]>;
 export type Mutation = Exclude<Command, { type: "session.actor.read" }>;
 
 export function participantRecord(
@@ -60,9 +61,6 @@ export function sessionActorFileTarget(
   sessionKey: string,
 ): SessionActorTarget & { database: Extract<SessionActorTarget["database"], { kind: "file" }> } {
   const identity = readOpenClawAgentDatabaseIdentity(database);
-  if (typeof identity.identity !== "string") {
-    throw new Error("Actor worker fixture requires a durable database");
-  }
   return {
     sessionKey,
     database: {
@@ -142,9 +140,7 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
   const wire = vi.spyOn(port1, "postMessage").mockImplementation((message, transferList) => {
     postMessage(message, transferList);
     const received: unknown = receiveMessageOnPort(port2)?.message;
-    if (!isRecord(received)) {
-      throw new Error("Synchronous actor fixture lost its native frame");
-    }
+    assert(isRecord(received), "Synchronous actor fixture lost its native frame");
     if (received.kind === "native-commit" || received.kind === "native-settlement") {
       receipts.push(received);
       if (received.kind === "native-commit" && isRecord(received.committed)) {
@@ -171,21 +167,17 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
     },
     read(selected: SessionActorTarget = target): SessionActorHotState {
       const value = execute({ type: "session.actor.read", input: { target: selected } });
-      if ("kind" in value) {
-        throw new Error("Actor read returned a mutation outcome");
-      }
+      assert(!("kind" in value), "Actor read returned a mutation outcome");
       return value;
     },
-    mutate(command: Mutation): SessionActorOutcome<SessionActorPhaseResults[SessionActorPhase]> {
+    mutate(command: Mutation): Outcome {
       commitFacts = undefined;
       transferredOutcome = undefined;
       outcomeTransfer = createSqliteWorkerTransferCollector("outcome", (value) => {
         transferredOutcome = value;
       });
       const value = execute(command);
-      if (!("kind" in value)) {
-        throw new Error("Actor mutation returned a read snapshot");
-      }
+      assert("kind" in value, "Actor mutation returned a read snapshot");
       lastReply = value;
       if (value.kind !== "committed") {
         return value;
@@ -196,14 +188,12 @@ export function createSessionActorWorkerFixture<Database extends OpenClawAgentDa
             ? transferredOutcome
             : undefined
           : commitFacts;
-      if (!isRecord(evidence) || evidence.kind !== "committed") {
-        throw new Error("Actor acknowledgement has no native committed outcome");
-      }
+      assert(
+        isRecord(evidence) && evidence.kind === "committed",
+        "Actor acknowledgement has no native committed outcome",
+      );
       // The worker's native receipt is the typed outcome; the command reply carries only failure.
-      const committed = evidence as Extract<
-        SessionActorOutcome<SessionActorPhaseResults[SessionActorPhase]>,
-        { kind: "committed" }
-      >;
+      const committed = evidence as Extract<Outcome, { kind: "committed" }>;
       return value.failure ? { ...committed, failure: value.failure } : committed;
     },
     reply: () => lastReply,

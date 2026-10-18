@@ -19,9 +19,7 @@ import {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const databases: DatabaseSync[] = [];
-const observations: ReturnType<typeof observeSqliteReadSql>[] = [];
 afterEach(() => {
-  observations.splice(0).forEach((observation) => observation.restore());
   for (const db of databases.splice(0)) {
     db.close();
   }
@@ -29,8 +27,7 @@ afterEach(() => {
 
 function observeReads() {
   const observation = observeSqliteReadSql(StatementSync.prototype);
-  observations.push(observation);
-  return observation;
+  return Object.assign(observation, { [Symbol.dispose]: observation.restore });
 }
 
 function connect(filename: string, readOnly = false) {
@@ -72,7 +69,7 @@ it.each([true, false])(
   "reuses policy with canonical admission %s and observes writes",
   (admitted) => {
     const { db, database, read } = fixture(":memory:", admitted);
-    const observation = observeReads();
+    using observation = observeReads();
     expect(Array.from({ length: 10 }, read)).toEqual(Array(10).fill("main"));
     expect(
       observation.queries.filter((sql) => sql.includes('from "session_key_contract"')),
@@ -97,7 +94,7 @@ it.each([true, false])(
 
 it("keeps current policy inside read transactions and refreshes after savepoint rollback", () => {
   const { db, read } = fixture();
-  const observation = observeReads();
+  using observation = observeReads();
   runSqliteReadOperationSync(db, () => {
     for (let transaction = 0; transaction < 3; transaction += 1) {
       runSqliteDeferredTransactionSync(db, () => {
@@ -172,7 +169,7 @@ it("shares the physical policy across handles and unrelated writes without rerea
   const { db, database, read } = fixture(filename);
   const peer = connect(filename, true);
   admitSqliteSchema(peer);
-  const observation = observeReads();
+  using observation = observeReads();
   expect(readCanonicalSessionMainKey({ db: peer })).toBe("main");
   db.exec("UPDATE session_nodes SET updated_at = updated_at + 1");
   expect(read()).toBe("main");
