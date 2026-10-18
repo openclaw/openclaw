@@ -138,13 +138,10 @@ describe("Gateway hosted web surfaces", () => {
                       source: `extensions/${pluginId}/index.ts`,
                     }),
                   );
-                  if (pluginId === "admin-http-rpc") {
-                    const registeredRoute = registry.httpRoutes[routeCount];
-                    if (registeredRoute) {
-                      registeredRoute.gatewayMethodDispatchAllowed = true;
-                    }
-                  }
                   const registeredRoute = registry.httpRoutes[routeCount];
+                  if (registeredRoute && pluginId === "admin-http-rpc") {
+                    registeredRoute.gatewayMethodDispatchAllowed = true;
+                  }
                   if (registeredRoute && route.handleUpgrade) {
                     registeredRoute.handleUpgrade = route.handleUpgrade;
                   }
@@ -169,30 +166,27 @@ describe("Gateway hosted web surfaces", () => {
               headers: { authorization: `Bearer ${TOKEN}` },
             });
             expect(controlUi.status).toBe(200);
-            expect(controlUi.headers.get("content-type")).toContain("text/html");
-            expect(controlUi.headers.get("x-content-type-options")).toBe("nosniff");
-            expect(controlUi.headers.get("x-frame-options")).toBe("DENY");
-            expect(controlUi.headers.get("referrer-policy")).toBe("no-referrer");
-            expect(controlUi.headers.get("content-security-policy")).toContain(
-              "frame-ancestors 'none'",
-            );
+            expect(Object.fromEntries(controlUi.headers)).toMatchObject({
+              "content-type": expect.stringContaining("text/html"),
+              "x-content-type-options": "nosniff",
+              "x-frame-options": "DENY",
+              "referrer-policy": "no-referrer",
+              "content-security-policy": expect.stringContaining("frame-ancestors 'none'"),
+            });
             expect(await controlUi.text()).toContain("Gateway hosted Control UI");
 
-            const unauthorizedAdmin = await fetch(`${origin}/api/v1/admin/rpc`, {
-              method: "POST",
-              headers: { "content-type": "application/json" },
-              body: JSON.stringify({ id: "unauthorized", method: "health", params: {} }),
-            });
+            const adminHealth = (id: string, headers: Record<string, string> = {}) =>
+              fetch(`${origin}/api/v1/admin/rpc`, {
+                method: "POST",
+                headers: { "content-type": "application/json", ...headers },
+                body: JSON.stringify({ id, method: "health", params: {} }),
+              });
+            const unauthorizedAdmin = await adminHealth("unauthorized");
             expect(unauthorizedAdmin.status).toBe(401);
 
-            const admin = await fetch(`${origin}/api/v1/admin/rpc`, {
-              method: "POST",
-              headers: {
-                accept: "text/html",
-                authorization: `Bearer ${TOKEN}`,
-                "content-type": "application/json",
-              },
-              body: JSON.stringify({ id: "health", method: "health", params: {} }),
+            const admin = await adminHealth("health", {
+              accept: "text/html",
+              authorization: `Bearer ${TOKEN}`,
             });
             expect(admin.status).toBe(200);
             expect(admin.headers.get("content-type")).toContain("application/json");

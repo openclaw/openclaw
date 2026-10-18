@@ -93,20 +93,16 @@ describe("Gateway HTTP API product proof", () => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
-        `${JSON.stringify(
-          {
-            memory: {
-              search: {
-                provider: "openai-compatible",
-                model: "qa-embedding",
-                documentInputType: "document",
-                remote: { baseUrl: embeddingFixture.baseUrl },
-              },
+        JSON.stringify({
+          memory: {
+            search: {
+              provider: "openai-compatible",
+              model: "qa-embedding",
+              documentInputType: "document",
+              remote: { baseUrl: embeddingFixture.baseUrl },
             },
           },
-          null,
-          2,
-        )}\n`,
+        }),
         "utf8",
       );
       resetConfigRuntimeState();
@@ -125,6 +121,8 @@ describe("Gateway HTTP API product proof", () => {
         .mockResolvedValueOnce({ payloads: [{ text: "qa responses response" }] } as never);
 
       const port = await getGatewayTestPort();
+      const post = (pathname: string, body: JsonRecord, headers = JSON_HEADERS) =>
+        fetchJson(port, pathname, { method: "POST", headers, body: JSON.stringify(body) });
       gateway = await startTestGatewayServer(port, {
         host: "127.0.0.1",
         auth: { mode: "token", token: GATEWAY_TOKEN },
@@ -140,14 +138,10 @@ describe("Gateway HTTP API product proof", () => {
         expect.arrayContaining(["openclaw/main", "openclaw/beta"]),
       );
 
-      const chat = await fetchJson(port, "/v1/chat/completions", {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          model: "openclaw/main",
-          stream: false,
-          messages: [{ role: "user", content: "qa chat request" }],
-        }),
+      const chat = await post("/v1/chat/completions", {
+        model: "openclaw/main",
+        stream: false,
+        messages: [{ role: "user", content: "qa chat request" }],
       });
       expect(chat.response.status).toBe(200);
       expect(
@@ -158,14 +152,10 @@ describe("Gateway HTTP API product proof", () => {
         )[0]?.message?.content,
       ).toBe("qa chat response");
 
-      const responses = await fetchJson(port, "/v1/responses", {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          model: "openclaw/main",
-          stream: false,
-          input: "qa responses request",
-        }),
+      const responses = await post("/v1/responses", {
+        model: "openclaw/main",
+        stream: false,
+        input: "qa responses request",
       });
       expect(responses.response.status).toBe(200);
       expect(responses.body.status).toBe("completed");
@@ -188,13 +178,9 @@ describe("Gateway HTTP API product proof", () => {
         }),
       ]);
 
-      const embeddings = await fetchJson(port, "/v1/embeddings", {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          model: "openclaw/main",
-          input: ["alpha", "beta"],
-        }),
+      const embeddings = await post("/v1/embeddings", {
+        model: "openclaw/main",
+        input: ["alpha", "beta"],
       });
       expect(embeddings.response.status).toBe(200);
       expect(embeddings.body.data).toEqual([
@@ -213,33 +199,23 @@ describe("Gateway HTTP API product proof", () => {
         }),
       ]);
 
-      const tool = await fetchJson(port, "/tools/invoke", {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: JSON.stringify({
-          tool: "agents_list",
-          action: "json",
-          args: {},
-          sessionKey: "main",
-        }),
+      const tool = await post("/tools/invoke", {
+        tool: "agents_list",
+        action: "json",
+        args: {},
+        sessionKey: "main",
       });
       expect(tool.response.status, JSON.stringify(tool.body)).toBe(200);
       expect(tool.body.ok).toBe(true);
-      expect(tool.body.result).toEqual(
-        expect.objectContaining({
-          details: expect.objectContaining({
-            requester: "main",
-            allowAny: false,
-            agents: [expect.objectContaining({ id: "main", configured: true })],
-          }),
-        }),
-      );
-
-      const malformedTool = await fetchJson(port, "/tools/invoke", {
-        method: "POST",
-        headers: JSON_HEADERS,
-        body: "{}",
+      expect(tool.body.result).toMatchObject({
+        details: {
+          requester: "main",
+          allowAny: false,
+          agents: [expect.objectContaining({ id: "main", configured: true })],
+        },
       });
+
+      const malformedTool = await post("/tools/invoke", {});
       expect(malformedTool.response.status).toBe(400);
       expect(malformedTool.body).toEqual({
         ok: false,
@@ -259,14 +235,14 @@ describe("Gateway HTTP API product proof", () => {
       expect(await unauthenticatedWake.text()).toBe("Unauthorized");
       expect(peekSystemEventEntries(mainSessionKey)).toHaveLength(0);
 
-      const authenticatedWake = await fetchJson(port, "/hooks/wake", {
-        method: "POST",
-        headers: {
+      const authenticatedWake = await post(
+        "/hooks/wake",
+        { text: "Gateway HTTP QA wake", mode: "next-heartbeat" },
+        {
           authorization: `Bearer ${HOOK_TOKEN}`,
           "content-type": "application/json",
         },
-        body: JSON.stringify({ text: "Gateway HTTP QA wake", mode: "next-heartbeat" }),
-      });
+      );
       expect(authenticatedWake.response.status).toBe(200);
       expect(authenticatedWake.body).toEqual({
         ok: true,

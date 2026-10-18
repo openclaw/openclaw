@@ -105,16 +105,12 @@ async function writeRouteCapturePlugin(params: {
   await fs.mkdir(params.pluginDir, { recursive: true });
   await fs.writeFile(
     path.join(params.pluginDir, "openclaw.plugin.json"),
-    `${JSON.stringify(
-      {
-        id: PROOF_CHANNEL_ID,
-        activation: { onStartup: true },
-        channels: [PROOF_CHANNEL_ID],
-        configSchema: { type: "object", additionalProperties: false, properties: {} },
-      },
-      null,
-      2,
-    )}\n`,
+    JSON.stringify({
+      id: PROOF_CHANNEL_ID,
+      activation: { onStartup: true },
+      channels: [PROOF_CHANNEL_ID],
+      configSchema: { type: "object", additionalProperties: false, properties: {} },
+    }),
     "utf8",
   );
   await fs.writeFile(
@@ -199,6 +195,11 @@ async function readSessionTranscript(sessionKey: string): Promise<unknown[]> {
     { mode: "full", reason: "heartbeat session routing Gateway boundary proof" },
   );
 }
+
+const poll = <T>(read: () => T) => expect.poll(read, { timeout: 15_000, interval: 50 });
+const transcript = (key: string) => readSessionTranscript(key).then(JSON.stringify);
+const readSessionId = (sessionKey: string) =>
+  loadSessionEntry({ agentId: "main", sessionKey, readConsistency: "latest" })?.sessionId;
 
 describe("Gateway heartbeat session routing", () => {
   let fixtureSettlement: Promise<void> | undefined;
@@ -377,41 +378,21 @@ describe("Gateway heartbeat session routing", () => {
         }
         const client = gateway.client;
 
-        const seedSession = async (params: {
-          sessionId: string;
-          sessionKey: string;
-          to: string;
-        }) => {
+        const seedSession = async (sessionId: string, sessionKey: string, to: string) => {
           await replaceSessionEntry(
-            { agentId: "main", sessionKey: params.sessionKey },
+            { agentId: "main", sessionKey },
             {
-              sessionId: params.sessionId,
+              sessionId,
               updatedAt: Date.now(),
               delivery: normalizeSessionDeliveryState({
-                context: {
-                  channel: PROOF_CHANNEL_ID,
-                  to: params.to,
-                  accountId: "default",
-                },
+                context: { channel: PROOF_CHANNEL_ID, to, accountId: "default" },
               }),
             },
           );
         };
-        await seedSession({
-          sessionId: configuredSessionId,
-          sessionKey: configuredSessionKey,
-          to: "configured-destination",
-        });
-        await seedSession({
-          sessionId: explicitSessionId,
-          sessionKey: explicitSessionKey,
-          to: "explicit-destination",
-        });
-        await seedSession({
-          sessionId: mainSessionId,
-          sessionKey: mainSessionKey,
-          to: "main-destination",
-        });
+        await seedSession(configuredSessionId, configuredSessionKey, "configured-destination");
+        await seedSession(explicitSessionId, explicitSessionKey, "explicit-destination");
+        await seedSession(mainSessionId, mainSessionKey, "main-destination");
 
         await expect(
           client.request<{ ok: boolean }>("system-event", {
@@ -463,63 +444,34 @@ describe("Gateway heartbeat session routing", () => {
           enqueued: true,
           runId: expect.any(String),
         });
-        await expect
-          .poll(
-            async () => {
-              const history = await client.request<{
-                entries: Array<{ error?: string; runId?: string; status?: string }>;
-              }>("cron.runs", {
-                id: monitor.id,
-                runId: configuredRun.runId,
-                limit: 1,
-              });
-              return history.entries.find((entry) => entry.runId === configuredRun.runId);
-            },
-            { timeout: 15_000, interval: 50 },
-          )
-          .toMatchObject({ runId: configuredRun.runId, status: "ok" });
-        await expect
-          .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
-          .toBeGreaterThan(configuredRequestBaseline);
+        await poll(async () => {
+          const history = await client.request<{
+            entries: Array<{ error?: string; runId?: string; status?: string }>;
+          }>("cron.runs", {
+            id: monitor.id,
+            runId: configuredRun.runId,
+            limit: 1,
+          });
+          return history.entries.find((entry) => entry.runId === configuredRun.runId);
+        }).toMatchObject({ runId: configuredRun.runId, status: "ok" });
+        await poll(() => providerRequests.length).toBeGreaterThan(configuredRequestBaseline);
         const configuredRequest = JSON.stringify(providerRequests[configuredRequestBaseline]);
         expect(configuredRequest).toContain(configuredEvent);
-        await expect
-          .poll(() => peekSystemEvents(configuredSessionKey).includes(configuredEvent), {
-            timeout: 15_000,
-            interval: 50,
-          })
-          .toBe(false);
-        await expect
-          .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
-          .toHaveLength(1);
-        expect(await readDeliveryTrace(deliveryTracePath)).toEqual([
-          {
-            accountId: "default",
-            text: configuredReply,
-            threadId: null,
-            to: "configured-destination",
-          },
-        ]);
-        await expect
-          .poll(() => readSessionTranscript(configuredSessionKey).then(JSON.stringify), {
-            timeout: 15_000,
-            interval: 50,
-          })
-          .toContain(configuredReply);
-        expect(
-          loadSessionEntry({
-            agentId: "main",
-            sessionKey: configuredSessionKey,
-            readConsistency: "latest",
-          })?.sessionId,
-        ).toBe(configuredSessionId);
-        const configuredTranscript = JSON.stringify(
-          await readSessionTranscript(configuredSessionKey),
+        await poll(() => peekSystemEvents(configuredSessionKey).includes(configuredEvent)).toBe(
+          false,
         );
-        expect(configuredTranscript).toContain(configuredReply);
-        expect(JSON.stringify(await readSessionTranscript(mainSessionKey))).not.toContain(
-          configuredReply,
-        );
+        const delivery = (text: string, to: string) => ({
+          accountId: "default",
+          text,
+          threadId: null,
+          to,
+        });
+        const configuredDelivery = delivery(configuredReply, "configured-destination");
+        await poll(() => readDeliveryTrace(deliveryTracePath)).toHaveLength(1);
+        expect(await readDeliveryTrace(deliveryTracePath)).toEqual([configuredDelivery]);
+        await poll(() => transcript(configuredSessionKey)).toContain(configuredReply);
+        expect(readSessionId(configuredSessionKey)).toBe(configuredSessionId);
+        expect(await transcript(mainSessionKey)).not.toContain(configuredReply);
 
         await expect(
           client.request<{ ok: boolean }>("system-event", {
@@ -538,58 +490,25 @@ describe("Gateway heartbeat session routing", () => {
             sessionKey: explicitSessionKey,
           }),
         ).resolves.toEqual({ ok: true });
-        await expect
-          .poll(() => providerRequests.length, { timeout: 15_000, interval: 50 })
-          .toBeGreaterThan(explicitRequestBaseline);
+        await poll(() => providerRequests.length).toBeGreaterThan(explicitRequestBaseline);
         const explicitRequest = JSON.stringify(providerRequests[explicitRequestBaseline]);
         expect(explicitRequest).toContain(explicitQueuedEvent);
         expect(explicitRequest).toContain(explicitWakeText);
-        await expect
-          .poll(
-            () => {
-              const queued = peekSystemEvents(explicitSessionKey);
-              return queued.includes(explicitQueuedEvent) || queued.includes(explicitWakeText);
-            },
-            { timeout: 15_000, interval: 50 },
-          )
-          .toBe(false);
-        await expect
-          .poll(() => readDeliveryTrace(deliveryTracePath), { timeout: 15_000, interval: 50 })
-          .toHaveLength(2);
+        await poll(() => {
+          const queued = peekSystemEvents(explicitSessionKey);
+          return queued.includes(explicitQueuedEvent) || queued.includes(explicitWakeText);
+        }).toBe(false);
+        await poll(() => readDeliveryTrace(deliveryTracePath)).toHaveLength(2);
         expect(await readDeliveryTrace(deliveryTracePath)).toEqual([
-          {
-            accountId: "default",
-            text: configuredReply,
-            threadId: null,
-            to: "configured-destination",
-          },
-          {
-            accountId: "default",
-            text: explicitReply,
-            threadId: null,
-            to: "explicit-destination",
-          },
+          configuredDelivery,
+          delivery(explicitReply, "explicit-destination"),
         ]);
-        await expect
-          .poll(() => readSessionTranscript(explicitSessionKey).then(JSON.stringify), {
-            timeout: 15_000,
-            interval: 50,
-          })
-          .toContain(explicitReply);
-        expect(
-          loadSessionEntry({
-            agentId: "main",
-            sessionKey: explicitSessionKey,
-            readConsistency: "latest",
-          })?.sessionId,
-        ).toBe(explicitSessionId);
-        const explicitTranscript = JSON.stringify(await readSessionTranscript(explicitSessionKey));
-        expect(explicitTranscript).toContain(explicitReply);
+        await poll(() => transcript(explicitSessionKey)).toContain(explicitReply);
+        expect(readSessionId(explicitSessionKey)).toBe(explicitSessionId);
+        const explicitTranscript = await transcript(explicitSessionKey);
         expect(explicitTranscript).not.toContain(configuredReply);
-        expect(JSON.stringify(await readSessionTranscript(configuredSessionKey))).not.toContain(
-          explicitReply,
-        );
-        const mainTranscript = JSON.stringify(await readSessionTranscript(mainSessionKey));
+        expect(await transcript(configuredSessionKey)).not.toContain(explicitReply);
+        const mainTranscript = await transcript(mainSessionKey);
         expect(mainTranscript).not.toContain(configuredReply);
         expect(mainTranscript).not.toContain(explicitReply);
         expect((await readDeliveryTrace(deliveryTracePath)).map((entry) => entry.to)).not.toContain(

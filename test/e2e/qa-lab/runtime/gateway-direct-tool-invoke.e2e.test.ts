@@ -70,15 +70,13 @@ async function postInvoke(params: {
 }
 
 function expectAgentsListResult(value: unknown): void {
-  expect(value).toEqual(
-    expect.objectContaining({
-      details: expect.objectContaining({
-        requester: "main",
-        allowAny: false,
-        agents: [expect.objectContaining({ id: "main", configured: true })],
-      }),
-    }),
-  );
+  expect(value).toMatchObject({
+    details: {
+      requester: "main",
+      allowAny: false,
+      agents: [expect.objectContaining({ id: "main", configured: true })],
+    },
+  });
 }
 
 afterEach(() => {
@@ -95,18 +93,14 @@ describe("Gateway direct tool invoke product proof", () => {
       await fs.mkdir(path.dirname(configPath), { recursive: true });
       await fs.writeFile(
         configPath,
-        `${JSON.stringify(
-          {
-            gateway: {
-              mode: "local",
-              port,
-              auth: { mode: "token", token: GATEWAY_TOKEN },
-              tools: { allow: ["nodes"] },
-            },
+        JSON.stringify({
+          gateway: {
+            mode: "local",
+            port,
+            auth: { mode: "token", token: GATEWAY_TOKEN },
+            tools: { allow: ["nodes"] },
           },
-          null,
-          2,
-        )}\n`,
+        }),
         "utf8",
       );
       resetConfigRuntimeState();
@@ -132,6 +126,19 @@ describe("Gateway direct tool invoke product proof", () => {
       let gateway: Awaited<ReturnType<typeof startTestGatewayServer>> | undefined;
       let readOnlyClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
       let writeClient: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
+      const invoke = (body: string | JsonRecord, scopes?: string) =>
+        postInvoke({ port, token: GATEWAY_TOKEN, body, scopes });
+      const connect = (scope: string, name: string) =>
+        connectGatewayClient({
+          url: `ws://127.0.0.1:${port}`,
+          token: GATEWAY_TOKEN,
+          scopes: [scope],
+          clientDisplayName: name,
+          deviceFamily: name,
+          requestTimeoutMs: 10_000,
+          timeoutMs: 10_000,
+        });
+      const httpArgs = { tool: "agents_list", args: {}, sessionKey: "main" };
 
       try {
         gateway = await startTestGatewayServer(port, {
@@ -142,7 +149,7 @@ describe("Gateway direct tool invoke product proof", () => {
 
         const missingToken = await postInvoke({
           port,
-          body: { tool: "agents_list", args: {}, sessionKey: "main" },
+          body: httpArgs,
         });
         expect(missingToken.response.status).toBe(401);
         expect(missingToken.body).toEqual({
@@ -152,28 +159,20 @@ describe("Gateway direct tool invoke product proof", () => {
         const invalidToken = await postInvoke({
           port,
           token: "wrong-token",
-          body: { tool: "agents_list", args: {}, sessionKey: "main" },
+          body: httpArgs,
         });
         expect(invalidToken.response.status).toBe(401);
         expect(invalidToken.body).toEqual({
           error: { message: "Unauthorized", type: "unauthorized" },
         });
 
-        const malformedBody = await postInvoke({
-          port,
-          token: GATEWAY_TOKEN,
-          body: "{",
-        });
+        const malformedBody = await invoke("{");
         expect(malformedBody.response.status).toBe(400);
         expect(malformedBody.body).toMatchObject({
           error: { type: "invalid_request_error" },
         });
 
-        const missingName = await postInvoke({
-          port,
-          token: GATEWAY_TOKEN,
-          body: {},
-        });
+        const missingName = await invoke({});
         expect(missingName.response.status).toBe(400);
         expect(missingName.body).toEqual({
           ok: false,
@@ -183,11 +182,7 @@ describe("Gateway direct tool invoke product proof", () => {
           },
         });
 
-        const unavailableHttp = await postInvoke({
-          port,
-          token: GATEWAY_TOKEN,
-          body: { tool: "qa_missing_tool", args: {}, sessionKey: "main" },
-        });
+        const unavailableHttp = await invoke({ ...httpArgs, tool: "qa_missing_tool" });
         expect(unavailableHttp.response.status).toBe(404);
         expect(unavailableHttp.body).toEqual({
           ok: false,
@@ -198,15 +193,7 @@ describe("Gateway direct tool invoke product proof", () => {
         });
         expect(observedToolCallIds).toEqual([]);
 
-        readOnlyClient = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
-          token: GATEWAY_TOKEN,
-          scopes: [READ_SCOPE],
-          clientDisplayName: "direct-tool-invoke-read-only",
-          deviceFamily: "direct-tool-invoke-read-only",
-          requestTimeoutMs: 10_000,
-          timeoutMs: 10_000,
-        });
+        readOnlyClient = await connect(READ_SCOPE, "direct-tool-invoke-read-only");
         await expect(
           readOnlyClient.request("tools.invoke", AGENTS_LIST_ARGS),
         ).rejects.toMatchObject({
@@ -218,46 +205,22 @@ describe("Gateway direct tool invoke product proof", () => {
         });
         expect(observedToolCallIds).toEqual([]);
 
-        const ownerRestored = await postInvoke({
-          port,
-          token: GATEWAY_TOKEN,
-          scopes: "operator.approvals",
-          body: {
-            tool: "nodes",
-            action: "status",
-            args: {},
-            sessionKey: "main",
-          },
-        });
+        const ownerRestored = await invoke(
+          { ...httpArgs, tool: "nodes", action: "status" },
+          "operator.approvals",
+        );
         expect(ownerRestored.response.status).toBe(200);
         expect(ownerRestored.body.ok).toBe(true);
         expect(ownerRestored.body.result).toBeDefined();
 
         for (let index = 0; index < 2; index += 1) {
-          const httpResult = await postInvoke({
-            port,
-            token: GATEWAY_TOKEN,
-            body: {
-              tool: "agents_list",
-              args: {},
-              sessionKey: "main",
-              idempotencyKey: "qa-http-stable",
-            },
-          });
+          const httpResult = await invoke({ ...httpArgs, idempotencyKey: "qa-http-stable" });
           expect(httpResult.response.status).toBe(200);
           expect(httpResult.body.ok).toBe(true);
           expectAgentsListResult(httpResult.body.result);
         }
 
-        writeClient = await connectGatewayClient({
-          url: `ws://127.0.0.1:${port}`,
-          token: GATEWAY_TOKEN,
-          scopes: [WRITE_SCOPE],
-          clientDisplayName: "direct-tool-invoke-writer",
-          deviceFamily: "direct-tool-invoke-writer",
-          requestTimeoutMs: 10_000,
-          timeoutMs: 10_000,
-        });
+        writeClient = await connect(WRITE_SCOPE, "direct-tool-invoke-writer");
         const unavailableRpc = await writeClient.request<ToolsInvokeResult>("tools.invoke", {
           name: "qa_missing_tool",
           args: {},
@@ -333,16 +296,7 @@ describe("Gateway direct tool invoke product proof", () => {
           },
         });
 
-        const blockedHttp = await postInvoke({
-          port,
-          token: GATEWAY_TOKEN,
-          body: {
-            tool: "agents_list",
-            args: {},
-            sessionKey: "main",
-            idempotencyKey: "qa-http-blocked",
-          },
-        });
+        const blockedHttp = await invoke({ ...httpArgs, idempotencyKey: "qa-http-blocked" });
         expect(blockedHttp.response.status).toBe(403);
         expect(blockedHttp.body).toEqual({
           ok: false,
