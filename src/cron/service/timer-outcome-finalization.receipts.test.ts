@@ -64,6 +64,12 @@ function createState(storePath: string, nowMs: number) {
   return createCronRegressionState({ storePath, nowMs: () => nowMs, runIsolatedAgentJob: vi.fn() });
 }
 
+function receiptStatus(receipt: ReturnType<typeof claimReceipt>) {
+  return openOpenClawStateDatabase()
+    .db.prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
+    .get(receipt.receiptId);
+}
+
 function completion(
   job: CronJob,
   startedAt: number,
@@ -312,16 +318,8 @@ describe("cron outcome receipt finalization", () => {
           row.job_json = JSON.stringify({ ...JSON.parse(row.job_json), enabled: false });
         }
         expect(readDefinitions()).toEqual(expectedDefinitions);
-        expect(
-          database
-            .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
-            .get(currentReceipt.receiptId),
-        ).toEqual({ status: "ok" });
-        expect(
-          database
-            .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
-            .get(retiredReceipt.receiptId),
-        ).toEqual({ status: replaced ? "superseded" : "ok" });
+        expect(receiptStatus(currentReceipt)).toEqual({ status: "ok" });
+        expect(receiptStatus(retiredReceipt)).toEqual({ status: replaced ? "superseded" : "ok" });
       } finally {
         if (successor) {
           await finishCronRunReceiptAsync({
@@ -436,10 +434,7 @@ describe("cron outcome receipt finalization", () => {
       expect(events).toContainEqual(
         expect.objectContaining({ action: "finished", jobId: completed.id }),
       );
-      const persistedReceipt = database
-        .prepare("SELECT status FROM cron_run_receipts WHERE receipt_id = ?")
-        .get(receipt.receiptId) as { status: string } | undefined;
-      expect(persistedReceipt?.status).toBe("ok");
+      expect(receiptStatus(receipt)).toEqual({ status: "ok" });
       expect(warn).toHaveBeenCalledWith(
         { err: expect.stringContaining("maintenance unavailable") },
         "cron: post-finalization schedule maintenance failed",
