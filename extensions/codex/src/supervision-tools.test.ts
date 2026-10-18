@@ -3,11 +3,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   replaceRuntimeAuthProfileStoreSnapshots,
 } from "openclaw/plugin-sdk/agent-runtime";
-import {
-  ensureAuthProfileStore,
-  ensureAuthProfileStoreAsync,
-  resolveAuthProfileOrder,
-} from "openclaw/plugin-sdk/provider-auth";
+import * as providerAuth from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createCodexAuthProfileSelection } from "./app-server/auth-profile-selection.js";
 import { resolveCodexSupervisionAppServerRuntimeOptions } from "./app-server/config-runtime.js";
@@ -22,19 +18,14 @@ type TestOptions = Omit<
   | "senderIsOwner"
 > & { senderIsOwner?: boolean };
 
-const { resolveCodexAppServerAuthProfileIdForAgent, resolveCodexAppServerAuthProfileIdAtEffect } =
-  createCodexAuthProfileSelection({
-    ensureAuthProfileStore,
-    ensureAuthProfileStoreAsync,
-    resolveAuthProfileOrder,
-  });
+const auth = createCodexAuthProfileSelection(providerAuth);
 
 function createTestSupervisionTools(options: TestOptions) {
   return createCodexSupervisionTools({
     senderIsOwner: true,
     ...options,
-    resolveAuthProfileId: resolveCodexAppServerAuthProfileIdForAgent,
-    resolveAuthProfileIdAtEffect: resolveCodexAppServerAuthProfileIdAtEffect,
+    resolveAuthProfileId: auth.resolveCodexAppServerAuthProfileIdForAgent,
+    resolveAuthProfileIdAtEffect: auth.resolveCodexAppServerAuthProfileIdAtEffect,
     resolveRuntimeOptions: resolveCodexSupervisionAppServerRuntimeOptions,
   });
 }
@@ -57,6 +48,18 @@ type EndpointRequestHandler = (...args: Parameters<EndpointRequest>) => unknown;
 
 function createEndpointRequest(handler: EndpointRequestHandler): EndpointRequest {
   return async <T>(...args: Parameters<EndpointRequest>) => (await handler(...args)) as T;
+}
+
+function storedPages(page: () => unknown): EndpointRequest {
+  return createEndpointRequest(async (_endpoint, method) => {
+    if (method === "thread/loaded/list") {
+      return { data: [], nextCursor: null };
+    }
+    if (method !== "thread/list") {
+      throw new Error(`unexpected method: ${method}`);
+    }
+    return page();
+  });
 }
 
 function toolByName(tools: ReturnType<typeof createCodexSupervisionTools>, name: string) {
@@ -88,13 +91,8 @@ function createTools(
 ) {
   return createTestSupervisionTools({
     getPluginConfig: () => ({
-      supervision: {
-        enabled: true,
-        allowRawTranscripts: true,
-        allowWriteControls: true,
-      },
+      supervision: { ...readPolicy, allowWriteControls: true },
     }),
-    senderIsOwner: true,
     request,
     ...overrides,
   });
@@ -112,7 +110,18 @@ const agentReadConfig = {
   appServer: { transport: "websocket", homeScope: "agent", url: "ws://127.0.0.1:4500" },
   supervision: readPolicy,
 };
-function endpointConfig(command: string, policy: Record<string, boolean>) {
+const agentConfig = (agentDir: string, order?: string[]) => ({
+  agents: { entries: { main: { agentDir } } },
+  ...(order ? { auth: { order: { openai: order } } } : {}),
+});
+function endpointConfig(
+  command: string,
+  policy: {
+    enabled?: boolean;
+    allowRawTranscripts?: boolean;
+    allowWriteControls?: boolean;
+  },
+) {
   return {
     supervision: {
       enabled: true,
@@ -180,23 +189,17 @@ describe("Codex supervision compatibility tools", () => {
     expect(transports).toEqual(["stdio-proxy"]);
   });
 
-  it("defaults the local compatibility endpoint to shared user-home stdio", async () => {
-    requestCodexAppServerJsonMock.mockResolvedValue({ data: [], nextCursor: null });
-    const tools = configuredTools({ enabled: true }, { env: {} });
-
-    await toolByName(tools, "codex_endpoint_probe").execute("probe", {});
-
-    expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+  it.each([
+    {
+      name: "default shared user-home stdio",
+      supervision: { enabled: true },
+      expected: {
         startOptions: expect.objectContaining({ transport: "stdio", homeScope: "user" }),
-      }),
-    );
-  });
-
-  it("preserves the shipped stdio endpoint working directory", async () => {
-    requestCodexAppServerJsonMock.mockResolvedValue({ data: [], nextCursor: null });
-    const tools = configuredTools(
-      {
+      },
+    },
+    {
+      name: "shipped stdio endpoint working directory",
+      supervision: {
         enabled: true,
         endpoints: [
           {
@@ -207,20 +210,16 @@ describe("Codex supervision compatibility tools", () => {
           },
         ],
       },
-      { env: {} },
-    );
-
-    await toolByName(tools, "codex_endpoint_probe").execute("probe", {});
-
-    expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(
-      expect.objectContaining({
+      expected: {
         method: "thread/loaded/list",
-        startOptions: expect.objectContaining({
-          transport: "stdio",
-          cwd: "/srv/codex-project",
-        }),
-      }),
-    );
+        startOptions: expect.objectContaining({ transport: "stdio", cwd: "/srv/codex-project" }),
+      },
+    },
+  ])("preserves $name", async ({ supervision, expected }) => {
+    requestCodexAppServerJsonMock.mockResolvedValue({ data: [], nextCursor: null });
+    const tools = configuredTools(supervision, { env: {} });
+    await toolByName(tools, "codex_endpoint_probe").execute("probe", {});
+    expect(requestCodexAppServerJsonMock).toHaveBeenCalledWith(expect.objectContaining(expected));
   });
 
   it("rejects unauthenticated remote compatibility endpoints before connecting", async () => {
@@ -440,35 +439,17 @@ describe("Codex supervision compatibility tools", () => {
   });
 
   it.each([
-    {
-      name: "non-string thread id",
-      response: { data: [42], nextCursor: null },
-      detail: "Codex thread/loaded/list returned an invalid thread id at data[0]",
-    },
-    {
-      name: "non-string cursor",
-      response: { data: [], nextCursor: 42 },
-      detail: "Codex thread/loaded/list returned an invalid nextCursor",
-    },
-    {
-      name: "oversized cursor",
-      response: { data: [], nextCursor: "x".repeat(4097) },
-      detail: "Codex thread/loaded/list returned an invalid nextCursor",
-    },
-  ])("rejects a loaded page with $name", async ({ response, detail }) => {
+    ["non-string thread id", { data: [42], nextCursor: null }, "thread id at data[0]"],
+    ["non-string cursor", { data: [], nextCursor: 42 }, "nextCursor"],
+    ["oversized cursor", { data: [], nextCursor: "x".repeat(4097) }, "nextCursor"],
+  ])("rejects a loaded page with %s", async (_name, response, detail) => {
     const request = createEndpointRequest(async () => response);
-    await expectListError(request, detail);
+    await expectListError(request, `Codex thread/loaded/list returned an invalid ${detail}`);
   });
 
   it("continues past a duplicate-only stored page when its cursor advances", async () => {
     let storedPageCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method !== "thread/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
+    const request = storedPages(() => {
       storedPageCalls += 1;
       if (storedPageCalls === 3) {
         return {
@@ -501,13 +482,7 @@ describe("Codex supervision compatibility tools", () => {
   });
 
   it("rejects a stored page that over-returns max_stored_sessions", async () => {
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method === "thread/loaded/list") {
-        return { data: [], nextCursor: null };
-      }
-      if (method !== "thread/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
+    const request = storedPages(() => {
       return {
         data: [1, 2, 3].map((id) => idleThread(`stored-thread-${id}`)),
         nextCursor: null,
@@ -520,73 +495,51 @@ describe("Codex supervision compatibility tools", () => {
   });
 
   it.each([
-    {
-      name: "missing thread id",
-      response: { data: [{}], nextCursor: null },
-      detail: "Codex thread/list returned an invalid thread id at data[0]",
-    },
-    {
-      name: "blank cursor",
-      response: { data: [], nextCursor: " " },
-      detail: "Codex thread/list returned an invalid nextCursor",
-    },
-  ])("rejects a stored page with $name", async ({ response, detail }) => {
+    ["missing thread id", { data: [{}], nextCursor: null }, "thread id at data[0]"],
+    ["blank cursor", { data: [], nextCursor: " " }, "nextCursor"],
+  ])("rejects a stored page with %s", async (_name, response, detail) => {
     const request = createEndpointRequest(async (_endpoint, method) => {
       if (method === "thread/loaded/list") {
         return { data: [], nextCursor: null };
       }
       return response;
     });
-    await expectListError(request, detail, { include_stored: true });
+    await expectListError(request, `Codex thread/list returned an invalid ${detail}`, {
+      include_stored: true,
+    });
   });
 
-  it("rechecks live supervision config before every paginated request", async () => {
-    let pluginConfig: unknown = { supervision: { enabled: true } };
-    let requestCalls = 0;
-    const request = createEndpointRequest(async (_endpoint, method) => {
-      if (method !== "thread/loaded/list") {
-        throw new Error(`unexpected method: ${method}`);
-      }
-      requestCalls += 1;
-      pluginConfig = { supervision: { enabled: false } };
-      return { data: [], nextCursor: "next-page" };
-    });
-    const tools = createTestSupervisionTools({
-      getPluginConfig: () => pluginConfig,
-      senderIsOwner: true,
-      request,
-    });
-
-    await expect(toolByName(tools, "codex_sessions_list").execute("list", {})).rejects.toThrow(
-      "Codex supervision is disabled",
-    );
-    expect(requestCalls).toBe(1);
-  });
-
-  it("revokes a removed endpoint before the next paginated request", async () => {
-    let pluginConfig: unknown = {
-      supervision: {
+  it.each([
+    {
+      name: "live supervision config",
+      initial: { enabled: true },
+      revoked: { enabled: false },
+      error: "Codex supervision is disabled",
+    },
+    {
+      name: "removed endpoint",
+      initial: {
         enabled: true,
         endpoints: [{ id: "remote", transport: "stdio-proxy", command: "codex" }],
       },
-    };
+      revoked: { enabled: true, endpoints: [] },
+      error: "endpoint remote was removed or changed",
+    },
+  ])("rechecks $name before the next paginated request", async ({ initial, revoked, error }) => {
+    let pluginConfig: unknown = { supervision: initial };
     let requestCalls = 0;
     const request = createEndpointRequest(async (_endpoint, method) => {
       if (method !== "thread/loaded/list") {
         throw new Error(`unexpected method: ${method}`);
       }
       requestCalls += 1;
-      pluginConfig = { supervision: { enabled: true, endpoints: [] } };
+      pluginConfig = { supervision: revoked };
       return { data: [], nextCursor: "next-page" };
     });
-    const tools = createTestSupervisionTools({
-      getPluginConfig: () => pluginConfig,
-      senderIsOwner: true,
-      request,
-    });
+    const tools = createTools(request, { getPluginConfig: () => pluginConfig });
 
     await expect(toolByName(tools, "codex_sessions_list").execute("list", {})).rejects.toThrow(
-      "endpoint remote was removed or changed",
+      error,
     );
     expect(requestCalls).toBe(1);
   });
@@ -604,50 +557,54 @@ describe("Codex supervision compatibility tools", () => {
       pluginConfig = { supervision: { enabled: true, allowRawTranscripts: false } };
       throw new Error("turns not materialized yet");
     });
-    const tools = createTestSupervisionTools({
-      getPluginConfig: () => pluginConfig,
-      senderIsOwner: true,
-      request,
-    });
+    const tools = createTools(request, { getPluginConfig: () => pluginConfig });
 
-    await expect(
-      toolByName(tools, "codex_session_read").execute("read", {
-        endpoint_id: "local",
-        thread_id: "thread-1",
-        include_turns: true,
-      }),
-    ).rejects.toThrow("Codex session reads are disabled");
+    await expect(readSession(tools, { include_turns: true })).rejects.toThrow(
+      "Codex session reads are disabled",
+    );
     expect(requestCalls).toBe(1);
   });
 
-  it("does not return a transcript when its endpoint changes in flight", async () => {
-    let pluginConfig: unknown = endpointConfig("codex-a", readPolicy);
-    const { tools } = mutateDuringRead(
+  it.each([
+    {
+      name: "returning a transcript",
+      toolName: "codex_session_read",
+      policy: readPolicy,
+      thread: { ...idleThread(), turns: [{ id: "private-turn" }] },
+      params: { include_turns: true },
+    },
+    {
+      name: "mutating an active turn",
+      toolName: "codex_session_send",
+      policy: { allowWriteControls: true },
+      thread: activeThread(),
+      params: { text: "continue" },
+    },
+  ])("rejects an endpoint repoint before $name", async ({ toolName, policy, thread, params }) => {
+    let pluginConfig: unknown = endpointConfig("codex-a", policy);
+    const { tools, methods } = mutateDuringRead(
       () => {
-        pluginConfig = endpointConfig("codex-b", readPolicy);
+        pluginConfig = endpointConfig("codex-b", policy);
       },
       { getPluginConfig: () => pluginConfig },
-      { ...idleThread(), turns: [{ id: "private-turn" }] },
+      thread,
     );
 
     await expect(
-      readSession(tools, { endpoint_id: "primary", include_turns: true }),
+      toolByName(tools, toolName).execute("repoint", {
+        ...sessionParams,
+        endpoint_id: "primary",
+        ...params,
+      }),
     ).rejects.toThrow("endpoint primary was removed or changed");
+    expect(methods).toEqual(["thread/read"]);
   });
 
   it("does not return a transcript when the effective agent directory changes in flight", async () => {
-    let runtimeConfig = {
-      agents: {
-        entries: { main: { agentDir: "/tmp/codex-supervision-agent-a" } },
-      },
-    };
+    let runtimeConfig = agentConfig("/tmp/codex-supervision-agent-a");
     const { tools } = mutateDuringRead(
       () => {
-        runtimeConfig = {
-          agents: {
-            entries: { main: { agentDir: "/tmp/codex-supervision-agent-b" } },
-          },
-        };
+        runtimeConfig = agentConfig("/tmp/codex-supervision-agent-b");
       },
       {
         getPluginConfig: () => agentReadConfig,
@@ -680,16 +637,10 @@ describe("Codex supervision compatibility tools", () => {
         },
       },
     ]);
-    let runtimeConfig = {
-      agents: { entries: { main: { agentDir } } },
-      auth: { order: { openai: ["openai:first", "openai:second"] } },
-    };
+    let runtimeConfig = agentConfig(agentDir, ["openai:first", "openai:second"]);
     const { tools } = mutateDuringRead(
       () => {
-        runtimeConfig = {
-          agents: { entries: { main: { agentDir } } },
-          auth: { order: { openai: ["openai:second", "openai:first"] } },
-        };
+        runtimeConfig = agentConfig(agentDir, ["openai:second", "openai:first"]);
       },
       {
         getPluginConfig: () => agentReadConfig,
@@ -726,31 +677,10 @@ describe("Codex supervision compatibility tools", () => {
 
     await expect(
       toolByName(tools, "codex_session_send").execute("send", {
-        endpoint_id: "local",
-        thread_id: "thread-1",
+        ...sessionParams,
         text: "continue",
       }),
     ).rejects.toThrow("Codex write controls are disabled");
-    expect(methods).toEqual(["thread/read"]);
-  });
-
-  it("rejects an endpoint repoint before mutating an active turn", async () => {
-    let pluginConfig: unknown = endpointConfig("codex-a", { allowWriteControls: true });
-    const { tools, methods } = mutateDuringRead(
-      () => {
-        pluginConfig = endpointConfig("codex-b", { allowWriteControls: true });
-      },
-      { getPluginConfig: () => pluginConfig },
-      activeThread(),
-    );
-
-    await expect(
-      toolByName(tools, "codex_session_send").execute("send", {
-        endpoint_id: "primary",
-        thread_id: "thread-1",
-        text: "continue",
-      }),
-    ).rejects.toThrow("endpoint primary was removed or changed");
     expect(methods).toEqual(["thread/read"]);
   });
 
@@ -761,44 +691,36 @@ describe("Codex supervision compatibility tools", () => {
 
     await expect(
       send.execute("start", {
-        endpoint_id: "local",
-        thread_id: "thread-1",
+        ...sessionParams,
         text: "continue",
         mode: "start",
       }),
     ).rejects.toThrow("Continue it from Codex Sessions");
     expect(calls).toEqual([]);
 
-    await expect(
-      send.execute("auto", {
-        endpoint_id: "local",
-        thread_id: "thread-1",
-        text: "continue",
-      }),
-    ).rejects.toThrow("Continue it from Codex Sessions");
+    await expect(send.execute("auto", { ...sessionParams, text: "continue" })).rejects.toThrow(
+      "Continue it from Codex Sessions",
+    );
     expect(calls.map((call) => call.method)).toEqual(["thread/read"]);
   });
 
   it("steers and interrupts only after a passive active-turn read", async () => {
     const { calls, request } = createRequest(activeThread());
     const tools = createTools(request);
+    const readCall = {
+      method: "thread/read",
+      params: { threadId: "thread-1", includeTurns: true },
+    };
 
     await toolByName(tools, "codex_session_send").execute("steer", {
-      endpoint_id: "local",
-      thread_id: "thread-1",
+      ...sessionParams,
       text: "focus on the failing test",
       mode: "steer",
     });
-    await toolByName(tools, "codex_session_interrupt").execute("interrupt", {
-      endpoint_id: "local",
-      thread_id: "thread-1",
-    });
+    await toolByName(tools, "codex_session_interrupt").execute("interrupt", sessionParams);
 
     expect(calls).toEqual([
-      {
-        method: "thread/read",
-        params: { threadId: "thread-1", includeTurns: true },
-      },
+      readCall,
       {
         method: "turn/steer",
         params: {
@@ -813,10 +735,7 @@ describe("Codex supervision compatibility tools", () => {
           ],
         },
       },
-      {
-        method: "thread/read",
-        params: { threadId: "thread-1", includeTurns: true },
-      },
+      readCall,
       {
         method: "turn/interrupt",
         params: { threadId: "thread-1", turnId: "turn-1" },
