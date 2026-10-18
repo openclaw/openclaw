@@ -605,32 +605,34 @@ export function prepareProjectedSessionPresentation(
         opts.rowMode === "sidebar" ||
         opts.ifRowsRevision !== undefined;
       const previous = view.rows;
-      if (previous?.length === rows.length && rows.every((row, index) => row === previous[index])) {
-        if (!conditional || view.conditional) {
-          return { sessions: previous, rowHistory: view.rowHistory };
-        }
-        // Promotion prepares and accounts for packed encodings without adding a generation.
-        rows = previous;
+      const unchanged =
+        previous?.length === rows.length && rows.every((row, index) => row === previous[index])
+          ? previous
+          : undefined;
+      if (unchanged && (!conditional || view.conditional)) {
+        return { sessions: unchanged, rowHistory: view.rowHistory };
       }
-      Object.freeze(rows);
+      // Promotion reuses the vector without adding a history generation.
+      const current = unchanged ?? rows;
+      Object.freeze(current);
       let sharedBytes = 0;
       if (conditional) {
         // Prepare before admission so the byte limit includes everything this vector pins.
-        const shared = shareSidebarSessionRows(rows);
+        const shared = shareSidebarSessionRows(current);
         sharedBytes =
           shared.sessions.reduce((bytes, row) => bytes + sessionRowEncodingBytes(row), 0) +
           serializedJsonArrayBytes(shared.sessions);
       } else {
-        registerSerializedJsonArray(rows, rows.map(serializeSessionRow));
+        registerSerializedJsonArray(current, current.map(serializeSessionRow));
       }
       publicationState?.lists.setRows(
         view,
-        rows,
+        current,
         conditional,
         sharedBytes,
         sessionRowFactEncodingBytes,
       );
-      return { sessions: rows, rowHistory: view.rowHistory };
+      return { sessions: current, rowHistory: view.rowHistory };
     },
     snapshot(query: records.Lookup, options: PresentationOptions = {}) {
       const record = projection.describe(query);

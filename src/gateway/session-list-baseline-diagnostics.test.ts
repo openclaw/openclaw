@@ -1,3 +1,4 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import {
   onInternalDiagnosticEvent,
@@ -39,7 +40,7 @@ it("accounts for conditional encodings after legacy reads and releases shared ro
       }
     });
     const flush = async () => {
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await setImmediate();
       await waitForDiagnosticEventsDrained();
       return retainedBytes;
     };
