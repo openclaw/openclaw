@@ -120,9 +120,20 @@ async function sendDiscordHeartbeatTyping(params: {
     return;
   }
   const { sendTypingDiscord } = await loadDiscordSendModule();
+  const readConfig = createRuntimeConfigReader(params.cfg);
   const assertCurrent = () => {
     params.signal?.throwIfAborted();
     params.assertPlatformSendAuthorized?.();
+    const cfg = readConfig();
+    const account = resolveDiscordAccount({ cfg, accountId: params.accountId });
+    const { groupPolicy } = resolveOpenProviderRuntimeGroupPolicy({
+      providerConfigPresent: cfg.channels?.discord !== undefined,
+      groupPolicy: account.config.groupPolicy,
+      defaultGroupPolicy: cfg.channels?.defaults?.groupPolicy,
+    });
+    if (!account.enabled || groupPolicy === "disabled") {
+      throw new Error("Discord channel typing is disabled by current policy");
+    }
   };
   assertCurrent();
   await withDiscordRequestAuthority(assertCurrent, () =>

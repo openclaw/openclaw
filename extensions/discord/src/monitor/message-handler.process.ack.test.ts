@@ -1,6 +1,7 @@
 import path from "node:path";
 import { DEFAULT_EMOJIS, DEFAULT_TIMING } from "openclaw/plugin-sdk/channel-feedback";
 import { resolveGroupThreadMentionFacts } from "openclaw/plugin-sdk/channel-inbound";
+import * as channelOutbound from "openclaw/plugin-sdk/channel-outbound";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { setReplyPayloadMetadata } from "openclaw/plugin-sdk/reply-payload-testing";
@@ -116,6 +117,30 @@ const failedFinalReceipt = {
 };
 
 describe("processDiscordMessage ack reactions", () => {
+  it("forwards admitted background audience and transport-failure ownership", async () => {
+    const pipelineSpy = vi.spyOn(channelOutbound, "createChannelMessageReplyPipeline");
+    const ctx = await createAutomaticSourceDeliveryContext();
+    dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
+      const pipelineResult = pipelineSpy.mock.results.at(-1);
+      if (pipelineResult?.type !== "return") {
+        throw new Error("expected the admitted channel reply pipeline");
+      }
+      const callbacks = pipelineResult.value.typingCallbacks;
+      expect(callbacks?.backgroundWorkAudienceKey).toBe(
+        JSON.stringify(["discord", ctx.accountId, "c1"]),
+      );
+      const retireOwner = vi.fn();
+      callbacks?.setBackgroundWorkFailureHandler?.(retireOwner);
+      typingMocks.sendTyping.mockRejectedValue(new Error("typing transport unavailable"));
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await params?.replyOptions?.onReplyStart?.();
+      }
+      expect(retireOwner).toHaveBeenCalledTimes(1);
+      return createNoQueuedDispatchResult();
+    });
+    await runProcessDiscordMessage(ctx);
+  });
+
   it("uses separate REST clients for feedback and reply delivery", async () => {
     const feedbackRest = {};
     const deliveryRest = {};
@@ -163,7 +188,7 @@ describe("processDiscordMessage ack reactions", () => {
     expect(deliverDiscordReply).toHaveBeenCalledTimes(1);
   });
 
-  it("keeps one typing refresh loop for default message-tool replies", async () => {
+  it("leaves periodic typing to the core owner for default message-tool replies", async () => {
     vi.useFakeTimers();
     dispatchInboundMessage.mockImplementationOnce(async (params?: DispatchInboundParams) => {
       await params?.replyOptions?.onReplyStart?.();
@@ -180,11 +205,13 @@ describe("processDiscordMessage ack reactions", () => {
 
     expectRecordFields(requireRecord(getLastDispatchReplyOptions(), "dispatch reply options"), {
       sourceReplyDeliveryMode: "message_tool_only",
-      typingKeepalive: false,
+      // getReplyFromConfig owns the default keepalive; do not override it here.
+      typingKeepalive: undefined,
       disableBlockStreaming: true,
     });
     expect(createDiscordDraftStream).not.toHaveBeenCalled();
-    expect(typingMocks.sendTyping).toHaveBeenCalledTimes(2);
+    // Dispatch is mocked here: adapter callbacks must not add a second cadence.
+    expect(typingMocks.sendTyping).toHaveBeenCalledTimes(1);
   });
 
   it.each(["delivery", "agent"] as const)(

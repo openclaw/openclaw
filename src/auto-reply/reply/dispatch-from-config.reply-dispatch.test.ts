@@ -29,6 +29,7 @@ import {
   submitSessionControllerTask,
   releaseSessionControllerClaim,
 } from "../../sessions/session-controller.mailbox.js";
+import { SESSION_WATCHDOG_CLEANUP_MS } from "../../sessions/session-controller.watchdog-state.js";
 import { createInternalHookEventPayload } from "../../test-utils/internal-hook-event-payload.js";
 import { withReplyDispatcher } from "../dispatch-dispatcher.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
@@ -556,6 +557,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
       const frozen = getSessionControllerOperation("agent:test:session");
       expect(frozen?.abortFrozen).toBe(true);
+      expect(["pending", "blocked"]).toContain(frozen?.watchdog.snapshot().recovery?.status);
+      await vi.advanceTimersByTimeAsync(SESSION_WATCHDOG_CLEANUP_MS);
+      expect(getSessionControllerOperation("agent:test:session")).toBe(frozen);
       expect(frozen?.watchdog.snapshot().recovery?.status).toBe("blocked");
       expect(() =>
         createReplyOperation({

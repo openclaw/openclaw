@@ -377,7 +377,59 @@ describe("discordPlugin outbound", () => {
     }
   });
 
-  it.each(["cancelled", "revoked"] as const)(
+  it.each(["group disabled", "account disabled", "named group disabled"] as const)(
+    "does not start channel recovery typing when %s",
+    async (reason) => {
+      const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }));
+      const rest = new RequestClient("synthetic-token", { fetch });
+      const resolveRest = vi.spyOn(discordClient, "resolveDiscordRest").mockReturnValue(rest);
+      try {
+        await expect(
+          discordPlugin.heartbeat!.sendTypingGuarded!({
+            cfg: createCfg({
+              enabled: reason !== "account disabled",
+              token: "discord-token",
+              groupPolicy: reason === "group disabled" ? "disabled" : "open",
+              ...(reason === "named group disabled"
+                ? { accounts: { work: { groupPolicy: "disabled" as const } } }
+                : {}),
+            }),
+            to: "channel:123",
+            accountId: "work",
+            signal: new AbortController().signal,
+            assertPlatformSendAuthorized: () => {},
+          }),
+        ).rejects.toThrow("typing is disabled by current policy");
+        expect(fetch).not.toHaveBeenCalled();
+      } finally {
+        resolveRest.mockRestore();
+      }
+    },
+  );
+
+  it("retains an enabled account group-policy override for channel typing", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async () => new Response(null, { status: 204 }));
+    const rest = new RequestClient("synthetic-token", { fetch });
+    const resolveRest = vi.spyOn(discordClient, "resolveDiscordRest").mockReturnValue(rest);
+    try {
+      await discordPlugin.heartbeat!.sendTypingGuarded!({
+        cfg: createCfg({
+          token: "discord-token",
+          groupPolicy: "disabled",
+          accounts: { work: { groupPolicy: "open" } },
+        }),
+        to: "channel:123",
+        accountId: "work",
+        signal: new AbortController().signal,
+        assertPlatformSendAuthorized: () => {},
+      });
+      expect(fetch).toHaveBeenCalledOnce();
+    } finally {
+      resolveRest.mockRestore();
+    }
+  });
+
+  it.each(["cancelled", "revoked", "policy disabled"] as const)(
     "does not send queued typing after its owner is %s",
     async (reason) => {
       const releaseWorkers = createDeferred<void>();
@@ -401,8 +453,12 @@ describe("discordPlugin outbound", () => {
       );
       const controller = new AbortController();
       let current = true;
+      const cfg = createCfg({ token: "discord-token", groupPolicy: "open" });
+      if (reason === "policy disabled") {
+        setRuntimeConfigSnapshot(cfg, cfg);
+      }
       const queued = discordPlugin.heartbeat!.sendTypingGuarded!({
-        cfg: createCfg(),
+        cfg,
         to: "channel:123",
         signal: controller.signal,
         assertPlatformSendAuthorized: () => {
@@ -416,6 +472,11 @@ describe("discordPlugin outbound", () => {
         await typingQueued.promise;
         if (reason === "cancelled") {
           controller.abort();
+        } else if (reason === "policy disabled") {
+          setRuntimeConfigSnapshot(
+            createCfg({ token: "discord-token", groupPolicy: "disabled" }),
+            cfg,
+          );
         } else {
           current = false;
         }
@@ -426,6 +487,9 @@ describe("discordPlugin outbound", () => {
       } finally {
         releaseWorkers.resolve();
         await Promise.allSettled([...active, queued]);
+        if (reason === "policy disabled") {
+          clearRuntimeConfigSnapshot();
+        }
         resolveRest.mockRestore();
       }
     },

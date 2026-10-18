@@ -3,6 +3,8 @@ import path from "node:path";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { normalizeStringEntries } from "@openclaw/normalization-core/string-normalization";
 import type { SessionSourceAssertion } from "../config/sessions/session-source-authority.js";
+import { emitAgentEventForRunContext } from "../infra/agent-events.js";
+import { getAgentRunContext } from "../infra/agent-run-registry.js";
 import { recordDiagnosticToolExecutionDeadline } from "../infra/diagnostic-tool-execution-liveness.js";
 import type { EventSessionRoutingPolicy } from "../infra/event-session-routing.js";
 import {
@@ -434,6 +436,7 @@ export async function runExecProcess({
   requestOwners?: readonly ExecRequestOwner[];
   scopeKey?: string;
   sessionKey?: string;
+  agentRunId?: string;
   agentId?: string;
   /** Start-time routing policy for detached exec system events. */
   eventRouting?: EventSessionRoutingPolicy;
@@ -465,6 +468,7 @@ export async function runExecProcess({
   let operatorAuthority = getGatewayToolCallerIdentity()?.operatorAuthority;
   const operatorSignal = operatorAuthority?.signal;
   let releaseOperatorAuthority: (() => void) | undefined;
+  const executionEventContext = opts.agentRunId ? getAgentRunContext(opts.agentRunId) : undefined;
   const startedAt = Date.now();
   const sessionId = createSessionSlug(isProcessSessionIdTaken);
   const execCommand = opts.execCommand ?? opts.command;
@@ -481,6 +485,7 @@ export async function runExecProcess({
       command: opts.command,
       scopeKey: opts.scopeKey,
       sessionKey: opts.sessionKey,
+      agentRunId: opts.agentRunId,
       cleanupMs: resolveProcessCleanupMs(opts.cleanupMs),
       agentId: opts.agentId,
       eventRouting: opts.eventRouting,
@@ -847,6 +852,22 @@ export async function runExecProcess({
   recordDiagnosticToolExecutionDeadline(managedRun.activity.deadlineAtMs);
   session.stdin = managedRun.stdin;
   session.pid = managedRun.pid;
+  // Approval resolution is not execution; report only a live native launch for its exact run.
+  if (
+    opts.agentRunId &&
+    executionEventContext &&
+    (session.pid ?? 0) > 0 &&
+    !managedRun.activity.resultSettled
+  ) {
+    emitAgentEventForRunContext(
+      {
+        runId: opts.agentRunId,
+        stream: "execution",
+        data: { state: "running", sourceId: "exec", executionId: session.id },
+      },
+      executionEventContext,
+    );
+  }
 
   const startedRun = managedRun;
   const promise = withoutGatewayToolCallerIdentity(async (): Promise<ExecProcessOutcome> => {

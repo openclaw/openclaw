@@ -2,6 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
+import { onAgentEventForRun } from "../infra/agent-events.js";
+import { clearAgentRunContext, registerAgentRunContext } from "../infra/agent-run-registry.js";
 import {
   onInternalDiagnosticEvent,
   resetDiagnosticEventsForTest,
@@ -166,6 +168,81 @@ function requireSystemEventCall(): [string, Record<string, unknown>] {
   }
   return call as [string, Record<string, unknown>];
 }
+
+describe("native exec execution events", () => {
+  it.each(["running", "failed", "settled", "replaced"] as const)(
+    "publishes an execution start only for the current live native launch (%s)",
+    async (outcome) => {
+      const runId = "native-exec-start-" + outcome;
+      const sessionKey = "agent:main:exec-start-" + outcome;
+      registerAgentRunContext(runId, { sessionKey, agentId: "main" });
+      const events: Array<Record<string, unknown>> = [];
+      const unsubscribe = onAgentEventForRun(runId, (event) => {
+        if (event.stream === "execution") {
+          events.push({ ...event.data });
+        }
+      });
+      const entered = createDeferred();
+      const launch = createDeferred<ReturnType<typeof runtimeManagedRun>>();
+      const exit = createDeferred<RunExit>();
+      let input: SpawnInput | undefined;
+      supervisorMock.spawn.mockImplementation(async (value: SpawnInput) => {
+        input = value;
+        entered.resolve();
+        return await launch.promise;
+      });
+      let run: Awaited<ReturnType<typeof runTestExecProcess>> | undefined;
+      const pending = runTestExecProcess({
+        agentRunId: runId,
+        sessionKey,
+        execCommand: "test-command",
+      });
+      void pending.catch(() => {});
+      try {
+        await entered.promise;
+        expect(events).toEqual([]);
+        if (outcome === "failed") {
+          launch.reject(new Error("native launch failed"));
+          await expect(pending).rejects.toThrow("native launch failed");
+          expect(events).toEqual([]);
+          return;
+        }
+        if (outcome === "replaced") {
+          clearAgentRunContext(runId);
+          registerAgentRunContext(runId, { sessionKey: "agent:main:replacement", agentId: "main" });
+        }
+        if (outcome === "settled") {
+          exit.resolve(createRunExit());
+        }
+        if (!input) {
+          throw new Error("native supervisor was not reached");
+        }
+        launch.resolve({
+          ...runtimeManagedRun(input),
+          activity: { resultSettled: outcome === "settled", lastOutputAtMs: Date.now() },
+          wait: () => exit.promise,
+        });
+        run = await pending;
+        expect(events).toEqual(
+          outcome === "running"
+            ? [
+                {
+                  state: "running",
+                  sourceId: "exec",
+                  executionId: run.session.id,
+                },
+              ]
+            : [],
+        );
+      } finally {
+        exit.resolve(createRunExit());
+        await run?.promise;
+        unsubscribe();
+        clearAgentRunContext(runId);
+      }
+    },
+  );
+});
 
 describe("runExecProcess cursor tracking", () => {
   it.each([{ raw: ["\x1b[?1l\x1b", "[?1", "h"], expected: "application" }])(

@@ -570,6 +570,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
           requestOwners: params.background === true ? undefined : requestOwners,
           scopeKey: defaults?.scopeKey,
           sessionKey: notifySessionKey,
+          agentRunId: defaults?.runId,
           agentId,
           eventRouting: defaults?.eventRouting,
           notifyDeliveryContext,

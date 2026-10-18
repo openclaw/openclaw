@@ -13,14 +13,22 @@ export function createDiscordReplyTypingFeedback(params: {
   token: string;
   accountId: string;
   channelId: string;
+  isCurrent?: () => boolean;
   rest?: RequestClient;
   log: (message: string) => void;
   maxDurationMs?: number;
   keepaliveIntervalMs?: number;
 }) {
   const rest = params.rest ?? createDiscordRestClient(params).rest;
-  return createTypingCallbacks({
-    start: () => sendTyping({ rest, channelId: params.channelId }),
+  let retireBackgroundOwner = () => {};
+  const callbacks = createTypingCallbacks({
+    start: async () => {
+      if (params.isCurrent?.() === false) {
+        retireBackgroundOwner();
+        return;
+      }
+      await sendTyping({ rest, channelId: params.channelId });
+    },
     onStartError: (err) => {
       logTypingFailure({
         log: params.log,
@@ -31,5 +39,15 @@ export function createDiscordReplyTypingFeedback(params: {
     },
     keepaliveIntervalMs: params.keepaliveIntervalMs,
     maxDurationMs: params.maxDurationMs ?? DISCORD_REPLY_TYPING_MAX_DURATION_MS,
+    backgroundWorkKeepalive: true,
   });
+  retireBackgroundOwner = () => callbacks.onCleanup?.();
+  return {
+    ...callbacks,
+    backgroundWorkAudienceKey: JSON.stringify(["discord", params.accountId, params.channelId]),
+    setBackgroundWorkFailureHandler(handler: () => void) {
+      retireBackgroundOwner = handler;
+      callbacks.setBackgroundWorkFailureHandler?.(handler);
+    },
+  };
 }

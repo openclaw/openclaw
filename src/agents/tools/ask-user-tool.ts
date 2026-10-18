@@ -6,6 +6,7 @@ import type {
   QuestionWaitAnswerResult,
 } from "../../../packages/gateway-protocol/src/index.js";
 import { isReplyDispatchDeliveryError } from "../../auto-reply/reply/reply-dispatch-outcome.js";
+import { emitAgentEvent } from "../../infra/agent-events.js";
 import { sha256Hex } from "../../infra/crypto-digest.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
 import { resolveGlobalMap } from "../../shared/global-singleton.js";
@@ -369,6 +370,32 @@ async function waitForPromptDelivery(
   return { error: new Error("ask_user prompt is no longer active") };
 }
 
+function emitAskUserExecutionWait(params: {
+  runId?: string;
+  sessionKey?: string;
+  questionId: string;
+  waiting: boolean;
+}): void {
+  if (!params.runId || !params.sessionKey) {
+    return;
+  }
+  try {
+    emitAgentEvent({
+      runId: params.runId,
+      sessionKey: params.sessionKey,
+      stream: "execution",
+      data: {
+        state: params.waiting ? "waiting" : "unknown",
+        sourceId: "ask_user",
+        executionId: params.questionId,
+        ...(params.waiting ? { wait: { kind: "user_input" } } : {}),
+      },
+    });
+  } catch {
+    // Liveness projection is best-effort and must not fail the question tool.
+  }
+}
+
 /** Shares question ownership and prompt delivery without installing a plaintext answer claim. */
 export function beginAskUserPromptDelivery(params: {
   toolCallId: string;
@@ -508,6 +535,7 @@ export function createAskUserTool(params: {
       );
       using prompt = createQuestionPromptLifetime(signal);
       let registered = false;
+      let waitingForHumanAnswer = false;
       const cancelPendingQuestion = createGatewayQuestionCanceller({
         gatewayCall,
         questionId,
@@ -634,6 +662,15 @@ export function createAskUserTool(params: {
             throw new Error("ask_user prompt delivery failed", { cause: deliveryResult.error });
           }
         }
+        if (state.phase.kind === "answerable") {
+          waitingForHumanAnswer = true;
+          emitAskUserExecutionWait({
+            runId: params.runId,
+            sessionKey: params.sessionKey,
+            questionId,
+            waiting: true,
+          });
+        }
         const result = await answerPromise;
         signal?.throwIfAborted();
         return await finishWait(result);
@@ -648,6 +685,14 @@ export function createAskUserTool(params: {
         }
         throw error;
       } finally {
+        if (waitingForHumanAnswer) {
+          emitAskUserExecutionWait({
+            runId: params.runId,
+            sessionKey: params.sessionKey,
+            questionId,
+            waiting: false,
+          });
+        }
         signal?.removeEventListener("abort", cancelOnAbort);
         delivery.release();
       }

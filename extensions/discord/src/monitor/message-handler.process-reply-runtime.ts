@@ -83,7 +83,6 @@ export function createDiscordMessageReplyRuntime(params: {
   processContext: DiscordMessageProcessContext;
   replyReference: DiscordMessageProcessContext["replyPlan"]["replyReference"];
   sourceRepliesAreToolOnly: boolean;
-  shouldDisableCoreTypingKeepalive: boolean;
   isRoomEvent: boolean;
   dispatchStartedAt: number;
   feedbackRest: RequestClient;
@@ -115,9 +114,11 @@ export function createDiscordMessageReplyRuntime(params: {
       token,
       accountId,
       channelId: deliverChannelId,
+      isCurrent: () => !ctx.abortSignal?.aborted && ctx.isPolicyCurrent?.() !== false,
       rest: params.feedbackRest,
       log: logVerbose,
-      keepaliveIntervalMs: params.shouldDisableCoreTypingKeepalive ? undefined : 0,
+      // Core owns the single cadence so its work-liveness lease can pause and resume it.
+      keepaliveIntervalMs: 0,
     }));
 
   const { onModelSelected, ...replyPipeline } = createChannelMessageReplyPipeline({
@@ -128,8 +129,14 @@ export function createDiscordMessageReplyRuntime(params: {
     // The core lifecycle reaches this callback only after reply admission.
     // Silent pre-dispatch outcomes therefore never allocate or emit feedback.
     typingCallbacks: {
+      get backgroundWorkAudienceKey() {
+        return getTypingFeedback().backgroundWorkAudienceKey;
+      },
+      setBackgroundWorkFailureHandler: (handler) =>
+        getTypingFeedback().setBackgroundWorkFailureHandler?.(handler),
       onReplyStart: () => getTypingFeedback().onReplyStart(),
       onIdle: () => typingFeedback?.onIdle?.(),
+      onBackgroundWorkPause: () => typingFeedback?.onBackgroundWorkPause?.(),
       onCleanup: () => typingFeedback?.onCleanup?.(),
     },
   });

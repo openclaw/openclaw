@@ -14,6 +14,7 @@ import type {
   TerminationReason,
 } from "../process/supervisor/types.js";
 import { createDeferredCore, type Deferred } from "../shared/deferred.js";
+import { notifyListeners, registerListener } from "../shared/listeners.js";
 import type { DeliveryContext } from "../utils/delivery-context.types.js";
 import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 
@@ -58,6 +59,8 @@ export interface ProcessSession {
   command: string;
   scopeKey?: string;
   sessionKey?: string;
+  /** Exact agent run that admitted this process; absent on non-agent/remote owners. */
+  agentRunId?: string;
   /** Admission-owned duration; another agent's tools cannot change this result's lifetime. */
   readonly cleanupMs: number;
   /** Agent owner frozen when the exec process starts. */
@@ -134,9 +137,37 @@ const activeExecSessions = new Map<
   string,
   { session: ProcessSession; promoted: boolean; settled?: Deferred }
 >();
+const processSessionChangeListeners = new Set<(session: ProcessSession) => void>();
 let finishedSessionOutputChars = 0;
 
 let sweeper: NodeJS.Timeout | null = null;
+
+/** Observe current process-owner changes without exposing retained session history. */
+export function subscribeProcessSessionChanges(
+  listener: (session: ProcessSession) => void,
+): () => void {
+  return registerListener(processSessionChangeListeners, listener);
+}
+
+/** Publishes a live process-owner transition to request-scoped observers. */
+export function publishProcessSessionChange(session: ProcessSession): void {
+  notifyListeners(processSessionChangeListeners, session);
+}
+
+export function markProcessSessionCancellationRequested(session: ProcessSession): void {
+  if (session.cancellationRequested) {
+    return;
+  }
+  session.cancellationRequested = true;
+  publishProcessSessionChange(session);
+}
+
+/** Lists authoritative current background owners, including hidden sessions. */
+export function listActiveBackgroundProcessSessions(): ProcessSession[] {
+  return [...activeExecSessions.values()]
+    .filter(({ session, promoted }) => promoted && session.backgrounded)
+    .map(({ session }) => session);
+}
 
 /** Return whether a process session id is live, retained, or reserved for notification. */
 export function isProcessSessionIdTaken(id: string): boolean {
@@ -149,6 +180,7 @@ export function addSession(session: ProcessSession) {
   processInstanceIds.set(session, randomUUID());
   runningSessions.set(session.id, session);
   activeExecSessions.set(session.id, { session, promoted: session.backgrounded });
+  publishProcessSessionChange(session);
 }
 
 /** Sorts registered process records newest-first, including same-millisecond starts. */
@@ -193,8 +225,12 @@ function deleteFinishedSession(id: string): boolean {
 
 /** Removes visible session records without changing live-process activity. */
 export function deleteSession(id: string) {
+  const session = runningSessions.get(id) ?? finishedSessions.get(id);
   runningSessions.delete(id);
   deleteFinishedSession(id);
+  if (session) {
+    publishProcessSessionChange(session);
+  }
   scheduleSweeper();
 }
 
@@ -326,6 +362,7 @@ export function markExited(
   session.pendingOutput = pending.output;
   session.pendingOutputDropped = pending.outputDropped;
   moveToFinished(session);
+  publishProcessSessionChange(session);
   if (!session.finalizing) {
     settleExecSessionFinalization(session);
   }
@@ -339,6 +376,7 @@ export function settleExecSessionFinalization(session: ProcessSession): void {
     activeExecSessions.delete(session.id);
     active.settled?.resolve();
   }
+  publishProcessSessionChange(session);
 }
 
 /** Marks a running session as reconnectable after the exec call returns. */
@@ -349,6 +387,7 @@ export function markBackgrounded(session: ProcessSession) {
     active.promoted = true;
   }
   session.exitNotificationPersistence ??= session.persistExitNotification?.();
+  publishProcessSessionChange(session);
 }
 
 /** Retains the precise completion-event removal handle on its process owner. */
