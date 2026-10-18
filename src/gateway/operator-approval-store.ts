@@ -129,6 +129,7 @@ function execute<Key extends Operation>(
   { databaseOptions, assertCurrent, guard, ...input }: Input<Key>,
   options?: {
     onCommitted?: (resolutionKey: string) => void;
+    changesExecPolicy?: boolean;
     context?: OpenClawStateWorkerContext;
     read?: {
       command: Extract<OpenClawStateReadCommand, { type: `operatorApprovals.${string}` }>;
@@ -177,7 +178,11 @@ function execute<Key extends Operation>(
     };
     const approvals = operatorApprovalPublication.begin(owner);
     const grants = operatorStandingGrantPublication.begin(owner);
-    const exec = execApprovalsPublication.begin(owner);
+    const exec = execApprovalsPublication.begin({
+      ...owner,
+      // Approval bookkeeping cannot revoke exec authority; durable MCP grants can.
+      publishPending: options?.changesExecPolicy === true,
+    });
     observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
       batchStateDomainPublications(() => {
         approvals.committed(isRecord(facts) ? facts.approvalFacts : undefined);
@@ -193,16 +198,6 @@ function execute<Key extends Operation>(
       exec.finish(confirmed, rolledBack);
     });
     return retained;
-  };
-  const publishCommitted = (facts: unknown) => {
-    if (
-      options?.onCommitted &&
-      isRecord(facts) &&
-      facts.type === "operatorApprovals.resolve" &&
-      typeof facts.resolutionKey === "string"
-    ) {
-      options.onCommitted(facts.resolutionKey);
-    }
   };
   return runApprovalStoreOperation(
     context,
@@ -222,7 +217,15 @@ function execute<Key extends Operation>(
         return await preparation.handoff(() => scope.execute({ type, input: captured }));
       } finally {
         // Broker settlement retains the native receipt even when the command reply is lost.
-        publishCommitted(admission?.committed?.facts);
+        const facts = admission?.committed?.facts;
+        if (
+          options?.onCommitted &&
+          isRecord(facts) &&
+          facts.type === "operatorApprovals.resolve" &&
+          typeof facts.resolutionKey === "string"
+        ) {
+          options.onCommitted(facts.resolutionKey);
+        }
       }
     },
     {
@@ -294,7 +297,10 @@ export function resolveOperatorApproval(
   },
 ) {
   const { onCommitted, ...input } = params;
-  return execute("operatorApprovals.resolve", input, { onCommitted });
+  return execute("operatorApprovals.resolve", input, {
+    onCommitted,
+    changesExecPolicy: input.decision === "allow-always" && input.mcpToolGrant !== undefined,
+  });
 }
 export function forceDenyOperatorApproval(params: Input<"operatorApprovals.deny">) {
   return execute("operatorApprovals.deny", params);

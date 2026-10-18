@@ -8,6 +8,7 @@ import { moveArrayEntry, type ArrayDropPosition } from "../../lib/array-order.ts
 import { formatDurationHuman } from "../../lib/format-duration.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
+import { createPointerDrag } from "../../lib/reactive/pointer-drag.ts";
 import { showToast } from "../../lib/toast.ts";
 import type { ModelAccountUsageElement } from "./account-usage.tsx";
 import { modelProviderErrorMessage } from "./config-mutation.ts";
@@ -192,18 +193,19 @@ function startPointerDrag(params: {
   canMove: boolean;
   provider: string;
   move: (targetId: string, position: ArrayDropPosition) => void;
-}): (() => void) | undefined {
+  drag: ReturnType<typeof createPointerDrag>;
+}): void {
   if (!params.canMove || params.event.button !== 0) {
-    return undefined;
+    return;
   }
   const grip = params.event.currentTarget;
   if (!(grip instanceof HTMLElement)) {
-    return undefined;
+    return;
   }
   const row = grip.closest<HTMLElement>(".model-providers__profile");
   const section = grip.closest<HTMLElement>(".model-providers__profiles");
   if (!row || !section) {
-    return undefined;
+    return;
   }
   const sectionTop = section.getBoundingClientRect().top;
   // Use the original slots for hit testing. Measuring animated neighbors would
@@ -213,7 +215,7 @@ function startPointerDrag(params: {
     .map((element) => ({ element, bounds: element.getBoundingClientRect() }));
   const source = slots.find((slot) => slot.element === row);
   if (!source) {
-    return undefined;
+    return;
   }
   const others = slots.filter((slot) => slot !== source);
   let target: (typeof slots)[number] | undefined;
@@ -221,16 +223,7 @@ function startPointerDrag(params: {
   params.event.preventDefault();
   section.classList.add(SORTING_CLASS);
   row.classList.add(DRAGGING_CLASS);
-  try {
-    grip.setPointerCapture?.(params.event.pointerId);
-  } catch {
-    // Synthetic pointers can lack the active pointer required for capture.
-  }
-
   const update = (event: PointerEvent) => {
-    if (event.pointerId !== params.event.pointerId) {
-      return;
-    }
     const scrollOffset = sectionTop - section.getBoundingClientRect().top;
     const deltaY = event.clientY - params.event.clientY + scrollOffset;
     row.style.translate = `${event.clientX - params.event.clientX}px ${deltaY}px`;
@@ -270,53 +263,34 @@ function startPointerDrag(params: {
       top += slot.bounds.height;
     }
   };
-  let active = true;
   const cleanup = () => {
-    if (!active) {
-      return;
-    }
-    active = false;
-    stops.forEach((stop) => stop());
+    stopKeydown();
     section.classList.remove(SORTING_CLASS);
     for (const { element } of slots) {
       element.classList.remove(DRAGGING_CLASS);
       element.style.removeProperty("translate");
     }
-    try {
-      grip.releasePointerCapture?.(params.event.pointerId);
-    } catch {
-      // Pointer cancellation may release capture before this cleanup runs.
-    }
   };
-  const finish = (event: PointerEvent, apply: boolean) => {
-    if (!active || event.pointerId !== params.event.pointerId) {
-      return;
-    }
+  const finish = (event: PointerEvent) => {
     update(event);
     const targetId = target?.element.dataset.profileId;
     cleanup();
-    if (apply && targetId) {
+    if (targetId) {
       params.move(targetId, position);
     }
   };
-  const handleUp = (event: PointerEvent) => finish(event, true);
-  const handleCancel = (event: PointerEvent) => finish(event, false);
   const handleKeyDown = (event: KeyboardEvent) => {
     if (event.key === "Escape") {
       event.preventDefault();
       event.stopPropagation();
-      finish(params.event, false);
+      params.drag.cancel();
     }
   };
-  const stops = [
-    listen(grip, "pointermove", { handleEvent: update }),
-    listen(grip, "pointerup", { handleEvent: handleUp }),
-    listen(grip, "pointercancel", { handleEvent: handleCancel }),
-    listen(grip, "lostpointercapture", { handleEvent: handleCancel }),
-    // A drag owns Escape before the Settings shell handles its back shortcut.
-    listen(document, "keydown", { handleEvent: handleKeyDown }, true),
-  ];
-  return cleanup;
+  // A drag owns Escape before the Settings shell handles its back shortcut.
+  const stopKeydown = listen(document, "keydown", { handleEvent: handleKeyDown }, true);
+  if (!params.drag.start(params.event, grip, { move: update, end: finish, cancel: cleanup })) {
+    cleanup();
+  }
 }
 
 function profileIdentity(profile: ProviderProfile, index: number): string {
@@ -511,10 +485,9 @@ function ProviderProfileRow(
     identity: string;
   },
 ) {
-  let cancelDrag: (() => void) | undefined;
+  const drag = createPointerDrag();
   let releaseUsage: (() => void) | undefined;
   onCleanup(() => {
-    cancelDrag?.();
     releaseUsage?.();
   });
   const profile = () => props.row.profile;
@@ -581,12 +554,13 @@ function ProviderProfileRow(
             aria-keyshortcuts={canMove() ? "ArrowUp ArrowDown" : undefined}
             title={reorderBlocked() || t("modelProviders.profiles.reorderHint")}
             onPointerDown={(event: PointerEvent) => {
-              cancelDrag?.();
-              cancelDrag = startPointerDrag({
+              drag.cancel();
+              startPointerDrag({
                 event,
                 canMove: canMove(),
                 provider: provider(),
                 move: reorder,
+                drag,
               });
             }}
             onKeyDown={(event: KeyboardEvent) => {

@@ -553,8 +553,9 @@ describe("dispatchReplyFromConfig reply_dispatch hook", () => {
       });
 
       await ownerStarted.promise;
-      await vi.advanceTimersByTimeAsync(REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
       const frozen = getSessionControllerOperation("agent:test:session");
+      vi.setSystemTime(Date.now() + REPLY_RUN_FINALIZATION_SETTLE_TIMEOUT_MS);
+      await frozen?.watchdog.tick();
       expect(frozen?.abortFrozen).toBe(true);
       expect(frozen?.watchdog.snapshot().recovery?.status).toBe("blocked");
       expect(() =>

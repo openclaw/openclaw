@@ -5,6 +5,7 @@ import {
   isPathInside,
   root as fsRoot,
 } from "openclaw/plugin-sdk/file-access-runtime";
+import { lstatIfExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import type {
   DirectoryEntry,
   SandboxFsBridge,
@@ -179,7 +180,7 @@ export class OpenShellFsBridge implements SandboxFsBridge {
   async stat(params: Parameters<SandboxFsBridge["stat"]>[0]): Promise<SandboxFsStat | null> {
     const target = this.resolveTarget(params);
     const hostPath = target.hostPath;
-    const stats = await fsPromises.lstat(hostPath).catch(() => null);
+    const stats = await lstatIfExists(hostPath, "ENOENT");
     if (!stats) {
       return null;
     }
