@@ -855,8 +855,8 @@ describe("SQLite exact transcript suffix replacement", () => {
       reassign: true,
       owners: [
         { event_id: "duplicate", message_idempotency_key: null },
-        { event_id: "owner", message_idempotency_key: "new-key" },
         { event_id: "new-owner", message_idempotency_key: "old-key" },
+        { event_id: "owner", message_idempotency_key: "new-key" },
       ],
     },
     {
