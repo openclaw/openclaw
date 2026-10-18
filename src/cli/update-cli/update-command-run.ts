@@ -241,8 +241,11 @@ export async function admitUpdateCommandRun(params: {
   );
   const record = adoptUpdateRun(created.runId, ledgerOptions);
   if (!params.opts.dryRun && !env[UPDATE_RUN_ID_ENV]?.trim()) {
-    // Create the ledger before opening its reader; reconcile only earlier drivers.
-    await reconcileAbandonedUpdateRunsAsync({ excludeRunId: record.runId }, ledgerOptions);
+    // Create the ledger before opening its reader; later update work may relocate it.
+    await reconcileAbandonedUpdateRunsAsync(
+      { excludeRunId: record.runId },
+      { ...ledgerOptions, snapshot: true },
+    );
     params.assertCurrent?.();
   }
   const requester = resolveManagedUpdateRequester(record.origin.requester);
