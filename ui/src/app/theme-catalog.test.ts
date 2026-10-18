@@ -21,6 +21,7 @@ import { AgentIdentityAvatar } from "../components/solid/identity-avatar.tsx";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
+import { bindControlUiDocumentHead } from "./control-ui-document-head.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
@@ -169,6 +170,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   favicon.type = "image/svg+xml";
   favicon.setAttribute("href", "/favicon.svg");
   document.head.append(favicon);
+  bindControlUiDocumentHead({ themeColors: [], favicons: [favicon] });
   const applicationTheme = createApplicationTheme(loadSettings(), gateway);
   gateway.start();
   let response = catalog();
@@ -296,6 +298,7 @@ it("applies routed profile updates and plugin hot reloads, restoring an unavaila
   } finally {
     applicationTheme.dispose();
     gateway.stop();
+    bindControlUiDocumentHead({ themeColors: [], favicons: [] });
     favicon.remove();
   }
 });
