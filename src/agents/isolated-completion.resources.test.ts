@@ -1,11 +1,9 @@
 import fs from "node:fs";
-import { createServer, type ServerResponse } from "node:http";
+import type { ServerResponse } from "node:http";
 import path from "node:path";
 import { getAiTransportHost } from "@openclaw/ai";
 import { expect, it, vi } from "vitest";
-import { writeOpenAiResponsesSse } from "../../test/helpers/openai-responses-sse.js";
-import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { resetPluginLoaderTestStateForTest } from "../plugins/loader.test-fixtures.js";
 import { clearPluginMetadataLifecycleCaches } from "../plugins/plugin-metadata-lifecycle.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
@@ -20,6 +18,12 @@ import { clearRuntimeAuthProfileStoreSnapshots } from "./auth-profiles/runtime-s
 import { runIsolatedCompletion } from "./isolated-completion.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 import { ModelRegistry } from "./sessions/model-registry.js";
+import {
+  completionChunk,
+  completionConfig,
+  completionModelDefinition,
+  startCompletionServer,
+} from "./simple-completion.test-support.js";
 
 it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] as const)(
   "retains standalone isolated completion resources through %s",
@@ -47,35 +51,35 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
     let authWorkSignal: AbortSignal | undefined;
     let authWorkFinished = false;
     let normalDrainRegistryMatches: boolean | undefined;
+    const authTail = mode === "auth-tail" || mode === "auth-failure";
+    const streamTail = mode === "callback-tail" || mode === "cancel-tail";
     const globalKey = `__isolatedAuthWork_${path.basename(root)}`;
     Object.defineProperty(globalThis, globalKey, {
       configurable: true,
       value: () => {
-        if (++authCalls !== 1) {
+        if (++authCalls !== 1 || !authTail) {
           return;
         }
-        if (mode === "auth-tail" || mode === "auth-failure") {
-          authWorkSignal = getAsyncWorkSignal();
-          const selectedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
-          authWorkSignal?.addEventListener(
-            "abort",
-            () => {
-              normalDrainRegistryMatches =
-                getPluginRuntimeGatewayRequestScope()?.pluginRegistry === selectedRegistry;
-            },
-            { once: true },
-          );
-          const pending = trackAsyncWork(async () => {
-            workStarted.resolve();
-            await finishWork.promise;
-            authWorkSignal?.throwIfAborted();
-            authWorkFinished = true;
-          });
-          actualWork.push(pending);
-          void pending.catch(() => {});
-          if (mode === "auth-failure") {
-            throw authFailure;
-          }
+        authWorkSignal = getAsyncWorkSignal();
+        const selectedRegistry = getPluginRuntimeGatewayRequestScope()?.pluginRegistry;
+        authWorkSignal?.addEventListener(
+          "abort",
+          () => {
+            normalDrainRegistryMatches =
+              getPluginRuntimeGatewayRequestScope()?.pluginRegistry === selectedRegistry;
+          },
+          { once: true },
+        );
+        const pending = trackAsyncWork(async () => {
+          workStarted.resolve();
+          await finishWork.promise;
+          authWorkSignal?.throwIfAborted();
+          authWorkFinished = true;
+        });
+        actualWork.push(pending);
+        void pending.catch(() => {});
+        if (mode === "auth-failure") {
+          throw authFailure;
         }
       },
     });
@@ -95,16 +99,10 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
       if (response.destroyed || response.writableEnded) {
         return;
       }
-      writeOpenAiResponsesSse(response, [
-        {
-          id: "isolated-response",
-          object: "chat.completion.chunk",
-          model: "isolated-model",
-          choices: [{ index: 0, delta: { content: `reply-${index}` }, finish_reason: "stop" }],
-        },
-      ]);
+      response.writeHead(200, { "content-type": "text/event-stream" });
+      response.end(completionChunk(`reply-${index}`, "isolated-model"));
     };
-    const server = createServer((request, response) => {
+    const server = await startCompletionServer((request, response) => {
       request.resume();
       const index = requests.push(response) - 1;
       arrivals[index]?.resolve();
@@ -112,48 +110,26 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
         finishResponse(response, index);
       }
     });
-    await new Promise<void>((resolve, reject) => {
-      server.once("error", reject);
-      server.listen(0, "127.0.0.1", () => {
-        server.removeListener("error", reject);
-        resolve();
-      });
-    });
     const calls: Promise<unknown>[] = [];
     const spies: Array<{ mockRestore(): void }> = [];
     try {
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("Isolated completion fixture has no TCP port");
-      }
-      const cfg: OpenClawConfig = {
-        agents: { defaults: { workspace: root, model: `${fixture.providerId}/isolated-model` } },
-        models: {
-          providers: {
-            [fixture.providerId]: {
-              api: "openai-completions",
-              apiKey: "synthetic-isolated-key",
-              baseUrl: `http://127.0.0.1:${address.port}/v1`,
-              models: [
-                {
-                  id: "isolated-model",
-                  name: "Isolated model",
-                  reasoning: false,
-                  input: ["text"],
-                  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                },
-              ],
-            },
+      const cfg = completionConfig(
+        fixture.providerId,
+        {
+          api: "openai-completions",
+          apiKey: "synthetic-isolated-key",
+          baseUrl: server.baseUrl,
+          models: [completionModelDefinition({ id: "isolated-model", name: "Isolated model" })],
+        },
+        {
+          agents: { defaults: { workspace: root, model: `${fixture.providerId}/isolated-model` } },
+          plugins: {
+            load: { paths: [fixture.rootDir] },
+            slots: { memory: "none" },
+            entries: { [fixture.pluginId]: { enabled: true } },
           },
         },
-        plugins: {
-          load: { paths: [fixture.rootDir] },
-          slots: { memory: "none" },
-          entries: { [fixture.pluginId]: { enabled: true } },
-        },
-      };
+      );
       await withEnvAsync(
         {
           ...createColdPluginHermeticEnv(root, { bundledPluginsDir: roots.makeTempDir() }),
@@ -165,7 +141,7 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
           const create = vi.spyOn(ModelRegistry, "fromCapturedSources");
           const fork = vi.spyOn(ModelRegistry.prototype, "fork");
           spies.push(create, fork);
-          if (mode === "callback-tail" || mode === "cancel-tail") {
+          if (streamTail) {
             const { configureAiTransportRuntimeHost } =
               await import("./ai-transport-runtime-host.js");
             configureAiTransportRuntimeHost();
@@ -200,24 +176,17 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
               spies.push(
                 vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
                   const response = await realFetch(...args);
-                  if (wrapped || !response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
+                  if (wrapped || !response.url.startsWith(`${server.origin}/`)) {
                     return response;
                   }
                   wrapped = true;
-                  const reader = response.body?.getReader();
-                  if (!reader) {
+                  const body = response.body;
+                  if (!body) {
                     throw new Error("Isolated fixture response has no body");
                   }
                   return new Response(
                     new ReadableStream<Uint8Array>({
-                      async pull(controller) {
-                        const { value, done } = await reader.read();
-                        if (done) {
-                          controller.close();
-                        } else {
-                          controller.enqueue(value);
-                        }
-                      },
+                      // The rejected response hook must cancel this unread body.
                       async cancel(reason) {
                         workStarted.resolve();
                         const pending = (async () => {
@@ -225,7 +194,7 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
                             await finishWork.promise;
                             throw cancelFailure;
                           } finally {
-                            await reader.cancel(reason);
+                            await body.cancel(reason);
                           }
                         })();
                         actualWork.push(pending);
@@ -253,13 +222,14 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
             calls.push(pending);
             return pending;
           };
+          const waitForWork = (work: Promise<unknown>, call: Promise<unknown>, label: string) =>
+            awaitGateBeforeSettlement(work, call, `Completion ended before ${label}`);
           const waitForRequest = (index: number, call: Promise<unknown>) =>
-            Promise.race([
-              arrivals[index]!.promise,
-              call.then(() => {
-                throw new Error("Completion ended before the expected provider request");
-              }),
-            ]);
+            waitForWork(arrivals[index]!.promise, call, "the expected provider request");
+          const expectReply = async (call: Promise<unknown>, index: number) => {
+            finishResponse(requests[index]!, index);
+            await expect(call).resolves.toMatchObject({ text: `reply-${index}` });
+          };
           const abortReason = new Error("fixture isolated caller aborted");
           const controller = new AbortController();
           const first = start(mode === "callback-tail" ? controller.signal : undefined);
@@ -271,13 +241,8 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
             await waitForRequest(0, first);
             if (mode !== "overlap") {
               finishResponse(requests[0]!, 0);
-              if (mode === "callback-tail" || mode === "cancel-tail") {
-                await Promise.race([
-                  workStarted.promise,
-                  first.then(() => {
-                    throw new Error("Completion ended before its accepted work started");
-                  }),
-                ]);
+              if (streamTail) {
+                await waitForWork(workStarted.promise, first, "its accepted work started");
               }
               if (mode === "callback-tail") {
                 controller.abort(abortReason);
@@ -290,7 +255,7 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
               }
             }
           }
-          if (mode === "auth-tail" || mode === "auth-failure") {
+          if (authTail) {
             expect.soft(authWorkSignal?.aborted ?? false).toBe(false);
           }
           const firstBuilds = create.mock.calls.length;
@@ -303,21 +268,18 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
           expect(fork.mock.calls[0]![0] === fork.mock.calls[1]![0]).toBe(false);
           finishWork.resolve();
           await Promise.allSettled(actualWork);
-          if (mode === "auth-tail" || mode === "auth-failure") {
+          if (authTail) {
             expect.soft(authWorkFinished).toBe(true);
           }
           if (mode === "overlap") {
-            finishResponse(requests[0]!, 0);
-            await expect(first).resolves.toMatchObject({ text: "reply-0" });
+            await expectReply(first, 0);
           }
-          finishResponse(requests[secondIndex]!, secondIndex);
-          await expect(second).resolves.toMatchObject({ text: `reply-${secondIndex}` });
+          await expectReply(second, secondIndex);
           const thirdIndex = secondIndex + 1;
           const third = start();
           await waitForRequest(thirdIndex, third);
           expect(create.mock.calls.length).toBe(firstBuilds + 1);
-          finishResponse(requests[thirdIndex]!, thirdIndex);
-          await expect(third).resolves.toMatchObject({ text: `reply-${thirdIndex}` });
+          await expectReply(third, thirdIndex);
           if (authWorkSignal) {
             expect(normalDrainRegistryMatches).toBe(true);
           }
@@ -337,10 +299,7 @@ it.for(["overlap", "callback-tail", "cancel-tail", "auth-tail", "auth-failure"] 
       clearPluginMetadataLifecycleCaches();
       resetPluginLoaderTestStateForTest();
       Reflect.deleteProperty(globalThis, globalKey);
-      server.closeAllConnections();
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => (error ? reject(error) : resolve()));
-      });
+      await server[Symbol.asyncDispose]();
       roots.cleanup();
     }
   },

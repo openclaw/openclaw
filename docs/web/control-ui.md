@@ -231,7 +231,8 @@ menu to inspect the conversation's background exec commands. It is separate from
 time. **Finished** starts collapsed; click its heading to expand or collapse the
 list. Selecting a process opens its recent output. **Stop** targets that exact
 process, not the parent conversation or another command with the same name.
-Hidden panels stop refreshing. Output follows the process owner's temporary
+Details and Processes panels viewing the same session share one refresh every
+five seconds. Hidden panels and browser tabs stop refreshing. Output follows the process owner's temporary
 retention limits; viewing it does not drain output waiting for the agent.
 
 Select a session's title in the chat header to rename it. Enter saves the name;

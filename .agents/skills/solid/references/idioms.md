@@ -72,6 +72,7 @@ Start from the narrowest primitive that expresses the data's owner and lifetime:
 | A keyed collection derived from async or owner data                              | `createProjection(fn, initial, { key: "id" })`                                                       |
 | An expected value shown before a mutation settles                                | `createOptimistic`/`createOptimisticStore` inside `action`                                           |
 | Count-only repetition                                                            | `<Repeat count={n}>`                                                                                 |
+| Browser document title                                                           | `createDocumentTitle(title)` from `lib/reactive/document-title.ts`                                   |
 | Resize notifications for owned elements                                          | `createResizeObserver(() => [element], callback)` from `lib/reactive/observers.ts`                   |
 | Visibility notifications for owned elements                                      | `createIntersectionObserver(() => [element], callback, options)` from the same module                |
 | Periodic work while a reactive cadence is enabled                                | `createInterval(callback, () => enabled() ? milliseconds : undefined)` from `lib/reactive/timers.ts` |

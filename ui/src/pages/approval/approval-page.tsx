@@ -15,6 +15,7 @@ import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/c
 import { readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { controlUiPublicAssetPath } from "../../app/public-assets.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
+import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { formatDateTimeMs } from "../../lib/reactive/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -437,8 +438,6 @@ function createApprovalPage(context: ApplicationContext, props: ApprovalPageProp
     }
   };
 
-  const previousDocumentTitle = document.title;
-  let activeDocumentTitle: string | undefined;
   const stopVisibility = listen(document, "visibilitychange", handleVisibilityChange);
   bindApprovalId(true);
   // Gateway receipts retire decisions and polls and redact approvals synchronously when access changes.
@@ -450,35 +449,26 @@ function createApprovalPage(context: ApplicationContext, props: ApprovalPageProp
     operationGeneration += 1;
     clearPollTimer();
     clientOwner = null;
-    if (!activeDocumentTitle || document.title === activeDocumentTitle) {
-      document.title = previousDocumentTitle;
-    }
   });
   // Gateway requests and the browser title follow the currently bound approval ID.
   createEffect(
     () => props.approvalId,
     (id) => bindApprovalId(false, id),
   );
-  createEffect(
-    () => {
-      const current = view.read();
-      const pageTitle =
-        current.connected && !current.approvalsAccess
-          ? t("common.disabled")
-          : current.requestError === "unavailable"
-            ? t("approvalPage.unavailableTitle")
-            : current.requestError === "connection" && !current.approval
-              ? t("approvalPage.connectionErrorTitle")
-              : current.approval
-                ? approvalTitle(current.approval, current.resolutionOrigin)
-                : t("approvalPage.loadingTitle");
-      return `${pageTitle} — ${t("approvalPage.brandName")}`;
-    },
-    (title) => {
-      document.title = title;
-      activeDocumentTitle = title;
-    },
-  );
+  createDocumentTitle(() => {
+    const current = view.read();
+    const pageTitle =
+      current.connected && !current.approvalsAccess
+        ? t("common.disabled")
+        : current.requestError === "unavailable"
+          ? t("approvalPage.unavailableTitle")
+          : current.requestError === "connection" && !current.approval
+            ? t("approvalPage.connectionErrorTitle")
+            : current.approval
+              ? approvalTitle(current.approval, current.resolutionOrigin)
+              : t("approvalPage.loadingTitle");
+    return `${pageTitle} — ${t("approvalPage.brandName")}`;
+  });
   return {
     read: view.read,
     hasGatewayConnection: () => hasGatewayConnection(view.read()),

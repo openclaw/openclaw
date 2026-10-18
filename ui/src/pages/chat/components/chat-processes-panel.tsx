@@ -19,7 +19,8 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
   "openclaw-chat-processes-panel",
   (props) => {
     const [finishedOpen, setFinishedOpen] = createSignal(false);
-    const data = useSessionPanel(props, ProcessesPanelData, () => setSelected(null));
+    const panel = useSessionPanel(props, ProcessesPanelData, () => setSelected(null));
+    const data = () => panel().snapshot;
     // Missing retained rows keep their detail state; access loss closes private output.
     const [selected, setSelected] = createSignal<string | null>((previous) =>
       data().error && !data().rows.length ? null : (previous ?? null),
@@ -46,7 +47,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
           aria-label={t("chat.processesPanel.stop", { name: row.name })}
           title={t("chat.processesPanel.stop", { name: row.name })}
           disabled={data().stopping.has(row.instanceId)}
-          onClick={() => void data().stop(row)}
+          onClick={() => void panel().stop(row)}
         >
           <Icon name="square" />
           {detail &&
@@ -61,7 +62,7 @@ export const ChatProcessesPanel = defineSolidBridge<SessionPanelProps>(
       data().error && (
         <div class="chat-processes__error" role="alert">
           {data().error}
-          <button class="btn btn--sm" type="button" onClick={() => void data().refresh()}>
+          <button class="btn btn--sm" type="button" onClick={() => void panel().refresh()}>
             {t("common.retry")}
           </button>
         </div>

@@ -2006,7 +2006,6 @@ src/infra/heartbeat-runner-config.ts	1
 src/infra/heartbeat-visibility.ts	1
 src/infra/install-package-dir.ts	2
 src/infra/json-utf8-bytes.ts	4
-src/infra/kysely-sync-cache-state.ts	1
 src/infra/kysely-sync.ts	7
 src/infra/net/fetch-guard.ts	2
 src/infra/net/form-data.ts	2
