@@ -241,27 +241,26 @@ it("prepares the roster once and yields while enriching only overlapping selecte
       checkpoint ??= nextTurn().then(() => rendered.length);
       return result;
     });
+    const listPage = async (offset: number, index: number) => {
+      const respond = vi.fn();
+      await sessionReadHandlers["sessions.list"]!({
+        req: { type: "req", id: `page-${index}`, method: "sessions.list" },
+        params: { limit: 5, offset },
+        client: null,
+        context,
+        isWebchatConnect: () => false,
+        respond(ok, result) {
+          expect(ok).toBe(true);
+          materialized.push(projection.materializedCount - before);
+          respond(result);
+        },
+      });
+      expect(respond).toHaveBeenCalledOnce();
+      return respond.mock.calls[0]![0] as SessionsListResult;
+    };
     try {
       sessionChanges.emit({ all: true, scope: "catalog" });
-      const pages = await Promise.all(
-        [0, 5, 0, 5].map(async (offset, index) => {
-          const respond = vi.fn();
-          await sessionReadHandlers["sessions.list"]!({
-            req: { type: "req", id: `page-${index}`, method: "sessions.list" },
-            params: { limit: 5, offset },
-            client: null,
-            context,
-            isWebchatConnect: () => false,
-            respond(ok, result) {
-              expect(ok).toBe(true);
-              materialized.push(projection.materializedCount - before);
-              respond(result);
-            },
-          });
-          expect(respond).toHaveBeenCalledOnce();
-          return respond.mock.calls[0]![0] as SessionsListResult;
-        }),
-      );
+      const pages = await Promise.all([0, 5, 0, 5].map(listPage));
       expect(pages.map((page) => page.sessions.map((row) => row.sessionId))).toEqual([
         ["page-79", "page-78", "page-77", "page-76", "page-75"],
         ["page-74", "page-73", "page-72", "page-71", "page-70"],
@@ -278,6 +277,16 @@ it("prepares the roster once and yields while enriching only overlapping selecte
       expect(sql.queries).toEqual([]);
       await projection.ensureMaterialized();
       expect(projection.materializedCount).toBe(10);
+
+      // Repeating the pages over unchanged rows renders, materializes and reads nothing,
+      // including after an unrelated subagent registry renewal.
+      rendered.length = 0;
+      publishSubagentRunChanges();
+      for (const [index, offset] of [0, 5, 0, 5].entries()) {
+        expect((await listPage(offset, index)).sessions).toEqual(pages[index]!.sessions);
+      }
+      expect([rendered, projection.materializedCount, sql.queries]).toEqual([[], 10, []]);
+      expect(reads).not.toHaveBeenCalled();
     } finally {
       sql.restore();
     }
