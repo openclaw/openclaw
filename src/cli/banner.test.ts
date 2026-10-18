@@ -12,11 +12,6 @@ const bannerOptions = {
   mode: "off" as const,
 };
 
-vi.mock("./banner-config-lite.js", () => ({
-  parseTaglineMode: (value: unknown) =>
-    value === "random" || value === "default" || value === "off" ? value : undefined,
-}));
-
 beforeEach(() => {
   setStdoutIsTty(true);
   Object.defineProperty(process, "platform", { configurable: true, value: "darwin" });

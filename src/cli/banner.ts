@@ -7,7 +7,6 @@ import {
 import { isRich, theme } from "../../packages/terminal-core/src/theme.js";
 import { resolveCommitHash } from "../infra/git-commit.js";
 import { hasRootVersionAlias } from "./argv.js";
-import { parseTaglineMode } from "./banner-config-lite.js";
 import { pickCliLobsterArt } from "./lobster-art.js";
 import { pickTagline, type TaglineOptions } from "./tagline.js";
 
@@ -32,10 +31,7 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
   const commit =
     options.commit ?? resolveCommitHash({ env: options.env, moduleUrl: import.meta.url });
   const commitLabel = commit ?? "unknown";
-  const tagline = stripDecorativeEmojiForTerminal(
-    pickTagline({ ...options, mode: parseTaglineMode(options.mode) }),
-    options,
-  );
+  const tagline = stripDecorativeEmojiForTerminal(pickTagline(options), options);
   const rich = options.richTty ?? isRich();
   const title = decorativePrefix("🦞", "OpenClaw", options);
   const prefix = decorativeEmoji("🦞", options);
@@ -59,8 +55,7 @@ export function formatCliBannerLine(version: string, options: BannerOptions = {}
 // Rare day-seeded ASCII lobster above the banner: random-tagline mode only,
 // rich terminals only, never in CI (see lobster-art.ts for the odds).
 function resolveLobsterArt(options: BannerOptions): string | null {
-  const mode = parseTaglineMode(options.mode);
-  if (mode === "off" || mode === "default") {
+  if (options.mode === "off" || options.mode === "default") {
     return null;
   }
   if (!(options.richTty ?? isRich())) {

@@ -3412,7 +3412,6 @@
 ["src/claws/provenance-runtime-read.async.test.ts","../state/openclaw-state-worker-store.js","37aa720ace6595784783fa99bc745d9f2bed1360c5697c2edae5e9dbe857bdf5",1]
 ["src/cli/acp-cli.option-collisions.test.ts","../acp/client.js","404599b7af347c5c2f5e1cb3101abe24ed22fee32a77910f91cbb651c59e8c00",1]
 ["src/cli/acp-cli.option-collisions.test.ts","../acp/server.js","7810c9de50ddc3bd1422c75a18fa98e037a7c03c5c495ac5cbb210dd9bad4d15",1]
-["src/cli/banner.test.ts","./banner-config-lite.js","bc3497874d1842dc9ea007a1589b547c36a6216ec6ac4fa02b2c0427943c2594",1]
 ["src/cli/capability-cli.help.test.ts","../agents/prepared-model-catalog.js","ac3295dcf8bd9fd7f9aa8b408dcf36b9e7ca402c71ffa9e2f620e5f44d76afa3",1]
 ["src/cli/capability-cli.help.test.ts","../agents/simple-completion-runtime.js","658fc73642be7af35faeb24e2fb9775c0099473f925b59f4bc07500dae220be6",1]
 ["src/cli/capability-cli.help.test.ts","../config/config.js","8d3fb986af405b4f20e75c64b0d9dc911bf1b6cc841593853606593aa01ee5d2",1]
