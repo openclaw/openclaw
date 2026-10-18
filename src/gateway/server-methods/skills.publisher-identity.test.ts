@@ -127,6 +127,8 @@ function fakeClawHub(input: string): Response {
 
 const callSkillsHandler = (method: string, params: Record<string, unknown>) =>
   callGatewayHandler(skillsHandlers, method, params);
+const detail = (params: Record<string, unknown> = {}) =>
+  callSkillsHandler("skills.detail", { slug: `@wangchenyu8/${SLUG}`, ...params });
 
 describe("ClawHub publisher identity across skills.search and skills.detail", () => {
   beforeEach(() => {
@@ -144,41 +146,36 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
     vi.unstubAllEnvs();
   });
 
-  it.each([{ configured: "https://registry.example/", registry: "https://registry.example" }])(
-    "preserves publisher and registry identity from $registry",
-    async ({ configured, registry }) => {
-      vi.stubEnv("OPENCLAW_CLAWHUB_URL", configured);
-      vi.stubEnv("CLAWHUB_URL", undefined);
-      const { ok, response } = await callSkillsHandler("skills.search", { query: SLUG, limit: 10 });
+  it("preserves publisher and registry identity from the configured registry", async () => {
+    const registry = "https://registry.example";
+    vi.stubEnv("OPENCLAW_CLAWHUB_URL", registry + "/");
+    vi.stubEnv("CLAWHUB_URL", undefined);
+    const { ok, response } = await callSkillsHandler("skills.search", { query: SLUG, limit: 10 });
 
-      expect(ok).toBe(true);
-      const results = (
-        response as {
-          results: { registry: string; installRef?: string; installOnly?: true }[];
-        }
-      ).results;
-      expect(requestedUrls).toHaveLength(1);
-      expect(
-        new URL(expectDefined(requestedUrls[0], "search request")).searchParams.get("limit"),
-      ).toBe("10");
-      expect(resolveClawHubCatalogIconUrl(SEARCH_ICON_URL)).toBe(SEARCH_ICON_URL);
-      expect(new URL(expectDefined(requestedUrls[0], "search request")).origin).toBe(registry);
-      expect(results.map((r) => r.registry)).toEqual([registry, registry, registry]);
-      expect(results.map((r) => r.installRef)).toEqual([
-        `@gzlicanyi/${SLUG}`,
-        `@wangchenyu8/${SLUG}`,
-        `skills-sh:acme/tools/${SLUG}`,
-      ]);
-      // Only the external row is install-only; the registry rows keep the review flow.
-      expect(results.map((r) => r.installOnly)).toEqual([undefined, undefined, true]);
-    },
-  );
+    expect(ok).toBe(true);
+    const results = (
+      response as {
+        results: { registry: string; installRef?: string; installOnly?: true }[];
+      }
+    ).results;
+    expect(requestedUrls).toHaveLength(1);
+    expect(
+      new URL(expectDefined(requestedUrls[0], "search request")).searchParams.get("limit"),
+    ).toBe("10");
+    expect(resolveClawHubCatalogIconUrl(SEARCH_ICON_URL)).toBe(SEARCH_ICON_URL);
+    expect(new URL(expectDefined(requestedUrls[0], "search request")).origin).toBe(registry);
+    expect(results.map((r) => r.registry)).toEqual([registry, registry, registry]);
+    expect(results.map((r) => r.installRef)).toEqual([
+      `@gzlicanyi/${SLUG}`,
+      `@wangchenyu8/${SLUG}`,
+      `skills-sh:acme/tools/${SLUG}`,
+    ]);
+    // Only the external row is install-only; the registry rows keep the review flow.
+    expect(results.map((r) => r.installOnly)).toEqual([undefined, undefined, true]);
+  });
 
   it("reads the selected release card and scan without relabeling latest requirements", async () => {
-    const { ok, response, error } = await callSkillsHandler("skills.detail", {
-      slug: `@wangchenyu8/${SLUG}`,
-      version: "1.0.0",
-    });
+    const { ok, response, error } = await detail({ version: "1.0.0" });
 
     expect(error).toBeUndefined();
     expect(ok).toBe(true);
@@ -218,9 +215,7 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
     "refuses registry detail with mismatched %s identity",
     async (identity) => {
       wrongIdentity = identity;
-      const { ok, error } = await callSkillsHandler("skills.detail", {
-        slug: `@wangchenyu8/${SLUG}`,
-      });
+      const { ok, error } = await detail();
 
       expect(ok).toBe(false);
       expect(error).toMatchObject({
@@ -233,10 +228,7 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
 
   it("does not relabel a different release returned by the registry", async () => {
     wrongIdentity = "version";
-    const { ok, response } = await callSkillsHandler("skills.detail", {
-      slug: `@wangchenyu8/${SLUG}`,
-      version: "2.0.0",
-    });
+    const { ok, response } = await detail({ version: "2.0.0" });
 
     expect(ok).toBe(true);
     expect(response).toMatchObject({
@@ -250,10 +242,7 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
 
   it("keeps a malformed optional scan out of the detail response", async () => {
     malformedScan = true;
-    const { ok, response } = await callSkillsHandler("skills.detail", {
-      slug: `@wangchenyu8/${SLUG}`,
-      version: "1.0.0",
-    });
+    const { ok, response } = await detail({ version: "1.0.0" });
 
     expect(ok).toBe(true);
     expect(Value.Check(SkillsDetailResultSchema, response)).toBe(true);
@@ -265,7 +254,7 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
   });
 
   it("surfaces the ambiguous-slug error instead of picking a publisher for a bare slug", async () => {
-    const { ok, error } = await callSkillsHandler("skills.detail", { slug: SLUG });
+    const { ok, error } = await detail({ slug: SLUG });
 
     expect(ok).toBe(false);
     expect(String((error as { message?: string }).message)).toContain("AMBIGUOUS_SKILL_SLUG");
@@ -274,7 +263,7 @@ describe("ClawHub publisher identity across skills.search and skills.detail", ()
   it("refuses external-source detail instead of reading a same-slug registry skill", async () => {
     // Install keeps the external source, so a bare-slug read here would let an operator review
     // one skill and install another. ClawHub has no source-qualified read endpoint yet.
-    const { ok, error } = await callSkillsHandler("skills.detail", {
+    const { ok, error } = await detail({
       slug: `skills-sh:openclaw/skills/${SLUG}`,
     });
 

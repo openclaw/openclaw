@@ -42,6 +42,37 @@ function context(broadcast = vi.fn(), cfg: OpenClawConfig = {}): GatewayRequestC
   } as unknown as GatewayRequestContext;
 }
 
+async function writeSession(
+  sessionKey: string,
+  sessionId: string,
+  updatedAt = 1,
+  owner = "owner",
+  agentId = "main",
+) {
+  await upsertSessionEntryCore(
+    { agentId, sessionKey },
+    {
+      sessionId,
+      updatedAt,
+      createdActor: { type: "human", source: "profile", id: owner },
+      visibility: "shared",
+    },
+  );
+}
+
+async function typingSession(sessionKey: string, sessionId: string, now: number, actor = "alice") {
+  setRuntimeConfigSnapshot({});
+  vi.useFakeTimers();
+  vi.setSystemTime(now);
+  await writeSession(sessionKey, sessionId);
+  mocks.presence = [actor, "owner"].map((id) => ({
+    user: profileUser(id),
+    watchedSessions: [sessionKey],
+  }));
+  const broadcast = vi.fn();
+  return { broadcast, params: { sessionKey, sessionId, context: context(broadcast) } };
+}
+
 async function callTyping(params: {
   sessionKey: string;
   sessionId: string;
@@ -109,15 +140,7 @@ describe("session typing handler", () => {
       setRuntimeConfigSnapshot({});
       const sessionKey = `agent:main:typing-namespace-${name.replaceAll(" ", "-")}`;
       const sessionId = "typing-namespace";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "shared" },
-          visibility: "shared",
-        },
-      );
+      await writeSession(sessionKey, sessionId, 1, "shared");
       mocks.presence = presence.map((entry) => ({ ...entry, watchedSessions: [sessionKey] }));
       const broadcast = vi.fn();
       expect(
@@ -144,30 +167,9 @@ describe("session typing handler", () => {
 
   it("broadcasts bounded draft previews and never includes previews after typing stops", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      vi.useFakeTimers();
-      vi.setSystemTime(30_000);
-      const sessionKey = "agent:main:preview";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-preview",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner" },
-          visibility: "shared",
-        },
-      );
-      mocks.presence = [
-        { user: profileUser("alice"), watchedSessions: [sessionKey] },
-        { user: profileUser("owner"), watchedSessions: [sessionKey] },
-      ];
-      const broadcast = vi.fn();
-      const params = {
-        sessionKey,
-        sessionId: "session-preview",
-        client: client("alice", "alice-preview"),
-        context: context(broadcast),
-      };
+      const fixture = await typingSession("agent:main:preview", "session-preview", 30_000);
+      const { broadcast } = fixture;
+      const params = { ...fixture.params, client: client("alice", "alice-preview") };
 
       expect(
         await callTyping({ ...params, typing: true, preview: "  first draft  ", cursor: 4 }),
@@ -211,29 +213,11 @@ describe("session typing handler", () => {
 
   it("keeps a draft beside boolean-only typing until its connection stops", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      vi.useFakeTimers();
-      vi.setSystemTime(40_000);
-      const sessionKey = "agent:main:shared-preview";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-shared-preview",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner" },
-          visibility: "shared",
-        },
+      const { broadcast, params } = await typingSession(
+        "agent:main:shared-preview",
+        "session-shared-preview",
+        40_000,
       );
-      mocks.presence = [
-        { user: profileUser("alice"), watchedSessions: [sessionKey] },
-        { user: profileUser("owner"), watchedSessions: [sessionKey] },
-      ];
-      const broadcast = vi.fn();
-      const params = {
-        sessionKey,
-        sessionId: "session-shared-preview",
-        context: context(broadcast),
-      };
 
       expect(
         await callTyping({
@@ -276,26 +260,11 @@ describe("session typing handler", () => {
     "replaces a stopped connection's $state preview with the live draft",
     async ({ state, delayMs }) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
-        vi.useFakeTimers();
-        vi.setSystemTime(50_000);
-        const sessionKey = `agent:main:stopped-${state}-preview`;
-        const sessionId = `session-stopped-${state}-preview`;
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            sessionId,
-            updatedAt: 1,
-            createdActor: { type: "human", source: "profile", id: "owner" },
-            visibility: "shared",
-          },
+        const { broadcast, params } = await typingSession(
+          `agent:main:stopped-${state}-preview`,
+          `session-stopped-${state}-preview`,
+          50_000,
         );
-        mocks.presence = [
-          { user: profileUser("alice"), watchedSessions: [sessionKey] },
-          { user: profileUser("owner"), watchedSessions: [sessionKey] },
-        ];
-        const broadcast = vi.fn();
-        const params = { sessionKey, sessionId, context: context(broadcast) };
         const liveTab = client("alice", "live-tab");
         const stoppedTab = client("alice", "stopped-tab");
         await callTyping({ ...params, typing: true, preview: "live draft", client: liveTab });
@@ -323,15 +292,7 @@ describe("session typing handler", () => {
         agents: { entries: { main: {}, work: {} } },
       } satisfies OpenClawConfig;
       setRuntimeConfigSnapshot(cfg);
-      await upsertSessionEntryCore(
-        { agentId, sessionKey: "global" },
-        {
-          sessionId: `session-${agentId}`,
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner" },
-          visibility: "shared",
-        },
-      );
+      await writeSession("global", `session-${agentId}`, 1, "owner", agentId);
       mocks.presence = [
         { user: profileUser("alice"), watchedSessions: ["global"] },
         { user: profileUser("owner"), watchedSessions: ["global"] },
@@ -358,28 +319,14 @@ describe("session typing handler", () => {
 
   it("keeps an identity typing until its last active connection stops", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      vi.useFakeTimers();
-      vi.setSystemTime(10_000);
-      const sessionKey = "agent:main:main";
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId: "session-main",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner" },
-          visibility: "shared",
-        },
+      const { broadcast, params } = await typingSession(
+        "agent:main:main",
+        "session-main",
+        10_000,
+        "multi",
       );
-      mocks.presence = [
-        { user: profileUser("multi"), watchedSessions: [sessionKey] },
-        { user: profileUser("owner"), watchedSessions: [sessionKey] },
-      ];
-      const broadcast = vi.fn();
-      const requestContext = context(broadcast);
       const recordClientActivity = vi.fn();
-      requestContext.recordClientActivity = recordClientActivity;
-      const params = { sessionKey, sessionId: "session-main", context: requestContext };
+      params.context.recordClientActivity = recordClientActivity;
       const tabOne = client("multi", "multi-tab-1");
       const tabTwo = client("multi", "multi-tab-2");
 
@@ -412,73 +359,32 @@ describe("session typing handler", () => {
 
   it("does not carry active connections across a session replacement", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      setRuntimeConfigSnapshot({});
-      vi.useFakeTimers();
-      vi.setSystemTime(15_000);
       const sessionKey = "agent:main:typing-instance";
-      const writeSession = (sessionId: string, updatedAt: number) =>
-        upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            sessionId,
-            updatedAt,
-            createdActor: { type: "human" as const, source: "profile" as const, id: "owner" },
-            visibility: "shared" as const,
-          },
-        );
-      await writeSession("session-before-reset", 1);
-      mocks.presence = [
-        { user: profileUser("alice"), watchedSessions: [sessionKey] },
-        { user: profileUser("owner"), watchedSessions: [sessionKey] },
-      ];
-      const broadcast = vi.fn();
-      const requestContext = context(broadcast);
+      const { broadcast, params } = await typingSession(sessionKey, "session-before-reset", 15_000);
       const oldTab = client("alice", "old-tab");
       const newTab = client("alice", "new-tab");
+      const oldTyping = { ...params, typing: true, client: oldTab };
+      const newTyping = {
+        ...params,
+        sessionId: "session-after-reset",
+        typing: true,
+        client: newTab,
+      };
 
-      expect(
-        await callTyping({
-          sessionKey,
-          sessionId: "session-before-reset",
-          typing: true,
-          client: oldTab,
-          context: requestContext,
-        }),
-      ).toEqual({ ok: true, broadcast: true });
-      await writeSession("session-after-reset", 2);
-      expect(
-        await callTyping({
-          sessionKey,
-          sessionId: "session-before-reset",
-          typing: true,
-          client: oldTab,
-          context: requestContext,
-        }),
-      ).toEqual({ ok: true, broadcast: false });
+      expect(await callTyping(oldTyping)).toEqual({ ok: true, broadcast: true });
+      await writeSession(sessionKey, "session-after-reset", 2);
+      expect(await callTyping(oldTyping)).toEqual({ ok: true, broadcast: false });
       await vi.advanceTimersByTimeAsync(1_000);
-      expect(
-        await callTyping({
-          sessionKey,
-          sessionId: "session-after-reset",
-          typing: true,
-          client: newTab,
-          context: requestContext,
-        }),
-      ).toEqual({ ok: true, broadcast: true });
+      expect(await callTyping(newTyping)).toEqual({ ok: true, broadcast: true });
       expect(broadcast.mock.calls[1]?.[1]).toMatchObject({
         sessionId: "session-after-reset",
         typing: true,
       });
       await vi.advanceTimersByTimeAsync(100);
-      expect(
-        await callTyping({
-          sessionKey,
-          sessionId: "session-after-reset",
-          typing: false,
-          client: newTab,
-          context: requestContext,
-        }),
-      ).toEqual({ ok: true, broadcast: false });
+      expect(await callTyping({ ...newTyping, typing: false })).toEqual({
+        ok: true,
+        broadcast: false,
+      });
       await vi.advanceTimersByTimeAsync(900);
       expect(broadcast.mock.calls.map((call) => call[1].typing)).toEqual([true, true, false]);
     });
@@ -488,31 +394,20 @@ describe("session typing handler", () => {
     "drops a delayed refresh after its connection or session is %s",
     async (change) => {
       await withOpenClawTestState({ scenario: "minimal" }, async () => {
-        setRuntimeConfigSnapshot({});
-        vi.useFakeTimers();
-        vi.setSystemTime(20_000);
         const sessionKey = "agent:main:typing-reset";
         const scope = { agentId: "main", sessionKey };
-        await upsertSessionEntryCore(scope, {
-          sessionId: "session-before-reset",
-          updatedAt: 1,
-          createdActor: { type: "human", source: "profile", id: "owner" },
-          visibility: "shared",
-        });
-        mocks.presence = [
-          { user: profileUser("alice"), watchedSessions: [sessionKey] },
-          { user: profileUser("owner"), watchedSessions: [sessionKey] },
-        ];
-        const broadcast = vi.fn();
+        const { broadcast, params: base } = await typingSession(
+          sessionKey,
+          "session-before-reset",
+          20_000,
+        );
         const connection = new AbortController();
         let currentAuthority = true;
         const requestClient = client("alice", "alice-tab");
         requestClient.connectionSignal = connection.signal;
         const params = {
-          sessionKey,
-          sessionId: "session-before-reset",
+          ...base,
           client: requestClient,
-          context: context(broadcast),
           hasCurrentClientAuthority: () => currentAuthority,
         };
         const recordClientActivity = vi.fn();

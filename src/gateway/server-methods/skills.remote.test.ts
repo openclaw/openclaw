@@ -33,6 +33,20 @@ afterEach(() => vi.unstubAllEnvs());
 // cannot outlive this file and re-arm timers on a later file's fake clock.
 afterEach(() => closeSkillsWatchers(true));
 
+function writeWorkspaceSkill(
+  workspace: string,
+  name: string,
+  description: string,
+  metadata?: object,
+) {
+  return writeSkill({
+    dir: path.join(workspace, "skills", name),
+    name,
+    description,
+    ...(metadata ? { metadata: JSON.stringify({ openclaw: metadata }) } : {}),
+  });
+}
+
 it("reads remote skill status, cards and binary requirements through the workspace binding", async () => {
   const root = tempDirs.make("gateway-remote-skills-");
   vi.stubEnv("HOME", root);
@@ -43,42 +57,21 @@ it("reads remote skill status, cards and binary requirements through the workspa
   const gateway = path.join(root, "gateway");
   const remote = path.join(root, "remote");
   const hostPlatform = process.platform === "linux" ? "darwin" : "linux";
-  await writeSkill({
-    dir: path.join(gateway, "skills", "stale"),
-    name: "stale",
-    description: "Stale",
+  await writeWorkspaceSkill(gateway, "stale", "Stale");
+  await writeWorkspaceSkill(remote, "available", "Remote skill", {
+    os: [hostPlatform],
+    requires: { bins: ["host-tool"] },
+    install: [{ id: "host", kind: "node", package: "host-tool", os: [hostPlatform] }],
   });
-  await writeSkill({
-    dir: path.join(remote, "skills", "available"),
-    name: "available",
-    description: "Remote skill",
-    metadata: JSON.stringify({
-      openclaw: {
-        os: [hostPlatform],
-        requires: { bins: ["host-tool"] },
-        install: [{ id: "host", kind: "node", package: "host-tool", os: [hostPlatform] }],
-      },
-    }),
+  await writeWorkspaceSkill(remote, "installer", "Workspace dependency recipes", {
+    install: [
+      { id: "brew", kind: "brew", formula: "fixture-tool" },
+      { id: "host", kind: "node", package: "host-tool", os: [hostPlatform] },
+      { id: "gateway", kind: "node", package: "gateway-tool", os: [process.platform] },
+    ],
   });
-  await writeSkill({
-    dir: path.join(remote, "skills", "installer"),
-    name: "installer",
-    description: "Workspace dependency recipes",
-    metadata: JSON.stringify({
-      openclaw: {
-        install: [
-          { id: "brew", kind: "brew", formula: "fixture-tool" },
-          { id: "host", kind: "node", package: "host-tool", os: [hostPlatform] },
-          { id: "gateway", kind: "node", package: "gateway-tool", os: [process.platform] },
-        ],
-      },
-    }),
-  });
-  await writeSkill({
-    dir: path.join(remote, "skills", "missing"),
-    name: "missing",
-    description: "Missing dependency",
-    metadata: JSON.stringify({ openclaw: { requires: { bins: ["absent-tool"] } } }),
+  await writeWorkspaceSkill(remote, "missing", "Missing dependency", {
+    requires: { bins: ["absent-tool"] },
   });
   await fs.writeFile(path.join(remote, "skills", "available", "skill-card.md"), "# Remote card\n");
   const config = {

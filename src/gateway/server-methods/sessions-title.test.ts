@@ -34,9 +34,18 @@ const cfg: OpenClawConfig = {
   },
 };
 
+function roleConfig(role: GatewayOperatorRoleDefinition, name = "limited"): OpenClawConfig {
+  return { ...cfg, gateway: { roles: { default: name, definitions: { [name]: role } } } };
+}
+
 function operatorModelConfig(allow: string[]): OpenClawConfig {
   return {
-    ...cfg,
+    ...roleConfig({
+      agents: "*",
+      scopes: ["operator.write"],
+      sessions: { others: "none" },
+      modelPolicy: { sourceAgent: "main", allow },
+    }),
     agents: {
       ...cfg.agents,
       defaults: {
@@ -45,19 +54,6 @@ function operatorModelConfig(allow: string[]): OpenClawConfig {
           "title-test/primary": {},
           "title-test/utility": {},
           "title-test/blocked": { alias: "hidden-title-model" },
-        },
-      },
-    },
-    gateway: {
-      roles: {
-        default: "limited",
-        definitions: {
-          limited: {
-            agents: "*",
-            scopes: ["operator.write"],
-            sessions: { others: "none" },
-            modelPolicy: { sourceAgent: "main", allow },
-          },
         },
       },
     },
@@ -247,17 +243,7 @@ describe("sessions.title.prepare", () => {
     ).map(([name, params]) => ({ name, params, error: "INVALID_REQUEST" as const })),
     {
       name: "denied creation agent",
-      config: {
-        ...cfg,
-        gateway: {
-          roles: {
-            default: "limited",
-            definitions: {
-              limited: { agents: [], scopes: ["operator.write"], sessions: { others: "none" } },
-            },
-          },
-        },
-      },
+      config: roleConfig({ agents: [], scopes: ["operator.write"], sessions: { others: "none" } }),
       profile: "owner",
       error: "FORBIDDEN",
     },
@@ -454,10 +440,7 @@ describe("sessions.title.prepare", () => {
         scopes: ["operator.write"],
         sessions: { others: "none" },
       };
-      const config: OpenClawConfig = {
-        ...cfg,
-        gateway: { roles: { default: "writer", definitions: { writer } } },
-      };
+      const config = roleConfig(writer, "writer");
       const client = connectedClient(ownerId);
       const connections = new Set([client]);
       const abort = new AbortController();
