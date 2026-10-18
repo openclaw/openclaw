@@ -54,14 +54,18 @@ function renderedOrder(state: TestState) {
   return [...renderedText(state).matchAll(/Step (\d+):/gu)].map((match) => Number(match[1]));
 }
 
-function createHistoryHarness(runId: string) {
+it("restores only the unowned tail with bounded commentary replay and continues live deltas", async () => {
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   vi.setSystemTime(new Date("2026-05-09T00:00:00.000Z"));
   vi.stubGlobal("window", globalThis);
+  const startedAtMs = Date.now();
+  const runId = "run-commentary-history";
   const gateway = createAgentEventTestHarness();
   gateway.register(runId, "main", runId);
   const history = activeHistory(runId);
-  const clients: TestState[] = [];
+  const live = createState(history);
+  live.chatRunId = runId;
+  const clients = [live];
   gateway.broadcast.mockImplementation((event: string, payload: unknown) => {
     if (event === "chat" && Value.Check(ChatEventSchema, payload)) {
       for (const client of clients) {
@@ -69,31 +73,6 @@ function createHistoryHarness(runId: string) {
       }
     }
   });
-  return {
-    gateway,
-    history,
-    clients,
-    connect() {
-      const state = createState(history);
-      clients.push(state);
-      return state;
-    },
-    async dispose() {
-      await gateway.handler.dispose();
-      gateway.chatRunState.clear();
-      vi.useRealTimers();
-      vi.unstubAllGlobals();
-    },
-  };
-}
-
-it("restores only the unowned tail with bounded commentary replay and continues live deltas", async () => {
-  const runId = "run-commentary-history";
-  const harness = createHistoryHarness(runId);
-  const { gateway, history, clients } = harness;
-  const startedAtMs = Date.now();
-  const live = harness.connect();
-  live.chatRunId = runId;
   const unsubscribe = subscribeAgentEvents(async (event) => {
     if (event.runId !== runId) {
       return;
@@ -106,12 +85,6 @@ it("restores only the unowned tail with bounded commentary replay and continues 
   const deliver = (stream: AgentEventPayload["stream"], data: AgentEventPayload["data"]) =>
     emitAgentEvent({ runId, sessionKey: "main", stream, data });
   const { emit, subscription } = createSubscribedSessionHarness({ runId });
-  const drain = async () => {
-    await subscription.waitForPendingEvents();
-    await unsubscribe.drain();
-  };
-  const snapshot = () =>
-    projectInFlightRunSnapshot({ chatRunState: gateway.chatRunState, runId, startedAtMs });
   const tool = (toolCallId: string, completed: boolean) => {
     deliver("tool", { phase: "start", toolCallId, name: "exec", args: {} });
     if (completed) {
@@ -150,7 +123,8 @@ it("restores only the unowned tail with bounded commentary replay and continues 
       vi.advanceTimersByTime(250);
       emit({ type: "message_start", message: textMessage("") });
       updateText(text, text);
-      await drain();
+      await subscription.waitForPendingEvents();
+      await unsubscribe.drain();
       const itemId = `commentary-0-step-${index}`;
       const commentary = {
         ...textMessage(text),
@@ -170,7 +144,8 @@ it("restores only the unowned tail with bounded commentary replay and continues 
         assistantMessageEvent: { type: "toolcall_start", contentIndex: 1, partial: commentary },
       });
       emit({ type: "message_end", message: commentary });
-      await drain();
+      await subscription.waitForPendingEvents();
+      await unsubscribe.drain();
       expect
         .soft(renderedOrder(live))
         .toEqual(Array.from({ length: index + 1 }, (_, step) => step + 1));
@@ -179,24 +154,26 @@ it("restores only the unowned tail with bounded commentary replay and continues 
         tool("tool_call:exec_0:exec:old", true);
       }
       if (index >= 18) {
-        const saved = {
-          timestamp: Date.now(),
-          __openclaw: { id: `step-${index}`, seq: index * 10 + 2, runId },
-        };
         history.messages!.push(
           {
-            ...saved,
             role: "assistant",
             content: [{ type: "text", text }],
+            timestamp: Date.now(),
+            __openclaw: { id: `step-${index}`, seq: index * 10 + 2, runId },
             openclawStreamFallback: { source: "segment", itemId, replacementText: text },
           },
-          { ...saved, role: "assistant", content: [commentary.content[1]] },
+          {
+            role: "assistant",
+            content: [commentary.content[1]],
+            timestamp: Date.now(),
+            __openclaw: { id: `step-${index}`, seq: index * 10 + 2, runId },
+          },
           ...Array.from({ length: 8 }, (_, nested) => ({
             role: "toolResult",
-            timestamp: Date.now(),
-            content: [{ type: "text", text: `result-${index}-${nested}` }],
-            __openclaw: { id: `result-${index}-${nested}`, seq: index * 10 + 3 + nested, runId },
             toolCallId: nested ? `tool_call:exec_0:exec:${index * 8 + nested}` : "exec_0",
+            content: [{ type: "text", text: `result-${index}-${nested}` }],
+            timestamp: Date.now(),
+            __openclaw: { id: `result-${index}-${nested}`, seq: index * 10 + 3 + nested, runId },
           })),
         );
       }
@@ -210,7 +187,11 @@ it("restores only the unowned tail with bounded commentary replay and continues 
     history.hasMore = true;
     history.nextOffset = 40;
     history.totalMessages = 220;
-    history.inFlightRun = snapshot();
+    history.inFlightRun = projectInFlightRunSnapshot({
+      chatRunState: gateway.chatRunState,
+      runId,
+      startedAtMs,
+    });
     expect(history.messages).toHaveLength(40);
     expect(history.inFlightRun.events).toHaveLength(49);
     expect(
@@ -228,16 +209,23 @@ it("restores only the unowned tail with bounded commentary replay and continues 
     vi.advanceTimersByTime(250);
     emit({ type: "message_start", message: textMessage("") });
     updateText(pending, pending);
-    await drain();
-    history.inFlightRun = snapshot();
-    const restored = harness.connect();
+    await subscription.waitForPendingEvents();
+    await unsubscribe.drain();
+    history.inFlightRun = projectInFlightRunSnapshot({
+      chatRunState: gateway.chatRunState,
+      runId,
+      startedAtMs,
+    });
+    const restored = createState(history);
+    clients.push(restored);
     await loadChatHistory(restored);
     expect(renderedOrder(restored)).toEqual([19, 20, 21, 22, 23]);
     expect(restored.chatStream).toBe(pending);
 
     vi.advanceTimersByTime(250);
     updateText(`${pending} Continuing after switch-back.`, " Continuing after switch-back.");
-    await drain();
+    await subscription.waitForPendingEvents();
+    await unsubscribe.drain();
     vi.advanceTimersByTime(250);
     expect(renderedOrder(live)).toEqual(Array.from({ length: 23 }, (_, index) => index + 1));
     expect(renderedOrder(restored)).toEqual([19, 20, 21, 22, 23]);
@@ -246,32 +234,58 @@ it("restores only the unowned tail with bounded commentary replay and continues 
   } finally {
     subscription.unsubscribe();
     await unsubscribe();
-    await harness.dispose();
+    await gateway.handler.dispose();
+    gateway.chatRunState.clear();
+    vi.useRealTimers();
+    vi.unstubAllGlobals();
   }
 });
 
 it.each([
-  { name: "without steer", includeSteer: false },
-  { name: "saved after steer", steerFirst: true },
-  { name: "live" },
-  { name: "restored", reload: true },
-  { name: "identical later occurrence", tail: "Saved A." },
-  { name: "literal terminal tail", tail: "[" },
-  { name: "fully committed", persistTail: true },
-  { name: "canvas-only display tail", persistTail: true, canvas: true },
+  {
+    name: "without steer",
+    reload: false,
+    tail: "Live B.",
+    persistTail: false,
+    canvas: false,
+    includeSteer: false,
+  },
+  {
+    name: "saved after steer",
+    reload: false,
+    tail: "Live B.",
+    persistTail: false,
+    canvas: false,
+    steerFirst: true,
+  },
+  { name: "live", reload: false, tail: "Live B.", persistTail: false, canvas: false },
+  { name: "restored", reload: true, tail: "Live B.", persistTail: false, canvas: false },
+  {
+    name: "identical later occurrence",
+    reload: false,
+    tail: "Saved A.",
+    persistTail: false,
+    canvas: false,
+  },
+  { name: "literal terminal tail", reload: false, tail: "[", persistTail: false, canvas: false },
+  { name: "fully committed", reload: false, tail: "Live B.", persistTail: true, canvas: false },
+  {
+    name: "canvas-only display tail",
+    reload: false,
+    tail: "Live B.",
+    persistTail: true,
+    canvas: true,
+  },
 ])(
   "displays each occurrence once when a run finishes ($name)",
-  async ({
-    reload = false,
-    tail = "Live B.",
-    persistTail = false,
-    canvas = false,
-    includeSteer = true,
-    steerFirst = false,
-  }) => {
+  async ({ reload, tail, persistTail, canvas, includeSteer = true, steerFirst = false }) => {
+    vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(new Date("2026-05-09T00:00:00.000Z"));
+    vi.stubGlobal("window", globalThis);
     const runId = "steered-final";
-    const harness = createHistoryHarness(runId);
-    const { gateway, history } = harness;
+    const gateway = createAgentEventTestHarness();
+    gateway.register(runId, "main", runId);
+    const history = activeHistory(runId);
     const original = {
       role: "user",
       content: "Original prompt",
@@ -300,21 +314,17 @@ it.each([
       },
     };
     history.messages = [original];
-    const state = harness.connect();
-    const apply = (payload: Parameters<typeof applySessionMessagePayload>[1]) =>
-      applySessionMessagePayload(state, payload, true, {
+    const state = createState(history);
+    gateway.broadcast.mockImplementation((event: string, payload: unknown) => {
+      if (event === "chat" && Value.Check(ChatEventSchema, payload)) {
+        handleChatGatewayEvent(state, payload);
+      }
+    });
+    const applySteer = () =>
+      applySessionMessagePayload(state, { message: steer, clientRunId: runId }, true, {
         kind: "live",
         activeRunId: runId,
       });
-    const applySteer = () => apply({ message: steer, clientRunId: runId });
-    const expectedText = (...suffix: string[]) =>
-      [
-        "Original prompt",
-        ...(includeSteer && steerFirst ? ["Steer prompt"] : []),
-        "Saved A.",
-        ...suffix,
-      ].join("\n");
-    const afterSteer = includeSteer && !steerFirst ? ["Steer prompt"] : [];
     try {
       await loadChatHistory(state);
       if (includeSteer && steerFirst) {
@@ -340,9 +350,18 @@ it.each([
       });
       expect(publication.payload).not.toHaveProperty("runId");
       expect(publication.payload).toMatchObject({ message: { __openclaw: { runId } } });
-      apply(publication.payload);
+      applySessionMessagePayload(state, publication.payload, true, {
+        kind: "live",
+        activeRunId: runId,
+      });
       expect(state.chatRunId).toBe(runId);
-      expect(renderedText(state, false)).toBe(expectedText());
+      expect(renderedText(state, false)).toBe(
+        [
+          "Original prompt",
+          ...(includeSteer && steerFirst ? ["Steer prompt"] : []),
+          "Saved A.",
+        ].join("\n"),
+      );
       if (includeSteer && !steerFirst) {
         applySteer();
       }
@@ -362,7 +381,13 @@ it.each([
         await loadChatHistory(state);
       }
       expect(renderedText(state)).toBe(
-        expectedText(...afterSteer, ...(tail === "[" ? [] : [tail])),
+        [
+          "Original prompt",
+          ...(includeSteer && steerFirst ? ["Steer prompt"] : []),
+          "Saved A.",
+          ...(includeSteer && !steerFirst ? ["Steer prompt"] : []),
+          ...(tail === "[" ? [] : [tail]),
+        ].join("\n"),
       );
       if (persistTail) {
         const savedTail = {
@@ -375,7 +400,10 @@ it.each([
           sessionKey: "main",
           message: { ...savedTail, idempotencyKey: "item-b" },
         });
-        apply({ message: savedTail, runId });
+        applySessionMessagePayload(state, { message: savedTail, runId }, true, {
+          kind: "live",
+          activeRunId: runId,
+        });
       }
       if (canvas) {
         gateway.toolEventRecipients.add(runId, "control-ui");
@@ -400,7 +428,15 @@ it.each([
           content: expect.arrayContaining([{ type: "text", text: `Saved A.\n\n${tail}` }]),
         },
       });
-      expect(renderedText(state)).toBe(expectedText(...afterSteer, tail));
+      expect(renderedText(state)).toBe(
+        [
+          "Original prompt",
+          ...(includeSteer && steerFirst ? ["Steer prompt"] : []),
+          "Saved A.",
+          ...(includeSteer && !steerFirst ? ["Steer prompt"] : []),
+          tail,
+        ].join("\n"),
+      );
       if (canvas) {
         const widget = expect.objectContaining({
           type: "canvas",
@@ -416,11 +452,23 @@ it.each([
           renderedItems(state).flatMap((item) =>
             item.kind === "group" ? item.messages.map(({ message }) => message) : [],
           ),
-        ).toContainEqual(expect.objectContaining({ content: expect.arrayContaining([widget]) }));
+        ).toContainEqual(
+          expect.objectContaining({
+            content: expect.arrayContaining([
+              expect.objectContaining({
+                type: "canvas",
+                preview: expect.objectContaining({ title: "final-widget" }),
+              }),
+            ]),
+          }),
+        );
       }
       expect(state.chatRunId).toBeNull();
     } finally {
-      await harness.dispose();
+      await gateway.handler.dispose();
+      gateway.chatRunState.clear();
+      vi.useRealTimers();
+      vi.unstubAllGlobals();
     }
   },
 );

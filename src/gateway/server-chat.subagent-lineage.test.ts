@@ -17,33 +17,49 @@ import {
   resolveOpenClawAgentSqlitePath,
 } from "../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createChatEventFixture, emitAgentEvent } from "./server-chat.agent-events.test-helpers.js";
+import {
+  createChatRunState,
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat-state.js";
+import { emitAgentEvent } from "./server-chat.agent-events.test-helpers.js";
 import { createAgentEventHandler } from "./server-chat.js";
 import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
 
 function createLineageHarness(projection: SessionRowProjection, key: string) {
-  const fixture = createChatEventFixture();
-  const { broadcast, chatRunState } = fixture;
-  const runId = "lineage-run";
+  const broadcast = vi.fn();
+  const chatRunState = createChatRunState();
+  const runId = "prepared-lineage-run";
   const handler = createAgentEventHandler({
-    ...fixture,
+    broadcast,
+    broadcastToConnIds: vi.fn(),
+    nodeSendToSession: vi.fn(),
     nodeHasSessionSubscribers: () => false,
+    agentRunSeq: new Map(),
+    chatRunState,
     resolveSessionKeyForRun: () => key,
+    clearAgentRunContext: vi.fn(),
+    toolEventRecipients: chatRunState.toolEventRecipients,
+    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     getSessionRowProjection: () => projection,
   });
   let seq = 0;
   return {
-    async expectLineage(expected: string | undefined, refresh = false) {
-      if (refresh) {
-        await projection.ensureMaterialized();
-      }
+    async expectLineage(expected: string | undefined) {
       broadcast.mockClear();
       const materialized = projection.materializedCount;
       const sql = observeHostDataSql();
       const builds = vi.spyOn(registryRead, "buildSubagentSessionListReadIndex");
       try {
         const stream = seq === 0 ? "assistant" : "thinking";
-        await emitAgentEvent(handler, runId, stream, { text: "Child" }, { seq: ++seq });
+        await emitAgentEvent(
+          handler,
+          runId,
+          stream,
+          { text: "Prepared child response" },
+          { seq: ++seq },
+        );
         const payload = broadcast.mock.calls.find(
           ([event]) => event === (stream === "assistant" ? "chat" : "agent"),
         )?.[1];
@@ -71,18 +87,19 @@ function createLineageHarness(projection: SessionRowProjection, key: string) {
 it("keeps prepared lineage current across publications and store lifetimes without SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const cfg: OpenClawConfig = {
-      session: { scope: "global", mainKey: "dashboard:alias" },
+      session: { scope: "global", mainKey: "dashboard:lineage-alias" },
     };
     setRuntimeConfigSnapshot(cfg);
+    // New keys can publish prepared metadata after their physical store is admitted.
     replaceSessionEntrySync(
-      { agentId: "main", sessionKey: "agent:main:dashboard:anchor" },
-      { sessionId: "anchor", updatedAt: 1 },
+      { agentId: "main", sessionKey: "agent:main:dashboard:lineage-anchor" },
+      { sessionId: "lineage-anchor", updatedAt: 1 },
     );
-    const key = "agent:main:subagent:child";
+    const key = "agent:main:subagent:prepared-lineage";
     const target = { agentId: "main", sessionKey: key };
     const controller = "agent:main:controller";
     const replacement = "agent:main:replacement-controller";
-    const runId = "lineage-run";
+    const runId = "prepared-lineage-run";
     const fallback = "agent:main:former-controller";
     const entry = { sessionId: "lineage", updatedAt: 1, spawnedBy: fallback };
     const run = createSubagentRunRecord({
@@ -96,29 +113,28 @@ it("keeps prepared lineage current across publications and store lifetimes witho
     const projection = await createSessionRowProjection({ cfg, modelCatalog: [] });
     await projection.ensureMaterialized();
     const harnesses: ReturnType<typeof createLineageHarness>[] = [];
-    const attach = (sessionKey: string) => {
-      const harness = createLineageHarness(projection, sessionKey);
-      harnesses.push(harness);
-      return harness;
-    };
-    const child = attach(key);
+    const child = createLineageHarness(projection, key);
+    harnesses.push(child);
     try {
       await child.expectLineage(undefined);
       replaceSessionEntrySync(target, entry);
       publishSubagentRunChanges([key]);
       await child.expectLineage(fallback);
-      await child.expectLineage(controller, true);
+      await projection.ensureMaterialized();
+      await child.expectLineage(controller);
       subagentRuns.set(runId, { ...run, controllerSessionKey: replacement });
       publishSubagentRunChanges([key]);
       await child.expectLineage(fallback);
-      await child.expectLineage(replacement, true);
+      await projection.ensureMaterialized();
+      await child.expectLineage(replacement);
       await deleteSessionEntryLifecycle({
         ...target,
         storePath: resolveOpenClawAgentSqlitePath({ agentId: "main" }),
         archiveTranscript: false,
         target: { canonicalKey: key, storeKeys: [key] },
       });
-      await child.expectLineage(undefined, true);
+      await projection.ensureMaterialized();
+      await child.expectLineage(undefined);
       subagentRuns.delete(runId);
       publishSubagentRunChanges([key]);
 
@@ -141,7 +157,8 @@ it("keeps prepared lineage current across publications and store lifetimes witho
           : kind === "acp"
             ? sessionKey.slice("agent:main:".length)
             : sessionKey;
-        const harness = attach(eventKey);
+        const harness = createLineageHarness(projection, eventKey);
+        harnesses.push(harness);
         await harness.expectLineage(parent);
         await replaceSessionEntry(scope, {
           ...stored,
@@ -164,7 +181,10 @@ it("keeps prepared lineage current across publications and store lifetimes witho
       );
       subagentRuns.set(runId, { ...run, childSessionKey: "global" });
       publishSubagentRunChanges(["global"]);
-      await attach("agent:main:dashboard:alias").expectLineage(controller, true);
+      await projection.ensureMaterialized();
+      const alias = createLineageHarness(projection, "agent:main:dashboard:lineage-alias");
+      harnesses.push(alias);
+      await alias.expectLineage(controller);
       projection.dispose();
       for (const harness of harnesses) {
         await harness.expectLineage(undefined);

@@ -20,11 +20,15 @@ import { capLiveAssistantText } from "./live-chat-projector.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import {
   emitAgentEvent,
-  createChatEventFixture,
   registerChatRun,
   subscribeAgentEvents,
 } from "./server-chat.agent-events.test-helpers.js";
-import { createAgentEventHandler, createChatRunState } from "./server-chat.js";
+import {
+  createAgentEventHandler,
+  createChatRunState,
+  createSessionEventSubscriberRegistry,
+  createSessionMessageSubscriberRegistry,
+} from "./server-chat.js";
 import { broadcastChatFinal } from "./server-methods/chat-broadcast.js";
 import { GatewayClientRegistry } from "./server/client-registry.js";
 import type { GatewayWsClient } from "./server/ws-types.js";
@@ -37,48 +41,34 @@ function createHarness(
   vi.useFakeTimers();
   const clients = new GatewayClientRegistry();
   const broadcaster = createGatewayBroadcaster({ clients, ...audience });
+  const chatRunState = createChatRunState();
   const options = {
-    ...createChatEventFixture(),
     broadcast: vi.fn(broadcaster.broadcast),
     broadcastToConnIds: vi.fn(broadcaster.broadcastToConnIds),
+    nodeSendToSession: vi.fn(),
+    nodeHasSessionSubscribers: () => true,
+    agentRunSeq: new Map<string, number>(),
+    chatRunState,
+    resolveSessionKeyForRun: () => undefined,
+    clearAgentRunContext: vi.fn(),
+    toolEventRecipients: chatRunState.toolEventRecipients,
+    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
+    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
     persistGatewaySessionLifecycleEventForEvent: vi.fn(async () => undefined),
   };
-  const { chatRunState } = options;
   const handler = createAgentEventHandler(options);
   return {
     ...options,
     handler,
     clients,
     broadcaster,
-    registerRun(runId: string, sessionKey = `agent:main:${runId}`) {
+    registerRun(runId: string, sessionKey: string) {
       registerChatRun(chatRunState, runId, sessionKey, runId);
-      const emit = (
+      return (
         seq: number,
         stream: AgentEventRuntimePayload["stream"],
         data: Record<string, unknown>,
       ) => emitAgentEvent(handler, runId, stream, data, { seq });
-      return Object.assign(emit, {
-        snapshot: () => projectInFlightRunSnapshot({ chatRunState, runId }).text,
-        buffer: (final = false) => chatRunState.resolveBuffer(runId, { final }).text,
-        flush: () => chatRunState.flushPendingText(runId),
-        end: (seq: number) => emit(seq, "lifecycle", { phase: "end" }),
-        retire: (
-          text: string,
-          retirement: Omit<
-            Parameters<typeof handler.retireTranscript>[0],
-            "sessionKey" | "message"
-          > & {
-            message?: Record<string, unknown>;
-          } = {},
-        ) => {
-          const { message, ...publication } = retirement;
-          handler.retireTranscript({
-            sessionKey,
-            ...publication,
-            message: { ...assistantMessage(text), __openclaw: { runId }, ...message },
-          });
-        },
-      });
     },
     async [Symbol.asyncDispose]() {
       await handler.dispose();
@@ -87,30 +77,12 @@ function createHarness(
     },
   };
 }
-function assistantMessage(text: string) {
-  return { role: "assistant", content: [{ type: "text", text }] };
-}
-function cliWire(
-  harness: ReturnType<typeof createHarness>,
-  context: ReturnType<typeof buildPreparedCliRunContext>,
+function emitLifecycleEnd(
+  handler: ReturnType<typeof createHarness>["handler"],
+  runId: string,
+  seq: number,
 ) {
-  const cli = createCliEventHandlers({
-    context,
-    toolTracking: createCliToolTracking(context),
-    getRunState: () => ({ failed: false, error: undefined }),
-  });
-  const dispose = subscribeAgentEvents((event) => {
-    if (event.runId === context.params.runId) {
-      return harness.handler(event);
-    }
-  });
-  return {
-    dispose,
-    async delta(this: void, text: string, delta: string) {
-      cli.emitCliAssistantDelta({ text, delta });
-      await dispose.drain();
-    },
-  };
+  return emitAgentEvent(handler, runId, "lifecycle", { phase: "end" }, { seq });
 }
 function answerCandidate(itemId: string, progressText: string, status = "candidate") {
   return {
@@ -172,18 +144,8 @@ function connect(
   return { frames, client, socket };
 }
 type Frames = ReturnType<typeof connect>["frames"];
-const connectChatOnly = (clients: GatewayClientRegistry, id: string) =>
-  connect(clients, id, undefined, [GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT]);
 const payloads = (frames: Frames, event: string) =>
   frames.filter((frame) => frame.event === event).map((frame) => frame.payload);
-const lastChat = (frames: Frames) => payloads(frames, "chat").at(-1);
-const textContent = (text: string) => ({ content: [{ type: "text", text }] });
-function expectChat(frames: Frames, fields: Record<string, unknown>, text?: string) {
-  expect(lastChat(frames)).toMatchObject({
-    ...fields,
-    ...(text === undefined ? {} : { message: textContent(text) }),
-  });
-}
 const chatDeltaText = (frames: Frames) =>
   payloads(frames, "chat")
     .filter((payload) => payload.state === "delta")
@@ -204,56 +166,66 @@ function expectCapturedTail(actual: string, tail: string, prefix: string) {
 
 afterEach(() => vi.useRealTimers());
 
-it.each([false, true])(
-  "retains display deltas independently of raw snapshots (hidden=%s)",
-  async (hidden) => {
-    await using harness = createHarness();
-    const { frames } = connect(harness.clients, "viewer");
-    const runId = hidden ? "hidden-display-deltas" : "display-deltas";
-    const sessionKey = `agent:main:${runId}`;
-    harness.registerRun(runId, sessionKey);
-    const emit = (seq: number, delta: string) => {
-      const event: AgentEventRuntimePayload = {
-        runId,
-        seq,
-        ts: Date.now(),
-        stream: "assistant",
-        ...(hidden ? { controlUiVisible: false, projectSessionLifecycle: false, sessionKey } : {}),
-        data: { itemId: "raw", text: "raw transcript text", delta },
-        assistantProjection: { itemId: "display", delta, replace: false },
-      };
-      return harness.handler(event);
+it("uses display deltas independently of cumulative raw assistant snapshots", async () => {
+  await using harness = createHarness();
+  const { frames } = connect(harness.clients, "viewer");
+  const runId = "display-deltas";
+  harness.registerRun(runId, "agent:main:display-deltas");
+  for (const [index, delta] of ["Hello", " world"].entries()) {
+    const event: AgentEventRuntimePayload = {
+      runId,
+      seq: index + 1,
+      ts: Date.now(),
+      stream: "assistant",
+      data: { itemId: "raw", text: "raw transcript text", delta },
+      assistantProjection: { itemId: "display", delta, replace: false },
     };
+    await harness.handler(event);
+  }
+  vi.advanceTimersByTime(75);
+  expect(chatDeltaText(frames)).toBe("Hello world");
+  expect(payloads(frames, "agent")[0]?.data?.text).toBe("raw transcript text");
+});
 
-    await emit(1, "Hello");
-    if (hidden) {
-      expect(frames).toEqual([]);
-      harness.sessionMessageSubscribers.subscribe("viewer", sessionKey);
-    }
-    await emit(2, " world");
-    if (hidden) {
-      harness.chatRunState.flushPendingText(runId);
-    } else {
-      vi.advanceTimersByTime(75);
-    }
-    expect(chatDeltaText(frames)).toBe("Hello world");
-    if (!hidden) {
-      expect(payloads(frames, "agent")[0]?.data?.text).toBe("raw transcript text");
-      return;
-    }
+it("retains display deltas while a hidden run has no session subscribers", async () => {
+  await using harness = createHarness();
+  const { frames } = connect(harness.clients, "viewer");
+  const runId = "hidden-display-deltas";
+  const sessionKey = "agent:main:hidden-display-deltas";
+  harness.registerRun(runId, sessionKey);
+  const emit = (seq: number, delta: string) => {
+    const event: AgentEventRuntimePayload = {
+      runId,
+      sessionKey,
+      seq,
+      ts: Date.now(),
+      stream: "assistant",
+      controlUiVisible: false,
+      projectSessionLifecycle: false,
+      data: { itemId: "raw", text: "raw transcript text", delta },
+      assistantProjection: { itemId: "display", delta, replace: false },
+    };
+    return harness.handler(event);
+  };
 
-    harness.sessionMessageSubscribers.unsubscribe("viewer", sessionKey);
-    const delivered = frames.length;
-    await emit(3, " hidden");
-    expect(frames).toHaveLength(delivered);
-    harness.sessionMessageSubscribers.subscribe("viewer", sessionKey);
-    await emit(4, " again");
-    harness.chatRunState.flushPendingText(runId);
-    expect(chatDeltaText(frames)).toBe("Hello world hidden again");
-    expect(harness.broadcast).not.toHaveBeenCalled();
-    expect(harness.nodeSendToSession).not.toHaveBeenCalled();
-  },
-);
+  await emit(1, "Hello");
+  expect(frames).toEqual([]);
+  harness.sessionMessageSubscribers.subscribe("viewer", sessionKey);
+  await emit(2, " world");
+  harness.chatRunState.flushPendingText(runId);
+  expect(chatDeltaText(frames)).toBe("Hello world");
+
+  harness.sessionMessageSubscribers.unsubscribe("viewer", sessionKey);
+  const delivered = frames.length;
+  await emit(3, " hidden");
+  expect(frames).toHaveLength(delivered);
+  harness.sessionMessageSubscribers.subscribe("viewer", sessionKey);
+  await emit(4, " again");
+  harness.chatRunState.flushPendingText(runId);
+  expect(chatDeltaText(frames)).toBe("Hello world hidden again");
+  expect(harness.broadcast).not.toHaveBeenCalled();
+  expect(harness.nodeSendToSession).not.toHaveBeenCalled();
+});
 
 it("replaces the wire baseline when a cumulative snapshot restores capped context", () => {
   const state = createChatRunState();
@@ -274,44 +246,75 @@ it("replaces the wire baseline when a cumulative snapshot restores capped contex
 
 it("restores the wire baseline when an anonymous snapshot invalidates retired ownership", async () => {
   await using harness = createHarness();
-  const { frames } = connectChatOnly(harness.clients, "viewer");
-  const emit = harness.registerRun("anonymous-reset");
+  const { frames } = connect(harness.clients, "viewer", undefined, [
+    GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+  ]);
+  const runId = "anonymous-reset";
+  const sessionKey = "agent:main:anonymous-reset";
+  const emit = harness.registerRun(runId, sessionKey);
   await emit(1, "assistant", { itemId: "saved", text: "Saved." });
-  emit.retire("Saved.", {
+  harness.handler.retireTranscript({
+    sessionKey,
     messageSeq: 2,
     assistantItemIds: ["saved"],
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Saved." }],
+      __openclaw: { runId },
+    },
   });
-  expectChat(frames, { deltaText: "", replace: true });
+  expect(payloads(frames, "chat").at(-1)).toMatchObject({ deltaText: "", replace: true });
   await emit(2, "assistant", { text: "Saved. More." });
   vi.advanceTimersByTime(75);
-  expectChat(frames, { deltaText: "Saved. More." });
+  expect(payloads(frames, "chat").at(-1)).toMatchObject({
+    deltaText: "Saved. More.",
+  });
 });
 
 it("keeps literal control tails through the capped terminal wire flush", async () => {
   await using harness = createHarness();
-  const { frames } = connectChatOnly(harness.clients, "viewer");
-  const emit = harness.registerRun("literal-control");
+  const { frames } = connect(harness.clients, "viewer", undefined, [
+    GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+  ]);
+  const runId = "literal-control";
+  const sessionKey = "agent:main:literal-control";
+  const emit = harness.registerRun(runId, sessionKey);
   const prefix = "The token is " + " ".repeat(500_000);
   const tail = `${SILENT_REPLY_TOKEN}.`;
   await emit(1, "assistant", { itemId: "native", occurrenceId: "a", text: prefix });
   await emit(2, "assistant", { itemId: "native", occurrenceId: "b", text: prefix + tail });
-  emit.retire(prefix, {
+  harness.handler.retireTranscript({
+    sessionKey,
     messageSeq: 2,
     assistantItemIds: ["a"],
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: prefix }],
+      __openclaw: { runId },
+    },
   });
-  const display = emit.buffer();
+  const display = harness.chatRunState.resolveBuffer(runId).text;
   expect(display.trim()).toBe(tail);
-  await emit.end(3);
+  await emitLifecycleEnd(harness.handler, runId, 3);
   const delta = payloads(frames, "chat").findLast((payload) => payload.state === "delta");
-  expect.soft(readAssistantDisplayContent(delta?.message)[0]?.text).toBe(display);
-  const final = lastChat(frames);
+  expect
+    .soft(
+      readAssistantDisplayContent(delta?.message)[0]?.text === display,
+      "pending flush preserves the display tail",
+    )
+    .toBe(true);
+  const final = payloads(frames, "chat").at(-1);
   expect(final?.state).toBe("final");
-  expect(readAssistantDisplayContent(final?.message)[0]?.text).toBe(display);
+  expect(
+    readAssistantDisplayContent(final?.message)[0]?.text === display,
+    "terminal frame retains display-only content",
+  ).toBe(true);
 });
 
 it("preserves an unfinished native replacement when an earlier matching prefix persists", async () => {
   await using harness = createHarness();
-  const emit = harness.registerRun("native-steer");
+  const sessionKey = "agent:main:native-steer";
+  const emit = harness.registerRun("native-steer", sessionKey);
   await emit(1, "assistant", { itemId: "completed", text: "Same.", replaceable: true });
   await emit(2, "assistant", {
     itemId: "unfinished",
@@ -319,12 +322,18 @@ it("preserves an unfinished native replacement when an earlier matching prefix p
     replace: true,
     replaceable: true,
   });
-  emit.retire("Same.", {
+  harness.handler.retireTranscript({
+    sessionKey,
     messageSeq: 2,
     assistantItemIds: ["completed"],
-    message: { idempotencyKey: "codex-app-server:thread:turn:assistant:completed" },
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Same." }],
+      idempotencyKey: "codex-app-server:thread:turn:assistant:completed",
+      __openclaw: { runId: "native-steer" },
+    },
   });
-  expect(emit.buffer()).toBe("Same. tail");
+  expect(harness.chatRunState.resolveBuffer("native-steer").text).toBe("Same. tail");
 });
 
 it.each([
@@ -334,7 +343,9 @@ it.each([
   "retires a captured occurrence while the same native item continues ($name)",
   async ({ prefix, preceding }) => {
     await using harness = createHarness();
-    const wireEmit = harness.registerRun("occurrence-tail");
+    const sessionKey = "agent:main:occurrence-tail";
+    const runId = "occurrence-tail";
+    const wireEmit = harness.registerRun(runId, sessionKey);
     const rawStream = createAssistantTextStream(false);
     const emit = async (seq: number, occurrenceId: string, text: string, delta: string) => {
       const data = { itemId: "answer", occurrenceId, text, delta };
@@ -348,17 +359,31 @@ it.each([
     }
     await emit(1, "captured", prefix, prefix);
     await emit(2, "tail", `${prefix}B`, "B");
-    wireEmit.retire(prefix, {
+    harness.handler.retireTranscript({
+      sessionKey,
       messageSeq: 2,
       assistantItemIds: [...(preceding ? ["earlier"] : []), "captured"],
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: prefix }],
+        __openclaw: { runId },
+      },
     });
-    const tail = wireEmit.snapshot();
+    const tail = projectInFlightRunSnapshot({ chatRunState: harness.chatRunState, runId }).text;
     expectCapturedTail(tail, "B", prefix);
-    expect(wireEmit.buffer(true)).toBe(`${prefix}B`.slice(-500_000));
+    expect(harness.chatRunState.resolveBuffer(runId, { final: true }).text).toBe(
+      `${prefix}B`.slice(-500_000),
+    );
     await emit(3, "tail", `${prefix}BC`, "C");
-    expectCapturedTail(wireEmit.snapshot(), "BC", prefix);
+    expectCapturedTail(
+      projectInFlightRunSnapshot({ chatRunState: harness.chatRunState, runId }).text,
+      "BC",
+      prefix,
+    );
     expect(rawStream.streamedText).toBe(`${preceding ? "Earlier.\n\n" : ""}${prefix}BC`);
-    expect(wireEmit.buffer(true)).toBe(`${prefix}BC`.slice(-500_000));
+    expect(harness.chatRunState.resolveBuffer(runId, { final: true }).text).toBe(
+      `${prefix}BC`.slice(-500_000),
+    );
   },
 );
 
@@ -370,9 +395,19 @@ it.each([
   async ({ saved, preceding }) => {
     await using harness = createHarness();
     const { frames } = connect(harness.clients, "control-ui");
-    const emit = harness.registerRun("cleared-native-item");
+    const runId = "cleared-native-item";
+    const sessionKey = "agent:main:cleared-native-item";
+    const emit = harness.registerRun(runId, sessionKey);
     const commit = (itemId: string, text: string) =>
-      emit.retire(text, { assistantItemIds: [itemId] });
+      harness.handler.retireTranscript({
+        sessionKey,
+        assistantItemIds: [itemId],
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text }],
+          __openclaw: { runId },
+        },
+      });
     if (preceding) {
       await emit(0, "assistant", { itemId: "earlier", text: "Earlier." });
       commit("earlier", "Earlier.");
@@ -380,21 +415,30 @@ it.each([
     await emit(1, "assistant", { itemId: "native", occurrenceId: "saved", text: saved });
     commit("saved", saved);
     await emit(2, "assistant", { itemId: "native", occurrenceId: "pending", text: `${saved}B` });
-    expectCapturedTail(emit.snapshot(), "B", saved);
+    expectCapturedTail(
+      projectInFlightRunSnapshot({ chatRunState: harness.chatRunState, runId }).text,
+      "B",
+      saved,
+    );
     await emit(3, "assistant", {
       itemId: "native",
       occurrenceId: "pending",
       text: "",
       replace: true,
     });
-    expect(emit.snapshot()).toBe("");
+    expect(projectInFlightRunSnapshot({ chatRunState: harness.chatRunState, runId }).text).toBe("");
     await emit(4, "assistant", { itemId: "answer", text: "Done" });
     commit("saved", saved);
-    emit.flush();
-    expect(emit.snapshot()).toBe("Done");
-    expectChat(frames, { deltaText: "Done" });
-    await emit.end(5);
-    expectChat(frames, { state: "final" }, `${preceding ? "Earlier.\n\n" : ""}Done`);
+    harness.chatRunState.flushPendingText(runId);
+    expect(projectInFlightRunSnapshot({ chatRunState: harness.chatRunState, runId }).text).toBe(
+      "Done",
+    );
+    expect(payloads(frames, "chat").at(-1)).toMatchObject({ deltaText: "Done" });
+    await emitLifecycleEnd(harness.handler, runId, 5);
+    expect(payloads(frames, "chat").at(-1)).toMatchObject({
+      state: "final",
+      message: { content: [{ type: "text", text: `${preceding ? "Earlier.\n\n" : ""}Done` }] },
+    });
   },
 );
 
@@ -421,80 +465,136 @@ it("keeps nonempty native replacement and the next item outside retired position
   expect(final.displayText ?? final.text).toBe(`${replacement}\n\nDone`);
 });
 
-it("preserves unsaved text after replacing a fully evicted occurrence", () => {
-  const state = createChatRunState();
-  const runId = "evicted-retirement";
-  const itemId = "native";
-  const saved = "a".repeat(100_000);
-  const pending = "b".repeat(500_000);
-  state.updateBuffer(runId, { itemId, occurrenceId: "saved", text: saved });
-  state.updateBuffer(runId, { itemId, occurrenceId: "pending", text: saved + pending });
-  state.retireBuffer(runId, ["saved"]);
-  const unsaved = pending.slice(0, -50_000);
-  const replacement = saved + unsaved;
-  state.updateBuffer(runId, {
-    itemId,
-    occurrenceId: "pending",
-    text: replacement,
+it.each([
+  {
+    name: "fully evicted occurrence",
+    itemId: "native",
+    savedSize: 100_000,
+    tailSize: 500_000,
+    correctPrefix: false,
     replace: true,
-  });
-  const available = capLiveAssistantText({ text: replacement });
-  const availableSaved = available.slice(0, -unsaved.length);
-  const final = state.resolveBuffer(runId, { final: true });
-  const views: Array<[string, string]> = [
-    ["live", state.resolveBuffer(runId).text],
-    ["snapshot", projectInFlightRunSnapshot({ chatRunState: state, runId }).text],
-    ["display-final", final.displayText ?? final.text],
-  ];
-  for (const [view, actual] of views) {
-    expect(actual.endsWith(unsaved), `${view} retains every unsaved character`).toBe(true);
-    expect(actual.length, `${view} respects the display cap`).toBeLessThanOrEqual(available.length);
-    const prefix = actual.slice(0, -unsaved.length);
-    expect(
-      availableSaved.endsWith(prefix),
-      `${view} only duplicates available committed text`,
-    ).toBe(true);
-  }
-});
+  },
+])(
+  "preserves unsaved text after an ambiguous replacement ($name)",
+  ({ itemId, savedSize, tailSize, correctPrefix, replace }) => {
+    const state = createChatRunState();
+    const runId = "evicted-retirement";
+    const saved = "a".repeat(savedSize);
+    const pending = "b".repeat(tailSize);
+    state.updateBuffer(runId, { itemId, occurrenceId: "saved", text: saved });
+    state.updateBuffer(runId, { itemId, occurrenceId: "pending", text: saved + pending });
+    state.retireBuffer(runId, ["saved"]);
+    const shorter = replace ? pending.slice(0, -50_000) : pending;
+    const replacement = (correctPrefix ? "x" + saved.slice(1) : saved) + shorter;
+    state.updateBuffer(runId, {
+      itemId,
+      occurrenceId: "pending",
+      text: replacement,
+      replace,
+    });
+    const available = capLiveAssistantText({ text: replacement });
+    // A correction at the evicted first character makes all replacement bytes
+    // unsaved even though the retained suffix matches the old committed occurrence.
+    const unsaved = correctPrefix ? available : shorter;
+    const availableSaved = available.slice(0, -unsaved.length);
+    const final = state.resolveBuffer(runId, { final: true });
+    const views: Array<[string, string]> = [
+      ["live", state.resolveBuffer(runId).text],
+      ["snapshot", projectInFlightRunSnapshot({ chatRunState: state, runId }).text],
+      ["display-final", final.displayText ?? final.text],
+    ];
+    for (const [view, actual] of views) {
+      expect(actual.endsWith(unsaved), `${view} retains every unsaved character`).toBe(true);
+      expect(actual.length, `${view} respects the display cap`).toBeLessThanOrEqual(
+        available.length,
+      );
+      const prefix = actual.slice(0, -unsaved.length);
+      expect(
+        availableSaved.endsWith(prefix),
+        `${view} only duplicates available committed text`,
+      ).toBe(true);
+    }
+  },
+);
 
 it("keeps unidentified third-party text live through unrelated commits", async () => {
   await using harness = createHarness();
-  const { frames } = connectChatOnly(harness.clients, "existing");
-  const emit = harness.registerRun("unkeyed-replacement");
-  const persist = (messageSeq: number) => emit.retire("Saved.", { messageSeq });
+  const { frames } = connect(harness.clients, "existing", undefined, [
+    GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+  ]);
+  const sessionKey = "agent:main:unkeyed-replacement";
+  const runId = "unkeyed-replacement";
+  const emit = harness.registerRun(runId, sessionKey);
+  const persist = (messageSeq: number) =>
+    harness.handler.retireTranscript({
+      sessionKey,
+      messageSeq,
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Saved." }],
+        __openclaw: { runId },
+      },
+    });
   await emit(1, "assistant", { text: "Draft" });
   persist(2);
   const replacement = "Saved.\n\nNew answer";
   await emit(2, "assistant", { text: replacement, replace: true });
-  expect(emit.snapshot()).toBe(replacement);
-  expectChat(frames, { replace: true, deltaText: replacement });
+  expect(projectInFlightRunSnapshot({ chatRunState: harness.chatRunState, runId }).text).toBe(
+    replacement,
+  );
+  expect(payloads(frames, "chat").at(-1)).toMatchObject({
+    replace: true,
+    deltaText: replacement,
+  });
   await emit(3, "assistant", { delta: " More." });
   vi.advanceTimersByTime(75);
-  expectChat(frames, { deltaText: " More." });
+  expect(payloads(frames, "chat").at(-1)).toMatchObject({ deltaText: " More." });
   persist(3);
-  expect(emit.snapshot()).toBe("Saved.\n\nNew answer More.");
+  expect(projectInFlightRunSnapshot({ chatRunState: harness.chatRunState, runId }).text).toBe(
+    "Saved.\n\nNew answer More.",
+  );
 });
 
 it("replaces committed live text and preserves an indented tail for existing and returning clients", async () => {
   const tail = "    const value = 1;";
   await using harness = createHarness({ canReceiveSessionEvent: () => true });
-  const { frames } = connectChatOnly(harness.clients, "existing");
-  const emit = harness.registerRun("tail-run", "agent:main:tail");
+  const { frames } = connect(harness.clients, "existing", undefined, [
+    GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+  ]);
+  const sessionKey = "agent:main:tail";
+  const emit = harness.registerRun("tail-run", sessionKey);
   await emit(1, "assistant", { itemId: "saved", text: "Saved.", delta: "Saved." });
   await emit(2, "assistant", { itemId: "tail", text: tail, delta: tail });
-  emit.retire("Saved.", {
+  harness.handler.retireTranscript({
+    sessionKey,
     messageSeq: 2,
-    message: { idempotencyKey: "saved" },
+    message: {
+      role: "assistant",
+      idempotencyKey: "saved",
+      content: [{ type: "text", text: "Saved." }],
+      __openclaw: { runId: "tail-run" },
+    },
   });
-  expectChat(frames, { replace: true, deltaText: tail }, tail);
-  const { frames: returning } = connectChatOnly(harness.clients, "returning");
-  expect(emit.buffer()).toBe(tail);
+  expect(payloads(frames, "chat").at(-1)).toMatchObject({
+    replace: true,
+    deltaText: tail,
+    message: { content: [{ type: "text", text: tail }] },
+  });
+  const { frames: returning } = connect(harness.clients, "returning", undefined, [
+    GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+  ]);
+  expect(harness.chatRunState.resolveBuffer("tail-run").text).toBe(tail);
   await emit(3, "assistant", { itemId: "tail", text: `${tail} More.`, delta: " More." });
   vi.advanceTimersByTime(75);
-  expectChat(frames, { deltaText: " More." });
-  expectChat(returning, {}, `${tail} More.`);
-  await emit.end(4);
-  expectChat(frames, { state: "final" }, `Saved.\n\n${tail} More.`);
+  expect(payloads(frames, "chat").at(-1)).toMatchObject({ deltaText: " More." });
+  expect(payloads(returning, "chat").at(-1)).toMatchObject({
+    message: { content: [{ type: "text", text: `${tail} More.` }] },
+  });
+  await emitLifecycleEnd(harness.handler, "tail-run", 4);
+  expect(payloads(frames, "chat").at(-1)).toMatchObject({
+    state: "final",
+    message: { content: [{ type: "text", text: `Saved.\n\n${tail} More.` }] },
+  });
   expect(payloads(frames, "chat").findLast((payload) => payload.state === "delta")).toMatchObject({
     deltaText: " More.",
   });
@@ -505,7 +605,9 @@ it("keeps non-text agent events for chat-only clients", async () => {
   await using harness = createHarness({ onBroadcast, canReceiveSessionEvent: () => true });
   const { clients } = harness;
   const { frames: legacy } = connect(clients, "legacy");
-  const { frames: chatOnly } = connectChatOnly(clients, "chat-only");
+  const { frames: chatOnly } = connect(clients, "chat-only", undefined, [
+    GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+  ]);
   const runId = "progress-run";
   const emit = harness.registerRun(runId, "agent:main:progress");
   harness.toolEventRecipients.add(runId, "legacy");
@@ -542,10 +644,12 @@ it("keeps non-text agent events for chat-only clients", async () => {
 it("sends append-only wire text while retaining snapshots for observers and late recipients", async () => {
   let visible = true;
   await using harness = createHarness({ canReceiveSessionEvent: () => visible });
-  const { clients, chatRunState } = harness;
+  const { clients, handler, chatRunState } = harness;
   const { frames } = connect(clients, "first");
-  const { frames: chatOnly } = connectChatOnly(clients, "chat-only");
-  const wireEmit = harness.registerRun("wire-run", "agent:main:wire");
+  const { frames: chatOnly } = connect(clients, "chat-only", undefined, [
+    GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+  ]);
+  registerChatRun(chatRunState, "wire-run", "agent:main:wire", "wire-run");
   const emit = async (
     seq: number,
     text: string | undefined,
@@ -553,7 +657,13 @@ it("sends append-only wire text while retaining snapshots for observers and late
     replace?: true,
     itemId = "answer",
   ) => {
-    await wireEmit(seq, "assistant", { itemId, text, delta, replace });
+    await emitAgentEvent(
+      handler,
+      "wire-run",
+      "assistant",
+      { itemId, text, delta, replace },
+      { seq },
+    );
     chatRunState.flushPendingText("wire-run");
   };
   await emit(1, undefined, "Hello");
@@ -578,26 +688,41 @@ it("sends append-only wire text while retaining snapshots for observers and late
     data: { text: "Hello world" },
   });
   await emit(3, "Rewritten", "", true);
-  expectChat(frames, { replace: true }, "Rewritten");
+  expect(payloads(frames, "chat").at(-1)).toMatchObject({
+    replace: true,
+    message: { content: [{ type: "text", text: "Rewritten" }] },
+  });
   visible = false;
   await emit(4, "Reset", undefined);
   visible = true;
   await emit(5, "Reset!", "!");
   expect(payloads(frames, "agent").at(-1)?.data?.text).toBe("Reset!");
   await emit(6, "Other", "Other", undefined, "other");
-  expectChat(frames, { deltaText: "\n\nOther" });
-  expect(wireEmit.snapshot()).toBe("Reset!\n\nOther");
+  expect(payloads(frames, "chat").at(-1)).toMatchObject({
+    deltaText: "\n\nOther",
+  });
+  expect(projectInFlightRunSnapshot({ chatRunState, runId: "wire-run" }).text).toBe(
+    "Reset!\n\nOther",
+  );
   await emit(7, "Reset! again", " again", undefined, "followup");
   expect(payloads(frames, "agent").at(-1)?.data?.text).toBe("Reset! again");
-  wireEmit.retire("Other", {
+  handler.retireTranscript({
+    sessionKey: "agent:main:wire",
     messageSeq: 1,
     assistantItemIds: ["other"],
+    message: {
+      role: "assistant",
+      content: [{ type: "text", text: "Other" }],
+      __openclaw: { runId: "wire-run" },
+    },
   });
-  expect(wireEmit.snapshot()).toBe("Reset!\n\nReset! again");
-  await wireEmit.end(8);
+  expect(projectInFlightRunSnapshot({ chatRunState, runId: "wire-run" }).text).toBe(
+    "Reset!\n\nReset! again",
+  );
+  await emitLifecycleEnd(handler, "wire-run", 8);
   expect(frames.at(-1)?.payload).toMatchObject({
     state: "final",
-    message: textContent("Reset!\n\nOther\n\nReset! again"),
+    message: { content: [{ type: "text", text: "Reset!\n\nOther\n\nReset! again" }] },
   });
   expect(readAssistantDisplayContent(frames.at(-1)?.payload.message)).toEqual([
     { type: "text", text: "Reset!\n\nReset! again" },
@@ -615,7 +740,7 @@ it.each(["immediate", "paced", "slow"])(
   async (mode) => {
     const replacement = "foobaz";
     const harness = createHarness();
-    const { clients, broadcaster, chatRunState } = harness;
+    const { clients, broadcaster, handler, chatRunState } = harness;
     const callbacks: Array<() => void> = [];
     let hold = false;
     const { frames } = connect(clients, "cli-reader", (callback) => {
@@ -629,19 +754,31 @@ it.each(["immediate", "paced", "slow"])(
     harness.registerRun(runId, `agent:main:${runId}`);
     const context = buildPreparedCliRunContext({ runId });
     context.backendResolved.textTransforms = { output: [{ from: /foobar/g, to: replacement }] };
-    const { delta, dispose } = cliWire(harness, context);
+    const cli = createCliEventHandlers({
+      context,
+      toolTracking: createCliToolTracking(context),
+      getRunState: () => ({ failed: false, error: undefined }),
+    });
+    const dispose = subscribeAgentEvents((event) => {
+      if (event.runId === runId) {
+        return handler(event);
+      }
+    });
     try {
-      await delta("foo", "foo");
+      cli.emitCliAssistantDelta({ text: "foo", delta: "foo" });
+      await dispose.drain();
       chatRunState.flushPendingText(runId);
       if (mode === "slow") {
         hold = true;
         broadcaster.broadcast("tick", {});
       }
-      await delta("foobar", "bar");
+      cli.emitCliAssistantDelta({ text: "foobar", delta: "bar" });
+      await dispose.drain();
       if (mode !== "paced") {
         chatRunState.flushPendingText(runId);
       }
-      await delta("foobarbaz", "baz");
+      cli.emitCliAssistantDelta({ text: "foobarbaz", delta: "baz" });
+      await dispose.drain();
       chatRunState.flushPendingText(runId);
       hold = false;
       while (callbacks.length) {
@@ -689,10 +826,20 @@ it("retires a real CLI reply before its corrected source snapshot arrives", asyn
   });
   context.params.storePath = target.storePath;
   context.params.persistAssistantTranscript = true;
-  const { delta, dispose: stopEvents } = cliWire(harness, context);
+  const cli = createCliEventHandlers({
+    context,
+    toolTracking: createCliToolTracking(context),
+    getRunState: () => ({ failed: false, error: undefined }),
+  });
+  const stopEvents = subscribeAgentEvents((event) => {
+    if (event.runId === runId) {
+      return harness.handler(event);
+    }
+  });
   const stopTranscript = onInternalSessionTranscriptUpdate(harness.handler.retireTranscript);
   try {
-    await delta("Preview", "Preview");
+    cli.emitCliAssistantDelta({ text: "Preview", delta: "Preview" });
+    await stopEvents.drain();
     harness.chatRunState.flushPendingText(runId);
     expect(harness.chatRunState.resolveBuffer(runId).text).toBe("Preview");
 
@@ -708,7 +855,8 @@ it("retires a real CLI reply before its corrected source snapshot arrives", asyn
     });
     expect(harness.chatRunState.resolveBuffer(runId).text).toBe("");
 
-    await delta("Selected", "");
+    cli.emitCliAssistantDelta({ text: "Selected", delta: "" });
+    await stopEvents.drain();
     harness.chatRunState.flushPendingText(runId);
     expect(harness.chatRunState.resolveBuffer(runId).text).toBe("");
     expect(harness.chatRunState.resolveBuffer(runId, { final: true }).text).toBe("Selected");
@@ -725,7 +873,9 @@ it.each([true, false])(
     await using harness = createHarness();
     const { clients, handler, chatRunState } = harness;
     const { frames } = connect(clients, "gap-reader");
-    const { frames: chatOnly } = connectChatOnly(clients, "chat-only");
+    const { frames: chatOnly } = connect(clients, "chat-only", undefined, [
+      GATEWAY_CLIENT_CAPS.CHAT_ONLY_ASSISTANT_TEXT,
+    ]);
     const runId = "gap-run";
     const sessionKey = "agent:main:gap-proof";
     harness.sessionMessageSubscribers.subscribe("gap-reader", sessionKey);
@@ -815,7 +965,7 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
         context: { ...harness, ...broadcaster },
         runId,
         sessionKey,
-        message: assistantMessage(expected),
+        message: { role: "assistant", content: [{ type: "text", text: expected }] },
       });
       chatRunState.clearRun(runId);
     } else {
@@ -857,7 +1007,7 @@ it.each(["native", "dispatch", "abort", "retry", "clearRun", "clear"] as const)(
       event: "chat",
       payload: {
         state: terminal === "abort" ? "aborted" : "final",
-        message: textContent(expected),
+        message: { content: [{ type: "text", text: expected }] },
       },
     });
     if (terminal === "native" || terminal === "dispatch") {

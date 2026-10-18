@@ -59,7 +59,7 @@ const piBinding = { backend: "acpx", agent: "pi", identity: { agentSessionId: "p
 
 it("does not initialize or remove a successor observed after ACP preparation", async () => {
   await withAcpFixture(async ({ key, read, create }) => {
-    let successor: Awaited<ReturnType<typeof replaceSessionEntry>>;
+    let successor: Awaited<ReturnType<typeof replaceSessionEntry>> = null;
     const upsert = acpSessionMeta.upsertAcpSessionMeta;
     using prepare = vi
       .spyOn(acpSessionMeta, "upsertAcpSessionMeta")

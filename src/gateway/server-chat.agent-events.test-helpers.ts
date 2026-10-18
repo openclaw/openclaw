@@ -9,22 +9,22 @@ import {
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import {
-  createChatRunState,
-  createSessionEventSubscriberRegistry,
-  createSessionMessageSubscriberRegistry,
-} from "./server-chat-state.js";
+import { createChatRunState } from "./server-chat-state.js";
 import type { ChatRunRegistration, ChatRunState } from "./server-chat-state.js";
-import type { AgentEventHandlerOptions } from "./server-chat.js";
 import type { GatewayRequestContext, RespondFn } from "./server-methods/shared-types.js";
 import { agentDiscoveryMock } from "./test-helpers.runtime-state.js";
 
 type AgentEventHandler = (event: AgentEventPayload) => void | Promise<void>;
 
+type AgentEventOverrideKey =
+  | "agentId"
+  | "lifecycleGeneration"
+  | "seq"
+  | "sessionId"
+  | "sessionKey"
+  | "ts";
 type AgentEventOverrides = {
-  [Key in "agentId" | "lifecycleGeneration" | "seq" | "sessionId" | "sessionKey" | "ts"]?:
-    | AgentEventPayload[Key]
-    | undefined;
+  [Key in AgentEventOverrideKey]?: AgentEventPayload[Key] | undefined;
 };
 type AgentEventCase = readonly [
   stream: AgentEventStream,
@@ -38,23 +38,6 @@ type TextTranscriptEventOptions = {
   timestamp?: number;
   message?: Record<string, unknown>;
 };
-
-export function createChatEventFixture() {
-  const chatRunState = createChatRunState();
-  return {
-    chatRunState,
-    broadcast: vi.fn(),
-    broadcastToConnIds: vi.fn(),
-    nodeSendToSession: vi.fn(),
-    nodeHasSessionSubscribers: () => true,
-    agentRunSeq: new Map<string, number>(),
-    resolveSessionKeyForRun: () => undefined,
-    clearAgentRunContext: vi.fn(),
-    toolEventRecipients: chatRunState.toolEventRecipients,
-    sessionEventSubscribers: createSessionEventSubscriberRegistry(),
-    sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-  } satisfies AgentEventHandlerOptions;
-}
 
 export function emitAgentEvent(
   handler: AgentEventHandler,
@@ -207,7 +190,12 @@ export function createTextTranscriptEvent(
   return {
     ...(id ? { id } : {}),
     ...(parentId !== undefined ? { parentId } : {}),
-    message: { role, content: [{ type: "text", text }], timestamp, ...message },
+    message: {
+      role,
+      content: [{ type: "text", text }],
+      timestamp,
+      ...message,
+    },
   };
 }
 
@@ -269,11 +257,13 @@ export function registerChatConnectionIdentityTest(harness: {
           return undefined;
         });
         const respond = vi.fn<RespondFn>();
-        await harness.sendControlUiChat({ context, ...params, respond });
-        expect(respond.mock.calls[0], JSON.stringify(respond.mock.calls)).toMatchObject({
-          0: true,
-          1: { status: "started" },
+        await harness.sendControlUiChat({
+          context,
+          ...params,
+          respond,
         });
+        expect(respond.mock.calls[0]?.[0], JSON.stringify(respond.mock.calls)).toBe(true);
+        expect(respond.mock.calls[0]?.[1]).toMatchObject({ status: "started" });
         expect(await removed.promise).toEqual([
           params.idempotencyKey,
           params.idempotencyKey,
@@ -285,42 +275,64 @@ export function registerChatConnectionIdentityTest(harness: {
         expect(context.removeChatRun).toHaveBeenCalledTimes(removeCount + 1);
       };
 
-      const sendAs = (name: string, hasAvatar: boolean) => {
-        const login = name.toLowerCase();
-        const authenticatedUserId = `${login}@example.com`;
-        return send({
-          authenticatedUserId,
-          authenticatedUserProfile: {
-            profileId: ensureProfileForEmail(authenticatedUserId).id,
-            displayName: name,
-            hasAvatar,
-          },
-          idempotencyKey: `idem-attributed-${login}`,
-          message: `prompt from ${login}`,
-        });
-      };
-      await sendAs("Alice", false);
-      await sendAs("Bob", true);
+      await send({
+        authenticatedUserId: "alice@example.com",
+        authenticatedUserProfile: {
+          profileId: ensureProfileForEmail("alice@example.com").id,
+          displayName: "Alice",
+          hasAvatar: false,
+        },
+        idempotencyKey: "idem-attributed-alice",
+        message: "prompt from alice",
+      });
+      await send({
+        authenticatedUserId: "bob@example.com",
+        authenticatedUserProfile: {
+          profileId: ensureProfileForEmail("bob@example.com").id,
+          displayName: "Bob",
+          hasAvatar: true,
+        },
+        idempotencyKey: "idem-attributed-bob",
+        message: "prompt from bob",
+      });
       await send({
         idempotencyKey: "idem-unattributed",
         message: "prompt without identity",
       });
 
-      const userMessage = (content: string, identity: unknown) =>
-        expect.objectContaining({
-          type: "message",
-          message: expect.objectContaining({ role: "user", content, __openclaw: identity }),
-        });
-      const sender = (email: string, senderName: string) =>
-        expect.objectContaining({ senderId: ensureProfileForEmail(email).id, senderName });
-      expect(harness.readTranscript()).toEqual(
+      const transcriptEvents = harness.readTranscript();
+      expect(transcriptEvents).toEqual(
         expect.arrayContaining([
-          userMessage("prompt from alice", sender("alice@example.com", "Alice")),
-          userMessage("prompt from bob", sender("bob@example.com", "Bob")),
-          userMessage(
-            "prompt without identity",
-            expect.not.objectContaining({ senderId: expect.anything() }),
-          ),
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: "prompt from alice",
+              __openclaw: expect.objectContaining({
+                senderId: ensureProfileForEmail("alice@example.com").id,
+                senderName: "Alice",
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: "prompt from bob",
+              __openclaw: expect.objectContaining({
+                senderId: ensureProfileForEmail("bob@example.com").id,
+                senderName: "Bob",
+              }),
+            }),
+          }),
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: "prompt without identity",
+              __openclaw: expect.not.objectContaining({ senderId: expect.anything() }),
+            }),
+          }),
         ]),
       );
     });
@@ -345,10 +357,18 @@ export function registerBoundedWidgetSnapshotsTest({
     h.registerNamed("widgets");
     let seq = 0;
     const id = (index: number) => `cv_${index.toString(16).padStart(32, "0")}`;
-    const emit: typeof h.emit = (runId, stream, data) =>
-      h.emit(runId, stream, data, { seq: ++seq });
     const publish = (result: ReturnType<typeof widgetResult>, isError = false) =>
-      emit("run-widgets", "tool", { phase: "result", name: "show_widget", result, isError });
+      h.emit(
+        "run-widgets",
+        "tool",
+        {
+          phase: "result",
+          name: "show_widget",
+          result,
+          isError,
+        },
+        { seq: ++seq },
+      );
     const publishWidget = async (index: number, titleChars = 1_700) => {
       const result = widgetResult(id(index), "assistant_message", "a".repeat(titleChars));
       // These fixtures survive embedded and default Codex tool-result text caps.
@@ -356,7 +376,7 @@ export function registerBoundedWidgetSnapshotsTest({
       await publish(result);
     };
     const snapshot = async () => {
-      await emit("run-widgets", "assistant", { text: `Widgets ready: ${seq}.` });
+      await h.emit("run-widgets", "assistant", { text: `Widgets ready: ${seq}.` }, { seq: ++seq });
       vi.advanceTimersByTime(75);
       return h
         .chat()
@@ -400,7 +420,7 @@ export function registerBoundedWidgetSnapshotsTest({
           "Live chat canvas preview omitted: display descriptors exceed the 64 KiB limit.",
         ]),
       );
-    await emit("run-widgets", "lifecycle", { phase: "end" });
+    await h.emit("run-widgets", "lifecycle", { phase: "end" }, { seq: ++seq });
     expect(h.chat().at(-1)?.[1].message.content).toHaveLength(2);
     await h.handler.dispose();
   });
