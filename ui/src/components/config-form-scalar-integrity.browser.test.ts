@@ -1,4 +1,3 @@
-// Control UI tests cover scalar identity and nullable enum behavior.
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   renderNumberInputFixture,
@@ -6,22 +5,11 @@ import {
   renderSelectFixture,
   renderAnalyzedFormFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
+import { query, edit, objectSchema } from "./config-form-integrity.test-support.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
 import type { JsonSchema } from "./config-form.shared.ts";
 
-function query<T extends Element = Element>(parent: ParentNode, selector: string): T {
-  const element = parent.querySelector<T>(selector);
-  expect(element instanceof Element, selector).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${selector}`);
-  }
-  return element;
-}
-
-function edit(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
-  input.value = value;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-}
+type FieldOptions = Omit<Parameters<typeof renderNumberInputFixture>[1], "onPatch">;
 
 function fieldFixture() {
   const container = document.createElement("div");
@@ -29,14 +17,10 @@ function fieldFixture() {
   return {
     container,
     onPatch,
-    text: (
-      options: Omit<Parameters<typeof renderTextInputFixture>[1], "onPatch" | "inputType"> & {
-        inputType?: "text" | "number";
-      },
-    ) => renderTextInputFixture(container, { inputType: "text", ...options, onPatch }),
-    number: (options: Omit<Parameters<typeof renderNumberInputFixture>[1], "onPatch">) =>
-      renderNumberInputFixture(container, { ...options, onPatch }),
-    selectField: (options: Omit<Parameters<typeof renderSelectFixture>[1], "onPatch">) =>
+    text: (options: FieldOptions & { inputType?: "text" | "number" }) =>
+      renderTextInputFixture(container, { inputType: "text", ...options, onPatch }),
+    number: (options: FieldOptions) => renderNumberInputFixture(container, { ...options, onPatch }),
+    selectField: (options: FieldOptions & { options: unknown[] }) =>
       renderSelectFixture(container, { ...options, onPatch }),
   };
 }
@@ -81,21 +65,13 @@ describe("config form scalar integrity", () => {
 
   it("separates boolean help from its default description", () => {
     const container = document.createElement("div");
-    const analysis = analyzeConfigSchema({
-      type: "object",
-      properties: {
-        runtime: {
-          type: "object",
-          properties: {
-            enabled: {
-              type: "boolean",
-              default: true,
-              description: "Controls runtime processing.",
-            },
-          },
-        },
-      },
-    });
+    const analysis = analyzeConfigSchema(
+      objectSchema({
+        runtime: objectSchema({
+          enabled: { type: "boolean", default: true, description: "Controls runtime processing." },
+        }),
+      }),
+    );
     renderAnalyzedFormFixture(container, analysis, {
       value: { runtime: { enabled: false } },
       onPatch: vi.fn(),
@@ -136,7 +112,6 @@ describe("config form scalar integrity", () => {
         expect(container.querySelector(".cfg-field__error")?.textContent).toBe(
           input.validationMessage,
         );
-
         input.blur();
         renderValue(refreshedValue, { snapshot: 3 });
         expect(input.value).toBe(String(refreshedValue));
@@ -152,20 +127,17 @@ describe("config form scalar integrity", () => {
   it("shows inherited defaults without turning them into stored overrides", () => {
     const { container, onPatch, text, number } = fieldFixture();
     const onRemove = vi.fn();
-
     text({
       schema: { type: "string", default: "balanced" },
       value: undefined,
       path: ["mode"],
       onRemove,
     });
-
     const textInput = query<HTMLInputElement>(container, "input[type='text']");
     expect(textInput).toMatchObject({ value: "", placeholder: "Default: balanced" });
     expect(container.textContent).not.toContain("Using default:");
     expect(onPatch).not.toHaveBeenCalled();
     expect(onRemove).not.toHaveBeenCalled();
-
     number({
       schema: { type: "integer", default: 3 },
       value: undefined,
@@ -175,7 +147,6 @@ describe("config form scalar integrity", () => {
     const numberInput = query<HTMLInputElement>(container, "input[type='number']");
     expect(numberInput).toMatchObject({ value: "", placeholder: "Default: 3" });
     expect(container.textContent).not.toContain("Using default:");
-
     const arrowUp = new KeyboardEvent("keydown", {
       bubbles: true,
       cancelable: true,
@@ -189,7 +160,6 @@ describe("config form scalar integrity", () => {
   it("restores scalar and select defaults through clearing and default selection", () => {
     const { container, onPatch, number, selectField } = fieldFixture();
     const onRemove = vi.fn();
-
     number({
       schema: { type: "integer", default: 3, description: "Controls retry attempts." },
       value: 9,
@@ -202,15 +172,14 @@ describe("config form scalar integrity", () => {
     edit(numberInput, "");
     expect(onPatch).toHaveBeenCalledWith(["retries"], undefined);
     expect(onRemove).not.toHaveBeenCalled();
-
     onPatch.mockClear();
-    selectField({
+    const selectOptions = {
       schema: { type: "string", default: "balanced" },
-      value: "fast",
       path: ["mode"],
       options: ["balanced", "fast", "careful", "safe", "strict", "custom"],
       onRemove,
-    });
+    };
+    selectField({ ...selectOptions, value: "fast" });
     const select = query<HTMLSelectElement>(container, "select");
     expect(container.textContent).toContain("Default: balanced");
     expect(select.options[0]?.textContent?.trim()).toBe("Default: balanced");
@@ -219,30 +188,16 @@ describe("config form scalar integrity", () => {
     select.dispatchEvent(new Event("change", { bubbles: true }));
     expect(onRemove).toHaveBeenCalledWith(["mode"]);
     expect(onPatch).not.toHaveBeenCalled();
-
-    selectField({
-      schema: { type: "string", default: "balanced" },
-      value: undefined,
-      path: ["mode"],
-      options: ["balanced", "fast", "careful", "safe", "strict", "custom"],
-      onRemove,
-    });
+    selectField({ ...selectOptions, value: undefined });
     expect(
       query<HTMLSelectElement>(container, "select").selectedOptions[0]?.textContent?.trim(),
     ).toBe("Default: balanced");
   });
 
   it("does not commit a clear while a number input holds partial numeric text", () => {
-    // Browsers report value === "" with validity.badInput while the user is
-    // mid-keystroke ("0." on the way to "0.5"). Committing undefined here
-    // deleted the stored value and wiped the input. jsdom never sets
-    // badInput, so simulate the browser tuple explicitly.
+    // jsdom cannot produce the browser's partial-number tuple (empty value + badInput).
     const { container, onPatch, number } = fieldFixture();
-    number({
-      schema: { type: "number" },
-      value: 0,
-      path: ["sampleRate"],
-    });
+    number({ schema: { type: "number" }, value: 0, path: ["sampleRate"] });
     const input = query<HTMLInputElement>(container, "input[type='number']");
     Object.defineProperty(input, "validity", {
       value: { badInput: true },
@@ -254,10 +209,8 @@ describe("config form scalar integrity", () => {
       writable: true,
     });
     input.dispatchEvent(new Event("input", { bubbles: true }));
-
     expect(onPatch).not.toHaveBeenCalled();
     expect(input.getAttribute("aria-invalid")).toBe("true");
-
     // A genuine clear (no badInput) still removes the optional override.
     Object.defineProperty(input, "validity", {
       value: { badInput: false },
@@ -273,16 +226,10 @@ describe("config form scalar integrity", () => {
     ["underflow", { type: "number" }, "1e-324"],
   ])("rejects %s text before a pure numeric input can round it", (_name, schema, raw) => {
     const { container, onPatch, number } = fieldFixture();
-    number({
-      schema,
-      value: 0,
-      path: ["numeric"],
-    });
+    number({ schema, value: 0, path: ["numeric"] });
     const input = query<HTMLInputElement>(container, "input[type='number']");
-
     edit(input, raw);
     input.dispatchEvent(new Event("change", { bubbles: true }));
-
     expect(onPatch).not.toHaveBeenCalled();
     expect(input.getAttribute("aria-invalid")).toBe("true");
     expect(input.value).toBe(raw);
@@ -293,13 +240,7 @@ describe("config form scalar integrity", () => {
     (kind) => {
       const { container, onPatch, text, number } = fieldFixture();
       const exactValue = Number("1000000000000000128");
-      const params = {
-        value: exactValue,
-        path: ["numeric"],
-        hints: {},
-        unsupported: new Set<string>(),
-        disabled: false,
-      };
+      const params = { value: exactValue, path: ["numeric"] };
       if (kind === "mixed") {
         text({
           ...params,
@@ -312,10 +253,8 @@ describe("config form scalar integrity", () => {
         container,
         `input[type='${kind === "mixed" ? "text" : "number"}']`,
       );
-
       expect(input.value).toBe("1000000000000000128");
       input.dispatchEvent(new Event("input", { bubbles: true }));
-
       expect(onPatch).toHaveBeenCalledWith(["numeric"], exactValue);
       expect(input.getAttribute("aria-invalid")).toBe("false");
     },
@@ -323,7 +262,6 @@ describe("config form scalar integrity", () => {
 
   it("conceals the default description while a sensitive value is concealed", () => {
     const { container, text } = fieldFixture();
-
     text({
       schema: { type: "string", default: "inherited" },
       value: "stored-secret",
@@ -332,7 +270,6 @@ describe("config form scalar integrity", () => {
       revealSensitive: false,
       onRemove: vi.fn(),
     });
-
     expect(container.textContent).not.toContain("inherited");
   });
 
@@ -340,7 +277,6 @@ describe("config form scalar integrity", () => {
     "keeps a server-redacted sentinel readonly (maskSensitive=%s)",
     (maskSensitive) => {
       const { container, text } = fieldFixture();
-
       text({
         schema: { type: "string" },
         value: "__OPENCLAW_REDACTED__",
@@ -353,7 +289,6 @@ describe("config form scalar integrity", () => {
         onToggleSensitivePath: vi.fn(),
         onRemove: vi.fn(),
       });
-
       const input = query<HTMLInputElement>(container, "input");
       expect(input.value).not.toContain("__OPENCLAW_REDACTED__");
       expect(input.readOnly).toBe(true);
@@ -368,7 +303,6 @@ describe("config form scalar integrity", () => {
 
   it("keeps an env placeholder readable in a masked sensitive field", () => {
     const { container, text } = fieldFixture();
-
     text({
       schema: { type: "string" },
       value: "${SLACK_BOT_TOKEN}",
@@ -377,56 +311,33 @@ describe("config form scalar integrity", () => {
       maskSensitive: true,
       onRemove: vi.fn(),
     });
-
     const input = query<HTMLInputElement>(container, "input");
     expect(input).toMatchObject({ type: "text", value: "${SLACK_BOT_TOKEN}", readOnly: false });
   });
 
-  it.each([
-    {
-      name: "object literal",
-      variants: [{ type: "string" }, { const: { enabled: true } }],
-      value: { enabled: true },
-    },
-    {
-      name: "explicit null branch",
-      variants: [{ type: "string" }, { const: false }, { type: "null" }],
-      value: null,
-    },
-    {
-      name: "nullable string branch",
-      variants: [{ type: ["string", "null"] }, { const: false }],
-      value: null,
-    },
-  ] satisfies Array<{ name: string; variants: JsonSchema[]; value: unknown }>)(
-    "keeps $name sentinels outside text editing",
-    ({ variants, value }) => {
-      const schema: JsonSchema = {
-        type: "object",
-        properties: { policy: { anyOf: variants } },
-      };
-      const analysis = analyzeConfigSchema(schema);
-      expect(analysis.unsupportedPaths).toEqual(["policy"]);
-      expect(analysis.schema?.properties?.policy).toMatchObject({ anyOf: variants });
-      const container = document.createElement("div");
-      const onPatch = vi.fn();
-      renderAnalyzedFormFixture(container, analysis, {
-        value: { policy: value },
-        onPatch,
-      });
-      expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
-      expect(container.querySelector("input, select, textarea")).toBeNull();
-      expect(onPatch).not.toHaveBeenCalled();
-    },
-  );
+  it.each<[string, JsonSchema[], unknown]>([
+    ["object literal", [{ type: "string" }, { const: { enabled: true } }], { enabled: true }],
+    ["explicit null branch", [{ type: "string" }, { const: false }, { type: "null" }], null],
+    ["nullable string branch", [{ type: ["string", "null"] }, { const: false }], null],
+  ])("keeps %s sentinels outside text editing", (_name, variants, value) => {
+    const schema = objectSchema({ policy: { anyOf: variants } });
+    const analysis = analyzeConfigSchema(schema);
+    expect(analysis.unsupportedPaths).toEqual(["policy"]);
+    expect(analysis.schema?.properties?.policy).toMatchObject({ anyOf: variants });
+    const container = document.createElement("div");
+    const onPatch = vi.fn();
+    renderAnalyzedFormFixture(container, analysis, {
+      value: { policy: value },
+      onPatch,
+    });
+    expect(container.textContent).toContain("Unsupported schema node. Use Raw mode.");
+    expect(container.querySelector("input, select, textarea")).toBeNull();
+    expect(onPatch).not.toHaveBeenCalled();
+  });
 });
 
 const containers: HTMLElement[] = [];
-afterEach(() => {
-  for (const container of containers.splice(0)) {
-    container.remove();
-  }
-});
+afterEach(() => containers.splice(0).forEach((container) => container.remove()));
 
 function fixture(
   options: unknown[],
@@ -437,22 +348,15 @@ function fixture(
   const container = document.createElement("div");
   document.body.append(container);
   containers.push(container);
-  const analysis = analyzeConfigSchema({
-    type: "object",
-    properties: {
-      settings: {
-        type: "object",
-        required: field.required ? ["mode"] : [],
-        properties: {
-          mode: {
-            title: "Typed mode",
-            enum: options,
-            ...(field.default !== undefined ? { default: field.default } : {}),
-          },
-        },
-      },
-    },
-  });
+  const mode: JsonSchema = { title: "Typed mode", enum: options };
+  if (field.default !== undefined) {
+    mode.default = field.default;
+  }
+  const analysis = analyzeConfigSchema(
+    objectSchema({
+      settings: { ...objectSchema({ mode }), required: field.required ? ["mode"] : [] },
+    }),
+  );
   expect(analysis.unsupportedPaths).toEqual([]);
   let current = initial;
   const onPatch = vi.fn((_path: Array<string | number>, value: unknown) => {
@@ -504,60 +408,43 @@ function fixture(
 }
 
 const cases = [
-  {
-    name: "boolean/string segmented",
-    options: [true, false, "true"],
-    typed: "true",
-    primitive: true,
-  },
-  { name: "number/string segmented", options: [1, 2, "1"], typed: "1", primitive: 1 },
-  {
-    name: "boolean/string dropdown",
-    options: [true, false, "true", "false", "auto", "off"],
-    typed: "true",
-    primitive: true,
-  },
-  { name: "number/string dropdown", options: [1, 2, "1", "2", 3, "3"], typed: "1", primitive: 1 },
-];
+  { name: "boolean/string segmented", options: [true, false, "true"] },
+  { name: "number/string segmented", options: [1, 2, "1"] },
+  { name: "boolean/string dropdown", options: [true, false, "true", "false", "auto", "off"] },
+  { name: "number/string dropdown", options: [1, 2, "1", "2", 3, "3"] },
+].map(({ name, options }) => ({ name, options, typed: options[2], primitive: options[0] }));
 
 describe("typed config enum selection through analyzed forms", () => {
-  it.each(cases)(
-    "preserves type through callbacks and rerenders: $name",
-    async ({ options, typed, primitive }) => {
-      const view = fixture(options, primitive);
+  it.each(
+    cases.flatMap((entry) =>
+      ["callbacks", "rejected", "default"].map((mode) => Object.assign({ mode }, entry)),
+    ),
+  )("preserves $name selection through $mode", async ({ options, typed, primitive, mode }) => {
+    const rejected = mode === "rejected";
+    const defaulted = mode === "default";
+    const view = fixture(
+      options,
+      defaulted ? undefined : rejected ? typed : primitive,
+      !rejected,
+      defaulted ? { default: typed } : {},
+    );
+    if (defaulted) {
+      expect(view.value()).toBe(options.length <= 5 ? "2" : "__unset__");
+      expect(view.onPatch).not.toHaveBeenCalled();
+    } else if (!rejected) {
       expect(view.value()).toBe("0");
       await view.select(2);
       expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], typed);
       expect(view.value()).toBe("2");
-      await view.select(0);
-      expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], primitive);
-      expect(view.value()).toBe("0");
+    }
+    await view.select(0);
+    expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], primitive);
+    expect(view.value()).toBe(rejected ? "2" : "0");
+    if (!rejected && !defaulted) {
       view.setValue(typed);
       expect(view.value()).toBe("2");
-    },
-  );
-
-  it.each(cases)(
-    "restores the typed member after a rejected selection: $name",
-    async ({ options, typed }) => {
-      const view = fixture(options, typed, false);
-      await view.select(0);
-      expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], options[0]);
-      expect(view.value()).toBe("2");
-    },
-  );
-
-  it.each(cases)(
-    "keeps the typed default without creating an override: $name",
-    async ({ options, typed, primitive }) => {
-      const view = fixture(options, undefined, true, { default: typed });
-      expect(view.value()).toBe(options.length <= 5 ? "2" : "__unset__");
-      expect(view.onPatch).not.toHaveBeenCalled();
-      await view.select(0);
-      expect(view.onPatch).toHaveBeenLastCalledWith(["settings", "mode"], primitive);
-      expect(view.value()).toBe("0");
-    },
-  );
+    }
+  });
 
   it("keeps null, unset and a typed string distinct in a nullable enum", async () => {
     const view = fixture([true, false, "true", null], null);

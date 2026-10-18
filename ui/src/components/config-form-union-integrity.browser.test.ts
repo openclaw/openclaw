@@ -4,21 +4,8 @@ import {
   renderTextInputFixture,
   renderNodeFixture,
 } from "../test-helpers/config-form-fixtures.tsx";
+import { query, edit, objectSchema } from "./config-form-integrity.test-support.ts";
 import { analyzeConfigSchema } from "./config-form.analyze.ts";
-
-function query<T extends Element = Element>(parent: ParentNode, selector: string): T {
-  const element = parent.querySelector<T>(selector);
-  expect(element instanceof Element, selector).toBe(true);
-  if (!(element instanceof Element)) {
-    throw new Error(`missing ${selector}`);
-  }
-  return element;
-}
-
-function edit(input: HTMLInputElement | HTMLTextAreaElement, value: string) {
-  input.value = value;
-  input.dispatchEvent(new Event("input", { bubbles: true }));
-}
 
 describe("config form primitive union integrity", () => {
   it.each(
@@ -61,10 +48,9 @@ describe("config form primitive union integrity", () => {
         type: syntax === "string-first" ? ["string", "object"] : ["object", "string"],
         minLength: 3,
       };
-      const analysis = analyzeConfigSchema({
-        type: "object",
-        properties: { credentials: { type: "object", properties: { token: credential } } },
-      });
+      const analysis = analyzeConfigSchema(
+        objectSchema({ credentials: objectSchema({ token: credential }) }),
+      );
       const renderValue = (token: unknown) =>
         renderNodeFixture(container, {
           schema: analysis.schema!,
@@ -77,7 +63,6 @@ describe("config form primitive union integrity", () => {
           maskSensitive: true,
           onPatch,
         });
-
       renderValue(undefined);
       const input = query<HTMLInputElement>(container, "input");
       expect(input.type).toBe("password");
@@ -88,19 +73,16 @@ describe("config form primitive union integrity", () => {
       renderValue("synthetic-key");
       expect(input.readOnly).toBe(false);
       expect(input.type).toBe("password");
-
       for (const source of ["env", "file", "exec"]) {
         onPatch.mockClear();
         renderValue({ source, provider: "default", id: "synthetic-reference" });
         const reference = query<HTMLInputElement>(container, "input");
-        expect(reference.value).toBe("");
-        expect(reference.readOnly).toBe(true);
+        expect(reference).toMatchObject({ value: "", readOnly: true });
         expect(reference.placeholder).toContain("edit the config file directly");
         edit(reference, "replacement");
         reference.dispatchEvent(new Event("change", { bubbles: true }));
         expect(onPatch).not.toHaveBeenCalled();
       }
-
       renderValue({ nested: "structured" });
       expect(container.querySelector("textarea")).not.toBeNull();
       expect(container.querySelector("input")).toBeNull();
@@ -118,23 +100,13 @@ describe("config form primitive union integrity", () => {
           ? { anyOf: [{ type: "string" }, { type: "number" }, { type: "boolean" }] }
           : { type: ["string", "number", "boolean"] };
       const renderValue = (value: unknown, defaultValue?: unknown) => {
-        const analysis = analyzeConfigSchema({
-          type: "object",
-          properties: {
-            providerOptions: {
-              type: "object",
-              properties: {
-                deepgram: {
-                  type: "object",
-                  properties: {
-                    temperature:
-                      defaultValue === undefined ? schema : { ...schema, default: defaultValue },
-                  },
-                },
-              },
-            },
-          },
-        });
+        const temperature =
+          defaultValue === undefined ? schema : { ...schema, default: defaultValue };
+        const analysis = analyzeConfigSchema(
+          objectSchema({
+            providerOptions: objectSchema({ deepgram: objectSchema({ temperature }) }),
+          }),
+        );
         expect(analysis.unsupportedPaths).toEqual([]);
         renderAnalyzedFormFixture(container, analysis, {
           value: { providerOptions: { deepgram: { temperature: value } } },
@@ -155,7 +127,6 @@ describe("config form primitive union integrity", () => {
       expect(onPatch).not.toHaveBeenCalled();
       expect(input.getAttribute("aria-invalid")).toBe("true");
       expect(input.value).toBe("1.0000000000000001");
-
       expectPatch("42", "43", "43");
       expectPatch(undefined, "43", 43);
       expectPatch(undefined, "43", 43, 42);
@@ -188,7 +159,6 @@ describe("config form primitive union integrity", () => {
       const patches: unknown[] = [];
       let persisted: unknown = initial;
       let value: unknown = initial;
-
       const renderValue = () => {
         renderTextInputFixture(container, {
           schema,
@@ -204,7 +174,6 @@ describe("config form primitive union integrity", () => {
           },
         });
       };
-
       try {
         renderValue();
         let input = query<HTMLInputElement>(container, "input[type='text']");
@@ -218,7 +187,6 @@ describe("config form primitive union integrity", () => {
           renderValue();
           input = query<HTMLInputElement>(container, "input[type='text']");
         }
-
         expect(patches.length).toBeGreaterThan(1);
         expect(patches.slice(0, -1).every((candidate) => typeof candidate === "number")).toBe(true);
         expect(patches.at(-1)).toBe(identifier);

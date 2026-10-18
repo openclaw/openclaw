@@ -6,22 +6,14 @@ const browserMode = "__vitest_browser__" in globalThis;
 const initialFilePath =
   "templates/customer-success/quarterly-reviews/complete-digest-template-with-a-long-name.md";
 
+function file(path: string, contents = "", size = "0 B", message?: string) {
+  return { path, contents, size, message };
+}
+
 const files = [
-  {
-    path: initialFilePath,
-    size: "2.1 KB",
-    contents: "Review the complete support-file contents.",
-  },
-  {
-    path: "filters/auto-senders.txt",
-    size: "418 B",
-    contents: "noreply@example.com",
-  },
-  {
-    path: "assets/empty-preview.png",
-    size: "0 B",
-    contents: "",
-  },
+  file(initialFilePath, "Review the complete support-file contents.", "2.1 KB"),
+  file("filters/auto-senders.txt", "noreply@example.com", "418 B"),
+  file("assets/empty-preview.png"),
 ];
 
 afterEach(() => {
@@ -30,7 +22,6 @@ afterEach(() => {
 
 async function resolveRenderedDialog(modal: OpenClawModalDialog) {
   await modal.updateComplete;
-
   await new Promise<void>((resolve) => {
     requestAnimationFrame(() => resolve());
   });
@@ -44,14 +35,12 @@ async function resolveRenderedDialog(modal: OpenClawModalDialog) {
 async function mountPreview(width: number, activePath = initialFilePath) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 844);
-
   const preview = document.createElement("openclaw-file-preview-modal");
   preview.style.setProperty("--openclaw-modal-show-duration", "150ms");
   preview.files = files;
   preview.activePath = activePath;
   document.body.append(preview);
   await preview.updateComplete;
-
   const ownerDialog = preview.querySelector<OpenClawModalDialog>("openclaw-modal-dialog");
   expect(ownerDialog).toBeInstanceOf(HTMLElement);
   const dialog = await resolveRenderedDialog(ownerDialog!);
@@ -68,7 +57,6 @@ async function mountModal(
 ) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, 844);
-
   const modal = document.createElement("openclaw-modal-dialog");
   modal.label = "Preview";
   modal.style.setProperty("--openclaw-modal-show-duration", "150ms");
@@ -125,7 +113,6 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     const sourceTextRange = document.createRange();
     sourceTextRange.selectNodeContents(source!);
     const sourceTextBounds = sourceTextRange.getBoundingClientRect();
-
     expect(dialogBounds.left).toBeGreaterThanOrEqual(0);
     expect(dialogBounds.right).toBeLessThanOrEqual(window.innerWidth + 1);
     expectVerticalFit(dialogBounds);
@@ -149,7 +136,6 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     expectHorizontalFit(sourceTextBounds, dialogBounds);
     expectVerticalFit(sourceTextBounds);
     expect(source?.textContent).toContain("Review the complete support-file contents.");
-
     const selected = vi.fn();
     preview.addEventListener("file-preview-select", selected);
     search?.focus();
@@ -171,7 +157,6 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     expect(detailBody).toBeInstanceOf(HTMLElement);
     expect(preview.querySelector(".chat-copy-btn")).toBeNull();
     expect(preview.querySelector(".code-chunk")?.textContent).toBe("");
-
     const dialogBounds = dialog.getBoundingClientRect();
     expectFooter(preview, dialogBounds);
     expectHorizontalFit(detail!.getBoundingClientRect(), dialogBounds);
@@ -184,7 +169,6 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     const detail = preview.querySelector<HTMLElement>(".detail");
     expect(list).toBeInstanceOf(HTMLElement);
     expect(detail).toBeInstanceOf(HTMLElement);
-
     const listBounds = list!.getBoundingClientRect();
     const detailBounds = detail!.getBoundingClientRect();
     expect(listBounds.width).toBeCloseTo(360, 0);
@@ -192,32 +176,24 @@ describe.runIf(browserMode)("file preview modal responsive layout", () => {
     expect(detailBounds.right).toBeLessThanOrEqual(dialog.getBoundingClientRect().right + 1);
   });
 
-  it.each([1280, 390])("expands fullscreen previews at a %dpx viewport", async (width) => {
-    const dialog = await mountModal(width, {
-      fullscreen: true,
-      modalWidth: "min(1040px, calc(100vw - 32px))",
-    });
-
-    expect(dialog.getBoundingClientRect().width).toBeGreaterThanOrEqual(width - 21);
-  });
-
-  it("preserves narrower owner-defined modal widths on phones", async () => {
-    const dialog = await mountModal(390, { modalWidth: "200px" });
-
-    expect(dialog.getBoundingClientRect().width).toBeCloseTo(200, 0);
-  });
-
   it.each([
-    { viewport: 390, expectedWidth: 390 },
-    { viewport: 1280, expectedWidth: 460 },
-  ])("keeps workboard drawers edge-to-edge on phones", async ({ viewport, expectedWidth }) => {
-    const dialog = await mountModal(viewport, {
-      kind: "drawer",
-      modalWidth: "min(460px, 100vw)",
-    });
-
-    expect(dialog.getBoundingClientRect().width).toBeCloseTo(expectedWidth, 0);
-  });
+    [1280, { fullscreen: true, modalWidth: "min(1040px, calc(100vw - 32px))" }, 1259, true],
+    [390, { fullscreen: true, modalWidth: "min(1040px, calc(100vw - 32px))" }, 369, true],
+    [390, { modalWidth: "200px" }, 200, false],
+    [390, { kind: "drawer", modalWidth: "min(460px, 100vw)" }, 390, false],
+    [1280, { kind: "drawer", modalWidth: "min(460px, 100vw)" }, 460, false],
+  ] as const)(
+    "preserves modal width at %dpx (%j)",
+    async (viewport, options, expected, minimum) => {
+      const dialog = await mountModal(viewport, options);
+      const width = expect(dialog.getBoundingClientRect().width);
+      if (minimum) {
+        width.toBeGreaterThanOrEqual(expected);
+      } else {
+        width.toBeCloseTo(expected, 0);
+      }
+    },
+  );
 });
 
 describe.runIf(browserMode)("skill bundle file preview", () => {
@@ -239,20 +215,14 @@ describe.runIf(browserMode)("skill bundle file preview", () => {
         "Complete instructions.\n".repeat(3000) +
         "Last complete instruction.";
       preview.files = [
-        {
-          path: "SKILL.md",
-          size: "100 B",
-          contents:
-            "# Guide\n[Reference](references/guide.md)\n```js\nwindow.untrusted = true;\n```\n<script>window.untrusted=true</script>",
-        },
-        { path: "references/guide.md", size: "64 KB", contents: long },
-        { path: "scripts/unlinked.py", size: "20 B", contents: "print('read only')" },
-        {
-          path: "assets/image.png",
-          size: "4 B",
-          contents: "",
-          message: "Binary file cannot be previewed",
-        },
+        file(
+          "SKILL.md",
+          "# Guide\n[Reference](references/guide.md)\n```js\nwindow.untrusted = true;\n```\n<script>window.untrusted=true</script>",
+          "100 B",
+        ),
+        file("references/guide.md", long, "64 KB"),
+        file("scripts/unlinked.py", "print('read only')", "20 B"),
+        file("assets/image.png", "", "4 B", "Binary file cannot be previewed"),
       ];
       preview.addEventListener("file-preview-select", (event: Event) => {
         preview.activePath = (event as CustomEvent<string>).detail;
