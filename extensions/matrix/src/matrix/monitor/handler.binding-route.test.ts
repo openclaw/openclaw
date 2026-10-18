@@ -15,6 +15,7 @@ import {
   createReplyDispatcher,
   dispatchInboundMessage,
   resetInboundDedupe,
+  settleReplyDispatcher,
 } from "openclaw/plugin-sdk/reply-runtime";
 import {
   registerSessionBindingAdapter,
@@ -28,6 +29,8 @@ import { installMatrixMonitorTestRuntime } from "../../test-runtime.js";
 import { createMatrixMonitorEventsTestHarness } from "./events.test-helpers.js";
 import {
   createMatrixHandlerTestHarness,
+  createMatrixAgentRoute,
+  createMatrixReplayClaim,
   createMatrixTextMessageEvent,
 } from "./handler.test-helpers.js";
 
@@ -37,10 +40,19 @@ vi.mock("openclaw/plugin-sdk/acp-binding-runtime", () => ({
   ensureConfiguredAcpBindingReady: vi.fn(async () => ({ ok: true })),
 }));
 
-let cleanup: (() => Promise<void>) | undefined;
+const cleanups: (() => Promise<void>)[] = [];
+async function cleanup() {
+  const next = cleanups.pop();
+  if (next) {
+    try {
+      await next();
+    } finally {
+      await cleanup();
+    }
+  }
+}
 afterEach(async () => {
-  await cleanup?.();
-  cleanup = undefined;
+  await cleanup();
   resetInboundDedupe();
   bindingTesting.resetSessionBindingAdaptersForTests();
   resetPluginRuntimeStateForTest();
@@ -51,7 +63,7 @@ it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as con
   "preserves Matrix's prepared owner through a registered message: %s",
   async (scenario) => {
     const state = await createOpenClawTestState({ label: "matrix-route-carry" });
-    cleanup = () => state.cleanup();
+    cleanups.push(() => state.cleanup());
     const roomId = "!route:example.org";
     const senderId = "@sender:example.org";
     const configured = scenario.startsWith("configured");
@@ -91,11 +103,7 @@ it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as con
       runtime: createPluginRuntimeMock(),
       activateGlobalSideEffects: false,
     });
-    const cleanupState = cleanup;
-    cleanup = async () => {
-      await disposePluginRegistryInstances(builder.registry);
-      await cleanupState();
-    };
+    cleanups.push(() => disposePluginRegistryInstances(builder.registry));
     const record = createPluginRecord({ id: "matrix", origin: "bundled", status: "loaded" });
     const api = builder.createApi(record, { config: cfg });
     builder.registry.plugins.push(record);
@@ -156,25 +164,18 @@ it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as con
     const entered = createDeferred<void>();
     const release = createDeferred<void>();
     let pause = true;
-    const commit = vi.fn(async () => true);
-    const releaseClaim = vi.fn();
+    const claim = createMatrixReplayClaim(scenario);
+    const { commit, release: releaseClaim } = claim;
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     const { handler } = createMatrixHandlerTestHarness({
       cfg,
       runtime,
       isDirectMessage: false,
-      resolveAgentRoute: () => ({
-        agentId: "main",
-        channel: "matrix",
-        accountId: "ops",
-        sessionKey: "agent:main:matrix:room",
-        mainSessionKey: "agent:main:main",
-        matchedBy: "binding.account",
-      }),
+      resolveAgentRoute: () => createMatrixAgentRoute("main", "agent:main:matrix:room"),
       inboundDeduper: {
         claim: async () => ({
           kind: "claimed",
-          handle: { keys: [scenario], commit, release: releaseClaim },
+          handle: claim,
         }),
       },
       getMemberDisplayName: async (_room, userId) => {
@@ -203,8 +204,7 @@ it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as con
             }),
           );
         } finally {
-          dispatcher.markComplete();
-          await dispatcher.waitForIdle();
+          await settleReplyDispatcher({ dispatcher });
         }
       },
     });
@@ -213,19 +213,11 @@ it.each(["plugin-to-global", "configured-stable", "configured-to-global"] as con
       accountId: "ops",
       onRoomMessage: handler,
     });
-    const cleanupRegistry = cleanup;
-    cleanup = async () => {
+    cleanups.push(() => monitor.dispose());
+    cleanups.push(async () => {
       release.resolve();
-      try {
-        await monitor.flushTasks();
-      } finally {
-        try {
-          await monitor.dispose();
-        } finally {
-          await cleanupRegistry();
-        }
-      }
-    };
+      await monitor.flushTasks();
+    });
     const event = createMatrixTextMessageEvent({
       eventId: `$matrix-route-${scenario}`,
       sender: senderId,

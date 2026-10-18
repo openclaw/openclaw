@@ -1,6 +1,5 @@
 import { shouldAckReaction } from "openclaw/plugin-sdk/channel-feedback";
 import { createTypingCallbacks } from "openclaw/plugin-sdk/channel-outbound";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { prepareMatrixReplyPayload } from "../../outbound.js";
@@ -12,11 +11,9 @@ import { createMatrixReplyDispatcher } from "./handler-reply-dispatcher.js";
 import {
   createMatrixHandlerTestHarness,
   createMatrixTextMessageEvent,
+  matrixDispatchResult,
 } from "./handler.test-helpers.js";
 
-const sendMessageMatrixMock = vi.hoisted(() =>
-  vi.fn(async (..._args: unknown[]) => ({ messageId: "evt", roomId: "!room" })),
-);
 const editMessageMatrixMock = vi.hoisted(() => vi.fn(async () => "$edited"));
 const sendSingleTextMessageMatrixMock = vi.hoisted(() =>
   vi.fn(async () => ({ messageId: "$draft1", roomId: "!room" })),
@@ -33,13 +30,15 @@ vi.mock("../send.js", () => ({
   })),
   reactMatrixMessage: reactMatrixMessageMock,
   resolveMatrixMentionsForBody: vi.fn(async () => ({})),
-  sendMessageMatrix: sendMessageMatrixMock,
+  sendMessageMatrix: vi.fn(async () => ({ messageId: "evt", roomId: "!room" })),
   sendSingleTextMessageMatrix: sendSingleTextMessageMatrixMock,
   sendReadReceiptMatrix: vi.fn(async () => {}),
   sendTypingMatrix: vi.fn(async () => {}),
 }));
 
-const deliverMatrixRepliesMock = vi.hoisted(() => vi.fn());
+const deliverMatrixRepliesMock = vi.hoisted(() =>
+  vi.fn<typeof import("./replies.js").deliverMatrixReplies>(),
+);
 
 vi.mock("./replies.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./replies.js")>()),
@@ -59,18 +58,9 @@ const approvalButtons = {
 describe("matrix monitor handler reply presentation", () => {
   beforeEach(() => {
     installMatrixMonitorTestRuntime();
-    sendMessageMatrixMock.mockClear();
-    editMessageMatrixMock.mockClear();
-    sendSingleTextMessageMatrixMock.mockClear();
-    reactMatrixMessageMock.mockClear();
+    vi.clearAllMocks();
     deliverMatrixRepliesMock.mockReset().mockResolvedValue({
       messageIds: ["$reply1"],
-      receipt: {
-        primaryPlatformMessageId: "$reply1",
-        platformMessageIds: ["$reply1"],
-        parts: [{ platformMessageId: "$reply1", kind: "text" as const, index: 0 }],
-        sentAt: 1,
-      },
       visibleReplySent: true,
       content: "delivered",
     });
@@ -87,10 +77,7 @@ describe("matrix monitor handler reply presentation", () => {
       },
     };
     let currentConfig = cfg;
-    const dispatchInboundMessage = vi.fn(async () => ({
-      queuedFinal: false,
-      counts: { final: 0, block: 0, tool: 0 },
-    }));
+    const dispatchInboundMessage = vi.fn(async () => matrixDispatchResult());
     const { handler } = createMatrixHandlerTestHarness({
       cfg,
       currentConfig: () => currentConfig,
@@ -108,13 +95,11 @@ describe("matrix monitor handler reply presentation", () => {
   });
 
   it("resolves a reply's presentation before the room delivery reads it", async () => {
-    const runGate = createDeferred<void>();
-    const captured = createDeferred<DeliverFn>();
-
+    let deliver: DeliverFn | undefined;
     const { handler } = createMatrixHandlerTestHarness({
       streaming: "off",
       createReplyDispatcherWithTyping: (params) => {
-        captured.resolve((params as { deliver: DeliverFn }).deliver);
+        deliver = (params as { deliver: DeliverFn }).deliver;
         return {
           dispatcher: { markComplete: () => {}, waitForIdle: async () => {} },
           replyOptions: {},
@@ -123,34 +108,26 @@ describe("matrix monitor handler reply presentation", () => {
         };
       },
       dispatchInboundMessage: vi.fn(async () => {
-        await runGate.promise;
-        return { queuedFinal: true, counts: { final: 1, block: 0, tool: 0 } };
-      }) as never,
+        if (!deliver) {
+          throw new Error("missing room delivery callback");
+        }
+        await deliver(
+          {
+            presentation: {
+              blocks: [{ type: "text", text: "Deploy to production?" }, approvalButtons],
+            },
+          },
+          { kind: "final" },
+        );
+        return matrixDispatchResult(1);
+      }),
     });
-
-    const handlerDone = handler(
+    await handler(
       "!room:example.org",
       createMatrixTextMessageEvent({ eventId: "$msg1", body: "deploy?" }),
     );
-    const deliver = await captured.promise;
-    try {
-      await deliver(
-        {
-          presentation: {
-            blocks: [{ type: "text", text: "Deploy to production?" }, approvalButtons],
-          },
-        },
-        { kind: "final" },
-      );
-    } finally {
-      runGate.resolve();
-      await handlerDone;
-    }
 
-    const delivered = deliverMatrixRepliesMock.mock.calls.at(0)?.[0] as
-      | { replies?: ReplyPayload[] }
-      | undefined;
-    const reply = delivered?.replies?.[0];
+    const reply = deliverMatrixRepliesMock.mock.calls[0]?.[0].replies[0];
     expect(reply?.text).toContain("Deploy to production?");
     expect(reply?.presentation).toBeUndefined();
     expect(reply?.channelData?.matrix).toMatchObject({

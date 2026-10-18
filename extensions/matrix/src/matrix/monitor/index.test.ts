@@ -55,9 +55,9 @@ describe("monitorMatrixProvider", () => {
     return handler;
   }
 
-  function expectPersistRelease() {
+  function expectRelease(mode: "persist" | "stop" = "persist") {
     expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "persist" }),
+      expect.objectContaining({ mode }),
     );
   }
 
@@ -91,16 +91,24 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.setStatus).toHaveBeenCalledWith(expect.objectContaining(fields));
   }
 
-  function expectLastStatusFields(fields: Record<string, unknown>) {
-    expect(hoisted.setStatus.mock.calls.at(-1)?.[0]).toMatchObject(fields);
-  }
-
   function expectCallOrder(...entries: string[]) {
     for (let i = 1; i < entries.length; i++) {
       expect(hoisted.callOrder.indexOf(entries[i - 1])).toBeLessThan(
         hoisted.callOrder.indexOf(entries[i]),
       );
     }
+  }
+
+  function holdTask(start: string, done: string) {
+    const gate = createDeferred<void>();
+    hoisted.callOrder.push(start);
+    return {
+      promise: gate.promise,
+      finish() {
+        hoisted.callOrder.push(done);
+        gate.resolve();
+      },
+    };
   }
 
   function untilAbort(signal?: AbortSignal): Promise<never> {
@@ -121,7 +129,6 @@ describe("monitorMatrixProvider", () => {
     hoisted.state.leaseAbortController = new AbortController();
     hoisted.state.monitorRetirement = null;
     hoisted.state.monitorRetirementPromise = null;
-    hoisted.state.startClientError = null;
     hoisted.accountConfig.dm = {};
     delete hoisted.accountConfig.streaming;
     delete hoisted.accountConfig.rooms;
@@ -179,32 +186,31 @@ describe("monitorMatrixProvider", () => {
 
       expect(getHealthySyncSinceMs()).toBeUndefined();
 
-      hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
-      const firstHealthySyncSinceMs = Date.now();
-      expect(getHealthySyncSinceMs()).toBe(firstHealthySyncSinceMs);
-
-      await vi.advanceTimersByTimeAsync(3_000);
-      hoisted.client.emit("sync.state", "CATCHUP", "SYNCING", undefined);
-      expect(getHealthySyncSinceMs()).toBe(firstHealthySyncSinceMs);
-
-      await vi.advanceTimersByTimeAsync(2_000);
-      hoisted.client.emit("sync.state", "PREPARED", "CATCHUP", undefined);
-      expect(getHealthySyncSinceMs()).toBe(firstHealthySyncSinceMs);
-
-      await vi.advanceTimersByTimeAsync(5_000);
-      hoisted.client.emit("sync.state", "RECONNECTING", "SYNCING", new Error("network flap"));
-      expect(getHealthySyncSinceMs()).toBeUndefined();
-
-      await vi.advanceTimersByTimeAsync(7_000);
-      hoisted.client.emit("sync.state", "SYNCING", "RECONNECTING", undefined);
-      const rearmedHealthySyncSinceMs = Date.now();
-      expect(getHealthySyncSinceMs()).toBe(rearmedHealthySyncSinceMs);
+      const startedAt = Date.now();
+      for (const [delay, state, previous, healthyOffset] of [
+        [0, "SYNCING", "RECONNECTING", 0],
+        [3_000, "CATCHUP", "SYNCING", 0],
+        [2_000, "PREPARED", "CATCHUP", 0],
+        [5_000, "RECONNECTING", "SYNCING", undefined],
+        [7_000, "SYNCING", "RECONNECTING", 17_000],
+      ] as const) {
+        await vi.advanceTimersByTimeAsync(delay);
+        hoisted.client.emit(
+          "sync.state",
+          state,
+          previous,
+          state === "RECONNECTING" ? new Error("network flap") : undefined,
+        );
+        expect(getHealthySyncSinceMs()).toBe(
+          healthyOffset === undefined ? undefined : startedAt + healthyOffset,
+        );
+      }
 
       abortController.abort();
       await expect(monitorPromise).resolves.toBeUndefined();
 
       hoisted.client.emit("sync.state", "RECONNECTING", "SYNCING", new Error("late noise"));
-      expect(getHealthySyncSinceMs()).toBe(rearmedHealthySyncSinceMs);
+      expect(getHealthySyncSinceMs()).toBe(startedAt + 17_000);
     } finally {
       vi.useRealTimers();
     }
@@ -251,7 +257,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.client.emit("sync.unexpected_error", new Error("sync exploded"));
 
     await expect(monitorPromise).rejects.toThrow("sync exploded");
-    expectPersistRelease();
+    expectRelease();
     expectStatusCallFields({
       accountId: "default",
       connected: false,
@@ -271,8 +277,8 @@ describe("monitorMatrixProvider", () => {
       }),
     ).rejects.toThrow("deduper failed");
 
-    expectPersistRelease();
-    expectLastStatusFields({
+    expectRelease();
+    expect(hoisted.setStatus.mock.calls.at(-1)?.[0]).toMatchObject({
       accountId: "default",
       connected: false,
       healthState: "error",
@@ -280,47 +286,37 @@ describe("monitorMatrixProvider", () => {
     });
   });
 
-  it("aborts stalled startup promptly and releases the shared client without persist", async () => {
-    hoisted.resolveSharedMatrixClient.mockImplementation(async (abortSignal?: AbortSignal) => {
-      hoisted.callOrder.push("start-client");
-      return await untilAbort(abortSignal);
-    });
+  it.each(["startup", "maintenance"] as const)(
+    "aborts stalled %s without persisting",
+    async (phase) => {
+      const handler = vi.fn(async () => {});
+      hoisted.createMatrixRoomMessageHandler.mockReturnValue(handler);
+      if (phase === "startup") {
+        hoisted.resolveSharedMatrixClient.mockImplementation(async (signal?: AbortSignal) => {
+          hoisted.callOrder.push("start-client");
+          return await untilAbort(signal);
+        });
+      } else {
+        hoisted.runMatrixStartupMaintenance.mockImplementation(
+          async ({ abortSignal }) => await untilAbort(abortSignal),
+        );
+      }
+      const { abortController, monitorPromise } = await startMonitor(phase === "startup");
+      if (phase === "maintenance") {
+        await flushUntil(
+          () => hoisted.runMatrixStartupMaintenance.mock.calls.length === 1,
+          "expected startup maintenance to run",
+        );
+      }
+      abortController.abort();
 
-    const { abortController, monitorPromise } = await startMonitor();
-
-    abortController.abort();
-
-    await expect(monitorPromise).resolves.toBeUndefined();
-    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "stop" }),
-    );
-    expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
-  });
-
-  it("aborts during startup maintenance and releases the shared client without persist", async () => {
-    const handler = vi.fn(async () => {});
-    hoisted.createMatrixRoomMessageHandler.mockReturnValue(handler);
-    hoisted.runMatrixStartupMaintenance.mockImplementation(
-      async (params: { abortSignal?: AbortSignal }) => await untilAbort(params.abortSignal),
-    );
-
-    const { abortController, monitorPromise } = await startMonitor(false);
-
-    await flushUntil(
-      () => hoisted.runMatrixStartupMaintenance.mock.calls.length === 1,
-      "expected startup maintenance to run",
-    );
-
-    abortController.abort();
-
-    await expect(monitorPromise).resolves.toBeUndefined();
-    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "stop" }),
-    );
-    expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
-    await hoisted.callbacks.roomMessage?.("!room:example.org", { event_id: "$late" });
-    expect(handler).not.toHaveBeenCalled();
-  });
+      await expect(monitorPromise).resolves.toBeUndefined();
+      expectRelease("stop");
+      expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
+      await hoisted.callbacks.roomMessage?.("!room:example.org", { event_id: "$late" });
+      expect(handler).not.toHaveBeenCalled();
+    },
+  );
 
   it("disposes resources installed after forced retirement wins setup", async () => {
     const stopLateManager = vi.fn();
@@ -347,9 +343,7 @@ describe("monitorMatrixProvider", () => {
     expect(stopLateManager).toHaveBeenCalledTimes(1);
     expect(hoisted.resolveSharedMatrixClient).not.toHaveBeenCalled();
     expect(hoisted.registerMatrixMonitorEvents).not.toHaveBeenCalled();
-    expect(hoisted.releaseSharedClientInstance).toHaveBeenCalledWith(
-      expect.objectContaining({ mode: "stop" }),
-    );
+    expectRelease("stop");
     expect(hoisted.disposeAutoJoin).toHaveBeenCalledTimes(1);
     expect(hoisted.client.listenerCount("sync.state")).toBe(0);
   });
@@ -376,9 +370,7 @@ describe("monitorMatrixProvider", () => {
     hoisted.backfillMatrixAuthDeviceIdAfterStartup.mockReturnValue(backfill.promise);
     const { abortController, monitorPromise } = await startMonitor();
     expect(hoisted.backfillMatrixAuthDeviceIdAfterStartup).toHaveBeenCalledTimes(1);
-    const backfillParams = mockCallArg(hoisted.backfillMatrixAuthDeviceIdAfterStartup) as {
-      abortSignal?: AbortSignal;
-    };
+    const [backfillParams] = hoisted.backfillMatrixAuthDeviceIdAfterStartup.mock.calls[0]!;
     expect(backfillParams.abortSignal).not.toBe(abortController.signal);
     expect(backfillParams.abortSignal?.aborted).toBe(false);
 
@@ -404,16 +396,10 @@ describe("monitorMatrixProvider", () => {
       "expected monitor startup consumers to be registered",
     );
 
-    const startSignal = mockCallArg(hoisted.resolveSharedMatrixClient, 0, 0) as AbortSignal;
-    const backfillParams = mockCallArg(hoisted.backfillMatrixAuthDeviceIdAfterStartup) as {
-      abortSignal?: AbortSignal;
-    };
-    const runtimeContextParams = mockCallArg(hoisted.registerChannelRuntimeContext) as {
-      abortSignal?: AbortSignal;
-    };
-    const maintenanceParams = mockCallArg(hoisted.runMatrixStartupMaintenance) as {
-      abortSignal?: AbortSignal;
-    };
+    const startSignal = hoisted.resolveSharedMatrixClient.mock.calls[0]![0]!;
+    const [backfillParams] = hoisted.backfillMatrixAuthDeviceIdAfterStartup.mock.calls[0]!;
+    const [runtimeContextParams] = hoisted.registerChannelRuntimeContext.mock.calls[0]!;
+    const [maintenanceParams] = hoisted.runMatrixStartupMaintenance.mock.calls[0]!;
     expect(backfillParams.abortSignal?.aborted).toBe(false);
     expect(runtimeContextParams.abortSignal).toBe(startSignal);
     expect(maintenanceParams.abortSignal).toBe(startSignal);
@@ -441,32 +427,23 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("detaches listeners, closes admission, waits for handlers, then releases", async () => {
-    const pendingHandlers = new Map<string, () => void>();
-    let finishManagerStop: (() => void) | undefined;
+    const pendingHandlers = new Map<string, ReturnType<typeof holdTask>>();
+    let managerStop: ReturnType<typeof holdTask> | undefined;
 
     hoisted.createMatrixRoomMessageHandler.mockReturnValue(
       vi.fn((_roomId: string, event: unknown) => {
         const eventId = (event as { event_id: string }).event_id;
-        hoisted.callOrder.push(`handler-start:${eventId}`);
-        return new Promise<void>((resolve) => {
-          pendingHandlers.set(eventId, () => {
-            hoisted.callOrder.push(`handler-done:${eventId}`);
-            resolve();
-          });
-        });
+        const task = holdTask(`handler-start:${eventId}`, `handler-done:${eventId}`);
+        pendingHandlers.set(eventId, task);
+        return task.promise;
       }),
     );
     hoisted.client.drainPendingDecryptions.mockImplementation(async () => {
       hoisted.callOrder.push("drain-decrypts");
     });
     hoisted.stopThreadBindingManager.mockImplementation(async () => {
-      hoisted.callOrder.push("stop-manager");
-      await new Promise<void>((resolve) => {
-        finishManagerStop = () => {
-          hoisted.callOrder.push("manager-stopped");
-          resolve();
-        };
-      });
+      managerStop = holdTask("stop-manager", "manager-stopped");
+      await managerStop.promise;
     });
     hoisted.releaseSharedClientInstance.mockImplementation(async () => {
       await hoisted.client.drainPendingDecryptions();
@@ -486,12 +463,12 @@ describe("monitorMatrixProvider", () => {
     await onRoomMessage("!room:example.org", { event_id: "$late" });
     expect(hoisted.callOrder).not.toContain("handler-start:$late");
 
-    pendingHandlers.get("$event")?.();
+    pendingHandlers.get("$event")?.finish();
     await roomMessagePromise;
     await waitForCallOrderEntry("stop-manager");
     expect(hoisted.callOrder).not.toContain("release-client");
 
-    finishManagerStop?.();
+    managerStop?.finish();
     await monitorPromise;
 
     expectCallOrder(
@@ -506,16 +483,11 @@ describe("monitorMatrixProvider", () => {
   });
 
   it("cleans up local monitor work after a retained shared-client release", async () => {
-    let finishHandler: (() => void) | undefined;
+    let pendingHandler: ReturnType<typeof holdTask> | undefined;
     hoisted.createMatrixRoomMessageHandler.mockReturnValue(
       vi.fn(() => {
-        hoisted.callOrder.push("handler-start");
-        return new Promise<void>((resolve) => {
-          finishHandler = () => {
-            hoisted.callOrder.push("handler-done");
-            resolve();
-          };
-        });
+        pendingHandler = holdTask("handler-start", "handler-done");
+        return pendingHandler.promise;
       }),
     );
     hoisted.stopThreadBindingManager.mockImplementation(() => {
@@ -537,7 +509,7 @@ describe("monitorMatrixProvider", () => {
     expect(hoisted.client.drainPendingDecryptions).not.toHaveBeenCalled();
     expect(hoisted.callOrder).not.toContain("release-retained");
 
-    finishHandler?.();
+    pendingHandler?.finish();
     await roomMessagePromise;
     await monitorPromise;
 
@@ -550,36 +522,31 @@ describe("monitorMatrixProvider", () => {
     await expect(promote("!room:example.org")).resolves.toBe(false);
   });
 
-  it("wires exact room config as a direct-room classifier veto", async () => {
-    hoisted.accountConfig.rooms = {
-      "!room:example.org": { requireMention: true },
-      "*": { requireMention: false },
-    };
-
-    const configured = await directRoomCallback("isExplicitlyConfiguredRoom");
-    expect(await configured("!room:example.org")).toBe(true);
-    expect(await configured("!other:example.org")).toBe(false);
-    expect(hoisted.getRoomInfo).not.toHaveBeenCalled();
-  });
-
-  it("wires alias room config as a direct-room classifier veto", async () => {
-    hoisted.accountConfig.rooms = {
-      "#ops:example.org": { requireMention: true },
-      "*": { requireMention: false },
-    };
-    const { resolveMatrixTargets } = await import("../../resolve-targets.js");
-    vi.mocked(resolveMatrixTargets).mockResolvedValueOnce([
-      {
-        input: "#ops:example.org",
-        resolved: true,
-        id: "!room:example.org",
-      },
-    ]);
-
-    const configured = await directRoomCallback("isExplicitlyConfiguredRoom");
-    mockRoomInfo({ canonicalAlias: "#ops:example.org" });
-    expect(await configured("!room:example.org")).toBe(true);
-  });
+  it.each(["!room:example.org", "#ops:example.org"])(
+    "uses %s config as a direct-room veto",
+    async (room) => {
+      hoisted.accountConfig.rooms = {
+        [room]: { requireMention: true },
+        "*": { requireMention: false },
+      };
+      const alias = room.startsWith("#");
+      if (alias) {
+        const { resolveMatrixTargets } = await import("../../resolve-targets.js");
+        vi.mocked(resolveMatrixTargets).mockResolvedValueOnce([
+          { input: room, resolved: true, id: "!room:example.org" },
+        ]);
+      }
+      const configured = await directRoomCallback("isExplicitlyConfiguredRoom");
+      if (alias) {
+        mockRoomInfo({ canonicalAlias: room });
+      }
+      expect(await configured("!room:example.org")).toBe(true);
+      if (!alias) {
+        expect(await configured("!other:example.org")).toBe(false);
+        expect(hoisted.getRoomInfo).not.toHaveBeenCalled();
+      }
+    },
+  );
 
   it("wires recent-invite promotion to reject wildcard-configured rooms", async () => {
     hoisted.accountConfig.rooms = {

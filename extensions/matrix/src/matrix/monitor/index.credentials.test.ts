@@ -12,6 +12,15 @@ import type { CoreConfig } from "../../types.js";
 import { getMatrixMonitorIndexTestHarness } from "./index.test-helpers.js";
 
 const harness = getMatrixMonitorIndexTestHarness();
+function matrixAccount(accessToken: string) {
+  return { homeserver: "https://matrix.example.org", accessToken };
+}
+const storedCredential = {
+  ...matrixAccount("synthetic-ops-token"),
+  accountId: "ops",
+  userId: "@ops:example.org",
+  createdAt: "2026-09-01T00:00:00.000Z",
+};
 let monitorMatrixProvider: typeof import("./index.js").monitorMatrixProvider;
 let getMatrixRuntime: typeof import("../../runtime.js").getMatrixRuntime;
 let credentials: typeof import("../credentials-read.js");
@@ -28,7 +37,7 @@ beforeAll(async () => {
 });
 
 describe("Matrix monitor credential discovery", () => {
-  let cfg: CoreConfig;
+  let accounts: Record<string, ReturnType<typeof matrixAccount>>;
   const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     afterEach(async () => {
       vi.restoreAllMocks();
@@ -48,19 +57,17 @@ describe("Matrix monitor credential discovery", () => {
     Object.assign(harness.client, { getUserId: async () => "@bot:example.org" });
     const stateDir = tempDirs.make("matrix-monitor-credentials-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    cfg = {
+    accounts = { ops: matrixAccount("synthetic-ops-token") };
+    const cfg = {
       channels: {
         matrix: {
-          homeserver: "https://matrix.example.org",
+          ...matrixAccount("synthetic-main-token"),
           userId: "@bot:example.org",
-          accessToken: "synthetic-main-token",
           allowBots: false,
-          accounts: {
-            ops: { homeserver: "https://matrix.example.org", accessToken: "synthetic-ops-token" },
-          },
+          accounts,
         },
       },
-    };
+    } satisfies CoreConfig;
     installMatrixTestRuntime({
       stateDir,
       cfg,
@@ -76,36 +83,24 @@ describe("Matrix monitor credential discovery", () => {
       },
     });
     Object.assign(getMatrixRuntime(), { system: { formatNativeDependencyHint: () => "" } });
-    credentials.openMatrixCredentialsStore().register("account:ops", {
-      accountId: "ops",
-      homeserver: "https://matrix.example.org",
-      userId: "@ops:example.org",
-      accessToken: "synthetic-ops-token",
-      createdAt: "2026-09-01T00:00:00.000Z",
-    });
+    credentials.openMatrixCredentialsStore().register("account:ops", storedCredential);
   });
 
   it.each(["matching", "changed-token", "changed-homeserver", "revoked"])(
     "uses %s credentials for real bot ingress without host SQLite",
     async (kind) => {
-      if (kind === "revoked") {
-        credentials.openMatrixCredentialsStore().register("account:ops", {
-          accountId: "ops",
-          kind: "revoked",
-          revokedAt: "2026-09-02T00:00:00.000Z",
-        });
-      } else if (kind !== "matching") {
-        const stored = credentials.loadMatrixCredentials(undefined, "ops");
-        if (!stored) {
-          throw new Error("missing seeded credential");
-        }
-        credentials.openMatrixCredentialsStore().register("account:ops", {
-          ...stored,
-          accountId: "ops",
-          ...(kind === "changed-token"
-            ? { accessToken: "synthetic-replacement-token" }
-            : { homeserver: "https://other.example.org" }),
-        });
+      if (kind !== "matching") {
+        credentials.openMatrixCredentialsStore().register(
+          "account:ops",
+          kind === "revoked"
+            ? { accountId: "ops", kind: "revoked", revokedAt: "2026-09-02T00:00:00.000Z" }
+            : {
+                ...storedCredential,
+                ...(kind === "changed-token"
+                  ? { accessToken: "synthetic-replacement-token" }
+                  : { homeserver: "https://other.example.org" }),
+              },
+        );
       }
       await closeOpenClawStateDatabaseAsync();
       const started = createDeferred<void>();
@@ -158,14 +153,7 @@ describe("Matrix monitor credential discovery", () => {
     },
   );
   it("joins admitted credential discovery after abort without starting a client", async () => {
-    const accounts = cfg.channels?.matrix?.accounts;
-    if (!accounts) {
-      throw new Error("missing synthetic Matrix accounts");
-    }
-    accounts.secondary = {
-      homeserver: "https://matrix.example.org",
-      accessToken: "synthetic-secondary-token",
-    };
+    accounts.secondary = matrixAccount("synthetic-secondary-token");
     const observed = createDeferred<void>();
     const release = createDeferred<void>();
     const read = credentials.loadMatrixCredentialsAsync;

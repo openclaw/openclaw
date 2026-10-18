@@ -11,12 +11,9 @@ export type DirectRoomTrackerOptions = {
     | undefined;
 };
 
-type MonitorRetirement = {
-  closeTaskAdmission: () => void;
-  detachListeners: () => void;
-  waitForTasks: () => Promise<void>;
-  cleanup: () => Promise<void> | void;
-};
+type MonitorRetirement = Parameters<
+  import("../client.js").SharedMatrixClientLease["registerMonitorRetirement"]
+>[0];
 
 const hoisted = await vi.hoisted(async () => {
   const { EventEmitter } = await import("node:events");
@@ -29,7 +26,6 @@ const hoisted = await vi.hoisted(async () => {
     leaseAbortController: new AbortController(),
     monitorRetirement: null as MonitorRetirement | null,
     monitorRetirementPromise: null as Promise<void> | null,
-    startClientError: null as Error | null,
   };
   const accountConfig: MatrixConfig = { dm: {} };
   const inboundReplayClaim = {
@@ -54,18 +50,9 @@ const hoisted = await vi.hoisted(async () => {
   );
   const getRoomInfo = vi.fn<
     (roomId: string, opts?: { includeAliases?: boolean }) => Promise<MatrixRoomInfo>
-  >(async () => ({
-    altAliases: [],
-    nameResolved: true,
-    aliasesResolved: true,
-  }));
+  >(async () => ({ altAliases: [], nameResolved: true, aliasesResolved: true }));
   const getMemberDisplayName = vi.fn(async () => "Bot");
-  const logger = {
-    info: vi.fn(),
-    warn: vi.fn(),
-    error: vi.fn(),
-    debug: vi.fn(),
-  };
+  const logger = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
   const stopThreadBindingManager = vi.fn();
   const createThreadBindingManager = vi.fn(async () => {
     callOrder.push("create-manager");
@@ -101,24 +88,20 @@ const hoisted = await vi.hoisted(async () => {
     })();
     return state.monitorRetirementPromise;
   };
-  const finalReleaseImpl = async () => {
-    await runRegisteredMonitorRetirement();
-  };
-  const resolveSharedMatrixClientImpl = async () => {
+  const resolveSharedMatrixClientImpl = async (_abortSignal?: AbortSignal) => {
     if (!callOrder.includes("create-manager")) {
       throw new Error("Matrix client started before thread bindings were registered");
     }
     if (!state.monitorRetirement) {
       throw new Error("Matrix client started before monitor retirement was registered");
     }
-    if (state.startClientError) {
-      throw state.startClientError;
-    }
     callOrder.push("start-client");
     return client;
   };
   const acquireSharedMatrixClient = vi.fn(acquireSharedMatrixClientImpl);
-  const releaseSharedClientInstance = vi.fn(finalReleaseImpl);
+  const releaseSharedClientInstance = vi.fn(async () => {
+    await runRegisteredMonitorRetirement();
+  });
   const lease = {
     get abortSignal() {
       return state.leaseAbortController.signal;
@@ -147,9 +130,11 @@ const hoisted = await vi.hoisted(async () => {
       return disposeMonitorEvents;
     },
   );
-  const registerChannelRuntimeContext = vi.fn();
+  const registerChannelRuntimeContext = vi.fn<(params: { abortSignal?: AbortSignal }) => void>();
   const setMatrixRuntime = vi.fn();
-  const backfillMatrixAuthDeviceIdAfterStartup = vi.fn(async () => undefined);
+  const backfillMatrixAuthDeviceIdAfterStartup = vi.fn(
+    async (_params: { abortSignal?: AbortSignal }) => undefined,
+  );
   const runMatrixStartupMaintenance = vi.fn<
     (params: { abortSignal?: AbortSignal }) => Promise<void>
   >(async () => undefined);
@@ -157,7 +142,6 @@ const hoisted = await vi.hoisted(async () => {
   return {
     accountConfig,
     acquireSharedMatrixClient,
-    acquireSharedMatrixClientImpl,
     backfillMatrixAuthDeviceIdAfterStartup,
     callOrder,
     client,
@@ -167,7 +151,6 @@ const hoisted = await vi.hoisted(async () => {
     createThreadBindingManager,
     disposeAutoJoin,
     disposeMonitorEvents,
-    finalReleaseImpl,
     getMemberDisplayName,
     getRoomInfo,
     inboundDeduper,

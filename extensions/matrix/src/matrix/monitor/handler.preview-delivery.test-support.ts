@@ -45,6 +45,9 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     waitForMatrixState,
     mockCalls,
   } = harness;
+  function expectVisible(result: unknown, messageIds: string[], content: string) {
+    expect(result).toMatchObject({ messageIds, visibleReplySent: true, content });
+  }
   async function startPreview(text = "Visible preview", previewToolProgressEnabled = false) {
     const context = createStreamingHarness({ streaming: "partial", previewToolProgressEnabled });
     const turn = await context.dispatch();
@@ -90,11 +93,7 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     const result = await deliver({ mediaUrl: "https://example.com/image.png" }, { kind: "final" });
     await finish();
 
-    expect(result).toMatchObject({
-      messageIds: ["$draft1"],
-      visibleReplySent: true,
-      content: "Visible preview",
-    });
+    expectVisible(result, ["$draft1"], "Visible preview");
     expect(redactEventMock).not.toHaveBeenCalled();
   });
 
@@ -131,20 +130,12 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
 
     const result = await deliver({ text: "Something failed", isError: true }, { kind: "final" });
 
-    expect(result).toMatchObject({
-      messageIds: ["$draft1", "$reply1"],
-      visibleReplySent: true,
-      content: "Visible preview\ndelivered",
-    });
+    expectVisible(result, ["$draft1", "$reply1"], "Visible preview\ndelivered");
     deliverMatrixRepliesMock.mockResolvedValueOnce(
       createMockMatrixDeliveryResult("$reply2", "Later durable reply"),
     );
     const laterResult = await deliver({ text: "Later durable reply" }, { kind: "final" });
-    expect(laterResult).toMatchObject({
-      messageIds: ["$reply2"],
-      visibleReplySent: true,
-      content: "Later durable reply",
-    });
+    expectVisible(laterResult, ["$reply2"], "Later durable reply");
     expect(editMessageMatrixMock).not.toHaveBeenCalled();
     await finish();
     expect(mockCalls(redactEventMock, "redactEvent").map(([, id]) => id)).toEqual([
@@ -153,15 +144,13 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
     ]);
   });
 
-  it.each([
-    { priorDisposition: "retained", boundary: "block", outcome: "unfinished" },
-    { priorDisposition: "consumed", boundary: "followup", outcome: "complete" },
-  ] as const)(
-    "settles $priorDisposition then $boundary draft generations through $outcome",
-    async ({ priorDisposition, boundary, outcome }) => {
+  it.each(["block", "followup"] as const)(
+    "settles retained/unfinished block or consumed/complete followup generations: %s",
+    async (boundary) => {
+      const retained = boundary === "block";
       const { redactEventMock, deliver, onError, opts, finish } =
         await startPreview("First generation");
-      if (priorDisposition === "retained") {
+      if (retained) {
         deliverMatrixRepliesMock.mockRejectedValueOnce(new Error("replacement failed"));
       }
       if (boundary === "block") {
@@ -171,7 +160,7 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
         { text: "First replacement", isError: true },
         { kind: boundary === "block" ? "block" : "final" },
       );
-      if (priorDisposition === "retained") {
+      if (retained) {
         await firstDelivery.catch(() => undefined);
       } else {
         await firstDelivery;
@@ -179,9 +168,7 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       if (boundary === "followup") {
         await opts.onQueuedFollowupAdmitted?.();
       } else {
-        if (priorDisposition === "retained") {
-          onError(new Error("replacement failed"), { kind: "block" });
-        }
+        onError(new Error("replacement failed"), { kind: "block" });
         await opts.onAssistantMessageStart?.();
       }
 
@@ -193,7 +180,7 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
       await waitForMatrixState(() => {
         expect(sendSingleTextMessageMatrixMock).toHaveBeenCalledTimes(2);
       });
-      if (outcome === "complete") {
+      if (!retained) {
         await deliver({ text: "Second replacement", isError: true }, { kind: "final" });
       }
       await finish();
@@ -202,11 +189,11 @@ export function registerMatrixPreviewDeliveryTests(harness: PreviewDeliveryHarne
         ([, eventId]) => eventId,
       );
       expect(redactedEventIds.filter((eventId) => eventId === "$draft1")).toHaveLength(
-        priorDisposition === "consumed" ? 1 : 0,
+        retained ? 0 : 1,
       );
       expect(redactedEventIds.filter((eventId) => eventId === "$draft2")).toHaveLength(1);
-      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(outcome === "complete" ? 2 : 1);
-      if (outcome === "complete") {
+      expect(deliverMatrixRepliesMock).toHaveBeenCalledTimes(retained ? 1 : 2);
+      if (!retained) {
         expect(deliverMatrixRepliesMock.mock.invocationCallOrder[1]).toBeLessThan(
           redactEventMock.mock.invocationCallOrder.at(-1)!,
         );
