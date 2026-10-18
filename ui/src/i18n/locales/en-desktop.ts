@@ -88,6 +88,8 @@ const enDesktop = {
     keyboardInput: "Remote desktop keyboard input",
     touchControls: "Remote desktop controls",
     fit: "Fit",
+    fitHeight: "Fit height",
+    fitWidth: "Fit width",
     actual: "Actual",
     actualSizeLabel: "Actual size",
     match: "Match",

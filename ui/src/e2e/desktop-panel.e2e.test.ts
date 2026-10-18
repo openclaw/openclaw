@@ -1,5 +1,16 @@
+import { writeFile } from "node:fs/promises";
+import path from "node:path";
 import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
+import type {
+  DesktopClient,
+  DesktopConnectionHandle,
+  DesktopSizingMode,
+} from "../components/desktop/desktop-client.ts";
+import {
+  takeControlUiScreenshotFrame,
+  takeControlUiViewportScreenshot,
+} from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   installMockGateway,
   type ControlUiMockGatewayScenario,
@@ -124,6 +135,272 @@ async function openScriptedDesktop(
   await expect.poll(rfb.events).toEqual(["authenticated:1"]);
   return { gateway, rfb, panel };
 }
+
+// Only this scenario needs both overlay and space-consuming scrollbars.
+const sizingSuite = createControlUiE2eSuite({
+  name: "desktop axis sizing",
+  startServerBeforeBrowser: true,
+  browserLaunchOptions: { ignoreDefaultArgs: ["--hide-scrollbars"] },
+});
+sizingSuite.define(() => {
+  it("fits either axis with real noVNC scaling, scroll and pointer coordinates", () =>
+    sizingSuite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      await page.setViewportSize({ width: 1000, height: 900 });
+      const gateway = await desktopGateway(
+        page,
+        [hostEnvironment],
+        observe("sizing", true, { canResize: true }),
+        {
+          deferredMethods: ["desktop.observe"],
+        },
+      );
+      await page.goto(`${sizingSuite.server.baseUrl}focus/desktop/control/source/gateway`);
+      const overlayScrollbars = await page.addStyleTag({
+        content: ".desktop-surface * { scrollbar-width: none; }",
+      });
+      await gateway.waitForRequest("desktop.observe");
+      const peer = await installScriptedRfbServer(page);
+      const panel = page.locator("openclaw-desktop-panel");
+      type SizingPanel = HTMLElement & {
+        desktopClientFactory: () => Pick<DesktopClient, "connect">;
+        sizingConnection: DesktopConnectionHandle;
+        sizingPackets: number[][];
+      };
+      await panel.evaluate((element) => {
+        const host = element as SizingPanel;
+        host.sizingPackets = [];
+        // Observe the existing wire fixture; neither transport nor noVNC is replaced here.
+        window.WebSocket = new Proxy(window.WebSocket, {
+          construct(Socket, args) {
+            const socket = Reflect.construct(Socket, args) as WebSocket;
+            const send = socket.send.bind(socket);
+            socket.send = (data) => {
+              if (ArrayBuffer.isView(data)) {
+                host.sizingPackets.push(
+                  Array.from(new Uint8Array(data.buffer, data.byteOffset, data.byteLength)),
+                );
+              }
+              send(data);
+            };
+            return socket;
+          },
+        });
+        const factory = host.desktopClientFactory;
+        host.desktopClientFactory = () => {
+          const client = factory.call(host);
+          const connect = client.connect.bind(client);
+          client.connect = async (options) => {
+            host.sizingConnection = await connect(options);
+            return host.sizingConnection;
+          };
+          return client;
+        };
+      });
+      await gateway.resolveDeferred("desktop.observe");
+      await expect.poll(peer.events).toEqual(["authenticated:1"]);
+      await panel
+        .getByRole("status", { name: "Connecting to desktop…" })
+        .waitFor({ state: "hidden" });
+      const surface = panel.locator(".desktop-surface");
+      const canvas = surface.locator("canvas");
+      const bounds = await surface.boundingBox();
+      if (!bounds) {
+        throw new Error("Desktop surface must be visible");
+      }
+      const dimensions = () =>
+        canvas.evaluate((element) => {
+          const rect = element.getBoundingClientRect();
+          return [Math.round(rect.width), Math.round(rect.height)];
+        });
+      // The focus document keeps its native selector; axis geometry uses the shared connection API.
+      const selectAxis = (mode: DesktopSizingMode) =>
+        panel.evaluate((element, next) => {
+          (element as SizingPanel).sizingConnection.setSizingMode(next);
+        }, mode);
+      const sizing = panel.getByRole("combobox", { name: "Desktop size", exact: true });
+      const scroll = (axis: "left" | "top", amount: number) =>
+        canvas.evaluate(
+          (element, value) => {
+            for (let owner = element.parentElement; owner; owner = owner.parentElement) {
+              if (
+                value.axis === "left"
+                  ? owner.scrollWidth > owner.clientWidth
+                  : owner.scrollHeight > owner.clientHeight
+              ) {
+                if (value.axis === "left") {
+                  owner.scrollLeft = value.amount;
+                } else {
+                  owner.scrollTop = value.amount;
+                }
+                return value.axis === "left" ? owner.scrollLeft : owner.scrollTop;
+              }
+            }
+            return 0;
+          },
+          { axis, amount },
+        );
+      const pointer = () =>
+        panel.evaluate((element) => {
+          const packet = (element as SizingPanel).sizingPackets.findLast(
+            (bytes) => bytes[0] === 5 && bytes[1] === 1,
+          );
+          return packet ? [packet[2]! * 256 + packet[3]!, packet[4]! * 256 + packet[5]!] : null;
+        });
+      const capture = async (name: string) => {
+        const frame = await takeControlUiScreenshotFrame(page, surface, [canvas], {
+          elements: [surface],
+          animations: "disabled",
+        });
+        await writeFile(path.join(sizingSuite.artifactDir, `${name}.png`), frame.png);
+        await writeFile(
+          path.join(sizingSuite.artifactDir, `${name}-surface.png`),
+          frame.elements[0]!.png,
+        );
+      };
+      const marker = createRfbRawFrame();
+      // A second wire-rendered landmark stays visible after scrolling either axis.
+      marker[5] = 240;
+      marker[6] = 1;
+      marker[7] = 44;
+      await peer.send([createRfbRawFrame(), marker]);
+      await expect.poll(dimensions).toEqual([1000, 750]);
+      await capture("fit-before-axis");
+      await selectAxis("fit-height");
+      await expect.poll(dimensions).toEqual([Math.round((bounds.height * 4) / 3), bounds.height]);
+      expect(await scroll("top", 100)).toBe(0);
+      expect(await scroll("left", 100)).toBe(100);
+      await page.mouse.click(bounds.x + 100, bounds.y + 100);
+      await expect
+        .poll(pointer)
+        .toEqual([
+          Math.floor((200 * 600) / bounds.height),
+          Math.floor((100 * 600) / bounds.height),
+        ]);
+      await capture("fit-height-scrolled");
+      // Real DesktopSize changes the framebuffer; the current axis must react before switching modes.
+      await peer.send([[0, 0, 0, 1, 0, 0, 0, 0, 2, 88, 4, 176, 255, 255, 255, 33]]);
+      await expect.poll(dimensions).toEqual([Math.round(bounds.height / 2), bounds.height]);
+      await peer.send([marker]);
+      await selectAxis("fit-width");
+      await expect.poll(dimensions).toEqual([1000, 2000]);
+      expect(await scroll("left", 100)).toBe(0);
+      expect(await scroll("top", 200)).toBe(200);
+      await page.mouse.click(bounds.x + 100, bounds.y + 100);
+      await expect.poll(pointer).toEqual([60, 180]);
+      await capture("fit-width-scrolled");
+      await page.setViewportSize({ width: 500, height: 900 });
+      await expect.poll(dimensions).toEqual([500, 1000]);
+      await sizing.selectOption("actual");
+      await expect.poll(dimensions).toEqual([600, 1200]);
+      expect(await scroll("left", 100)).toBe(100);
+      expect(await scroll("top", 100)).toBe(100);
+      await sizing.selectOption("fit");
+      await expect.poll(dimensions).toEqual([Math.round(bounds.height / 2), bounds.height]);
+      await sizing.selectOption("match");
+      await expect.poll(dimensions).toEqual([Math.round(bounds.height / 2), bounds.height]);
+
+      // The launch flag must also be absent; CSS alone cannot override --hide-scrollbars.
+      await overlayScrollbars.evaluate((element) => element.remove());
+      // Custom Chromium scrollbars consume real layout space even on overlay-scrollbar hosts.
+      await page.addStyleTag({
+        content:
+          ".desktop-surface * { scrollbar-width: auto; scrollbar-color: auto; } .desktop-surface *::-webkit-scrollbar { width: 16px; height: 16px; }",
+      });
+      await page.setViewportSize({ width: 800, height: 600 });
+      const feedback = [];
+      for (const [mode, width, height] of [
+        ["fit-height", 804, 600],
+        ["fit-width", 800, 604],
+      ] as const) {
+        await peer.send([
+          [
+            0,
+            0,
+            0,
+            1,
+            0,
+            0,
+            0,
+            0,
+            width >> 8,
+            width & 255,
+            height >> 8,
+            height & 255,
+            255,
+            255,
+            255,
+            33,
+          ],
+        ]);
+        await expect
+          .poll(() =>
+            canvas.evaluate((element: HTMLCanvasElement) => [element.width, element.height]),
+          )
+          .toEqual([width, height]);
+        await selectAxis(mode);
+        const samples = await canvas.evaluate(async (element, axis) => {
+          const viewport = [...element.closest(".desktop-surface")!.querySelectorAll("div")].find(
+            (owner) =>
+              ["auto", "scroll"].includes(
+                axis === "fit-height"
+                  ? getComputedStyle(owner).overflowX
+                  : getComputedStyle(owner).overflowY,
+              ),
+          )!;
+          const frames = [];
+          // Observe consecutive rendered frames; a single settled-looking sample misses feedback.
+          for (let frame = 0; frame < 32; frame++) {
+            await new Promise<void>((resolve) => {
+              requestAnimationFrame(() => resolve());
+            });
+            const rect = element.getBoundingClientRect();
+            frames.push({
+              width: rect.width,
+              height: rect.height,
+              clientWidth: viewport.clientWidth,
+              clientHeight: viewport.clientHeight,
+              gutterX: viewport.offsetHeight - viewport.clientHeight,
+              gutterY: viewport.offsetWidth - viewport.clientWidth,
+            });
+          }
+          return frames;
+        }, mode);
+        feedback.push({ mode, framebuffer: [width, height], samples });
+        await writeFile(
+          path.join(sizingSuite.artifactDir, `classic-${mode}.png`),
+          await takeControlUiViewportScreenshot(page, surface, [canvas]),
+        );
+      }
+      await writeFile(
+        path.join(sizingSuite.artifactDir, "scrollbar-feedback.json"),
+        JSON.stringify(feedback, null, 2),
+      );
+      for (const { mode, samples } of feedback) {
+        expect(
+          samples.some(
+            (sample) => (mode === "fit-height" ? sample.gutterX : sample.gutterY) === 16,
+          ),
+          `${mode} must exercise a measured classic gutter`,
+        ).toBe(true);
+        expect(
+          new Set(samples.slice(-16).map((sample) => JSON.stringify(sample))).size,
+          `${mode} must stop resizing once the viewport and framebuffer stop changing`,
+        ).toBe(1);
+      }
+      expect(await peer.connectionCount()).toBe(1);
+      expect(await gateway.getRequests("desktop.observe")).toHaveLength(1);
+      // Provider permission alone cannot negotiate remote resizing with this wire peer.
+      expect(
+        await panel.evaluate((element) =>
+          (element as SizingPanel).sizingPackets.some((bytes) => bytes[0] === 251),
+        ),
+      ).toBe(false);
+      const mountedSurface = await surface.elementHandle();
+      await panel.evaluate((element) => (element as SizingPanel).sizingConnection.disconnect());
+      await expect.poll(peer.events).toContain("closed:1");
+      expect(await mountedSurface?.evaluate((element) => element.childElementCount)).toBe(0);
+    }));
+});
 
 suite.define(() => {
   it("hides the desktop command without the method or operator.admin", async () => {
