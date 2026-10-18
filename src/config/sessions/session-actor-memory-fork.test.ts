@@ -1,17 +1,16 @@
 import { afterEach, assert, describe, expect, it } from "vitest";
-import type {
-  SessionActor,
-  SessionActorAuthority,
-  SessionActorStorage,
-} from "./session-actor-contract.js";
+import type { SessionActor, SessionActorAuthority } from "./session-actor-contract.js";
+import type { SessionActorMemoryForkWrites } from "./session-actor-memory-fork-contract.js";
 import {
   commitMemory,
   committedMemoryResult as committed,
+  memoryStorage,
   mutateMemory,
   readMemory,
 } from "./session-actor-memory-publication.test-support.js";
 import { createMemorySessionActorOwner } from "./session-actor-memory.js";
 import type { SessionActorStorageAuthority } from "./session-actor-storage-contract.js";
+import type { SessionMessageCutIntent } from "./session-message-cut.types.js";
 import type { InternalSessionEntry as SessionEntry } from "./types.js";
 
 const parentKey = "agent:main:dashboard:incognito-fork-parent";
@@ -23,6 +22,18 @@ const forkAuthority: SessionActorStorageAuthority = {
   parentFork: { supportsCliFork: (provider) => provider === "claude" },
 };
 const lifetime = { assertCurrent() {}, assertReadable() {} };
+const expectedState = { sessionId: "parent-session", lifecycleRevision: "parent-lifecycle" };
+const cutIntent: SessionMessageCutIntent = {
+  canonicalSourceKey: parentKey,
+  sourceKey: parentKey,
+  targetKey: parentKey,
+  entryId: "u2",
+  expectedState,
+  mode: "rewind",
+};
+const cliBindings = (resumeCheckpointId: string) => ({
+  claude: { sessionId: "cli-parent", resumeCheckpointId, forceReuse: true },
+});
 const owners: ReturnType<typeof createMemorySessionActorOwner>[] = [];
 afterEach(() => {
   for (const owner of owners.splice(0)) {
@@ -30,9 +41,18 @@ afterEach(() => {
   }
 });
 
-function storage(actor: SessionActor): SessionActorStorage {
+function storage(actor: SessionActor) {
   assert(actor.storage, "Memory actor storage is missing");
-  return actor.storage;
+  const raw = actor.storage;
+  return {
+    ...memoryStorage(raw),
+    fork: (
+      input: SessionActorMemoryForkWrites["session.parentFork.commit"]["input"],
+      auth = authority,
+    ) => mutateMemory(raw, "session.parentFork.commit", input, auth),
+    source: () => readMemory(raw, "session.parentFork.source", {}),
+    cut: (intent: SessionMessageCutIntent) => commitMemory(raw, "session.messageCut", { intent }),
+  };
 }
 
 const message = (id: string, parentId: string | null, second: number, body: object) => ({
@@ -67,18 +87,17 @@ async function fixture(entry: Partial<SessionEntry> = {}) {
   owners.push(owner);
   const acquire = (sessionKey = parentKey) =>
     owner.acquire({ database: owner.identity, sessionKey }, lifetime);
-  const parent = await acquire();
-  await commitMemory(storage(parent), "session.entry.create", {
+  const parent = storage(await acquire());
+  await parent.commit("session.entry.create", {
     entry: {
-      sessionId: "parent-session",
-      lifecycleRevision: "parent-lifecycle",
+      ...expectedState,
       updatedAt: 1,
       incognito: true,
       ...entry,
     },
     transcriptEvents: transcript,
   });
-  const child = await acquire(childKey);
+  const child = storage(await acquire(childKey));
   const forkInput = {
     kind: "entry" as const,
     params: {
@@ -93,33 +112,19 @@ async function fixture(entry: Partial<SessionEntry> = {}) {
 describe("memory actor fork and cut", () => {
   it("forks the latest in-process bindings and detaches copied transcript results", async () => {
     const { parent, child, forkInput } = await fixture({
-      cliSessionBindings: {
-        claude: { sessionId: "cli-parent", resumeCheckpointId: "old-checkpoint", forceReuse: true },
-      },
+      cliSessionBindings: cliBindings("old-checkpoint"),
     });
-    const patch = mutateMemory(storage(parent), "session.entry.patch", {
+    const patch = parent.commit("session.entry.patch", {
       operation: {
         kind: "fields",
         patch: {
-          cliSessionBindings: {
-            claude: {
-              sessionId: "cli-parent",
-              resumeCheckpointId: "new-checkpoint",
-              forceReuse: true,
-            },
-          },
+          cliSessionBindings: cliBindings("new-checkpoint"),
         },
       },
     });
-    const fork = mutateMemory(
-      storage(child),
-      "session.parentFork.commit",
-      forkInput,
-      forkAuthority,
-    );
-    committed(await patch);
+    const fork = child.fork(forkInput, forkAuthority);
+    await patch;
     const result = committed(await fork);
-    expect(result.status).toBe("forked");
     assert(result.status === "forked", "Fork failed");
     expect(result.sessionEntry).toMatchObject({
       incognito: true,
@@ -133,77 +138,53 @@ describe("memory actor fork and cut", () => {
       },
     });
     expect(result.sessionEntry.cliSessionBindings?.claude?.forceReuse).toBeUndefined();
-    const copied = await readMemory(storage(child), "session.parentFork.source", {});
+    const copied = await child.source();
     expect(copied?.branchEntries).toHaveLength(4);
     copied?.branchEntries.splice(0);
-    const source = await readMemory(storage(parent), "session.parentFork.source", {});
-    const reread = await readMemory(storage(child), "session.parentFork.source", {});
+    const source = await parent.source();
+    const reread = await child.source();
     expect(source?.branchEntries).toHaveLength(4);
     expect(reread?.branchEntries).toHaveLength(4);
   });
 
   it("does not inherit CLI bindings without host fork support", async () => {
-    const { child, forkInput } = await fixture({
-      cliSessionBindings: {
-        claude: { sessionId: "cli-parent", resumeCheckpointId: "checkpoint", forceReuse: true },
-      },
-    });
-    const result = await commitMemory(storage(child), "session.parentFork.commit", forkInput);
-    expect(result.status).toBe("forked");
+    const { child, forkInput } = await fixture({ cliSessionBindings: cliBindings("checkpoint") });
+    const result = committed(await child.fork(forkInput));
     assert(result.status === "forked", "Fork failed");
     expect(result.sessionEntry.cliSessionBindings).toBeUndefined();
   });
 
   it("rewinds and switches branches while retaining the original window and rejecting old identity", async () => {
     const { parent, acquire } = await fixture();
-    const expectedState = { sessionId: "parent-session", lifecycleRevision: "parent-lifecycle" };
-    const intent = {
-      canonicalSourceKey: parentKey,
-      sourceKey: parentKey,
-      targetKey: parentKey,
-      entryId: "u2",
-      expectedState,
-      mode: "rewind" as const,
-    };
-    const rewind = await commitMemory(storage(parent), "session.messageCut", { intent });
+    const rewind = await parent.cut(cutIntent);
     expect(rewind).toMatchObject({
       status: "created",
       editorText: "Edit this",
       editorAttachments: [{ mimeType: "image/png", data: "c3ludGhldGlj" }],
     });
     assert(rewind.status === "created", "Rewind failed");
-    await expect(async () => readMemory(storage(parent), "session.entry.read", {})).rejects.toThrow(
-      /closed/,
-    );
-    const active = await acquire();
-    const old = await readMemory(storage(active), "session.history.hydrate", {
+    await expect(async () => parent.read("session.entry.read", {})).rejects.toThrow(/closed/);
+    const active = storage(await acquire());
+    const old = await active.read("session.history.hydrate", {
       sessionId: "parent-session",
     });
-    expect(old.kind).toBe("full");
-    if (old.kind === "full") {
-      expect(old.snapshot.events).toEqual(transcript);
-    }
-    const branch = await readMemory(storage(active), "session.parentFork.source", {});
+    assert(old.kind === "full", "Expected full history");
+    expect(old.snapshot.events).toEqual(transcript);
+    const branch = await active.source();
     expect(branch?.branchEntries).toHaveLength(2);
-    expect(await commitMemory(storage(active), "session.messageCut", { intent })).toEqual({
-      status: "conflict",
-    });
-    const switched = await commitMemory(storage(active), "session.messageCut", {
-      intent: {
-        ...intent,
-        mode: "switch",
-        entryId: "a2",
-        expectedState: {
-          sessionId: rewind.entry.sessionId,
-          lifecycleRevision: rewind.entry.lifecycleRevision,
-        },
+    expect(await active.cut(cutIntent)).toEqual({ status: "conflict" });
+    const switched = await active.cut({
+      ...cutIntent,
+      mode: "switch",
+      entryId: "a2",
+      expectedState: {
+        sessionId: rewind.entry.sessionId,
+        lifecycleRevision: rewind.entry.lifecycleRevision,
       },
     });
     expect(switched.status).toBe("created");
-    const restored = await acquire();
-    expect(
-      (await readMemory(storage(restored), "session.parentFork.source", {}))?.branchEntries,
-    ).toHaveLength(4);
+    const restored = storage(await acquire());
+    expect((await restored.source())?.branchEntries).toHaveLength(4);
   });
 
   it("forks only the prefix before a user message and preserves source identity", async () => {
@@ -212,16 +193,11 @@ describe("memory actor fork and cut", () => {
       cliSessionIds: { claude: "old-cli" },
       totalTokens: 50,
     });
-    const result = await commitMemory(storage(child), "session.messageCut", {
-      intent: {
-        canonicalSourceKey: parentKey,
-        sourceKey: parentKey,
-        targetKey: childKey,
-        entryId: "u2",
-        expectedState: { sessionId: "parent-session", lifecycleRevision: "parent-lifecycle" },
-        mode: "fork",
-        creation: { via: "operator" },
-      },
+    const result = await child.cut({
+      ...cutIntent,
+      targetKey: childKey,
+      mode: "fork",
+      creation: { via: "operator" },
     });
     expect(result).toMatchObject({
       status: "created",
@@ -231,15 +207,9 @@ describe("memory actor fork and cut", () => {
     assert(result.status === "created", "Message fork failed");
     expect(result.entry.cliSessionIds).toBeUndefined();
     expect(result.entry.totalTokens).toBeUndefined();
-    expect(
-      (await readMemory(storage(child), "session.parentFork.source", {}))?.branchEntries,
-    ).toHaveLength(2);
-    expect((await readMemory(storage(parent), "session.entry.read", {}))?.sessionId).toBe(
-      "parent-session",
-    );
-    expect(
-      (await readMemory(storage(parent), "session.parentFork.source", {}))?.branchEntries,
-    ).toHaveLength(4);
+    expect((await child.source())?.branchEntries).toHaveLength(2);
+    expect((await parent.read("session.entry.read", {}))?.sessionId).toBe("parent-session");
+    expect((await parent.source())?.branchEntries).toHaveLength(4);
   });
 
   it("does not publish a child when authority refuses the source copy", async () => {
@@ -252,16 +222,11 @@ describe("memory actor fork and cut", () => {
         }
       },
     };
-    const result = await mutateMemory(
-      storage(child),
-      "session.parentFork.commit",
-      forkInput,
-      denied,
-    );
+    const result = await child.fork(forkInput, denied);
     expect(result).toMatchObject({
       kind: "rolled-back",
       error: { message: "Source access revoked" },
     });
-    expect(await readMemory(storage(child), "session.entry.read", {})).toBeUndefined();
+    expect(await child.read("session.entry.read", {})).toBeUndefined();
   });
 });

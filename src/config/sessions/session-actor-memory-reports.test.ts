@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, assert, describe, expect, it, vi } from "vitest";
 import { createWorkerTranscriptCommitter } from "../../gateway/worker-environments/transcript-commit.js";
 import {
@@ -47,6 +48,15 @@ const scope = {
 afterEach(() => {
   memorySessionActorOwners.closeDatabase({ agentId: scope.agentId, path: scope.storePath });
 });
+
+function workerBatch(request = createRequest(), assertCurrent = () => {}) {
+  return {
+    identity: createTranscriptCommitIdentity(scope.sessionId, 7),
+    sessionTarget: scope,
+    request,
+    assertCurrent,
+  };
+}
 
 async function fixture() {
   const owner = memorySessionActorOwners.get({ agentId: scope.agentId, path: scope.storePath });
@@ -107,11 +117,7 @@ describe("memory transcript reports and edits", () => {
         if (selections === 1) {
           intervening = custom("status-2", "second");
         }
-        return {
-          customType: "status",
-          content: `after ${String(latest?.content)}`,
-          display: true,
-        };
+        return { customType: "status", content: `after ${String(latest?.content)}`, display: true };
       },
     });
     await intervening;
@@ -230,7 +236,7 @@ describe("memory transcript reports and edits", () => {
         await custom("status-2", "second");
         await correction.replaceEvents(
           events.map((event) =>
-            typeof event === "object" && event !== null && "id" in event && event.id === "status-1"
+            isRecord(event) && event.id === "status-1"
               ? Object.assign({}, event, { content: "overwritten" })
               : event,
           ),
@@ -260,11 +266,7 @@ describe("memory transcript reports and edits", () => {
     const before = await hydrate();
     const currentAnchor = actor.snapshot(authority)!.transcript.anchors[0]!;
     const index = before.events.findIndex(
-      (event) =>
-        typeof event === "object" &&
-        event !== null &&
-        "id" in event &&
-        event.id === currentAnchor.entryId,
+      (event) => isRecord(event) && event.id === currentAnchor.entryId,
     );
     let competing: ReturnType<typeof storage.mutate> | undefined;
     await expect(
@@ -299,17 +301,13 @@ describe("memory transcript reports and edits", () => {
     const before = await hydrate();
     const committer = createWorkerTranscriptCommitter({ getConfig: () => ({}) });
     let current = true;
-    const commit = committer.commit({
-      identity: createTranscriptCommitIdentity(scope.sessionId, 7),
-      sessionTarget: scope,
-      request: createRequest(),
-      assertCurrent() {
+    const commit = committer.commit(
+      workerBatch(createRequest(), () => {
         if (!current) {
           throw new Error("Placement owner ended");
         }
-        return undefined;
-      },
-    });
+      }),
+    );
     current = false;
     await expect(commit).rejects.toThrow("Placement owner ended");
     expect((await hydrate()).eventJson).toEqual(before.eventJson);
@@ -318,24 +316,18 @@ describe("memory transcript reports and edits", () => {
   it("commits and replays ordered worker batches without creating a durable ledger", async () => {
     const { hydrate } = await fixture();
     const committer = createWorkerTranscriptCommitter({ getConfig: () => ({}) });
-    const params = {
-      identity: createTranscriptCommitIdentity(scope.sessionId, 7),
-      sessionTarget: scope,
-      request: createRequest({
+    const params = workerBatch(
+      createRequest({
         messages: [
           { role: "user", content: [{ type: "text", text: "one" }], timestamp: 1 },
           { role: "user", content: [{ type: "text", text: "two" }], timestamp: 2 },
         ],
       }),
-      assertCurrent: () => undefined,
-    };
+    );
     const first = await committer.commit(params);
     expect(first).toMatchObject({
       ok: true,
-      result: {
-        entryIds: [expect.any(String), expect.any(String)],
-        newLeafId: expect.any(String),
-      },
+      result: { entryIds: [expect.any(String), expect.any(String)], newLeafId: expect.any(String) },
     });
     const before = await hydrate();
     expect(await committer.commit(params)).toEqual(first);

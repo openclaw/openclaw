@@ -42,7 +42,7 @@ async function hydrate(storage: SessionActorStorage, selectedId = sessionId) {
   return result.snapshot;
 }
 
-async function fixture() {
+async function fixture(initialText?: string) {
   vi.useFakeTimers({ toFake: ["Date"] });
   vi.setSystemTime(1000);
   const owner = createMemorySessionActorOwner({ agentId: scope.agentId, path: scope.storePath });
@@ -80,7 +80,11 @@ async function fixture() {
       },
     });
   };
-  return { owner, actor, storage, raw, user, acquire };
+  if (initialText !== undefined) {
+    await raw(header);
+    await user("user-1", initialText);
+  }
+  return { actor, storage, raw, acquire };
 }
 
 describe("memory actor metadata storage", () => {
@@ -108,9 +112,7 @@ describe("memory actor metadata storage", () => {
   });
 
   it("refuses a prepared rewrite after a phase append and preserves the original branch bytes", async () => {
-    const { actor, storage, raw, user } = await fixture();
-    await raw(header);
-    await user("user-1", "First");
+    const { actor, storage } = await fixture("First");
     const before = await hydrate(storage);
     const source = before.events.find(
       (event) => isIndexedSessionEntry(event) && event.id === "user-1",
@@ -183,9 +185,7 @@ describe("memory actor metadata storage", () => {
   });
 
   it("replaces only an exact suffix, preserves opaque custom data, and invalidates old cursors", async () => {
-    const { storage, raw, user } = await fixture();
-    await raw(header);
-    await user("user-1", "Keep");
+    const { storage, raw } = await fixture("Keep");
     await raw(
       JSON.stringify({
         type: "custom",
@@ -228,9 +228,7 @@ describe("memory actor metadata storage", () => {
   });
 
   it("retains an old window across branch replacement and commits compaction accounting atomically", async () => {
-    const { storage, raw, user, acquire } = await fixture();
-    await raw(header);
-    await user("user-1", "Old window");
+    const { storage, acquire } = await fixture("Old window");
     const before = await hydrate(storage);
     const branchId = "branched-session";
     const branchHeader = {

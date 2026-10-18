@@ -84,10 +84,7 @@ describe("actor-owned transcript search", () => {
     };
     const search = (query: string, options: Partial<SessionTranscriptSearchParams> = {}) =>
       searchSessionTranscripts({ agentId, storePath, env, query, ...options });
-    return {
-      create,
-      search,
-    };
+    return { create, search };
   }
 
   async function append(
@@ -316,10 +313,7 @@ describe("Memory export from the session actor", () => {
     expect(() => loadMemorySessionMetadata(scope)).toThrow("loadMemorySessionMetadataAsync");
     const entry = await buildSessionEntry(scope.sessionKey, scope);
     expect(entry?.content).toBe("User: Previous discussion\nUser: Current discussion");
-    expect(await readSessionResetRecallCutoff(scope)).toEqual({
-      state: "valid",
-      cutoffLine: 2,
-    });
+    expect(await readSessionResetRecallCutoff(scope)).toEqual({ state: "valid", cutoffLine: 2 });
     expect(await readSessionResetRecallCutoff({ ...scope, sessionId: "after-reset" })).toEqual({
       state: "absent",
     });
