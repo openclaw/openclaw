@@ -22,8 +22,8 @@ import { parseNodeWorkerComputerInput } from "../../worker/node-computer-protoco
 import type { ComputerToolTransport } from "./computer-tool.js";
 import { wrapToolWithGatewayCallerIdentity } from "./gateway-caller-context.js";
 
-const listNodesMock = vi.fn();
-const callGatewayToolMock = vi.fn();
+const listNodesMock = vi.hoisted(() => vi.fn());
+const callGatewayToolMock = vi.hoisted(() => vi.fn());
 const sleepMock = vi.hoisted(() => vi.fn());
 const gatewayComputerStatusMock = vi.hoisted(() => vi.fn());
 const TINY_PNG_BASE64 =

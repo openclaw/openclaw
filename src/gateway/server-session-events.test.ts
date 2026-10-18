@@ -15,7 +15,6 @@ import {
   projectChatDisplayMessageMock,
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
-  resolveEmbeddedAgentSessionProgressStateMock,
   runtimeConfigState,
   sessionRow,
   storedMessage,
@@ -26,7 +25,6 @@ import { GatewayClientRegistry } from "./server/client-registry.js";
 describe("createTranscriptUpdateBroadcastHandler", () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    resolveEmbeddedAgentSessionProgressStateMock.mockReturnValue(undefined);
     listAccessorSessionEntriesReadOnlyMock.mockReturnValue([]);
     loadAccessorSessionEntryReadOnlyMock.mockReturnValue(undefined);
     loadGatewaySessionEntryReadOnlyMock.mockReturnValue({ entry: undefined, storePath: "" });
@@ -119,7 +117,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => broadConnIds },
       sessionMessageSubscribers: { get: getSessionMessageSubscribers },
-      chatAbortControllers: new Map(),
     });
 
     await handler({
@@ -434,12 +431,12 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     );
   });
 
-  it("projects running status into ordinary startup transcript snapshots", async () => {
+  it("does not project a prepared source as a running startup transcript", async () => {
     await expect(emitAssistantTranscriptUpdate(true, undefined, false)).resolves.toMatchObject({
       sessionKey: "agent:main:main",
-      status: "running",
-      hasActiveRun: true,
-      session: { key: "agent:main:main", status: "running", hasActiveRun: true },
+      status: "done",
+      hasActiveRun: false,
+      session: { key: "agent:main:main", status: "done", hasActiveRun: false },
     });
   });
 
@@ -478,28 +475,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
     });
   });
 
-  it("keeps transcript snapshots active for embedded or channel reply runs", async () => {
-    resolveEmbeddedAgentSessionProgressStateMock.mockImplementation((sessionId) =>
-      sessionId === "sess-main" ? "running" : undefined,
-    );
-
-    await expect(emitAssistantTranscriptUpdate(false)).resolves.toMatchObject({
-      sessionKey: "agent:main:main",
-      hasActiveRun: true,
-      activeRunIds: null,
-      session: {
-        key: "agent:main:main",
-        sessionId: "sess-main",
-        hasActiveRun: true,
-        activeRunIds: null,
-      },
-    });
-    expect(resolveEmbeddedAgentSessionProgressStateMock).toHaveBeenCalledWith(
-      "sess-main",
-      expect.objectContaining({ agentId: "main" }),
-    );
-  });
-
   it.each([
     { name: "routes the configured persisted owner without publishing its goal" },
     { name: "publishes the explicit owner's identity and goal", agentId: "ops" },
@@ -520,7 +495,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set<string>() },
       sessionMessageSubscribers: { get: getSessionMessageSubscribers },
-      chatAbortControllers: new Map(),
     });
 
     await handler({
@@ -631,7 +605,6 @@ describe("createTranscriptUpdateBroadcastHandler", () => {
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set() },
       sessionMessageSubscribers: { get: () => new Set() },
-      chatAbortControllers: new Map(),
     });
     projectChatDisplayMessageMock.mockReturnValueOnce(undefined).mockReturnValueOnce(undefined);
 

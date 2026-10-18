@@ -5,7 +5,8 @@ import {
   type SessionWriterDeliveryAuthority,
 } from "../../auto-reply/reply-payload.js";
 import { prepareSessionWriterDeliveryAuthority } from "../../auto-reply/reply/session-writer-delivery-authority.js";
-import type { ChatAbortControllerEntry } from "../chat-abort.types.js";
+import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources.js";
+import { captureChatAbortRegistrationGuard } from "../chat-abort-lifecycle-internal.js";
 import { captureWebchatReplyMediaScope } from "./chat-reply-media.js";
 import type { PreparedChatSendSession } from "./chat-send-session.js";
 import type { GatewayRequestContext } from "./types.js";
@@ -15,7 +16,7 @@ export type ChatSendReplyFinalizationParams = {
   abortSignal?: AbortSignal;
   accountId: string | undefined;
   context: GatewayRequestContext;
-  terminalEntry: Pick<ChatAbortControllerEntry, "terminalOutcomeObserved"> | undefined;
+  terminalEntry: RpcSourceRef | undefined;
   emitFirstAssistantServerTiming: () => void;
   session: Pick<
     PreparedChatSendSession,
@@ -29,6 +30,11 @@ export async function createChatSendReplyFinalizationAuthority(
   onUnauthorized?: () => void,
 ) {
   const { cfg, sessionKey, agentId, sessionLoadOptions } = params.session;
+  const sourceIsCurrent = params.terminalEntry
+    ? captureChatAbortRegistrationGuard([
+        { runId: params.session.clientRunId, entry: params.terminalEntry },
+      ])
+    : () => true;
   const prepared = new Map<
     SessionWriterDeliveryAuthority,
     Awaited<ReturnType<typeof prepareSessionWriterDeliveryAuthority>>
@@ -55,6 +61,7 @@ export async function createChatSendReplyFinalizationAuthority(
   }
   const mediaScopes: Awaited<ReturnType<typeof captureWebchatReplyMediaScope>>[] = [];
   const deliveryAuthorized = () =>
+    sourceIsCurrent() &&
     (!params.isCurrent || params.isCurrent()) &&
     payloads.every((payload) => {
       const authority = getReplyPayloadMetadata(payload)?.sessionWriterDeliveryAuthority;

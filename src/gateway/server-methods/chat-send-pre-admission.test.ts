@@ -1,8 +1,8 @@
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
+  detachActiveEmbeddedRun,
+  attachActiveEmbeddedRun,
 } from "../../agents/embedded-agent-runner/runs.js";
 import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -14,7 +14,12 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { SessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../../sessions/session-controller.lifecycle.js";
+import { registerRpcSource } from "../../sessions/session-controller.rpc-sources.js";
+import { rpcSourceTesting } from "../../sessions/session-lifecycle-admission.test-support.js";
 import {
   prepareUserProfileCatalog,
   readResidentUserProfileId,
@@ -23,9 +28,12 @@ import { linkEmail } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { setGatewayDedupeEntry } from "../agent-turn/agent-job.js";
+import { registerChatAbortController } from "../chat-abort.js";
+import { createChatAbortMarker } from "../server-chat-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { SessionMutationAuthorizationChangedError } from "../session-sharing.js";
+import { claimRpcSourceForTest, createRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { writePreRegisteredChatAbort } from "./chat-abort-authorization.js";
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import {
@@ -149,32 +157,32 @@ beforeEach(() => {
   params = createFixture();
 });
 
-it("preserves admitted and embedded controller-less producers without Stop opt-in", async () => {
+it("stops admitted session work while preserving a detached producer", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { session, request, context, respond } = params;
     const cfg: OpenClawConfig = {
       session: { store: state.statePath("agents", "{agentId}", "sessions", "sessions.sqlite") },
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
-    context.getRuntimeConfig = () => cfg;
-    request.stopCommand = true;
-    request.p.message = "/stop";
-    session.cfg = cfg;
-    session.storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
-    const { sessionKey, entry, storePath } = session;
-    const scope = { agentId: "main", storePath, sessionKey };
-    await upsertSessionEntryCore(scope, entry!);
-    const before = loadSessionEntry(scope);
+    params.context.getRuntimeConfig = () => cfg;
+    params.request.stopCommand = true;
+    params.request.p.message = "/stop";
+    params.session.cfg = cfg;
+    params.session.storePath = resolveSessionStorePathCore(cfg.session?.store, {
+      agentId: "main",
+    });
+    const { sessionKey, entry, storePath } = params.session;
+    await upsertSessionEntryCore({ agentId: "main", storePath, sessionKey }, entry!);
+    const before = loadSessionEntry({ agentId: "main", storePath, sessionKey });
     const embeddedAbort = vi.fn();
     const handle = createEmbeddedRunHandle({ runId: "embedded-producer", abort: embeddedAbort });
-    setActiveEmbeddedRun(entry!.sessionId, handle, sessionKey, undefined, "main");
+    attachActiveEmbeddedRun(entry!.sessionId, handle);
     const controller = new AbortController();
     const admittedInterrupt = vi.fn((reason?: Error) => {
       controller.abort(reason);
       return { runId: "admitted-producer" };
     });
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [sessionKey, entry!.sessionId],
       run: {
@@ -189,21 +197,24 @@ it("preserves admitted and embedded controller-less producers without Stop opt-i
     });
     try {
       expect(await runChatSendPreAdmission(params)).toBe(false);
-      expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: false, runIds: [] });
+      expect(params.respond).toHaveBeenCalledWith(true, {
+        ok: true,
+        aborted: true,
+        runIds: ["admitted-producer"],
+      });
       expect(embeddedAbort).not.toHaveBeenCalled();
-      expect(admittedInterrupt).not.toHaveBeenCalled();
-      expect(controller.signal.aborted).toBe(false);
-      expect(loadSessionEntry(scope)).toEqual(before);
+      expect(admittedInterrupt).toHaveBeenCalledOnce();
+      expect(controller.signal.aborted).toBe(true);
+      expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })).toEqual(before);
     } finally {
       admission.release();
-      clearActiveEmbeddedRun(entry!.sessionId, handle, sessionKey);
+      detachActiveEmbeddedRun(entry!.sessionId, handle);
     }
   });
 });
 
 it("stops selected-agent work without cancelling the compatibility owner's run", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-    const { session, request, context, respond } = params;
     const cfg: OpenClawConfig = {
       session: {
         scope: "global",
@@ -217,15 +228,15 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
     };
     await state.writeConfig(cfg);
     setRuntimeConfigSnapshot(cfg);
-    context.getRuntimeConfig = () => cfg;
-    request.stopCommand = true;
-    request.p = {
+    params.context.getRuntimeConfig = () => cfg;
+    params.request.stopCommand = true;
+    params.request.p = {
       sessionKey: "global",
       agentId: "research",
-      idempotencyKey: session.clientRunId,
+      idempotencyKey: params.session.clientRunId,
       message: "/stop",
     };
-    Object.assign(session, {
+    Object.assign(params.session, {
       cfg,
       sessionKey: "global",
       rawSessionKey: "global",
@@ -242,24 +253,55 @@ it("stops selected-agent work without cancelling the compatibility owner's run",
       ["selected", "research"],
       ["compatibility", undefined],
     ]) {
-      context.dedupe.set(`agent:${runId}`, {
+      params.context.dedupe.set(`agent:${runId}`, {
         ts: 100,
         ok: true,
         payload: { runId, sessionKey: "global", agentId, status: "accepted" },
       });
     }
-
-    expect(await runChatSendPreAdmission(params)).toBe(false);
-    expect(respond).toHaveBeenCalledWith(true, { ok: true, aborted: true, runIds: ["selected"] });
-    expect(context.dedupe.get("agent:selected")?.payload).toMatchObject({
-      status: "timeout",
-      summary: "aborted",
+    const registrations = [
+      ["selected", "research"],
+      ["compatibility", "ops"],
+    ] as const;
+    const sourceRegistrations = registrations.map(([runId, agentId]) => {
+      const sessionId = `${runId}-session`;
+      return registerChatAbortController({
+        target: captureSessionTarget({
+          storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId }),
+          sessionKey: "global",
+          incarnation: sessionId,
+          agentId,
+        }),
+        runId,
+        sessionId,
+        sessionKey: "global",
+        agentId,
+        kind: "agent",
+        timeoutMs: 1_000,
+      });
     });
-    expect(context.dedupe.get("agent:compatibility")?.payload).toMatchObject({
-      status: "accepted",
-    });
+    try {
+      expect(await runChatSendPreAdmission(params)).toBe(false);
+      expect(params.respond).toHaveBeenCalledWith(true, {
+        ok: true,
+        aborted: true,
+        runIds: ["selected"],
+      });
+      expect(sourceRegistrations[0]?.entry?.input.abortSignal.aborted).toBe(true);
+      expect(sourceRegistrations[1]?.entry?.input.abortSignal.aborted).toBe(false);
+      expect(rpcSourceTesting.has("selected")).toBe(false);
+      expect(rpcSourceTesting.has("compatibility")).toBe(true);
+      expect(params.context.dedupe.get("agent:compatibility")?.payload).toMatchObject({
+        status: "accepted",
+      });
+    } finally {
+      for (const registration of sourceRegistrations) {
+        registration.cleanup();
+      }
+    }
   });
 });
+
 it.each(["pending", "active", "queued", "terminal"] as const)(
   "rejects changed mention recipients before a %s acknowledgement",
   async (state) => {
@@ -278,19 +320,22 @@ it.each(["pending", "active", "queued", "terminal"] as const)(
           }
         : {}),
     });
-    const controller = {
-      controller: new AbortController(),
-      sessionKey,
-      sessionId: "mention-session",
-    };
-    if (state === "active") {
-      params.context.chatAbortControllers.set(clientRunId, {
-        ...controller,
-        startedAtMs: 100,
-        expiresAtMs: 200,
-      });
-    } else if (state === "queued") {
-      params.context.chatQueuedTurns.set(clientRunId, controller);
+    if (state === "active" || state === "queued") {
+      const source = createRpcSourceForTest(
+        {},
+        {
+          storeScope: params.session.storePath,
+          runId: clientRunId,
+          sessionKey,
+          sessionId: "mention-session",
+          agentId: "main",
+          phase: state === "queued" ? "waiting" : "preparing",
+        },
+      );
+      registerRpcSource(clientRunId, source);
+      if (state === "active") {
+        await claimRpcSourceForTest(source);
+      }
     }
     expect(await retry(params)).toBe(true);
     expect(params.respond).toHaveBeenCalledWith(
@@ -327,6 +372,25 @@ it("keeps a transient preparation failure retryable without treating identity me
   });
   params.request.requestIdentity = "changed-after-terminal";
   await expectRetryConflict(params);
+});
+
+it("replays explicit cancellation before a retained accepted input marker", async () => {
+  const { clientRunId } = params.session;
+  params.context.dedupe.set(`chat:${clientRunId}`, {
+    ts: 100,
+    ok: true,
+    requestIdentity: params.request.requestIdentity,
+    effectAccepted: true,
+  });
+  params.context.chatRunState.getOrCreate(clientRunId).abortMarker = createChatAbortMarker(200);
+
+  expect(await retry(params)).toBe(true);
+  expect(params.respond).toHaveBeenCalledWith(
+    true,
+    { runId: clientRunId, status: "timeout", summary: "aborted", endedAt: 200 },
+    undefined,
+    { cached: true, runId: clientRunId },
+  );
 });
 
 it("transfers the pending input identity when an abort precedes active registration", async () => {
@@ -621,8 +685,7 @@ it.each(["unchanged", "cached-success", "cached-error", "new-admission"] as cons
         expect(recoveryCompleted).toBe(true);
         expect(loadSessionEntry(scope)).toEqual(originalEntry);
         expect([...context.dedupe]).toEqual(originalReceipts);
-        expect(context.chatAbortControllers.size).toBe(0);
-        expect(context.chatQueuedTurns?.size ?? 0).toBe(0);
+        expect(rpcSourceTesting.size).toBe(0);
         expect(client).not.toHaveProperty("invalidated", true);
         expect(respond).not.toHaveBeenCalled();
       } finally {

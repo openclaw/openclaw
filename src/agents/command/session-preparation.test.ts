@@ -32,8 +32,9 @@ import {
   prepareEmbeddedSessionState,
 } from "./session-preparation.js";
 
+// mock-isolation: session preparation projects run state without loading the embedded runner owner.
 vi.mock("../embedded-agent-runner/runs.js", () => ({
-  resolveEmbeddedAgentSessionProgressState: () => undefined,
+  resolveSessionRunProgressState: () => undefined,
 }));
 vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: () => undefined,
@@ -265,7 +266,7 @@ it.each([
     const lifecycleGeneration = getAgentRunLifecycleGeneration();
     const state = () =>
       resolveVisibleActiveSessionRunState({
-        context: {},
+        storePath: "/unused/command.sqlite",
         requestedKey: sessionKey,
         canonicalKey: sessionKey,
         sessionId,

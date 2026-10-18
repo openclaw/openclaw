@@ -1,4 +1,5 @@
 import { expect, it, vi } from "vitest";
+import { getRuntimeConfig } from "../../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../../config/runtime-snapshot.js";
 import {
   appendTranscriptMessage,
@@ -7,6 +8,7 @@ import {
   loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
+import { resolvePhysicalSessionStorePath } from "../../../config/sessions/session-store-path.js";
 import { callGateway } from "../../../gateway/call.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
@@ -30,6 +32,74 @@ export function registerSubagentRegistrationOwnershipTests({
   registration: (runId: string, overrides?: Partial<Registration>) => Registration;
   updateRun: (runId: string, update: (draft: SubagentRunRecord) => void) => Promise<void>;
 }) {
+  it("keeps same-key child registrations owned by different agents separate", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async () => {
+      setRuntimeConfigSnapshot({});
+      const first = registration("research-global", {
+        childSessionKey: "global",
+        childAgentId: "research",
+      });
+      await registerSubagentRun(first);
+      const original = loadSubagentRegistryFromSqlite().get(first.runId);
+      await registerSubagentRun(
+        registration("main-global", { childSessionKey: "global", childAgentId: "main" }),
+      );
+      await expect(
+        registerSubagentRun({ ...first, childAgentId: "main" }, { acceptedRunReplay: true }),
+      ).rejects.toThrow("unresolved or different child owner");
+      const persisted = loadSubagentRegistryFromSqlite();
+      expect(persisted.get(first.runId)).toEqual(original);
+      expect(persisted.get("main-global")?.childAgentId).toBe("main");
+    });
+  });
+
+  it("retains raw child ownership across store changes and refuses unresolved historical replay", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const originalConfig = { session: { store: state.path("original.sqlite") } };
+      for (const childAgentId of [undefined, "research"]) {
+        setRuntimeConfigSnapshot(originalConfig);
+        vi.mocked(getRuntimeConfig).mockReturnValue(originalConfig);
+        const runId = childAgentId ?? "legacy";
+        const params = registration(runId, {
+          childSessionKey: "global",
+          childAgentId: childAgentId ?? "main",
+        });
+        if (childAgentId === undefined) {
+          const historical = createSubagentRunRecord({
+            runId,
+            childSessionKey: "global",
+            requesterAgentId: "main",
+            requesterStorePath: resolvePhysicalSessionStorePath(
+              { sessionKey: params.requesterSessionKey, agentId: "main" },
+              originalConfig,
+            ),
+          });
+          saveSubagentRegistryChangesToSqlite(new Map([[runId, historical]]), [runId]);
+        } else {
+          await registerSubagentRun(params);
+        }
+        const original = loadSubagentRegistryFromSqlite().get(runId);
+        expect(original?.childAgentId).toBe(childAgentId);
+        const replacementConfig = {
+          session: { store: state.path("replacement.sqlite") },
+        };
+        setRuntimeConfigSnapshot(replacementConfig);
+        vi.mocked(getRuntimeConfig).mockReturnValue(replacementConfig);
+        if (childAgentId === undefined) {
+          await expect(registerSubagentRun(params, { acceptedRunReplay: true })).rejects.toThrow(
+            "unresolved or different child owner",
+          );
+          expect(subagentRuns.has(runId)).toBe(false);
+        } else {
+          const accepted = subagentRuns.get(runId);
+          await registerSubagentRun(params, { acceptedRunReplay: true });
+          expect(subagentRuns.get(runId)).toBe(accepted);
+        }
+        expect(loadSubagentRegistryFromSqlite().get(runId)).toEqual(original);
+      }
+    });
+  });
+
   for (const phase of ["ordinary intent", "queued intent", "queued descriptor"] as const) {
     it.each([
       "persisted owner",

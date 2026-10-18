@@ -18,7 +18,6 @@ export function createSteeringParams() {
   params.sessionId = sessionId;
   params.sessionKey = `agent:main:${sessionId}`;
   params.runId = `run-${sessionId}`;
-  params.toolAuthorityFingerprint = `authority-${sessionId}`;
   params.model = { ...params.model, input: ["text", "image"] };
   return params;
 }

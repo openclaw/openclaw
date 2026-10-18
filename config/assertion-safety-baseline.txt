@@ -1213,7 +1213,6 @@ src/agents/embedded-agent-runner/run/images.ts	6
 src/agents/embedded-agent-runner/run/incomplete-turn-recovery.ts	2
 src/agents/embedded-agent-runner/run/message-transform-stream-wrapper.ts	2
 src/agents/embedded-agent-runner/run/recovery-message-action-capability.ts	1
-src/agents/embedded-agent-runner/run/session-bootstrap.ts	1
 src/agents/embedded-agent-runner/run/session-prompt-state.ts	1
 src/agents/embedded-agent-runner/run/stream-wrapper.ts	1
 src/agents/embedded-agent-runner/run/terminal-preparation.ts	1
@@ -1340,10 +1339,9 @@ src/agents/subagents/announce/subagent-announce-origin.ts	2
 src/agents/subagents/registry/subagent-recovery-state.ts	1
 src/agents/subagents/registry/subagent-registry-lifecycle-delivery.ts	2
 src/agents/subagents/registry/subagent-registry-restore.ts	1
-src/agents/subagents/registry/subagent-registry.ts	2
+src/agents/subagents/registry/subagent-registry.ts	1
 src/agents/subagents/registry/subagent-session-cleanup.ts	2
 src/agents/subagents/spawn/acp-spawn-parent-stream.ts	1
-src/agents/subagents/spawn/subagent-spawn.ts	1
 src/agents/subagents/swarm/swarm-output-schema.ts	1
 src/agents/subagents/swarm/swarm-scheduler.ts	1
 src/agents/system-prompt-report.ts	1
@@ -1426,7 +1424,6 @@ src/auto-reply/reply/acp-reset-target.ts	1
 src/auto-reply/reply/agent-lifecycle-terminal.ts	2
 src/auto-reply/reply/agent-runner-event-handler.ts	1
 src/auto-reply/reply/agent-runner-fallback-candidate.ts	1
-src/auto-reply/reply/agent-runner-run.ts	1
 src/auto-reply/reply/agent-runner-utils.ts	1
 src/auto-reply/reply/block-streaming.ts	3
 src/auto-reply/reply/commands-acp/diagnostics.ts	2
@@ -1876,7 +1873,7 @@ src/gateway/server-methods/approval.ts	2
 src/gateway/server-methods/attachment-normalize.ts	1
 src/gateway/server-methods/base-hash.ts	1
 src/gateway/server-methods/channels.ts	2
-src/gateway/server-methods/chat-abort-authorization.ts	3
+src/gateway/server-methods/chat-abort-authorization.ts	2
 src/gateway/server-methods/chat-assistant-content.ts	1
 src/gateway/server-methods/chat-broadcast.ts	1
 src/gateway/server-methods/chat-send-attachments.ts	1
@@ -2115,7 +2112,6 @@ src/llm/utils/oauth/openai-chatgpt.ts	2
 src/logging/config.ts	2
 src/logging/console.ts	4
 src/logging/diagnostic-run-activity.ts	1
-src/logging/diagnostic-session-recovery-coordinator.ts	1
 src/logging/diagnostic-stability-bundle.ts	3
 src/logging/diagnostic-stability.ts	2
 src/logging/diagnostic-support-redaction.ts	1
@@ -2380,7 +2376,6 @@ src/security/installed-plugin-dirs.ts	1
 src/security/safe-regex.ts	1
 src/sessions/input-provenance.ts	3
 src/sessions/session-key-utils.ts	1
-src/sessions/session-lifecycle-admission.ts	1
 src/sessions/session-upstream-monitor.ts	2
 src/sessions/user-turn-transcript-runtime-context.ts	2
 src/shared/account-enabled.ts	1

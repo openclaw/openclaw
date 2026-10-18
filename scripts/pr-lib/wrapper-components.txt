@@ -152,6 +152,7 @@ packages/worker-runtime/package.json
 packages/worker-runtime/src/index.ts
 packages/worker-runtime/src/lifecycle.ts
 packages/worker-runtime/src/retained-operation.ts
+packages/worker-runtime/src/worker-task-admission.ts
 packages/worker-runtime/src/worker-task-capacity.ts
 packages/worker-runtime/src/worker-task-context.ts
 packages/worker-runtime/src/worker-task-error.ts
@@ -1745,6 +1746,8 @@ src/security/safe-regex.ts
 src/security/scan-paths.ts
 src/sessions/model-selection-error.ts
 src/sessions/session-chat-type-shared.ts
+src/sessions/session-controller.cleanup-context.ts
+src/sessions/session-controller.owner-context.ts
 src/sessions/session-diff-parser.ts
 src/sessions/session-diff-revisions.ts
 src/sessions/session-diff.runtime.ts

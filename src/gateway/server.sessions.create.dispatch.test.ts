@@ -14,14 +14,13 @@ import {
 } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
 import {
-  getSessionWorkAdmissionRelease,
-  isSessionWorkAdmissionActive,
-} from "../sessions/session-lifecycle-admission.js";
+  captureSessionControllerSettlement,
+  isSessionControllerWorkActive,
+} from "../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
 import { createMentionInbox } from "./mention-inbox.js";
 import { identifiedClient } from "./server-methods/sessions-sharing.test-support.js";
 import type { GatewayClient } from "./server-methods/types.js";
@@ -113,7 +112,7 @@ test("chat.send deletes a session before its pending dashboard title finishes", 
   const scheduleTitle = await actualDashboardTitleScheduler();
   dashboardTitleScheduleMocks.schedule.mockImplementationOnce((params, turn) => {
     // Wait for the real reply custody, independently of the pending metadata title.
-    dispatchAdmissionsReleased = getSessionWorkAdmissionRelease({
+    dispatchAdmissionsReleased = captureSessionControllerSettlement({
       scope: params.storePath,
       identities: [params.sessionKey, params.admittedSessionId],
     });
@@ -166,7 +165,7 @@ test("chat.send deletes a session before its pending dashboard title finishes", 
     finishDispatch();
     expect(dispatchAdmissionsReleased).toBeDefined();
     await dispatchAdmissionsReleased;
-    expect(isSessionWorkAdmissionActive(storePath, [sessionKey])).toBe(false);
+    expect(isSessionControllerWorkActive(storePath, [sessionKey])).toBe(false);
 
     // Use the dispatching Gateway's terminal drain while its metadata-only title is blocked.
     const deletion = rpcReq<{ deleted: boolean }>(ws, "sessions.delete", {
@@ -257,7 +256,7 @@ test.for(["reply", "empty", "error"])(
       );
     } finally {
       stopTitleObserver();
-      const released = getSessionWorkAdmissionRelease({
+      const released = captureSessionControllerSettlement({
         scope: storePath,
         identities: [sessionKey],
       });
@@ -333,7 +332,7 @@ test("chat.send retries a title that failed during its turn once that turn settl
     expect(retriedAfterTurn).toEqual([true]);
   } finally {
     stopTitleObserver();
-    const released = getSessionWorkAdmissionRelease({
+    const released = captureSessionControllerSettlement({
       scope: storePath,
       identities: [sessionKey],
     });
@@ -365,7 +364,6 @@ test.each(mentionCreationOwners)(
       });
       const context = {
         mentionInbox: inbox,
-        chatAbortControllers: new Map<string, ChatAbortControllerEntry>(),
         getClientConnIds: (filter?: (client: GatewayClient) => boolean) =>
           new Set(
             [sender, recipient]

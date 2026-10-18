@@ -3,9 +3,9 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
 import { refreshSessionEntryFromStore } from "../../auto-reply/reply/agent-runner-core.js";
-import { getReplyOperationSessionReader } from "../../auto-reply/reply/reply-run-registry.state.js";
 import { upsertSessionEntryCore } from "../../config/sessions/session-accessor.js";
 import type { ContextEngineRuntimeContext } from "../../context-engine/types.js";
+import { getReplyOperationSessionReader } from "../../sessions/session-controller.session-reader.js";
 import { resolveCompactionTimeoutMs } from "./compaction-safety-timeout.js";
 import {
   type RecoveryFixture,

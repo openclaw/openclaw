@@ -9,6 +9,7 @@ import {
   readDurableAcpSignals,
   withAcpCancellationFixture,
 } from "./manager.cancel-session.worker.test-support.js";
+import { stopAcpControllerTurns } from "./manager.controller-test-support.js";
 
 it.each(["owner", "lifecycle"] as const)(
   "preserves successor metadata after %s replacement during cancelled-turn identity reconciliation",
@@ -51,12 +52,7 @@ it.each(["owner", "lifecycle"] as const)(
         }),
       ]);
       let sql = observeHostDataSql();
-      const cancellation = f.manager.cancelSession({
-        ...f.target,
-        expectedRunId: "identity-worker",
-        expectedInstanceId: context.operationalRunInstance.instanceId,
-        expectedOwnerKey: "agent:main:main",
-      });
+      const cancellation = stopAcpControllerTurns(f.target);
       const result = Promise.allSettled([cancellation, turn]);
       try {
         await Promise.race([

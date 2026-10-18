@@ -65,6 +65,7 @@ export type SessionEntryBookkeepingReducer =
 /** Closed internal operations; arbitrary updater callbacks retain prepare/CAS. */
 type SessionEntryPatchStep = (
   | { kind: "fields"; patch: Partial<SessionEntry> }
+  | { kind: "writer-revoke"; runId: string; terminalAtMs?: number }
   | {
       kind: "cron-session";
       sessionKey: string;
@@ -245,6 +246,21 @@ export function reduceSessionEntryPatch(
     return null;
   }
   switch (operation.kind) {
+    case "writer-revoke":
+      return {
+        activeWriterRunId: undefined,
+        ...(operation.terminalAtMs !== undefined &&
+        entry.status === undefined &&
+        entry.lifecycleRunId === operation.runId
+          ? {
+              status: "killed",
+              abortedLastRun: true,
+              lifecycleRunId: undefined,
+              endedAt: operation.terminalAtMs,
+              updatedAt: operation.terminalAtMs,
+            }
+          : {}),
+      };
     case "cron-session":
       return projectCronSessionEntry(operation, existingEntry);
     case "cron-run-continuation": {
