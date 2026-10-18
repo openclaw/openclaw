@@ -39,6 +39,21 @@ describe("authenticated human prepared-pool demand", () => {
     },
   };
 
+  const projectReserves = (key: string) =>
+    fixture
+      .reserves()
+      .filter((record) => readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === key);
+
+  const persistedDemand = (): PreparedPoolPresenceDemand => ({
+    revision: 1,
+    profileId: "development",
+    requestedRef: "main",
+    preparationKey: PREPARATION_KEY,
+    project: repository,
+    lastPresentAtMs: 1_000,
+    retireAtMs: null,
+  });
+
   function presencePool(
     initial?: PreparedPoolPresenceDemand,
     executionMode: "worker-turn" | "remote-exec" = "remote-exec",
@@ -199,137 +214,117 @@ describe("authenticated human prepared-pool demand", () => {
     },
   );
 
-  it.each(["held"] as const)(
-    "cleans unrelated expiry and refills a healthy sibling before %s presence admission",
-    async (failure) => {
-      const healthyKey = "2".repeat(64);
-      const progressed = createDeferredCore();
-      const expiredAgain = createDeferredCore();
-      const presenceExpired = createDeferredCore();
-      const presence = presencePool(undefined, "worker-turn", {
-        reconcile: async (record, _signal, beforeReconcile) => {
-          beforeReconcile();
-          if (readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === healthyKey) {
-            progressed.resolve();
-          }
-          if (record.environmentId === "expired-again" && record.destroyRequestedAtMs !== null) {
-            expiredAgain.resolve();
-          }
-          if (
-            readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === PROJECT_KEY &&
-            record.destroyRequestedAtMs !== null
-          ) {
-            presenceExpired.resolve();
-          }
-        },
-      });
-      await presence.owner.setHumanPresence(true);
-      const ready = await Promise.all(fixture.reserves().map((record) => fixture.ready(record)));
-      await fixture.destroy(ready[0]!);
-      const expired = await fixture.ready(
-        await fixture.seed("expired-other", { reserve: true, projectKey: "1".repeat(64) }),
-      );
-      fixture.nowMs = 1_500;
-      await fixture.attach(
-        await fixture.ready(await fixture.seed("healthy-source", { projectKey: healthyKey })),
-      );
-      fixture.nowMs = 2_000;
-      fixture.config.cloudWorkers!.preparedPool!.maxTotal = 8;
-      const entered = createDeferredCore();
-      const release = createDeferredCore();
-      const prepare = presence.prepareIntent.getMockImplementation()!;
-      presence.prepareIntent.mockClear();
-      fixture.releases.push(() => release.resolve());
-      presence.prepareIntent.mockImplementation(async (_profileId, options) => {
-        if (options.projectPath) {
-          return {
-            providerId: fixture.provider.id,
-            profileSnapshot: fixture.profile(healthyKey),
-            preparationKey: PREPARATION_KEY,
-          };
+  it("cleans unrelated expiry and refills a healthy sibling before held presence admission", async () => {
+    const healthyKey = "2".repeat(64);
+    const progressed = createDeferredCore();
+    const expiredAgain = createDeferredCore();
+    const presenceExpired = createDeferredCore();
+    const presence = presencePool(undefined, "worker-turn", {
+      reconcile: async (record, _signal, beforeReconcile) => {
+        beforeReconcile();
+        if (readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === healthyKey) {
+          progressed.resolve();
         }
-        entered.resolve();
-        if (failure === "held") {
-          await release.promise;
+        if (record.environmentId === "expired-again" && record.destroyRequestedAtMs !== null) {
+          expiredAgain.resolve();
         }
-        throw new Error("Presence repository unavailable");
-      });
-      const running = fixture.schedule(presence.owner);
-      const settled = running.catch(() => {});
-      try {
-        await entered.promise;
-        await awaitGateBeforeSettlement(
-          progressed.promise,
-          running,
-          "Healthy refill did not progress",
-        );
-        expect(fixture.store.get(expired.environmentId)?.destroyRequestedAtMs).toBe(2_000);
-        const healthy = fixture
-          .reserves()
-          .filter(
-            (record) =>
-              readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === healthyKey,
-          );
-        expect(healthy).toHaveLength(3);
-        expect(ready.slice(1).map((record) => fixture.store.get(record.environmentId))).toEqual(
-          ready.slice(1),
-        );
-        expect(
-          fixture
-            .reserves()
-            .filter(
-              (record) =>
-                readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === PROJECT_KEY,
-            ),
-        ).toHaveLength(3);
-        if (failure === "held") {
-          await fixture.ready(
-            await fixture.seed("expired-again", {
-              reserve: true,
-              projectKey: "3".repeat(64),
-              expiresAtMs: 2_100,
-            }),
-          );
-          fixture.nowMs = 2_100;
-          const repeated = fixture.schedule(presence.owner).catch(() => {});
-          await awaitGateBeforeSettlement(
-            expiredAgain.promise,
-            repeated,
-            "Later cleanup did not progress",
-          );
-          expect(
-            presence.prepareIntent.mock.calls.filter(([, options]) => !options.projectPath),
-          ).toHaveLength(1);
-          expect(fixture.store.get("expired-again")?.destroyRequestedAtMs).toBe(2_100);
-          const departure = presence.owner.setHumanPresence(false).catch(() => {});
-          fixture.operations.add(departure);
-          fixture.nowMs = 902_100;
-          const retiring = fixture.schedule(presence.owner).catch(() => {});
-          await awaitGateBeforeSettlement(
-            presenceExpired.promise,
-            retiring,
-            "Departure grace did not expire during held admission",
-          );
-          expect(
-            ready
-              .slice(1)
-              .map((record) => fixture.store.get(record.environmentId)?.destroyRequestedAtMs),
-          ).toEqual([902_100, 902_100]);
-          expect(
-            presence.prepareIntent.mock.calls.filter(([, options]) => !options.projectPath),
-          ).toHaveLength(1);
+        if (
+          readWorkerProjectSnapshot(record.profileSnapshot.project)?.key === PROJECT_KEY &&
+          record.destroyRequestedAtMs !== null
+        ) {
+          presenceExpired.resolve();
         }
-      } finally {
-        release.resolve();
-        await settled;
-        presence.prepareIntent.mockImplementation(prepare);
+      },
+    });
+    await presence.owner.setHumanPresence(true);
+    const ready = await Promise.all(fixture.reserves().map((record) => fixture.ready(record)));
+    await fixture.destroy(ready[0]!);
+    const expired = await fixture.ready(
+      await fixture.seed("expired-other", { reserve: true, projectKey: "1".repeat(64) }),
+    );
+    fixture.nowMs = 1_500;
+    await fixture.attach(
+      await fixture.ready(await fixture.seed("healthy-source", { projectKey: healthyKey })),
+    );
+    fixture.nowMs = 2_000;
+    fixture.config.cloudWorkers!.preparedPool!.maxTotal = 8;
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const prepare = presence.prepareIntent.getMockImplementation()!;
+    presence.prepareIntent.mockClear();
+    fixture.releases.push(() => release.resolve());
+    presence.prepareIntent.mockImplementation(async (_profileId, options) => {
+      if (options.projectPath) {
+        return {
+          providerId: fixture.provider.id,
+          profileSnapshot: fixture.profile(healthyKey),
+          preparationKey: PREPARATION_KEY,
+        };
       }
-    },
-  );
+      entered.resolve();
+      await release.promise;
+      throw new Error("Presence repository unavailable");
+    });
+    const running = fixture.schedule(presence.owner);
+    const settled = running.catch(() => {});
+    try {
+      await entered.promise;
+      await awaitGateBeforeSettlement(
+        progressed.promise,
+        running,
+        "Healthy refill did not progress",
+      );
+      expect(fixture.store.get(expired.environmentId)?.destroyRequestedAtMs).toBe(2_000);
+      const healthy = projectReserves(healthyKey);
+      expect(healthy).toHaveLength(3);
+      expect(ready.slice(1).map((record) => fixture.store.get(record.environmentId))).toEqual(
+        ready.slice(1),
+      );
+      expect(projectReserves(PROJECT_KEY)).toHaveLength(3);
+      await fixture.ready(
+        await fixture.seed("expired-again", {
+          reserve: true,
+          projectKey: "3".repeat(64),
+          expiresAtMs: 2_100,
+        }),
+      );
+      fixture.nowMs = 2_100;
+      const repeated = fixture.schedule(presence.owner).catch(() => {});
+      await awaitGateBeforeSettlement(
+        expiredAgain.promise,
+        repeated,
+        "Later cleanup did not progress",
+      );
+      expect(
+        presence.prepareIntent.mock.calls.filter(([, options]) => !options.projectPath),
+      ).toHaveLength(1);
+      expect(fixture.store.get("expired-again")?.destroyRequestedAtMs).toBe(2_100);
+      const departure = presence.owner.setHumanPresence(false).catch(() => {});
+      fixture.operations.add(departure);
+      fixture.nowMs = 902_100;
+      const retiring = fixture.schedule(presence.owner).catch(() => {});
+      await awaitGateBeforeSettlement(
+        presenceExpired.promise,
+        retiring,
+        "Departure grace did not expire during held admission",
+      );
+      expect(
+        ready
+          .slice(1)
+          .map((record) => fixture.store.get(record.environmentId)?.destroyRequestedAtMs),
+      ).toEqual([902_100, 902_100]);
+      expect(
+        presence.prepareIntent.mock.calls.filter(([, options]) => !options.projectPath),
+      ).toHaveLength(1);
+    } finally {
+      release.resolve();
+      await settled;
+      presence.prepareIntent.mockImplementation(prepare);
+    }
+  });
 
-  it.each([
-    { change: "repository on the same host", url: "https://github.com/acme/other-repo.git" },
-  ])("retires persisted demand after a $change change", async ({ url }) => {
+  it("retires persisted demand after a repository change on the same host", async () => {
+    const url = "https://github.com/acme/other-repo.git";
     const oldReserve = await fixture.ready(
       await fixture.seed("previous-repository-reserve", {
         reserve: true,
@@ -337,15 +332,7 @@ describe("authenticated human prepared-pool demand", () => {
         expiresAtMs: Number.MAX_SAFE_INTEGER,
       }),
     );
-    const presence = presencePool({
-      revision: 1,
-      profileId: "development",
-      requestedRef: "main",
-      preparationKey: PREPARATION_KEY,
-      project: repository,
-      lastPresentAtMs: 1_000,
-      retireAtMs: null,
-    });
+    const presence = presencePool(persistedDemand());
     presence.setRepository({
       ...repository,
       source: { ...repository.source, url },
@@ -361,15 +348,7 @@ describe("authenticated human prepared-pool demand", () => {
   });
 
   it("clears persisted demand when the configured default repository is removed", async () => {
-    const presence = presencePool({
-      revision: 1,
-      profileId: "development",
-      requestedRef: "main",
-      preparationKey: PREPARATION_KEY,
-      project: repository,
-      lastPresentAtMs: 1_000,
-      retireAtMs: null,
-    });
+    const presence = presencePool(persistedDemand());
     presence.disableSource();
 
     await presence.owner.setHumanPresence(false);

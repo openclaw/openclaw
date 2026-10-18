@@ -11,6 +11,8 @@ import { createProjectPreparationFixture } from "./project-preparation.test-supp
 import { prepareWorkerProjectSnapshot } from "./workspace-git-base.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const readText = (root: string, ...parts: string[]) =>
+  fs.readFile(path.join(root, ...parts), "utf8");
 
 async function fixture(files: Record<string, string>) {
   const f = await createProjectPreparationFixture(
@@ -97,15 +99,11 @@ describe("repository environment preparation", () => {
         phaseDurationsMs: { onCreate: expect.any(Number), updateContent: expect.any(Number) },
       });
       prepared = result.preparedWorkspace!;
-      expect(await fs.readFile(path.join(prepared.workspaceDir, "build", "order"), "utf8")).toBe(
+      expect(await readText(prepared.workspaceDir, "build", "order")).toBe(
         "onCreate\nupdateContent\n",
       );
-      expect(await fs.readFile(path.join(prepared.workspaceDir, "build", "cached"), "utf8")).toBe(
-        "prepared base\n",
-      );
-      expect(await fs.readFile(path.join(prepared.workspaceDir, "created.txt"), "utf8")).toBe(
-        "initialized",
-      );
+      expect(await readText(prepared.workspaceDir, "build", "cached")).toBe("prepared base\n");
+      expect(await readText(prepared.workspaceDir, "created.txt")).toBe("initialized");
     } finally {
       first.close();
     }
@@ -127,18 +125,12 @@ describe("repository environment preparation", () => {
       expect(result.recipePreparation!.phaseDurationsMs).toEqual({
         updateContent: expect.any(Number),
       });
-      expect(await fs.readFile(path.join(prepared.workspaceDir, "build", "order"), "utf8")).toBe(
+      expect(await readText(prepared.workspaceDir, "build", "order")).toBe(
         "onCreate\nupdateContent\nupdateContent\n",
       );
-      expect(await fs.readFile(path.join(prepared.workspaceDir, "build", "cached"), "utf8")).toBe(
-        "prepared base\n",
-      );
-      expect(await fs.readFile(path.join(prepared.workspaceDir, "build", "current"), "utf8")).toBe(
-        "updated content\n",
-      );
-      expect(await fs.readFile(path.join(prepared.workspaceDir, "created.txt"), "utf8")).toBe(
-        "initialized",
-      );
+      expect(await readText(prepared.workspaceDir, "build", "cached")).toBe("prepared base\n");
+      expect(await readText(prepared.workspaceDir, "build", "current")).toBe("updated content\n");
+      expect(await readText(prepared.workspaceDir, "created.txt")).toBe("initialized");
       expect(await requireGit(prepared.workspaceDir, ["rev-parse", "HEAD"])).toBe(
         refreshedProject.baseCommit,
       );
@@ -171,12 +163,9 @@ describe("repository environment preparation", () => {
         const result = await operation.project.prepare(f);
         expect(result.captureRequired).toBe(true);
         expect(result.recipePreparation!.failure).toBeUndefined();
-        expect(
-          await fs.readFile(
-            path.join(result.preparedWorkspace!.workspaceDir, "package.json"),
-            "utf8",
-          ),
-        ).toBe(packageContent);
+        expect(await readText(result.preparedWorkspace!.workspaceDir, "package.json")).toBe(
+          packageContent,
+        );
       } finally {
         operation.close();
       }
@@ -217,9 +206,7 @@ describe("repository environment preparation", () => {
         expect(recordRecipePreparation).toHaveBeenCalledWith(result.recipePreparation);
         const prepared = result.preparedWorkspace!;
         expect(operation.getPreparedWorkspace()).toEqual(prepared);
-        expect(await fs.readFile(path.join(prepared.workspaceDir, "input.txt"), "utf8")).toBe(
-          "prepared base\n",
-        );
+        expect(await readText(prepared.workspaceDir, "input.txt")).toBe("prepared base\n");
       } finally {
         operation.close();
       }
@@ -255,7 +242,7 @@ describe("repository environment preparation", () => {
         "c".repeat(64),
         "workspace",
       );
-      expect(await fs.readFile(path.join(workspace, "build", "sibling"), "utf8")).toBe("finished");
+      expect(await readText(workspace, "build", "sibling")).toBe("finished");
       expect(
         await fs.stat(path.join(workspace, "build", "update")).catch(() => undefined),
       ).toBeUndefined();
