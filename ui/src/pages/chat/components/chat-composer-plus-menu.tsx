@@ -489,27 +489,31 @@ function PlusMenuSurface(props: { menu: ChatComposerPlusMenuContentProps }) {
   const inputs = createMemo(
     () => ({ view: view(), values: menuRenderInputs(props.menu, view()) }),
     {
+      lazy: true,
       equals: (previous, next) =>
         previous.view === next.view &&
         previous.values.length === next.values.length &&
         previous.values.every((value, index) => Object.is(value, next.values[index])),
     },
   );
-  const items = createMemo(() => {
-    const current = inputs().view;
-    // Actions keep reading current props; only presentation owns these retained nodes.
-    return untrack(() =>
-      current === "skills"
-        ? skillItems(props.menu)
-        : current === "connectors"
-          ? connectorItems(props.menu)
-          : current.startsWith("tools:")
-            ? toolItems(props.menu, current.slice("tools:".length))
-            : current.startsWith("library:")
-              ? composerLibraryMenuItems(props.menu.library, current.slice("library:".length))
-              : rootItems(props.menu),
-    );
-  });
+  const items = createMemo(
+    () => {
+      const current = inputs().view;
+      // Actions keep reading current props; only presentation owns these retained nodes.
+      return untrack(() =>
+        current === "skills"
+          ? skillItems(props.menu)
+          : current === "connectors"
+            ? connectorItems(props.menu)
+            : current.startsWith("tools:")
+              ? toolItems(props.menu, current.slice("tools:".length))
+              : current.startsWith("library:")
+                ? composerLibraryMenuItems(props.menu.library, current.slice("library:".length))
+                : rootItems(props.menu),
+      );
+    },
+    { lazy: true },
+  );
   return (
     <>
       <div
