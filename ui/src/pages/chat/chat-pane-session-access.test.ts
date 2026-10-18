@@ -1,18 +1,18 @@
 /* @vitest-environment jsdom */
 
-import { render } from "lit";
-import { flush } from "solid-js";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { sessionsResult } from "../../lib/sessions/session-capability.test-support.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   createPaneHeaderWorkspaceFixture,
   createSessionCapabilityFixture,
   createTestChatPane,
 } from "./chat-pane.test-support.ts";
+import { renderPaneHeaderInto } from "./components/chat-pane-header.test-support.ts";
 
 describe("chat pane session access", () => {
   it("refuses ordinary session creation for read-only operators", async () => {
@@ -65,7 +65,7 @@ describe("chat pane session access", () => {
     ]) {
       const patch = vi.fn(async () => ({}));
       const sessions = { patch } as unknown as SessionCapability;
-      const { pane, state, requestUpdate } = createTestChatPane({
+      const { pane, state } = createTestChatPane({
         client: {} as GatewayBrowserClient,
         sessions,
       });
@@ -79,9 +79,8 @@ describe("chat pane session access", () => {
 
       pane.beginHeaderRename(session);
 
-      expect(Boolean(pane.headerRenameSession)).toBe(false);
+      expect(Boolean(pane.headerPresentation.renameSession)).toBe(false);
       expect(state.chatError).toBeTruthy();
-      expect(requestUpdate).toHaveBeenCalledOnce();
       expect(patch).not.toHaveBeenCalled();
     }
   });
@@ -100,7 +99,7 @@ describe("chat pane session access", () => {
     } satisfies GatewaySessionRow;
 
     pane.beginHeaderRename(session);
-    pane.headerRenameValue = "Blocked rename";
+    pane.headerPresentation.renameValue = "Blocked rename";
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["sessions.patch"] },
@@ -129,7 +128,7 @@ describe("chat pane session access", () => {
     } satisfies GatewaySessionRow;
 
     pane.beginHeaderRename(session);
-    pane.headerRenameValue = "Replacement Gateway title";
+    pane.headerPresentation.renameValue = "Replacement Gateway title";
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
       client: { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient,
@@ -139,14 +138,14 @@ describe("chat pane session access", () => {
     });
     pane.commitHeaderRename();
 
-    expect(Boolean(pane.headerRenameSession)).toBe(false);
+    expect(Boolean(pane.headerPresentation.renameSession)).toBe(false);
     expect(patch).not.toHaveBeenCalled();
   });
 
   it("refuses archived-session restore without exact sessions.patch access", async () => {
     const patch = vi.fn(async () => ({}));
     const sessions = { patch } as unknown as SessionCapability;
-    const { pane, state, requestUpdate } = createTestChatPane({
+    const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
       sessions,
     });
@@ -159,7 +158,6 @@ describe("chat pane session access", () => {
 
     expect(state.chatError).toBeTruthy();
     expect(state.lastError).toBe(state.chatError);
-    expect(requestUpdate).toHaveBeenCalledOnce();
     expect(patch).not.toHaveBeenCalled();
   });
 
@@ -212,7 +210,7 @@ describe("chat pane session access", () => {
     } satisfies GatewaySessionRow;
     const container = document.createElement("div");
 
-    render(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         session,
@@ -227,7 +225,7 @@ describe("chat pane session access", () => {
     expect(container.querySelector(".chat-pane__sharing-menu")).toBeNull();
   });
 
-  it("keeps visibility controls available without member-list support", () => {
+  it("keeps visibility controls available without member-list support", async () => {
     const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
       sessions: createSessionCapabilityFixture(),
@@ -245,8 +243,10 @@ describe("chat pane session access", () => {
       visibility: "shared",
     } satisfies GatewaySessionRow;
     const container = document.createElement("div");
+    document.body.append(container);
+    onTestFinished(() => container.remove());
 
-    render(
+    renderPaneHeaderInto(
       pane.renderPaneHeader(
         createPaneHeaderWorkspaceFixture(state),
         session,
@@ -258,14 +258,18 @@ describe("chat pane session access", () => {
       container,
     );
 
-    expect(
-      container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled,
-    ).toBe(false);
-    container.querySelector(".chat-pane__sharing-menu")?.dispatchEvent(new Event("wa-show"));
-    flush();
-    expect(
-      container.querySelector('wa-dropdown-item[value="visibility:read-only"]'),
-    ).not.toBeNull();
+    await waitForSolid(() =>
+      expect(
+        container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.disabled,
+      ).toBe(false),
+    );
+    container.querySelector<HTMLButtonElement>(".chat-pane__sharing-trigger")?.click();
+    await waitForSolid(() =>
+      expect(container.querySelector(".chat-pane__sharing-panel")?.matches(":popover-open")).toBe(
+        true,
+      ),
+    );
+    expect(container.querySelector('[data-value="visibility:read-only"]')).not.toBeNull();
     expect(container.textContent).not.toContain("People");
   });
 });

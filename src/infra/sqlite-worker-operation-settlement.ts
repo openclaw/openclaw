@@ -16,6 +16,7 @@ import type { SqliteWorkerRequestCustodyDescriptor } from "./sqlite-worker-reque
 
 export type SqliteWorkerOperationContext = {
   port: MessagePort;
+  databaseAdmissionDeadlineAtMs?: number;
   /** Present for broker-owned work; standalone admission owners keep their own lifetime. */
   requestCustody?: SqliteWorkerRequestCustodyDescriptor;
   executionAuthority?: SqliteWorkerExecutionAuthority;
@@ -54,7 +55,11 @@ export function readNativeCommitReceipt(value: unknown): NativeCommitReceipt | u
 // Keep the latest committed evidence for settlement if ordinary delivery fails.
 const nativeCommitReceipts = resolveGlobalSingleton(
   Symbol.for("openclaw.sqliteWorkerNativeCommitReceipts"),
-  () => new WeakMap<SqliteWorkerOperationContext, NativeCommitReceipt>(),
+  () =>
+    new WeakMap<
+      SqliteWorkerOperationContext,
+      { receipt: NativeCommitReceipt; payloadBytes: number; delivered: boolean }
+    >(),
 );
 
 /** Native settlement is independent of whether delivery of the result succeeded. */
@@ -81,25 +86,39 @@ export type RetainedWorkerTransactionAdmission = {
   readonly settled: Promise<SqliteWorkerOperationSettlement>;
 };
 
+export type CapturedSqliteWorkerCommitReceipt =
+  | { kind: "inline"; facts: unknown; payloadBytes: number }
+  | { kind: "oversized"; serialized: Uint8Array };
+
+export function captureSqliteWorkerCommitReceipt(
+  facts: unknown,
+): CapturedSqliteWorkerCommitReceipt {
+  const serialized = serialize(facts);
+  const payloadBytes = serialized.byteLength;
+  if (payloadBytes > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+    return { kind: "oversized", serialized };
+  }
+  // Keep the size and detached facts together so transport selection and native
+  // publication use one capture, even if the producer mutates its result later.
+  return { kind: "inline", facts: structuredClone(facts), payloadBytes };
+}
+
 export function deferSqliteWorkerNativeCommitReceipt(
   owner: SqliteWorkerOperationContext,
   database: DatabaseSync | PostgresSqlConnection,
-  facts: unknown,
+  captured: CapturedSqliteWorkerCommitReceipt,
   delivery: "commit" | "settlement",
 ): void {
-  if (serialize(facts).byteLength > SQLITE_WORKER_MAX_MESSAGE_BYTES) {
+  if (captured.kind === "oversized") {
     throw new SqliteWorkerError(
       "SQLite worker commit receipt exceeds the transport limit",
       "overloaded",
     );
   }
-  const captured = structuredClone(facts);
+  const { facts, payloadBytes } = captured;
   const anchor = sqlPublicationAnchor(database);
-  const counts = owner.sourceReservations ? (owner.pendingReceipts ??= new Map()) : undefined;
+  const counts = (owner.pendingReceipts ??= new Map());
   const pending = (delta: number) => {
-    if (!counts) {
-      return;
-    }
     const count = (counts.get(anchor) ?? 0) + delta;
     if (count === 0) {
       counts.delete(anchor);
@@ -116,13 +135,15 @@ export function deferSqliteWorkerNativeCommitReceipt(
         const previous = nativeCommitReceipts.get(owner);
         const receipt: NativeCommitReceipt = {
           version: 1,
-          sequence: (previous?.sequence ?? 0) + 1,
-          facts: captured,
+          sequence: (previous?.receipt.sequence ?? 0) + 1,
+          facts,
         };
-        nativeCommitReceipts.set(owner, receipt);
-        owner.committed = { facts: captured };
+        const retained = { receipt, payloadBytes, delivered: false };
+        nativeCommitReceipts.set(owner, retained);
+        owner.committed = { facts };
         if (delivery === "commit") {
-          owner.port.postMessage({ kind: "native-commit", committed: receipt }, []);
+          owner.port.postMessage({ kind: "native-commit", committed: receipt, payloadBytes }, []);
+          retained.delivered = true;
         }
       },
     })
@@ -140,11 +161,14 @@ export function settleSqliteWorkerOperationContext(
     return;
   }
   owner.settled = true;
-  const committed = nativeCommitReceipts.get(owner);
+  const retained = nativeCommitReceipts.get(owner);
+  // This private port is FIFO: settlement only carries facts not already posted successfully.
+  const pending = retained?.delivered ? undefined : retained;
   owner.port.postMessage(
     {
       kind: "native-settlement",
-      settlement: { kind, ...(committed ? { committed } : {}) },
+      settlement: { kind, ...(pending ? { committed: pending.receipt } : {}) },
+      payloadBytes: pending?.payloadBytes ?? 0,
     },
     [],
   );

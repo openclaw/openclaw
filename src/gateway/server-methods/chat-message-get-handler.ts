@@ -1,4 +1,5 @@
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
+import { GATEWAY_CLIENT_IDS } from "../../../packages/gateway-protocol/src/client-info.js";
 import { validateChatMessageGetParams } from "../../../packages/gateway-protocol/src/index.js";
 import { CHAT_PENDING_INPUT_MESSAGE_PREFIX } from "../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
@@ -33,6 +34,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
       return;
     }
     const { sessionKey, messageId, maxChars, sessionId: requestedSessionId } = params;
+    const includePluginSteering = client?.connect.client?.id === GATEWAY_CLIENT_IDS.CONTROL_UI;
     const agentIdOverride = normalizeOptionalString(params.agentId);
     const selection = await prepareChatHistorySessionRead({
       context,
@@ -122,6 +124,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         return;
       }
       const resolved = await readChatHistoryMessageById({
+        includePluginSteering,
         entry: historyEntry,
         provider: getCliSessionBinding(historyEntry, "claude-cli")?.sessionId
           ? resolveSessionModelRef(cfg, historyEntry, sessionAgentId, {
@@ -161,6 +164,7 @@ export const chatMessageGetHandlers: GatewayRequestHandlers = {
         const projectedMessage = resolved.message
           ? projectChatDisplayMessage(resolved.message, {
               includeCommentaryFallbacks: true,
+              includePluginSteering,
               maxChars: effectiveMaxChars,
               resolveCurrentUserProfileDisplay,
               resolveCronJobName,

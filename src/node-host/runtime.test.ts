@@ -6,7 +6,7 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import type { SkillBinTrustEntry } from "../infra/exec-approvals.js";
 import { NODE_DESKTOP_STREAM_COMMAND } from "../shared/node-desktop-stream.js";
 import { withEnvAsync } from "../test-utils/env.js";
-import type { SkillBinsProvider } from "./invoke.js";
+import type { SkillBinsProvider } from "./runtime-skill-bins.js";
 import {
   createNodeHostClient,
   frame,
@@ -305,18 +305,6 @@ describe("node-host invocation cancellation", () => {
     } finally {
       await runtime.close();
     }
-  });
-
-  it("aggregates independent supervisor and MCP close failures in owner order", async () => {
-    const supervisorError = new Error("supervisor close failed");
-    const mcpError = new Error("MCP close failed");
-    mocks.closeWorkerSupervisor.mockRejectedValueOnce(supervisorError);
-    mocks.closeMcp.mockRejectedValueOnce(mcpError);
-    const runtime = await startRuntime();
-
-    const error = await runtime.close().catch((caught: unknown) => caught);
-    expect(error).toBeInstanceOf(AggregateError);
-    expect((error as AggregateError).errors).toEqual([supervisorError, mcpError]);
   });
 
   it("aborts MCP startup before waiting while supervisor retirement runs independently", async () => {

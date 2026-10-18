@@ -1,0 +1,234 @@
+import { describe, expect, it } from "vitest";
+import {
+  normalizeModelCatalog,
+  normalizeModelCatalogProviderRows,
+} from "./model-catalog-normalize.js";
+import type { ModelInferenceCapabilities } from "./model-catalog-types.js";
+
+const decision = {
+  protocol: "fixture-decide",
+  input: ["text", "image"],
+  questions: {
+    boolean: { probabilities: "boolean", abstention: true },
+    choice: {
+      probabilities: "independent",
+      abstention: true,
+      minOptions: 2,
+      maxOptions: 120,
+      maxImageOptions: 20,
+    },
+    sort: { probabilities: "none", abstention: false },
+    box: { probabilities: "none", abstention: false },
+  },
+  reasoning: {
+    modes: ["auto", "off", "on"],
+    default: "auto",
+    questionTypes: ["boolean", "choice"],
+    metadata: true,
+  },
+  grounding: { webSearch: true, questionTypes: ["boolean", "choice"] },
+  limits: {
+    maxRequestTokens: 131072,
+    image: {
+      maxBytes: 4194304,
+      mimeTypes: ["image/png", "image/jpeg", "image/webp"],
+      remoteUrls: false,
+    },
+  },
+  billing: { unit: "decision-units", source: "provider-docs" },
+} satisfies NonNullable<ModelInferenceCapabilities["decision"]>;
+
+function catalog(inference: unknown) {
+  return normalizeModelCatalog(
+    { providers: { fixture: { models: [{ id: "typed", inference }] } } },
+    { ownedProviders: new Set(["fixture"]) },
+  );
+}
+
+describe("route inference capabilities", () => {
+  it("retains a decision route with unknown question kinds without filling limits or prices", () => {
+    const inference = {
+      chat: false,
+      decision: { protocol: "decision-v1", input: ["text"] },
+    };
+    const providerCatalog = catalog(inference)?.providers?.fixture;
+    if (!providerCatalog) {
+      throw new Error("Missing legacy route");
+    }
+    const [row] = normalizeModelCatalogProviderRows({
+      provider: "fixture",
+      providerCatalog,
+      source: "manifest",
+    });
+    expect(row?.inference).toEqual(inference);
+    expect(row).not.toHaveProperty("cost");
+    expect(row).not.toHaveProperty("contextWindow");
+    expect(row).not.toHaveProperty("maxTokens");
+  });
+
+  it("preserves a five-level score subset instead of advertising arbitrary rubric support", () => {
+    const inference = {
+      chat: false,
+      decision: {
+        protocol: "fixture-scale",
+        input: ["text"],
+        questions: {
+          score: { probabilities: "none", abstention: false, minOptions: 5, maxOptions: 5 },
+        },
+        billing: { unit: "requests", source: "provider-docs" },
+      },
+    };
+    const providerCatalog = catalog(inference)?.providers?.fixture;
+    if (!providerCatalog) {
+      throw new Error("Missing scale route");
+    }
+    const [row] = normalizeModelCatalogProviderRows({
+      provider: "fixture",
+      providerCatalog,
+      source: "manifest",
+    });
+    expect(row?.inference).toEqual(inference);
+    expect(row?.inference?.decision?.questions).not.toHaveProperty("choice");
+  });
+
+  it("retains provider-defined estimates, confidence and Boolean criteria requirements", () => {
+    const inference = {
+      chat: false,
+      decision: {
+        protocol: "fixture-legacy",
+        input: ["text"],
+        confidence: "provider-specific",
+        questions: {
+          boolean: { probabilities: "boolean", abstention: false, requiresCriteria: true },
+          choice: { probabilities: "provider-defined", abstention: false },
+        },
+      },
+    };
+    expect(catalog(inference)?.providers?.fixture?.models[0]?.inference).toEqual(inference);
+  });
+
+  it("preserves independent probabilities, abstention and task-specific reasoning without inventing chat or prices", () => {
+    const normalized = catalog({ chat: false, decision });
+    const providerCatalog = normalized?.providers?.fixture;
+    expect(providerCatalog).toBeDefined();
+    if (!providerCatalog) {
+      throw new Error("Missing fixture catalog");
+    }
+    const [row] = normalizeModelCatalogProviderRows({
+      provider: "fixture",
+      providerCatalog,
+      source: "manifest",
+    });
+    expect(row?.inference).toEqual({ chat: false, decision });
+    expect(row).not.toHaveProperty("cost");
+    expect(row).not.toHaveProperty("maxTokens");
+    // The conversational reasoning flag is not inferred from the decision reasoning pass.
+    expect(row?.reasoning).toBe(false);
+  });
+
+  it("keeps genuine dual capability explicit and preserves published zero token prices", () => {
+    const inference = {
+      chat: true,
+      decision: {
+        ...decision,
+        billing: {
+          unit: "tokens",
+          source: "provider-catalog",
+          usdPerMillion: { input: 0.042, output: 0 },
+        },
+      },
+    };
+    expect(catalog(inference)?.providers?.fixture?.models[0]?.inference).toEqual(inference);
+    const unknown = catalog({
+      chat: false,
+      decision: { ...decision, billing: { unit: "tokens", source: "provider-catalog" } },
+    });
+    expect(unknown?.providers?.fixture?.models[0]?.inference?.decision?.billing).toEqual({
+      unit: "tokens",
+      source: "provider-catalog",
+    });
+  });
+
+  it("does not infer a task from legacy text or JSON compatibility flags", () => {
+    const [row] = normalizeModelCatalogProviderRows({
+      provider: "fixture",
+      source: "manifest",
+      providerCatalog: {
+        models: [
+          {
+            id: "ordinary",
+            input: ["text"],
+            compat: { supportsJsonSchemaResponseFormat: true, supportsTools: true },
+          },
+        ],
+      },
+    });
+    expect(row).not.toHaveProperty("inference");
+  });
+
+  it.each([
+    { chat: "false", decision },
+    { decision },
+    { chat: false, decision: { ...decision, protocol: "https://fixture.invalid/decide" } },
+    { chat: false, decision: { ...decision, questions: {} } },
+    { chat: false, decision: { ...decision, questions: null } },
+    { chat: false, decision: { ...decision, questions: [] } },
+    { chat: false, decision: { ...decision, questions: { unknown: {} } } },
+    { chat: false, decision: { ...decision, questions: { boolean: {} } } },
+    { chat: false, decision: { ...decision, confidence: "calibrated" } },
+    {
+      chat: false,
+      decision: {
+        ...decision,
+        questions: { boolean: { ...decision.questions.boolean, requiresCriteria: "true" } },
+      },
+    },
+    {
+      chat: false,
+      decision: {
+        ...decision,
+        questions: {
+          choice: { probabilities: "independent", abstention: true, minOptions: 5, maxOptions: 4 },
+        },
+      },
+    },
+    { chat: false, decision: { ...decision, input: ["text", "text"] } },
+    { chat: false, decision: { ...decision, reasoning: { modes: ["off"], default: "on" } } },
+    {
+      chat: false,
+      decision: { ...decision, reasoning: { modes: ["off"], questionTypes: ["tags"] } },
+    },
+    { chat: false, decision: { ...decision, limits: { maxRequestTokens: -1 } } },
+    { chat: false, decision: { ...decision, limits: { maxQuestions: 1.5 } } },
+    { chat: false, decision: { ...decision, input: ["text"] } },
+    {
+      chat: false,
+      decision: {
+        ...decision,
+        billing: {
+          unit: "decision-units",
+          source: "provider-catalog",
+          usdPerMillion: { input: 3 },
+        },
+      },
+    },
+  ])(
+    "drops invalid declared rows instead of silently treating them as legacy chat: %j",
+    (inference) => {
+      expect(catalog(inference)).toBeUndefined();
+    },
+  );
+
+  it("strips undeclared provider diagnostics and does not mutate the descriptor", () => {
+    const supplied = {
+      chat: false,
+      decision: { ...decision, privateDiagnostic: "synthetic-only" },
+      privateEndpoint: "https://fixture.invalid",
+    };
+    expect(catalog(supplied)?.providers?.fixture?.models[0]?.inference).toEqual({
+      chat: false,
+      decision,
+    });
+    expect(supplied).toHaveProperty("privateEndpoint");
+  });
+});

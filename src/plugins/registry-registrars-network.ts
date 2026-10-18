@@ -335,7 +335,7 @@ export function createNetworkRegistrars(state: PluginRegistryState) {
     const agentTools = plugin.agentTools;
     if (agentTools) {
       plugin.agentTools = typeof agentTools === "function" ? agentTools : () => agentTools;
-      getPluginInstance(record)?.admitFactory(plugin.agentTools);
+      getPluginInstance(record)?.admitFactory(plugin.agentTools, "tool");
     }
     const metadata = {
       // Normalization copied the input; teardown must retain its registration owner.

@@ -62,7 +62,7 @@ afterEach(async () => {
 });
 
 function createPool(
-  options: Pick<WorkerTaskPoolOptions<string>, "maxWorkers" | "prepareWorker"> & {
+  options: Pick<WorkerTaskPoolOptions<string>, "maxWorkers"> & {
     requiresReady?: false;
   } = {},
 ) {
@@ -106,7 +106,6 @@ function createPool(
     {
       workerUrl: new URL("file:///synthetic-worker.mjs"),
       maxWorkers: options.maxWorkers ?? 1,
-      prepareWorker: options.prepareWorker,
       idleTimeoutMs: 0,
     },
     host,
@@ -129,13 +128,16 @@ it.each(["error", "exit", "constructor"] as const)(
   "rejects one bootstrap cohort after %s and retries only after rotation",
   async (failure) => {
     const { pool, workers, attempts, failConstruction, onCreated } = createPool();
+    const nativeFailure = Object.assign(new Error("synthetic heap exhausted"), {
+      code: "ERR_WORKER_OUT_OF_MEMORY",
+    });
     if (failure === "constructor") {
       failConstruction(new Error("module unavailable"));
     } else {
       onCreated((worker) => {
         queueMicrotask(() => {
           if (failure === "error") {
-            worker.emit("error", new Error("module unavailable"));
+            worker.emit("error", nativeFailure);
           } else {
             worker.emit("exit", 0);
           }
@@ -154,6 +156,9 @@ it.each(["error", "exit", "constructor"] as const)(
         reason: expect.objectContaining({ code: "unavailable" }),
       })),
     );
+    if (failure === "error") {
+      expect(outcomes[0]).toMatchObject({ reason: { cause: nativeFailure } });
+    }
     expect(attempts()).toBe(1);
     expect(prepare).toHaveBeenCalledOnce();
     expect(release).toHaveBeenCalledTimes(12);
@@ -172,18 +177,6 @@ it.each(["error", "exit", "constructor"] as const)(
     expect(attempts()).toBe(2);
   },
 );
-
-it("preserves the native worker cause for runtime diagnostics", async () => {
-  const { pool, onCreated } = createPool();
-  const failure = Object.assign(new Error("synthetic heap exhausted"), {
-    code: "ERR_WORKER_OUT_OF_MEMORY",
-  });
-  onCreated((worker) => queueMicrotask(() => worker.emit("error", failure)));
-  await expect(pool.run("input", {})).rejects.toMatchObject({
-    code: "unavailable",
-    cause: failure,
-  });
-});
 
 it("keeps a healthy sibling serving the backlog without repeatedly replacing the failed boot", async () => {
   const { pool, workers, attempts } = createPool({ maxWorkers: 2 });
@@ -228,38 +221,6 @@ it("does not start a late input preparation after its sibling bootstrap failed",
   expect(release).toHaveBeenCalledOnce();
   expect(attempts()).toBe(1);
   expect(pool.getSnapshot().pendingTasks).toBe(0);
-});
-
-it("rechecks bootstrap admission after worker preparation reenters a sibling failure", async () => {
-  const created = Promise.withResolvers<FixtureWorker>();
-  const release = vi.fn(async () => {});
-  let preparations = 0;
-  const { pool, attempts, onCreated } = createPool({
-    maxWorkers: 2,
-    prepareWorker() {
-      if (++preparations === 2) {
-        sibling.emit("error", new Error("first worker failed during second preparation"));
-      }
-      return { options: {}, releaseResources: release };
-    },
-  });
-  onCreated((worker) => {
-    if (worker.threadId === 1) {
-      created.resolve(worker);
-    } else {
-      queueMicrotask(() => worker.emit("error", new Error("unexpected replacement worker")));
-    }
-  });
-  const first = pool.run("first bootstrap", {});
-  const sibling = await created.promise;
-  const results = await Promise.allSettled([first, pool.run("second preparation", {})]);
-  expect(results).toEqual([
-    { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
-    { status: "rejected", reason: expect.objectContaining({ code: "unavailable" }) },
-  ]);
-  await pool.close();
-  expect(attempts()).toBe(1);
-  expect(release).toHaveBeenCalledTimes(2);
 });
 
 it("requests a checkpoint when failed bootstrap leaves a healthy host-waiting sibling", async () => {

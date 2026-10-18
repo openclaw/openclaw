@@ -43,7 +43,11 @@ export const emptyLengthScenario = {
   }),
 } satisfies TransportDropScenario;
 
-export const outputLimitScenarios = [outputLimitScenario, emptyLengthScenario];
+export const outputLimitScenarios = [
+  outputLimitScenario,
+  emptyLengthScenario,
+  { ...emptyLengthScenario, trigger: "cron" as const, toolResultText: "NO_REPLY" },
+];
 
 export type TransportDropScenario = {
   config?: OpenClawConfig;
@@ -254,6 +258,7 @@ export async function recoverAfterTransportDrop(scenario: TransportDropScenario 
         genericCompactionRecoveryAllowed: scenario.compactionEnabled ?? false,
         attemptedThinking: new Set(["off"]),
         maybeRefreshRuntimeAuthForAuthError: vi.fn(async () => false),
+        refreshTransportForConnectionError: vi.fn(async () => {}),
         snapshot: () => ({
           thinkLevel: "off",
           agentHarness: { id: "openclaw" },

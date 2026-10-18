@@ -12,7 +12,7 @@ import { resolveCronJobConfigRevision } from "../config-revision.js";
 import { projectCronRunHistoryPage } from "../run-history.js";
 import { saveCronStore } from "../store.js";
 import type { CronJob, CronJobPatch } from "../types.js";
-import { readCronRunRecords } from "./read-only.js";
+import { readCronRunHistoryCandidates, readCronRunHistoryRecords } from "./read-only.js";
 import type { CronRunQueueOperations, CronRunRequestContext } from "./run-queue.types.js";
 import type { CronRunReceiptHandle } from "./run-receipt.types.js";
 import { createCronScheduledRunId } from "./run-request-id.js";
@@ -20,6 +20,14 @@ import { createCronScheduledRunId } from "./run-request-id.js";
 const now = 1_800_000_000_000;
 let fixture: OpenClawTestState;
 let context: OpenClawStateWorkerContext;
+
+async function readHistoryRecords(storeKey: string) {
+  const { records } = await readCronRunHistoryCandidates(storeKey);
+  return readCronRunHistoryRecords(
+    storeKey,
+    records.map((record) => record.id),
+  );
+}
 
 beforeAll(async () => {
   fixture = await createOpenClawTestState({ label: "cron-worker-queue" });
@@ -131,6 +139,26 @@ function scheduled(storeKey: string, current: CronJob) {
   };
 }
 
+it("keeps the first execution link across binding retries without changing the run claim", async () => {
+  const current = job("execution-link");
+  const queue = await store("execution-link", [current]);
+  await queue.request([scheduled(queue.storeKey, current)]);
+  const activated = await queue.drain();
+  expect(activated.launches).toHaveLength(1);
+  const receipt = activated.launches[0]!.runReceipt;
+  const bind = (contextId: string, executionId: string) =>
+    executeOpenClawStateWorker(context, {
+      type: "cron.bindReceiptExecution",
+      input: { receiptId: receipt.receiptId, binding: { contextId, executionId } },
+    });
+
+  expect(await bind("original-context", "original-execution")).toBe(true);
+  expect(await bind("replacement-context", "replacement-execution")).toBe(false);
+  expect(await bind("original-context", "original-execution")).toBe(true);
+  expect(await queue.readReceipt(receipt)).toEqual(receipt);
+  await queue.cancel([receipt.receiptId], "superseded");
+});
+
 it("deduplicates committed slots and drains persisted job order within worker capacity", async () => {
   const jobs = [
     job("z-first", { state: { nextRunAtMs: now, lastError: "previous run failed" } }),
@@ -160,8 +188,24 @@ it("deduplicates committed slots and drains persisted job order within worker ca
     ["m-third", now, undefined],
   ]);
   await queue.cancel([first.launches[0]!.runReceipt.receiptId], "superseded");
-  expect(await readCronRunRecords(queue.storeKey, "z-first")).toEqual([]);
+  expect((await readCronRunHistoryCandidates(queue.storeKey, "z-first")).records).toEqual([]);
   expect((await queue.drain()).launches.map((entry) => entry.job.id)).toEqual(["a-second"]);
+});
+
+it("advances a consumed scheduled slot without reclaiming its terminal receipt", async () => {
+  const current = job("consumed");
+  const queue = await store("consumed", [current]);
+  const request = scheduled(queue.storeKey, current);
+  await queue.request([request]);
+  await queue.cancel([request.receiptId], "superseded");
+  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBe(now);
+  const retry = await queue.request([request]);
+  expect(retry.accepted).toEqual([]);
+  expect(retry.rejected).toEqual([
+    { jobId: current.id, receiptId: request.receiptId, reason: "already-requested" },
+  ]);
+  expect((await queue.read()).jobs[0]?.state.nextRunAtMs).toBeGreaterThan(now);
+  expect((await queue.drain()).launches).toEqual([]);
 });
 
 it("returns durable receipt handles across queued edits and records disabled requests under their public ID", async () => {
@@ -226,7 +270,7 @@ it("returns durable receipt handles across queued edits and records disabled req
   expect(drained.launches).toEqual([]);
   expect(drained.skipped.map((entry) => entry.runReceipt.receiptId)).toEqual([manual.receiptId]);
   expect((await cancelled.read()).jobs[0]?.state.queuedAtMs).toBeUndefined();
-  const page = projectCronRunHistoryPage(await readCronRunRecords(cancelled.storeKey), {
+  const page = projectCronRunHistoryPage(await readHistoryRecords(cancelled.storeKey), {
     storeKey: cancelled.storeKey,
     runId: "public-ack",
   });
@@ -327,7 +371,7 @@ it("recovers a timed request without replaying active work or reconstructing a l
   });
   expect((await legacy.read()).jobs[0]?.state.queuedAtMs).toBeUndefined();
   expect((await legacy.drain()).launches).toEqual([]);
-  const history = projectCronRunHistoryPage(await readCronRunRecords(legacy.storeKey), {
+  const history = projectCronRunHistoryPage(await readHistoryRecords(legacy.storeKey), {
     storeKey: legacy.storeKey,
   });
   expect(history.entries).toMatchObject([
@@ -370,7 +414,7 @@ it.each(["request", "cancellation"] as const)(
     } else {
       expect((await queue.read()).jobs[0]?.state.queuedAtMs).toBeUndefined();
       expect((await queue.drain()).launches).toEqual([]);
-      const history = projectCronRunHistoryPage(await readCronRunRecords(queue.storeKey), {
+      const history = projectCronRunHistoryPage(await readHistoryRecords(queue.storeKey), {
         storeKey: queue.storeKey,
       });
       expect(history.entries).toHaveLength(1);

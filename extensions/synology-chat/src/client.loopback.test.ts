@@ -26,6 +26,52 @@ vi.mock("openclaw/plugin-sdk/runtime-env", async (importOriginal) => ({
 
 const USER_LIST_RESPONSE_MAX_BYTES = 1 * 1024 * 1024;
 
+function respond(res: http.ServerResponse, success: boolean, status = 200) {
+  res.writeHead(status, { "Content-Type": "application/json" });
+  res.end(JSON.stringify({ success }));
+}
+
+function readForm(req: http.IncomingMessage, done: (payload: string | null) => void) {
+  let body = "";
+  req.setEncoding("utf8");
+  req.on("data", (chunk: string) => {
+    body += chunk;
+  });
+  req.on("end", () => done(new URLSearchParams(body).get("payload")));
+}
+
+function config(incomingUrl: string, token = "loopback-token") {
+  return { channels: { "synology-chat": { enabled: true, token, incomingUrl } } };
+}
+
+function drip(res: http.ServerResponse) {
+  // Keep bytes flowing so the socket-idle timeout cannot end the response.
+  const timer = setInterval(() => {
+    if (!res.writableEnded && !res.destroyed) {
+      res.write("x");
+    }
+  }, 20);
+  res.on("close", () => clearInterval(timer));
+  res.write("x");
+}
+
+function shortenDeadline(deadline: number, replacement: number, onceOnly = false) {
+  const nativeSetTimeout = globalThis.setTimeout;
+  const spy = vi.spyOn(globalThis, "setTimeout");
+  const schedule = ((callback: (...args: unknown[]) => void, delay?: number, ...args: unknown[]) =>
+    nativeSetTimeout(
+      callback,
+      onceOnly || delay === deadline ? replacement : delay,
+      ...args,
+    )) as typeof setTimeout;
+  if (onceOnly) {
+    spy.mockImplementationOnce(schedule);
+  } else {
+    spy.mockImplementation(schedule);
+  }
+  return spy;
+}
+
 describe("Synology Chat client loopback", () => {
   let server: http.Server | undefined;
 
@@ -106,8 +152,7 @@ describe("Synology Chat client loopback", () => {
       receivedRequests += 1;
       req.resume();
       req.on("end", () => {
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: true }));
+        respond(res, true);
       });
     }, port);
     if (!releaseRetry) {
@@ -118,9 +163,6 @@ describe("Synology Chat client loopback", () => {
     await expect(send).resolves.toBe(true);
     expect(receivedRequests).toBe(1);
     expect(timeoutSpy.mock.calls.filter(([, delay]) => delay === 300)).toHaveLength(1);
-    console.log(
-      `[synology webhook retry proof] preconnect_refusal=true retry_scheduled=true server_received=${receivedRequests} outcome=success`,
-    );
   });
 
   it("does not replay after the server receives the upload and disconnects", async () => {
@@ -144,39 +186,22 @@ describe("Synology Chat client loopback", () => {
     expect(new URLSearchParams(uploadedBody).get("payload")).toBe(
       JSON.stringify({ text: "post-upload disconnect" }),
     );
-    console.log(
-      `[synology webhook retry proof] server_received=${requestCount} disconnect_after_upload=true replayed=${requestCount > 1} outcome=not_sent`,
-    );
   });
 
   it("acquires durable send custody before webhook bytes cross the loopback boundary", async () => {
     const receivedPayloads: Array<Record<string, unknown>> = [];
     const port = await listenLoopback((req, res) => {
-      let formBody = "";
-      req.setEncoding("utf8");
-      req.on("data", (chunk: string) => {
-        formBody += chunk;
-      });
-      req.on("end", () => {
-        const payload = new URLSearchParams(formBody).get("payload");
+      readForm(req, (payload) => {
         if (payload) {
           receivedPayloads.push(JSON.parse(payload) as Record<string, unknown>);
         }
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: true }));
+        respond(res, true);
       });
     });
     const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          enabled: true,
-          token: "synology-custody-proof",
-          incomingUrl,
-        },
-      },
-    };
+    const cfg = config(incomingUrl, "synology-custody-proof");
     const marker = `autoqa-synology-custody-${randomUUID()}`;
+    const sendContext = { cfg, text: marker, to: "42" };
     const custodyFailure = new Error(`fault-injected custody failure: ${marker}`);
     const rejectedDispatch = vi.fn(async () => {
       throw custodyFailure;
@@ -184,9 +209,7 @@ describe("Synology Chat client loopback", () => {
 
     await expect(
       synologyChatPlugin.message.send?.text?.({
-        cfg,
-        text: marker,
-        to: "42",
+        ...sendContext,
         onPlatformSendDispatch: rejectedDispatch,
       }),
     ).rejects.toThrow(custodyFailure.message);
@@ -195,9 +218,7 @@ describe("Synology Chat client loopback", () => {
 
     const acceptedDispatch = vi.fn(async () => undefined);
     await synologyChatPlugin.message.send?.text?.({
-      cfg,
-      text: marker,
-      to: "42",
+      ...sendContext,
       onPlatformSendDispatch: acceptedDispatch,
     });
     expect(acceptedDispatch).toHaveBeenCalledOnce();
@@ -209,10 +230,8 @@ describe("Synology Chat client loopback", () => {
     hostedCapabilityCleanup.mockClear();
     await expect(
       synologyChatPlugin.message.send?.media?.({
-        cfg,
-        text: marker,
+        ...sendContext,
         mediaUrl: "https://example.com/custody-proof.png",
-        to: "42",
         onPlatformSendDispatch: rejectedMediaDispatch,
       }),
     ).rejects.toThrow(custodyFailure.message);
@@ -233,62 +252,42 @@ describe("Synology Chat client loopback", () => {
         requestUrl.searchParams.get("version") !== "2" ||
         requestUrl.searchParams.get("token") !== "synology-loopback-proof"
       ) {
-        res.writeHead(403, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: false }));
+        respond(res, false, 403);
         return;
       }
 
-      let formBody = "";
-      req.setEncoding("utf8");
-      req.on("data", (chunk: string) => {
-        formBody += chunk;
-      });
-      req.on("end", () => {
-        const payload = new URLSearchParams(formBody).get("payload");
+      readForm(req, (payload) => {
         if (!payload) {
-          res.writeHead(400, { "Content-Type": "application/json" });
-          res.end(JSON.stringify({ success: false }));
+          respond(res, false, 400);
           return;
         }
         receivedPayloads.push(JSON.parse(payload) as Record<string, unknown>);
-        res.writeHead(200, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: true }));
+        respond(res, true);
       });
     });
     const incomingUrl =
       `http://127.0.0.1:${port}/webapi/entry.cgi?` +
       "api=SYNO.Chat.External&method=chatbot&version=2&token=synology-loopback-proof";
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          enabled: true,
-          token: "synology-loopback-proof",
-          incomingUrl,
-        },
-      },
-    };
+    const cfg = config(incomingUrl, "synology-loopback-proof");
     const mediaUrl = "https://example.com/synology-receipt-proof.png";
+    const sendContext = { cfg, to: "42" };
 
     const outboundText = await synologyChatPlugin.outbound.sendText({
-      cfg,
+      ...sendContext,
       text: "native outbound text",
-      to: "42",
     });
     const outboundMedia = await synologyChatPlugin.outbound.sendMedia({
-      cfg,
+      ...sendContext,
       mediaUrl,
-      to: "42",
     });
     const durableText = await synologyChatPlugin.message.send?.text?.({
-      cfg,
+      ...sendContext,
       text: "durable adapter text",
-      to: "42",
     });
     const durableMedia = await synologyChatPlugin.message.send?.media?.({
-      cfg,
+      ...sendContext,
       text: "durable adapter media",
       mediaUrl,
-      to: "42",
     });
 
     expect(receivedPayloads).toEqual([
@@ -317,32 +316,18 @@ describe("Synology Chat client loopback", () => {
   it("chunks long text before the Synology payload limit for every text adapter", async () => {
     const receivedPayloads: Array<{ text: string; user_ids?: number[] }> = [];
     const port = await listenLoopback((req, res) => {
-      let formBody = "";
-      req.setEncoding("utf8");
-      req.on("data", (chunk: string) => {
-        formBody += chunk;
-      });
-      req.on("end", () => {
-        const payload = JSON.parse(new URLSearchParams(formBody).get("payload") ?? "{}") as {
+      readForm(req, (body) => {
+        const payload = JSON.parse(body ?? "{}") as {
           text?: string;
           user_ids?: number[];
         };
         receivedPayloads.push({ text: payload.text ?? "", user_ids: payload.user_ids });
         const accepted = (payload.text?.length ?? 0) <= 2_000;
-        res.writeHead(accepted ? 200 : 413, { "Content-Type": "application/json" });
-        res.end(JSON.stringify({ success: accepted }));
+        respond(res, accepted, accepted ? 200 : 413);
       });
     });
     const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          enabled: true,
-          token: "loopback-token",
-          incomingUrl,
-        },
-      },
-    };
+    const cfg = config(incomingUrl);
     const text = "x".repeat(2_001);
 
     await synologyChatPlugin.outbound.sendText({ cfg, text, to: "42" });
@@ -359,20 +344,13 @@ describe("Synology Chat client loopback", () => {
     let rejectedRequests = 0;
     const port = await listenLoopback((_req, res) => {
       rejectedRequests += 1;
-      res.writeHead(403, { "Content-Type": "application/json" });
-      res.end(JSON.stringify({ success: false }));
+      respond(res, false, 403);
     });
-    const cfg = {
-      channels: {
-        "synology-chat": {
-          enabled: true,
-          token: "synology-loopback-rejected",
-          incomingUrl:
-            `http://127.0.0.1:${port}/webapi/entry.cgi?` +
-            "api=SYNO.Chat.External&method=chatbot&version=2&token=synology-loopback-rejected",
-        },
-      },
-    };
+    const cfg = config(
+      `http://127.0.0.1:${port}/webapi/entry.cgi?` +
+        "api=SYNO.Chat.External&method=chatbot&version=2&token=synology-loopback-rejected",
+      "synology-loopback-rejected",
+    );
 
     await expect(
       synologyChatPlugin.outbound.sendText({ cfg, text: "rejected", to: "42" }),
@@ -454,15 +432,7 @@ describe("Synology Chat client loopback", () => {
         );
         return;
       }
-      // Keep sending bytes so ClientRequest socket-idle alone would never fire.
-      const dripTimer = setInterval(() => {
-        if (res.writableEnded || res.destroyed) {
-          return;
-        }
-        res.write("x");
-      }, 20);
-      res.on("close", () => clearInterval(dripTimer));
-      res.write("x");
+      drip(res);
     });
     const incomingUrl =
       `http://127.0.0.1:${port}/webapi/entry.cgi?` +
@@ -480,13 +450,7 @@ describe("Synology Chat client loopback", () => {
     now.mockReturnValue(1_700_000_100_000 + 10 * 60 * 1000);
     const warnings: string[] = [];
     const timeoutMs = 250;
-    const nativeSetTimeout = globalThis.setTimeout;
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    timeoutSpy.mockImplementationOnce(((
-      callback: (...args: unknown[]) => void,
-      _delay?: number,
-      ...args: unknown[]
-    ) => nativeSetTimeout(callback, timeoutMs, ...args)) as typeof setTimeout);
+    const timeoutSpy = shortenDeadline(15_000, timeoutMs, true);
     const startedAt = performance.now();
     await expect(
       resolveLegacyWebhookNameToChatUserId({
@@ -513,28 +477,11 @@ describe("Synology Chat client loopback", () => {
         "Content-Type": "application/json",
         "Transfer-Encoding": "chunked",
       });
-      const dripTimer = setInterval(() => {
-        if (!res.writableEnded && !res.destroyed) {
-          res.write("x");
-        }
-      }, 20);
-      res.on("close", () => clearInterval(dripTimer));
-      res.write("x");
+      drip(res);
     });
     const incomingUrl = `http://127.0.0.1:${port}/webapi/entry.cgi`;
     const timeoutMs = 250;
-    const nativeSetTimeout = globalThis.setTimeout;
-    const timeoutSpy = vi.spyOn(globalThis, "setTimeout");
-    timeoutSpy.mockImplementation(((
-      callback: (...args: unknown[]) => void,
-      delay?: number,
-      ...args: unknown[]
-    ) =>
-      nativeSetTimeout(
-        callback,
-        delay === 30_000 ? timeoutMs : delay,
-        ...args,
-      )) as typeof setTimeout);
+    const timeoutSpy = shortenDeadline(30_000, timeoutMs);
 
     const startedAt = performance.now();
     await expect(sendMessage(incomingUrl, "hello")).resolves.toBe(false);

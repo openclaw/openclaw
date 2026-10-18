@@ -1,9 +1,9 @@
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import {
   findLiveRegistryWorktreeByOwnerInDatabase,
-  findLiveRegistryWorktreeByPathInDatabase,
   getRegistryWorktreeInDatabase,
   listRegistryWorktreesInDatabase,
+  worktreeReadOperations,
 } from "./registry-read.kernel.js";
 import type { ManagedWorktreeOwnerKind, ManagedWorktreeRecord } from "./types.js";
 
@@ -30,10 +30,10 @@ export function findLiveRegistryWorktreeByPath(
   env: NodeJS.ProcessEnv,
   worktreePath: string,
 ): ManagedWorktreeRecord | undefined {
-  return findLiveRegistryWorktreeByPathInDatabase(
+  return worktreeReadOperations["worktrees.findLiveByPath"](
+    { path: worktreePath },
     openOpenClawStateDatabase({ env }).db,
-    worktreePath,
-  );
+  ).value;
 }
 
 export function listRegistryWorktrees(env: NodeJS.ProcessEnv): ManagedWorktreeRecord[] {

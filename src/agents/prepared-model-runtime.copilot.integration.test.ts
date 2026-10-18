@@ -39,10 +39,21 @@ it("prepares an agent-local Copilot BYOK harness without replacing the active ro
   });
   // Reuse Vitest's source graph at the module-loading seam. The real loader
   // still discovers and validates the entrypoint and owns registration.
-  const loadModule = vi.fn<pluginModuleRuntime.PluginModuleLoader>((source) => {
-    expect(source).toBe(entrypoint);
-    return copilotModule;
-  });
+  const loadModule = Object.assign(
+    vi.fn<
+      (
+        ...args: Parameters<pluginModuleRuntime.PluginModuleLoader>
+      ) => ReturnType<pluginModuleRuntime.PluginModuleLoader>
+    >((source) => {
+      expect(source).toBe(entrypoint);
+      return copilotModule;
+    }),
+    {
+      prepare: vi.fn(async () => {
+        throw new Error("bundled harness must not prepare an external plugin artifact");
+      }),
+    },
+  );
   vi.spyOn(pluginModuleRuntime, "createPluginModuleLoader").mockReturnValue(loadModule);
   const env = {
     ...process.env,

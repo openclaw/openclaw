@@ -13,17 +13,30 @@ import {
   waitForSessionParticipantRecording,
 } from "./session-participant-recording.js";
 
-const { recordParticipant } = vi.hoisted(() => ({
+const { recordParticipant, warnParticipant } = vi.hoisted(() => ({
   recordParticipant: vi.fn<() => Promise<"inserted">>(),
+  warnParticipant: vi.fn(),
 }));
 
 vi.mock("../config/sessions/session-accessor.js", () => ({
   recordSessionParticipant: recordParticipant,
 }));
 
+vi.mock("../logging/subsystem.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../logging/subsystem.js")>();
+  return {
+    ...actual,
+    createSubsystemLogger: (subsystem: string) => ({
+      ...actual.createSubsystemLogger(subsystem),
+      warn: warnParticipant,
+    }),
+  };
+});
+
 beforeEach(() => {
   resetGatewayWorkAdmission();
   recordParticipant.mockReset();
+  warnParticipant.mockReset();
 });
 afterEach(resetGatewayWorkAdmission);
 
@@ -34,6 +47,38 @@ const target = {
   storePath: "/synthetic/participant.sqlite",
   promptedAt: 1,
 };
+
+it("reports best-effort persistence failure when the caller supplies no reporter", async () => {
+  recordParticipant.mockRejectedValue(new Error("synthetic participant write failure"));
+  recordSessionParticipantBestEffort(target);
+  await waitForSessionParticipantRecording(target);
+  expect(warnParticipant).toHaveBeenCalledExactlyOnceWith(
+    "failed to record session participant: Error: synthetic participant write failure",
+  );
+});
+
+it("reports persistence failure outside its caller's still-active Gateway root", async () => {
+  const root = tryBeginGatewayRootWorkAdmission("test:participant-reporter");
+  if (!root) {
+    throw new Error("Participant fixture could not acquire its root");
+  }
+  const reportedActiveRoots: number[] = [];
+  recordParticipant.mockRejectedValue(new Error("synthetic participant write failure"));
+  try {
+    await root.run(async () => {
+      recordSessionParticipantBestEffort({
+        ...target,
+        onError: () => {
+          reportedActiveRoots.push(getActiveGatewayRootWorkCount({ excludeCurrent: true }));
+        },
+      });
+      await waitForSessionParticipantRecording(target);
+      expect(reportedActiveRoots).toEqual([1]);
+    });
+  } finally {
+    root.release();
+  }
+});
 
 it.each(["resolve", "reject"] as const)(
   "joins participant persistence without retaining its caller root when it %ss",

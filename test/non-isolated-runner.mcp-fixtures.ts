@@ -6,10 +6,9 @@ export function mcpManagerFixtureFiles(repoRoot: string): Record<string, string>
 const key = Symbol.for("openclaw.sessionMcpRuntimeManager");
 const probeKey = Symbol.for("fixture.sessionMcpManager");
 async function fixtureManager() {
-  const { bindSessionMcpRuntimeTestScheduler } = await import(${source("agents/agent-bundle-mcp-manager.test-support.ts")});
+  const { bindSessionMcpRuntimeTestScheduler, getSessionMcpRuntimeTestManager } = await import(${source("agents/agent-bundle-mcp-manager.test-support.ts")});
   await bindSessionMcpRuntimeTestScheduler();
-  const { getSessionMcpRuntimeManagerForTesting } = await import(${source("agents/agent-bundle-mcp-manager-api.ts")});
-  return getSessionMcpRuntimeManagerForTesting();
+  return getSessionMcpRuntimeTestManager();
 }
 `;
   return {

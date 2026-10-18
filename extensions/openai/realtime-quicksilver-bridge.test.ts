@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { fakeQuicksilverMediaSocket } from "./realtime-quicksilver-socket.test-support.js";
 
 const { captureWsEventAsyncMock } = vi.hoisted(() => ({
@@ -18,941 +18,764 @@ import {
   sentEvents,
 } from "./realtime-quicksilver-bridge.test-support.js";
 
-describe("OpenAIQuicksilverVoiceBridge", () => {
-  it("connects directly to /v1/live and completes the Frameless Bidi handshake", async () => {
-    const harness = createHarness();
-    await harness.bridge.connect();
+type Harness = ReturnType<typeof createHarness>;
+type Callback = (...args: never[]) => unknown;
 
-    expect(harness.connections).toHaveLength(1);
-    expect(harness.connections[0]?.url).toBe(
-      "wss://api.openai.com/v1/live?model=gpt-live-test-canary",
-    );
-    expect(harness.connections[0]?.options.headers).toMatchObject({
-      Authorization: "Bearer test-key",
-      "OpenAI-Alpha": "quicksilver=v2",
-    });
-    expect(sentEvents(harness.socket)[0]).toEqual({
-      type: "session.update",
-      session: {
-        instructions: "Use delegation for real work.",
-        audio: { output: { voice: "marin" } },
-        delegation: { type: "client" },
-      },
-    });
-    expect(harness.bridge.isConnected()).toBe(true);
-    expect(harness.bridge.handlesInputAudioBargeIn).toBe(true);
-    expect(harness.bridge.outputAudioMode).toBe("continuous");
-    expect(harness.onReady).toHaveBeenCalledOnce();
+function expectCall<T extends Callback>(callback: T, ...args: Parameters<T>) {
+  expect(callback).toHaveBeenCalledWith(...args);
+}
 
-    void harness.bridge.close();
-    await vi.waitFor(() => expect(harness.onClose).toHaveBeenCalledWith("completed"));
-  });
+function expectLast<T extends Callback>(callback: T, ...args: Parameters<T>) {
+  expect(callback).toHaveBeenLastCalledWith(...args);
+}
 
-  it("streams the public Live protocol and delegates from user context through graceful close", async () => {
-    const harness = createHarness({ model: "gpt-live-1" });
-    await harness.bridge.connect();
-    harness.bridge.sendUserMessage("The kitchen lights are on.");
-    const speechRequest = sentEvents(harness.socket).at(-1);
-    harness.bridge.submitToolResult("quiet-background", "Unspoken background.", {
-      suppressResponse: true,
-    });
-    const suppressedResult = sentEvents(harness.socket).at(-1);
-    const audio = Buffer.from([0, 1, 2, 3]);
-    harness.bridge.sendAudio(audio);
-    await vi.waitFor(() =>
-      expect(sentEvents(harness.socket)).toContainEqual({
-        type: "session.input_audio.append",
-        audio: Buffer.concat([audio, Buffer.alloc(956)]).toString("base64"),
-      }),
-    );
-    harness.socket.serverEvent({
-      type: "session.output_audio.delta",
-      delta: audio.toString("base64"),
-    });
-    expect(harness.onAudio).toHaveBeenCalledWith(audio);
-    harness.socket.serverEvent({
-      type: "session.input_transcript.delta",
-      delta: "Find a train.",
-      start_ms: 0,
-      end_ms: 500,
-    });
-    harness.socket.serverEvent({
-      type: "session.output_transcript.delta",
-      delta: "I can help.",
-      start_ms: 400,
-      end_ms: 600,
-    });
-    harness.socket.serverEvent({
-      type: "session.delegation.created",
-      offset_ms: 600,
-      delegation: { id: "item_live", type: "delegation", target: "client" },
-    });
-    expect(harness.onToolCall).toHaveBeenCalledWith(
-      expect.objectContaining({
-        callId: "item_live",
-        args: { question: expect.stringContaining("<input>Find a train.</input>") },
-      }),
-    );
-    expect(harness.onTranscript).toHaveBeenCalledWith("assistant", "I can help.", false);
-    expect(harness.onTranscript).toHaveBeenCalledWith("assistant", "I can help.", true);
-    expect(harness.onTranscript).toHaveBeenCalledWith("user", "Find a train.", true);
-    expect(harness.onEvent).not.toHaveBeenCalledWith(
-      expect.objectContaining({ type: "response.done" }),
-    );
-    harness.bridge.submitToolResult("item_live", "Still checking.", { willContinue: true });
-    harness.bridge.submitToolResult("item_live", "The train leaves at noon.");
-    expect(sentEvents(harness.socket)).toContainEqual({
-      type: "session.thinking.append",
-      delegation_id: "item_live",
-      content: "Still checking.",
-    });
-    expect(sentEvents(harness.socket)).toContainEqual({
-      type: "session.commentary.append",
-      delegation_id: "item_live",
-      content: "The train leaves at noon.",
-    });
-    const longAnswer = "The journey is scenic. ".repeat(800);
-    harness.socket.serverEvent({
-      type: "session.output_transcript.delta",
-      delta: longAnswer,
-      start_ms: 600,
-      end_ms: 700,
-    });
-    harness.socket.serverEvent({
-      type: "session.output_transcript.delta",
-      delta: "Goodbye.",
-      start_ms: 700,
-      end_ms: 900,
-    });
-    const closing = harness.bridge.close();
-    expect(closing).toBeInstanceOf(Promise);
-    expect(harness.bridge.close()).toBe(closing);
-    const snapshots = harness.onTranscript.mock.calls.filter((call) => call[2]);
-    expect(snapshots.filter(([role]) => role === "user")).toEqual([
-      ["user", "Find a train.", true],
-    ]);
-    expect(
-      snapshots
-        .filter(([role]) => role === "assistant")
-        .map(([, text]) => text)
-        .join(""),
-    ).toBe("I can help." + longAnswer + "Goodbye.");
-    expect(harness.bridge.isConnected()).toBe(false);
-    expect(harness.socket.closeCalls).toBe(0);
-    expect(
-      sentEvents(harness.socket).filter((event) => event.type === "session.close"),
-    ).toHaveLength(1);
-    const sentBeforeLateResult = harness.socket.sent.length;
-    harness.bridge.submitToolResult("item_live", "Late result");
-    expect(harness.socket.sent).toHaveLength(sentBeforeLateResult);
-    harness.socket.serverEvent({
-      type: "session.output_transcript.delta",
-      delta: "Trailing speech.",
-      start_ms: 900,
-      end_ms: 1000,
-    });
-    expect(harness.onClose).not.toHaveBeenCalled();
-    harness.socket.serverEvent({
-      type: "session.closed",
-      reason: "close_requested",
-      session: { id: "live_1" },
-      usage: {},
-    });
-    await closing;
-    expect(harness.socket.closeCalls).toBe(1);
-    expect(harness.onTranscript).toHaveBeenLastCalledWith("assistant", "Trailing speech.", true);
-    expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("completed");
-    expect(speechRequest).toEqual({
-      type: "session.commentary.append",
-      delegation_id: null,
-      content: "The kitchen lights are on.",
-    });
-    expect(suppressedResult).toEqual({
-      type: "session.thinking.append",
-      delegation_id: null,
-      content: "Unspoken background.",
-    });
-  });
+function expectOnce<T extends Callback>(callback: T, ...args: Parameters<T>) {
+  expect(callback).toHaveBeenCalledExactlyOnceWith(...args);
+}
 
-  it("keeps the public input clock running through silence and stops before transcript drain", async () => {
-    const harness = createHarness({ model: "gpt-live-1", autoStart: false });
-    const connecting = harness.bridge.connect();
-    await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
-    const capture = Buffer.alloc(960, 1);
-    harness.bridge.sendAudio(capture);
-    const readAudio = () =>
-      sentEvents(harness.socket)
-        .filter((event) => event.type === "session.input_audio.append")
-        .map((event) => Buffer.from(String(event.audio), "base64"));
-    vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
-    try {
-      harness.socket.serverEvent({ type: "session.started", session: {} });
-      await connecting;
-      expect(harness.bridge.pacesInputAudio).toBe(true);
-      expect(readAudio()).toEqual([capture]);
-      await vi.advanceTimersByTimeAsync(40);
-      expect(readAudio()).toEqual([capture, Buffer.alloc(960), Buffer.alloc(960)]);
-      const closing = harness.bridge.close();
-      const sentBeforeClose = harness.socket.sent.length;
-      harness.bridge.sendAudio(capture);
-      await vi.advanceTimersByTimeAsync(100);
-      expect(harness.socket.sent).toHaveLength(sentBeforeClose);
-      harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
-      await closing;
-    } finally {
-      harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
-      await harness.bridge.close();
-      vi.useRealTimers();
-    }
-  });
+async function pendingHarness(params?: Parameters<typeof createHarness>[0]) {
+  const harness = createHarness({ ...params, autoStart: false });
+  const connecting = harness.bridge.connect();
+  await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
+  return { ...harness, connecting };
+}
 
-  it("classifies the retained public user request before consuming snapshots", async () => {
-    const order: string[] = [];
-    const handleDelegationInput = vi.fn((input: string) => {
-      order.push(`classify:${input}`);
-      if (input === "status") {
-        return "control" as const;
-      }
+const eventsOf = (socket: FakeSocket, type: string) =>
+  sentEvents(socket).filter((event) => event.type === type);
+const snapshots = (harness: Harness) => harness.onTranscript.mock.calls.filter((call) => call[2]);
+
+function closeOnSnapshot(harness: Harness) {
+  harness.onTranscript.mockImplementation((_role, _text, final) => {
+    if (final) {
       void harness.bridge.close();
-      return "consult" as const;
-    });
-    const harness = createHarness({ model: "gpt-live-1", handleDelegationInput });
-    await harness.bridge.connect();
-    harness.onTranscript.mockImplementation((_role, _text, final) => {
-      if (final) {
-        order.push("snapshot");
-      }
-    });
-    const transcript = (role: "input" | "output", delta: string) =>
-      harness.socket.serverEvent({
-        type: `session.${role}_transcript.delta`,
-        delta,
-        start_ms: 0,
-        end_ms: 100,
-      });
-    const delegate = (id: string) =>
-      harness.socket.serverEvent({
-        type: "session.delegation.created",
-        offset_ms: 100,
-        delegation: { type: "delegation", target: "client", id },
-      });
-    transcript("input", "status");
-    delegate("item_status");
-    expect(order).toEqual(["classify:status"]);
-    transcript("input", "Check my flight.");
-    transcript("output", "Background speech. ".repeat(1_000));
-    order.length = 0;
-    delegate("item_flight");
-    expect(order[0]).toBe("classify:Check my flight.");
-    expect(order.length).toBeGreaterThan(1);
-    expect(order.slice(1).every((entry) => entry === "snapshot")).toBe(true);
-    expect(harness.onToolCall).not.toHaveBeenCalled();
-    harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
-    await harness.bridge.close();
-  });
-
-  it.each(["local-close", "delegation"])(
-    "saves the entire %s batch when a snapshot callback closes",
-    async (boundary) => {
-      const harness = createHarness({ model: "gpt-live-1" });
-      await harness.bridge.connect();
-      harness.onTranscript.mockImplementation((_role, _text, final) => {
-        if (final) {
-          void harness.bridge.close();
-        }
-      });
-      harness.socket.serverEvent({
-        type: "session.input_transcript.delta",
-        delta: "My question.",
-        start_ms: 0,
-        end_ms: 100,
-      });
-      harness.socket.serverEvent({
-        type: "session.output_transcript.delta",
-        delta: "The answer.",
-        start_ms: 100,
-        end_ms: 200,
-      });
-      if (boundary === "delegation") {
-        harness.socket.serverEvent({
-          type: "session.delegation.created",
-          offset_ms: 200,
-          delegation: { type: "delegation", target: "client", id: "item_close" },
-        });
-      } else {
-        void harness.bridge.close();
-      }
-      expect(harness.onToolCall).not.toHaveBeenCalled();
-      expect(harness.onTranscript.mock.calls.filter((call) => call[2])).toEqual([
-        ["user", "My question.", true],
-        ["assistant", "The answer.", true],
-      ]);
-      await vi.waitFor(() =>
-        expect(
-          sentEvents(harness.socket).filter((event) => event.type === "session.close"),
-        ).toHaveLength(1),
-      );
-      harness.socket.serverEvent({
-        type: "session.closed",
-        reason: "close_requested",
-        session: { id: "live_1" },
-        usage: {},
-      });
-      await vi.waitFor(() => expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("completed"));
-      expect(harness.logger.warn).not.toHaveBeenCalled();
-    },
-  );
-
-  it.each(["close_requested", "content", "transport-error"] as const)(
-    "keeps cleanup completion when snapshot publication throws (terminal=%s)",
-    async (terminal) => {
-      const harness = createHarness({ model: "gpt-live-1" });
-      await harness.bridge.connect();
-      const publicationError = new Error("snapshot consumer failed");
-      let rejectNextFinal = true;
-      let reentrantCompletion: void | Promise<void> = undefined;
-      harness.onTranscript.mockImplementation((_role, _text, final) => {
-        if (final && rejectNextFinal) {
-          rejectNextFinal = false;
-          reentrantCompletion = harness.bridge.close();
-          throw publicationError;
-        }
-      });
-      try {
-        harness.socket.serverEvent({
-          type: "session.input_transcript.delta",
-          delta: "Received speech.",
-          start_ms: 0,
-          end_ms: 100,
-        });
-        let closing: void | Promise<void> = undefined;
-        expect(() => {
-          closing = harness.bridge.close();
-        }).not.toThrow();
-        expect(closing).toBeInstanceOf(Promise);
-        expect(reentrantCompletion).toBe(closing);
-        expect(harness.bridge.close()).toBe(closing);
-        let settled = false;
-        void Promise.resolve(closing).then(
-          () => {
-            settled = true;
-          },
-          () => {
-            settled = true;
-          },
-        );
-        await Promise.resolve();
-        expect(settled).toBe(false);
-        expect(harness.onClose).not.toHaveBeenCalled();
-        expect(harness.socket.closeCalls).toBe(0);
-        harness.socket.serverEvent({
-          type: "session.output_transcript.delta",
-          delta: "Trailing speech.",
-          start_ms: 100,
-          end_ms: 200,
-        });
-        if (terminal === "transport-error") {
-          harness.socket.emit("error", new Error("transport ended"));
-        } else {
-          harness.socket.serverEvent({ type: "session.closed", reason: terminal });
-        }
-        await expect(closing).rejects.toBe(publicationError);
-        expect(harness.onTranscript).toHaveBeenLastCalledWith(
-          "assistant",
-          "Trailing speech.",
-          true,
-        );
-        expect(harness.onClose).toHaveBeenCalledExactlyOnceWith(
-          terminal === "close_requested" ? "completed" : "error",
-        );
-        expect(harness.socket.closeCalls).toBe(1);
-        expect(harness.logger.warn).toHaveBeenCalledOnce();
-      } finally {
-        if (harness.socket.readyState !== 3) {
-          harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
-        }
-        await Promise.allSettled([harness.bridge.close()]);
-      }
-    },
-  );
-
-  it.each([
-    ["content", false],
-    ["connection_lost", false],
-    ["content", true],
-    ["connection_lost", true],
-  ] as const)(
-    "keeps remote %s outcome through snapshot callbacks (locally closing: %s)",
-    async (reason, locallyClosing) => {
-      const harness = createHarness({ model: "gpt-live-1" });
-      await harness.bridge.connect();
-      harness.onTranscript.mockImplementation((_role, _text, final) => {
-        if (final) {
-          void harness.bridge.close();
-        }
-      });
-      harness.socket.serverEvent({
-        type: "session.output_transcript.delta",
-        delta: "Received speech.",
-        start_ms: 0,
-        end_ms: 100,
-      });
-      const closing = locallyClosing ? harness.bridge.close() : undefined;
-      if (locallyClosing) {
-        await vi.waitFor(() =>
-          expect(sentEvents(harness.socket)).toContainEqual({ type: "session.close" }),
-        );
-      }
-      harness.socket.serverEvent({
-        type: "session.closed",
-        reason,
-        session: { id: "live_1" },
-        usage: {},
-      });
-      await closing;
-      await Promise.resolve();
-      expect(harness.onTranscript.mock.calls.filter((call) => call[2])).toEqual([
-        ["assistant", "Received speech.", true],
-      ]);
-      expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("error");
-      expect(sentEvents(harness.socket).filter((event) => event.type === "session.close")).toEqual(
-        locallyClosing ? [{ type: "session.close" }] : [],
-      );
-      expect(harness.socket.closeCalls).toBe(1);
-      expect(harness.logger.warn).not.toHaveBeenCalled();
-    },
-  );
-
-  it("bounds public close finalization and reports missing session.closed", async () => {
-    const harness = createHarness({ model: "gpt-live-1" });
-    await harness.bridge.connect();
-    vi.useFakeTimers();
-    try {
-      const closing = harness.bridge.close();
-      const rejected = expect(closing).rejects.toThrow("finalization is unconfirmed");
-      await vi.advanceTimersByTimeAsync(15_000);
-      await rejected;
-      expect(harness.logger.warn).toHaveBeenCalledWith(
-        expect.stringContaining("cleanup INCOMPLETE"),
-      );
-      expect(harness.logger.warn).toHaveBeenCalledOnce();
-      expect(harness.onClose).toHaveBeenCalledExactlyOnceWith("error");
-      expect(harness.socket.closeCalls).toBe(1);
-    } finally {
-      vi.useRealTimers();
     }
   });
+}
 
-  it("keeps repeated close idempotent while the transport is still open", async () => {
-    const harness = createHarness({ deferClose: true });
-    await harness.bridge.connect();
-
-    void harness.bridge.close();
-    void harness.bridge.close();
-
-    expect(
-      sentEvents(harness.socket).filter((event) => event.type === "session.close"),
-    ).toHaveLength(1);
-    expect(harness.socket.closeCalls).toBe(1);
-    expect(harness.onClose).toHaveBeenCalledOnce();
-    expect(harness.onClose).toHaveBeenCalledWith("completed");
-
-    harness.socket.finishClose();
-    await Promise.resolve();
-    expect(harness.onClose).toHaveBeenCalledOnce();
+function publicDelegation(socket: FakeSocket, id: string, offset_ms: number) {
+  socket.serverEvent({
+    type: "session.delegation.created",
+    offset_ms,
+    delegation: { type: "delegation", target: "client", id },
   });
+}
 
-  it("shares an in-flight connection until session readiness", async () => {
-    const harness = createHarness({ autoStart: false });
-    const firstConnect = harness.bridge.connect();
-    const secondConnect = harness.bridge.connect();
-    await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
+function outputAudio(socket: FakeSocket, audio: Buffer) {
+  socket.serverEvent({ type: "output_audio.delta", audio: audio.toString("base64") });
+}
 
-    expect(harness.connections).toHaveLength(1);
-    harness.socket.serverEvent({
-      type: "session.started",
-      session: { id: "live-1", expires_at: Math.floor(Date.now() / 1000) + 60 },
-    });
+function turnDone(socket: FakeSocket, role: "user" | "assistant", transcript: string) {
+  socket.serverEvent({ type: "turn.done", turn: { role, transcript } });
+}
 
-    await Promise.all([firstConnect, secondConnect]);
-    expect(harness.onReady).toHaveBeenCalledOnce();
+function expectTransportError(error: unknown) {
+  expect(error).toBeInstanceOf(Error);
+  expect(error).toMatchObject({ name: "Error", message: "OpenAI GPT-Live transport failed" });
+}
+
+function expectClosed(harness: Harness, reason: "completed" | "error") {
+  expectOnce(harness.onClose, reason);
+  expect(harness.socket.closeCalls).toBe(1);
+}
+
+function expectSilent(harness: Harness) {
+  expect(harness.onError).not.toHaveBeenCalled();
+  expect(harness.onClose).not.toHaveBeenCalled();
+}
+
+const serverEvent = (type: string): Parameters<Harness["onEvent"]>[0] => ({
+  direction: "server",
+  type,
+});
+
+const liveAppend = (type: string, content: string, delegation_id: string | null = null) => ({
+  type: `session.${type}.append`,
+  delegation_id,
+  content,
+});
+
+function expectContext(socket: FakeSocket, text: string, speakable = true) {
+  expect(sentEvents(socket).at(-1)).toEqual({
+    type: "session.context.append",
+    ...(speakable ? { channel: "speakable" } : {}),
+    content: [{ type: "input_text", text }],
   });
+}
 
-  it("keeps recoverable provider errors non-terminal before session readiness", async () => {
-    const harness = createHarness({ autoStart: false });
-    const connecting = harness.bridge.connect();
-    await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
+async function connectHarness(params?: Parameters<typeof createHarness>[0]) {
+  const harness = createHarness(params);
+  await harness.bridge.connect();
+  return harness;
+}
 
-    harness.socket.serverEvent({
-      type: "error",
-      error: { code: "missing_scope", message: "temporary provider rejection" },
-    });
+function emitTranscript(
+  socket: FakeSocket,
+  role: "input" | "output",
+  delta: string,
+  start_ms: number,
+  end_ms: number,
+) {
+  socket.serverEvent({ type: `session.${role}_transcript.delta`, delta, start_ms, end_ms });
+}
 
-    expect(harness.bridge.isConnected()).toBe(false);
-    expect(harness.onError).not.toHaveBeenCalled();
-    expect(harness.onClose).not.toHaveBeenCalled();
+function closed(socket: FakeSocket, reason = "close_requested") {
+  socket.serverEvent({ type: "session.closed", reason });
+}
 
-    harness.socket.serverEvent({
-      type: "session.started",
-      session: { id: "live-1", expires_at: Math.floor(Date.now() / 1000) + 60 },
-    });
-    await connecting;
-    expect(harness.bridge.isConnected()).toBe(true);
-    expect(harness.onReady).toHaveBeenCalledOnce();
+function started(socket: FakeSocket) {
+  socket.serverEvent({ type: "session.started", session: {} });
+}
+
+function delegation(socket: FakeSocket, id: string, text: string) {
+  socket.serverEvent({
+    type: "delegation.created",
+    item: {
+      type: "delegation",
+      target: "client",
+      id,
+      content: [{ type: "input_text", text }],
+    },
   });
+}
 
-  it.each([
-    [1000, "completed"],
-    [1006, "error"],
-  ] as const)("classifies an established session closing with code %s", async (code, reason) => {
-    const harness = createHarness();
-    await harness.bridge.connect();
+it("connects directly to /v1/live and completes the Frameless Bidi handshake", async () => {
+  const harness = await connectHarness();
 
-    harness.socket.finishClose(code);
-    await Promise.resolve();
-
-    expect(harness.onClose).toHaveBeenCalledExactlyOnceWith(reason);
-    expect(harness.bridge.isConnected()).toBe(false);
-  });
-
-  it("bounds queued audio by aggregate bytes before session readiness", async () => {
-    const harness = createHarness({ autoStart: false });
-    const connecting = harness.bridge.connect();
-    await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
-
-    harness.bridge.sendAudio(Buffer.alloc(512 * 1024, 0x01));
-    harness.bridge.sendAudio(Buffer.alloc(512 * 1024, 0x02));
-    harness.bridge.sendAudio(Buffer.from("overflow"));
-    harness.socket.serverEvent({
-      type: "session.started",
-      session: { id: "live-1", expires_at: Math.floor(Date.now() / 1000) + 60 },
-    });
-    await connecting;
-
-    const audioEvents = sentEvents(harness.socket).filter(
-      (event) => event.type === "input_audio.append",
-    );
-    expect(audioEvents).toHaveLength(1);
-    const retained = Buffer.from(String(audioEvents[0]?.audio), "base64");
-    expect(retained).toEqual(
-      Buffer.concat([Buffer.alloc(240_000 - 8, 0x02), Buffer.from("overflow")]),
-    );
-    expect(harness.logger.warn).toHaveBeenCalledOnce();
-    expect(harness.logger.warn).toHaveBeenCalledWith(
-      "OpenAI GPT-Live input audio queue overflow; keeping newest audio",
-    );
-    void harness.bridge.close();
-  });
-
-  it("discards audio closed before the first connection and reconnects fresh", async () => {
-    const harness = createHarness();
-
-    harness.bridge.sendAudio(Buffer.from("queued-before-connect"));
-    void harness.bridge.close();
-    void harness.bridge.close();
-    harness.bridge.sendAudio(Buffer.from("sent-after-close"));
-
-    expect(harness.connections).toHaveLength(0);
-    expect(harness.onClose).not.toHaveBeenCalled();
-
-    await harness.bridge.connect();
-
-    expect(
-      sentEvents(harness.socket).filter((event) => event.type === "input_audio.append"),
-    ).toHaveLength(0);
-
-    void harness.bridge.close();
-    expect(harness.onClose).toHaveBeenCalledOnce();
-    expect(harness.onClose).toHaveBeenCalledWith("completed");
-  });
-
-  it("does not carry queued audio across terminal close and explicit reconnect", async () => {
-    const sockets: FakeSocket[] = [];
-    const bridge = new OpenAIQuicksilverVoiceBridge(
-      {
-        providerConfig: {},
-        model: "gpt-live-test-canary",
-        audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
-        resolveAuth: async () => ({ type: "api-key", token: "test-key" }),
-        mediaSocketFactory: fakeQuicksilverMediaSocket((_url, _options) => {
-          const socket = new FakeSocket(false);
-          sockets.push(socket);
-          queueMicrotask(() => socket.open());
-          return socket;
-        }),
-        onAudio: vi.fn(),
-        onClearAudio: vi.fn(),
+  expect(harness.connections).toMatchObject([
+    {
+      url: "wss://api.openai.com/v1/live?model=gpt-live-test-canary",
+      options: {
+        headers: { Authorization: "Bearer test-key", "OpenAI-Alpha": "quicksilver=v2" },
       },
-      openAIRealtimeHost,
+    },
+  ]);
+  expect(sentEvents(harness.socket)[0]).toEqual({
+    type: "session.update",
+    session: {
+      instructions: "Use delegation for real work.",
+      audio: { output: { voice: "marin" } },
+      delegation: { type: "client" },
+    },
+  });
+  expect(harness.bridge.isConnected()).toBe(true);
+  expect(harness.bridge).toMatchObject({
+    handlesInputAudioBargeIn: true,
+    outputAudioMode: "continuous",
+  });
+  expect(harness.onReady).toHaveBeenCalledOnce();
+
+  void harness.bridge.close();
+  await vi.waitFor(() => expectCall(harness.onClose, "completed"));
+});
+
+it("streams the public Live protocol and delegates from user context through graceful close", async () => {
+  const harness = await connectHarness({ model: "gpt-live-1" });
+  harness.bridge.sendUserMessage("The kitchen lights are on.");
+  const speechRequest = sentEvents(harness.socket).at(-1);
+  harness.bridge.submitToolResult("quiet-background", "Unspoken background.", {
+    suppressResponse: true,
+  });
+  const suppressedResult = sentEvents(harness.socket).at(-1);
+  const audio = Buffer.from([0, 1, 2, 3]);
+  harness.bridge.sendAudio(audio);
+  await vi.waitFor(() =>
+    expect(sentEvents(harness.socket)).toContainEqual({
+      type: "session.input_audio.append",
+      audio: Buffer.concat([audio, Buffer.alloc(956)]).toString("base64"),
+    }),
+  );
+  harness.socket.serverEvent({
+    type: "session.output_audio.delta",
+    delta: audio.toString("base64"),
+  });
+  expectCall(harness.onAudio, audio);
+  emitTranscript(harness.socket, "input", "Find a train.", 0, 500);
+  emitTranscript(harness.socket, "output", "I can help.", 400, 600);
+  publicDelegation(harness.socket, "item_live", 600);
+  expectCall(
+    harness.onToolCall,
+    expect.objectContaining({
+      callId: "item_live",
+      args: { question: expect.stringContaining("<input>Find a train.</input>") },
+    }),
+  );
+  expectCall(harness.onTranscript, "assistant", "I can help.", false);
+  expectCall(harness.onTranscript, "assistant", "I can help.", true);
+  expectCall(harness.onTranscript, "user", "Find a train.", true);
+  expect(harness.onEvent).not.toHaveBeenCalledWith(
+    expect.objectContaining({ type: "response.done" }),
+  );
+  harness.bridge.submitToolResult("item_live", "Still checking.", { willContinue: true });
+  harness.bridge.submitToolResult("item_live", "The train leaves at noon.");
+  expect(sentEvents(harness.socket)).toEqual(
+    expect.arrayContaining([
+      liveAppend("thinking", "Still checking.", "item_live"),
+      liveAppend("commentary", "The train leaves at noon.", "item_live"),
+    ]),
+  );
+  const longAnswer = "The journey is scenic. ".repeat(800);
+  emitTranscript(harness.socket, "output", longAnswer, 600, 700);
+  emitTranscript(harness.socket, "output", "Goodbye.", 700, 900);
+  const closing = harness.bridge.close();
+  expect(closing).toBeInstanceOf(Promise);
+  expect(harness.bridge.close()).toBe(closing);
+  const finalTranscripts = snapshots(harness);
+  expect(finalTranscripts.filter(([role]) => role === "user")).toEqual([
+    ["user", "Find a train.", true],
+  ]);
+  expect(
+    finalTranscripts
+      .filter(([role]) => role === "assistant")
+      .map(([, text]) => text)
+      .join(""),
+  ).toBe("I can help." + longAnswer + "Goodbye.");
+  expect(harness.bridge.isConnected()).toBe(false);
+  expect(harness.socket.closeCalls).toBe(0);
+  expect(eventsOf(harness.socket, "session.close")).toHaveLength(1);
+  const sentBeforeLateResult = harness.socket.sent.length;
+  harness.bridge.submitToolResult("item_live", "Late result");
+  expect(harness.socket.sent).toHaveLength(sentBeforeLateResult);
+  emitTranscript(harness.socket, "output", "Trailing speech.", 900, 1000);
+  expect(harness.onClose).not.toHaveBeenCalled();
+  closed(harness.socket, "close_requested");
+  await closing;
+  expectLast(harness.onTranscript, "assistant", "Trailing speech.", true);
+  expectClosed(harness, "completed");
+  expect(speechRequest).toEqual(liveAppend("commentary", "The kitchen lights are on."));
+  expect(suppressedResult).toEqual(liveAppend("thinking", "Unspoken background."));
+});
+
+it("keeps the public input clock running through silence and stops before transcript drain", async () => {
+  const { connecting, ...harness } = await pendingHarness({ model: "gpt-live-1" });
+  const capture = Buffer.alloc(960, 1);
+  harness.bridge.sendAudio(capture);
+  const readAudio = () =>
+    eventsOf(harness.socket, "session.input_audio.append").map((event) =>
+      Buffer.from(String(event.audio), "base64"),
     );
+  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout", "performance"] });
+  try {
+    harness.socket.serverEvent({ type: "session.started", session: {} });
+    await connecting;
+    expect(harness.bridge.pacesInputAudio).toBe(true);
+    expect(readAudio()).toEqual([capture]);
+    await vi.advanceTimersByTimeAsync(40);
+    expect(readAudio()).toEqual([capture, Buffer.alloc(960), Buffer.alloc(960)]);
+    const closing = harness.bridge.close();
+    const sentBeforeClose = harness.socket.sent.length;
+    harness.bridge.sendAudio(capture);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(harness.socket.sent).toHaveLength(sentBeforeClose);
+    closed(harness.socket);
+    await closing;
+  } finally {
+    closed(harness.socket);
+    await harness.bridge.close();
+    vi.useRealTimers();
+  }
+});
 
-    const firstConnect = bridge.connect();
-    await vi.waitFor(() => expect(sockets[0]?.readyState).toBe(1));
-    bridge.sendAudio(Buffer.from("queued-before-close"));
-    void bridge.close();
-    await firstConnect;
-    bridge.sendAudio(Buffer.from("sent-after-close"));
-
-    const reconnecting = bridge.connect();
-    await vi.waitFor(() => expect(sockets[1]?.readyState).toBe(1));
-    sockets[1]?.serverEvent({
-      type: "session.started",
-      session: { id: "live-2", expires_at: Math.floor(Date.now() / 1000) + 60 },
-    });
-    await reconnecting;
-
-    const secondSocket = sockets[1];
-    if (!secondSocket) {
-      throw new Error("expected bridge to reconnect");
+it("classifies the retained public user request before consuming snapshots", async () => {
+  const order: string[] = [];
+  const handleDelegationInput = vi.fn((input: string) => {
+    order.push(`classify:${input}`);
+    if (input === "status") {
+      return "control" as const;
     }
-    expect(
-      sentEvents(secondSocket).filter((event) => event.type === "input_audio.append"),
-    ).toHaveLength(0);
-    void bridge.close();
+    void harness.bridge.close();
+    return "consult" as const;
   });
+  const harness = await connectHarness({ model: "gpt-live-1", handleDelegationInput });
+  harness.onTranscript.mockImplementation((_role, _text, final) => {
+    if (final) {
+      order.push("snapshot");
+    }
+  });
+  emitTranscript(harness.socket, "input", "status", 0, 100);
+  publicDelegation(harness.socket, "item_status", 100);
+  expect(order).toEqual(["classify:status"]);
+  emitTranscript(harness.socket, "input", "Check my flight.", 0, 100);
+  emitTranscript(harness.socket, "output", "Background speech. ".repeat(1_000), 0, 100);
+  order.length = 0;
+  publicDelegation(harness.socket, "item_flight", 100);
+  expect(order[0]).toBe("classify:Check my flight.");
+  expect(order.length).toBeGreaterThan(1);
+  expect(order.slice(1).every((entry) => entry === "snapshot")).toBe(true);
+  expect(harness.onToolCall).not.toHaveBeenCalled();
+  closed(harness.socket);
+  await harness.bridge.close();
+});
 
-  it("rejects startup failures without emitting terminal callbacks", async () => {
-    const harness = createHarness({ autoStart: false });
-    const connecting = harness.bridge.connect();
-    await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
+it.each(["local-close", "delegation"])(
+  "saves the entire %s batch when a snapshot callback closes",
+  async (boundary) => {
+    const harness = await connectHarness({ model: "gpt-live-1" });
+    closeOnSnapshot(harness);
+    emitTranscript(harness.socket, "input", "My question.", 0, 100);
+    emitTranscript(harness.socket, "output", "The answer.", 100, 200);
+    if (boundary === "delegation") {
+      publicDelegation(harness.socket, "item_close", 200);
+    } else {
+      void harness.bridge.close();
+    }
+    expect(harness.onToolCall).not.toHaveBeenCalled();
+    expect(snapshots(harness)).toEqual([
+      ["user", "My question.", true],
+      ["assistant", "The answer.", true],
+    ]);
+    await vi.waitFor(() => expect(eventsOf(harness.socket, "session.close")).toHaveLength(1));
+    closed(harness.socket, "close_requested");
+    await vi.waitFor(() => expectOnce(harness.onClose, "completed"));
+    expect(harness.logger.warn).not.toHaveBeenCalled();
+  },
+);
 
-    harness.socket.serverEvent({
-      type: "error",
-      error: { code: "authentication_error", message: "invalid live session" },
+it.each(["close_requested", "content", "transport-error"] as const)(
+  "keeps cleanup completion when snapshot publication throws (terminal=%s)",
+  async (terminal) => {
+    const harness = await connectHarness({ model: "gpt-live-1" });
+    const publicationError = new Error("snapshot consumer failed");
+    let rejectNextFinal = true;
+    let reentrantCompletion: void | Promise<void> = undefined;
+    harness.onTranscript.mockImplementation((_role, _text, final) => {
+      if (final && rejectNextFinal) {
+        rejectNextFinal = false;
+        reentrantCompletion = harness.bridge.close();
+        throw publicationError;
+      }
     });
+    try {
+      emitTranscript(harness.socket, "input", "Received speech.", 0, 100);
+      let closing: void | Promise<void> = undefined;
+      expect(() => {
+        closing = harness.bridge.close();
+      }).not.toThrow();
+      expect(closing).toBeInstanceOf(Promise);
+      expect(reentrantCompletion).toBe(closing);
+      expect(harness.bridge.close()).toBe(closing);
+      let settled = false;
+      const markSettled = () => {
+        settled = true;
+      };
+      void Promise.resolve(closing).then(markSettled, markSettled);
+      await Promise.resolve();
+      expect(settled).toBe(false);
+      expect(harness.onClose).not.toHaveBeenCalled();
+      expect(harness.socket.closeCalls).toBe(0);
+      emitTranscript(harness.socket, "output", "Trailing speech.", 100, 200);
+      if (terminal === "transport-error") {
+        harness.socket.emit("error", new Error("transport ended"));
+      } else {
+        harness.socket.serverEvent({ type: "session.closed", reason: terminal });
+      }
+      await expect(closing).rejects.toBe(publicationError);
+      expectLast(harness.onTranscript, "assistant", "Trailing speech.", true);
+      expectClosed(harness, terminal === "close_requested" ? "completed" : "error");
+      expect(harness.logger.warn).toHaveBeenCalledOnce();
+    } finally {
+      if (harness.socket.readyState !== 3) {
+        harness.socket.serverEvent({ type: "session.closed", reason: "close_requested" });
+      }
+      await Promise.allSettled([harness.bridge.close()]);
+    }
+  },
+);
 
-    await expect(connecting).rejects.toThrow("OpenAI GPT-Live transport failed");
-    expect(harness.onError).not.toHaveBeenCalled();
-    expect(harness.onClose).not.toHaveBeenCalled();
+it.each([
+  ["content", false],
+  ["connection_lost", false],
+  ["content", true],
+  ["connection_lost", true],
+] as const)(
+  "keeps remote %s outcome through snapshot callbacks (locally closing: %s)",
+  async (reason, locallyClosing) => {
+    const harness = await connectHarness({ model: "gpt-live-1" });
+    closeOnSnapshot(harness);
+    emitTranscript(harness.socket, "output", "Received speech.", 0, 100);
+    const closing = locallyClosing ? harness.bridge.close() : undefined;
+    if (locallyClosing) {
+      await vi.waitFor(() =>
+        expect(sentEvents(harness.socket)).toContainEqual({ type: "session.close" }),
+      );
+    }
+    closed(harness.socket, reason);
+    await closing;
+    await Promise.resolve();
+    expect(snapshots(harness)).toEqual([["assistant", "Received speech.", true]]);
+    expect(eventsOf(harness.socket, "session.close")).toEqual(
+      locallyClosing ? [{ type: "session.close" }] : [],
+    );
+    expectClosed(harness, "error");
+    expect(harness.logger.warn).not.toHaveBeenCalled();
+  },
+);
+
+it("bounds public close finalization and reports missing session.closed", async () => {
+  const harness = await connectHarness({ model: "gpt-live-1" });
+  vi.useFakeTimers();
+  try {
+    const closing = harness.bridge.close();
+    const rejected = expect(closing).rejects.toThrow("finalization is unconfirmed");
+    await vi.advanceTimersByTimeAsync(15_000);
+    await rejected;
+    expectCall(harness.logger.warn, expect.stringContaining("cleanup INCOMPLETE"));
+    expect(harness.logger.warn).toHaveBeenCalledOnce();
+    expectClosed(harness, "error");
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+it("keeps repeated close idempotent while the transport is still open", async () => {
+  const harness = await connectHarness({ deferClose: true });
+
+  void harness.bridge.close();
+  void harness.bridge.close();
+
+  expect(eventsOf(harness.socket, "session.close")).toHaveLength(1);
+  expectClosed(harness, "completed");
+
+  harness.socket.finishClose();
+  await Promise.resolve();
+  expect(harness.onClose).toHaveBeenCalledOnce();
+});
+
+it("shares an in-flight connection until session readiness", async () => {
+  const harness = createHarness({ autoStart: false });
+  const firstConnect = harness.bridge.connect();
+  const secondConnect = harness.bridge.connect();
+  await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
+
+  expect(harness.connections).toHaveLength(1);
+  started(harness.socket);
+
+  await Promise.all([firstConnect, secondConnect]);
+  expect(harness.onReady).toHaveBeenCalledOnce();
+});
+
+it.each([
+  ["missing_scope", "temporary provider rejection", true],
+  ["authentication_error", "invalid live session", false],
+] as const)(
+  "handles %s before session readiness: %s (recoverable=%s)",
+  async (code, message, recoverable) => {
+    const { connecting, ...harness } = await pendingHarness();
+    harness.socket.serverEvent({ type: "error", error: { code, message } });
     expect(harness.bridge.isConnected()).toBe(false);
-  });
+    expectSilent(harness);
+    if (recoverable) {
+      started(harness.socket);
+      await connecting;
+      expect(harness.bridge.isConnected()).toBe(true);
+      expect(harness.onReady).toHaveBeenCalledOnce();
+    } else {
+      await expect(connecting).rejects.toThrow("OpenAI GPT-Live transport failed");
+      expectSilent(harness);
+      expect(harness.bridge.isConnected()).toBe(false);
+    }
+  },
+);
 
-  it("does not reject after explicit close while awaiting session readiness", async () => {
-    const harness = createHarness({ autoStart: false, deferClose: true });
-    const connecting = harness.bridge.connect();
-    await vi.waitFor(() => expect(harness.socket.readyState).toBe(1));
+it("bounds queued audio by aggregate bytes before session readiness", async () => {
+  const { connecting, ...harness } = await pendingHarness();
 
-    void harness.bridge.close();
-    harness.socket.emit("error", new Error("late startup error"));
+  harness.bridge.sendAudio(Buffer.alloc(512 * 1024, 0x01));
+  harness.bridge.sendAudio(Buffer.alloc(512 * 1024, 0x02));
+  harness.bridge.sendAudio(Buffer.from("overflow"));
+  started(harness.socket);
+  await connecting;
 
-    await expect(connecting).resolves.toBeUndefined();
-    expect(harness.onClose).toHaveBeenCalledOnce();
-    expect(harness.onClose).toHaveBeenCalledWith("completed");
-    expect(harness.onError).not.toHaveBeenCalled();
-    harness.socket.finishClose();
-  });
+  const audioEvents = eventsOf(harness.socket, "input_audio.append");
+  expect(audioEvents).toHaveLength(1);
+  const retained = Buffer.from(String(audioEvents[0]?.audio), "base64");
+  expect(retained).toEqual(
+    Buffer.concat([Buffer.alloc(240_000 - 8, 0x02), Buffer.from("overflow")]),
+  );
+  expect(harness.logger.warn).toHaveBeenCalledOnce();
+  expectCall(
+    harness.logger.warn,
+    "OpenAI GPT-Live input audio queue overflow; keeping newest audio",
+  );
+  void harness.bridge.close();
+});
 
-  it("completes once when closed while authentication is pending", async () => {
-    let resolveAuth!: (auth: { type: "api-key"; token: string }) => void;
+it("discards audio closed before the first connection and reconnects fresh", async () => {
+  const harness = createHarness();
+
+  harness.bridge.sendAudio(Buffer.from("queued-before-connect"));
+  void harness.bridge.close();
+  void harness.bridge.close();
+  harness.bridge.sendAudio(Buffer.from("sent-after-close"));
+
+  expect(harness.connections).toHaveLength(0);
+  expect(harness.onClose).not.toHaveBeenCalled();
+
+  await harness.bridge.connect();
+
+  expect(eventsOf(harness.socket, "input_audio.append")).toHaveLength(0);
+
+  void harness.bridge.close();
+  expectOnce(harness.onClose, "completed");
+});
+
+it("does not carry queued audio across terminal close and explicit reconnect", async () => {
+  const sockets: FakeSocket[] = [];
+  const bridge = new OpenAIQuicksilverVoiceBridge(
+    {
+      providerConfig: {},
+      model: "gpt-live-test-canary",
+      audioFormat: { encoding: "pcm16", sampleRateHz: 24000, channels: 1 },
+      resolveAuth: async () => ({ type: "api-key", token: "test-key" }),
+      mediaSocketFactory: fakeQuicksilverMediaSocket((_url, _options) => {
+        const socket = new FakeSocket(false);
+        sockets.push(socket);
+        queueMicrotask(() => socket.open());
+        return socket;
+      }),
+      onAudio: vi.fn(),
+      onClearAudio: vi.fn(),
+    },
+    openAIRealtimeHost,
+  );
+
+  const firstConnect = bridge.connect();
+  await vi.waitFor(() => expect(sockets[0]?.readyState).toBe(1));
+  bridge.sendAudio(Buffer.from("queued-before-close"));
+  void bridge.close();
+  await firstConnect;
+  bridge.sendAudio(Buffer.from("sent-after-close"));
+
+  const reconnecting = bridge.connect();
+  await vi.waitFor(() => expect(sockets[1]?.readyState).toBe(1));
+  const secondSocket = sockets[1];
+  if (!secondSocket) {
+    throw new Error("expected bridge to reconnect");
+  }
+  started(secondSocket);
+  await reconnecting;
+  expect(eventsOf(secondSocket, "input_audio.append")).toHaveLength(0);
+  void bridge.close();
+});
+
+it("does not reject after explicit close while awaiting session readiness", async () => {
+  const { connecting, ...harness } = await pendingHarness({ deferClose: true });
+
+  void harness.bridge.close();
+  harness.socket.emit("error", new Error("late startup error"));
+
+  await expect(connecting).resolves.toBeUndefined();
+  expectOnce(harness.onClose, "completed");
+  expect(harness.onError).not.toHaveBeenCalled();
+  harness.socket.finishClose();
+});
+
+it("completes once when closed while authentication is pending", async () => {
+  const auth = Promise.withResolvers<{ type: "api-key"; token: string }>();
+  const harness = createHarness({ resolveAuth: () => auth.promise });
+  const connecting = harness.bridge.connect();
+
+  void harness.bridge.close();
+  void harness.bridge.close();
+  expectOnce(harness.onClose, "completed");
+
+  auth.resolve({ type: "api-key", token: "test-key" });
+  await expect(connecting).resolves.toBeUndefined();
+  expect(harness.connections).toHaveLength(0);
+  expect(harness.onError).not.toHaveBeenCalled();
+});
+
+it.each([
+  ["gpt-live-test-canary", 1000, "completed", true],
+  ["gpt-live-test-canary", 1006, "error", true],
+  ["gpt-live-1", 1000, "error", true],
+  ["gpt-live-1", 1006, "error", true],
+  ["gpt-live-test-canary", 1000, "completed", false],
+  ["gpt-live-test-canary", 1006, "error", false],
+] as const)(
+  "classifies %s close code %s as %s (buffered=%s)",
+  async (model, code, reason, buffered) => {
     const harness = createHarness({
-      resolveAuth: () =>
-        new Promise((resolve) => {
-          resolveAuth = resolve;
-        }),
+      model,
+      autoStart: !buffered,
+      afterOpen: buffered
+        ? (socket) => {
+            started(socket);
+            socket.finishClose(code);
+          }
+        : undefined,
     });
-    const connecting = harness.bridge.connect();
-
-    void harness.bridge.close();
-    void harness.bridge.close();
-    expect(harness.onClose).toHaveBeenCalledOnce();
-    expect(harness.onClose).toHaveBeenCalledWith("completed");
-
-    resolveAuth({ type: "api-key", token: "test-key" });
-    await expect(connecting).resolves.toBeUndefined();
-    expect(harness.connections).toHaveLength(0);
-    expect(harness.onError).not.toHaveBeenCalled();
-  });
-
-  it.each([
-    ["gpt-live-test-canary", 1000, "completed"],
-    ["gpt-live-test-canary", 1006, "error"],
-    ["gpt-live-1", 1000, "error"],
-    ["gpt-live-1", 1006, "error"],
-  ] as const)(
-    "classifies a buffered %s close after readiness with code %s",
-    async (model, code, reason) => {
-      const harness = createHarness({
-        model,
-        autoStart: false,
-        afterOpen: (socket) => {
-          socket.serverEvent({
-            type: "session.started",
-            session: { id: "live-1", expires_at: Math.floor(Date.now() / 1000) + 60 },
-          });
-          socket.finishClose(code);
-        },
-      });
-
-      await harness.bridge.connect();
-
+    await harness.bridge.connect();
+    if (buffered) {
       expect(harness.onReady).toHaveBeenCalledOnce();
       if (reason === "error") {
         expect(harness.onError).toHaveBeenCalledOnce();
-        expect(harness.onError.mock.calls[0]?.[0]).toMatchObject({
-          message: "OpenAI GPT-Live transport failed",
-          name: "Error",
-        });
+        expectTransportError(harness.onError.mock.calls[0]?.[0]);
       } else {
         expect(harness.onError).not.toHaveBeenCalled();
       }
-      expect(harness.onClose).toHaveBeenCalledExactlyOnceWith(reason);
-      expect(harness.bridge.isConnected()).toBe(false);
+    } else {
+      harness.socket.finishClose(code);
+      await Promise.resolve();
+    }
+    expectOnce(harness.onClose, reason);
+    expect(harness.bridge.isConnected()).toBe(false);
+  },
+);
+
+it("maps audio, transcripts, and delegations onto the shared bridge contract", async () => {
+  const harness = await connectHarness();
+  outputAudio(harness.socket, Buffer.from([1, 2, 3, 4]));
+  harness.socket.serverEvent({ type: "output_audio_buffer.cleared" });
+  harness.socket.serverEvent({
+    type: "input_transcript.added",
+    item: { text: "hello" },
+  });
+  turnDone(harness.socket, "user", "hello there");
+  expectLast(harness.onEvent, serverEvent("turn.done"));
+  delegation(harness.socket, "delegation-1", "check the repository");
+
+  expectCall(harness.onAudio, Buffer.from([1, 2, 3, 4]));
+  expectCall(harness.onEvent, serverEvent("output_audio_buffer.cleared"));
+  expectOnce(harness.onClearAudio, "barge-in");
+  outputAudio(harness.socket, Buffer.from([5, 6, 7, 8]));
+  expectLast(harness.onAudio, Buffer.from([5, 6, 7, 8]));
+  expect(harness.onTranscript.mock.calls.slice(0, 2)).toEqual([
+    ["user", "hello", false],
+    ["user", "hello there", true],
+  ]);
+  expectCall(harness.onToolCall, {
+    itemId: "delegation-1",
+    callId: "delegation-1",
+    name: "openclaw_agent_consult",
+    args: { question: "check the repository" },
+  });
+
+  harness.bridge.submitToolResult("delegation-1", { text: "The repository is clean." });
+  expect(sentEvents(harness.socket).at(-1)).toEqual({
+    type: "delegation.context.append",
+    delegation_item_id: "delegation-1",
+    channel: "speakable",
+    content: [{ type: "input_text", text: "The repository is clean." }],
+  });
+});
+
+it("redacts the opaque model from direct provider errors", async () => {
+  const model = "gpt-live-test-canary";
+  const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
+  const harness = await connectHarness();
+  harness.socket.serverEvent({
+    type: "error",
+    error: {
+      message: `provider rejected ${model} ${sensitiveDetails.join(" ")}`,
+      code: "invalid_api_key",
     },
+  });
+
+  expect(harness.onError).toHaveBeenCalledOnce();
+  const projectedError = harness.onError.mock.calls[0]?.[0];
+  expectTransportError(projectedError);
+  expect(projectedError?.cause).toBeUndefined();
+  const projected = JSON.stringify({ events: harness.onEvent.mock.calls });
+  for (const privateValue of [model, ...sensitiveDetails]) {
+    expect(projected).not.toContain(privateValue);
+  }
+});
+
+it("redacts raw startup and active transport errors", async () => {
+  const model = "sensitive-model-marker";
+  const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
+  const startup = createHarness({
+    autoStart: false,
+    model,
+    afterOpen: (socket) => {
+      const error = new Error(`startup rejected ${model} ${sensitiveDetails.join(" ")}`);
+      error.name = `Transport${model}`;
+      socket.emit("error", error);
+    },
+  });
+
+  const startupError = await startup.bridge.connect().catch((error: unknown) => error);
+  expectTransportError(startupError);
+
+  const active = await connectHarness({ model });
+  const error = new Error(`active transport failed ${model}`);
+  error.name = `Socket${model}`;
+  active.socket.emit("error", error);
+
+  expect(active.onError).toHaveBeenCalledOnce();
+  expectTransportError(active.onError.mock.calls[0]?.[0]);
+});
+
+it("captures only fixed metadata for private transport activity", async () => {
+  captureWsEventAsyncMock.mockClear();
+  const model = "sensitive-model-marker";
+  const transcript = "sensitive-frame-marker";
+  const harness = await connectHarness({ model });
+  harness.bridge.sendUserMessage(transcript);
+  turnDone(harness.socket, "user", transcript);
+
+  expect(harness.connections[0]?.options).not.toHaveProperty("agent");
+  expect(captureWsEventAsyncMock).toHaveBeenCalled();
+  const captureCalls = captureWsEventAsyncMock.mock.calls as Array<[Record<string, unknown>]>;
+  for (const [event] of captureCalls) {
+    expect(event).toEqual({
+      url: "wss://realtime.invalid/private",
+      direction: expect.stringMatching(/^(inbound|outbound|local)$/),
+      kind: expect.stringMatching(/^ws-(frame|open)$/),
+      flowId: "private-realtime",
+      meta: { provider: "openai", capability: "gpt-live-voice" },
+    });
+  }
+  const captured = JSON.stringify(captureCalls);
+  expect(captured).not.toContain(model);
+  expect(captured).not.toContain(transcript);
+});
+
+it("bounds direct tool results before sideband sends", async () => {
+  const harness = await connectHarness();
+
+  delegation(harness.socket, "delegation-large", "summarize everything");
+  harness.bridge.submitToolResult("delegation-large", { text: "x".repeat(10_000) });
+
+  const appends = eventsOf(harness.socket, "delegation.context.append");
+  expect(appends.length).toBeGreaterThan(0);
+  expect(appends.length).toBeLessThanOrEqual(11);
+  expect(
+    appends.map((event) => (event.content as Array<{ text: string }>)[0]?.text ?? "").join(""),
+  ).toMatch(/^x+ \[truncated\]$/);
+});
+
+it("converts telephony mu-law audio to and from GPT-Live PCM16", async () => {
+  const harness = await connectHarness({ audioFormat: "g711_ulaw" });
+  harness.bridge.sendAudio(Buffer.alloc(160, 0xff));
+
+  const inputEvent = sentEvents(harness.socket).at(-1);
+  expect(inputEvent?.type).toBe("input_audio.append");
+  expect(Buffer.from(String(inputEvent?.audio), "base64")).toHaveLength(870);
+
+  outputAudio(harness.socket, Buffer.alloc(960));
+  turnDone(harness.socket, "assistant", "first response");
+  expectLast(harness.onEvent, serverEvent("response.done"));
+  outputAudio(harness.socket, Buffer.alloc(960));
+  turnDone(harness.socket, "assistant", "second response");
+
+  expect(harness.onAudio.mock.calls.map(([audio]) => audio)).toEqual([
+    Buffer.alloc(155, 0xff),
+    Buffer.alloc(5, 0xff),
+    Buffer.alloc(155, 0xff),
+    Buffer.alloc(5, 0xff),
+  ]);
+  expect(harness.onAudio.mock.invocationCallOrder.at(-1)).toBeLessThan(
+    harness.onEvent.mock.invocationCallOrder.at(-1) ?? 0,
   );
+});
 
-  it("maps audio, transcripts, and delegations onto the shared bridge contract", async () => {
-    const harness = createHarness();
-    await harness.bridge.connect();
-    harness.socket.serverEvent({
-      type: "output_audio.delta",
-      audio: Buffer.from([1, 2, 3, 4]).toString("base64"),
-    });
-    harness.socket.serverEvent({ type: "output_audio_buffer.cleared" });
-    harness.socket.serverEvent({
-      type: "input_transcript.added",
-      item: { text: "hello" },
-    });
-    harness.socket.serverEvent({
-      type: "turn.done",
-      turn: { role: "user", transcript: "hello there" },
-    });
-    harness.socket.serverEvent({
-      type: "delegation.created",
-      item: {
-        type: "delegation",
-        target: "client",
-        id: "delegation-1",
-        content: [{ type: "input_text", text: "check the repository" }],
-      },
-    });
-
-    expect(harness.onAudio).toHaveBeenCalledWith(Buffer.from([1, 2, 3, 4]));
-    expect(harness.onEvent).toHaveBeenCalledWith({
-      direction: "server",
-      type: "output_audio_buffer.cleared",
-    });
-    expect(harness.onClearAudio).toHaveBeenCalledExactlyOnceWith("barge-in");
-    harness.socket.serverEvent({
-      type: "output_audio.delta",
-      audio: Buffer.from([5, 6, 7, 8]).toString("base64"),
-    });
-    expect(harness.onAudio).toHaveBeenLastCalledWith(Buffer.from([5, 6, 7, 8]));
-    expect(harness.onTranscript).toHaveBeenNthCalledWith(1, "user", "hello", false);
-    expect(harness.onTranscript).toHaveBeenNthCalledWith(2, "user", "hello there", true);
-    expect(harness.onToolCall).toHaveBeenCalledWith({
-      itemId: "delegation-1",
-      callId: "delegation-1",
-      name: "openclaw_agent_consult",
-      args: { question: "check the repository" },
-    });
-
-    harness.bridge.submitToolResult("delegation-1", { text: "The repository is clean." });
-    expect(sentEvents(harness.socket).at(-1)).toEqual({
-      type: "delegation.context.append",
-      delegation_item_id: "delegation-1",
-      channel: "speakable",
-      content: [{ type: "input_text", text: "The repository is clean." }],
-    });
-  });
-
-  it("redacts the opaque model from direct provider errors", async () => {
-    const model = "gpt-live-test-canary";
-    const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
-    const harness = createHarness();
-    await harness.bridge.connect();
-    harness.socket.serverEvent({
-      type: "error",
-      error: {
-        message: `provider rejected ${model} ${sensitiveDetails.join(" ")}`,
-        code: "invalid_api_key",
-      },
-    });
-
-    expect(harness.onError).toHaveBeenCalledOnce();
-    const projectedError = harness.onError.mock.calls[0]?.[0];
-    expect(projectedError).toBeInstanceOf(Error);
-    expect(projectedError?.name).toBe("Error");
-    expect(projectedError?.message).toBe("OpenAI GPT-Live transport failed");
-    expect(projectedError?.cause).toBeUndefined();
-    const projected = JSON.stringify({
-      events: harness.onEvent.mock.calls,
-    });
-    for (const privateValue of [model, ...sensitiveDetails]) {
-      expect(projected).not.toContain(privateValue);
-    }
-  });
-
-  it("redacts raw startup and active transport errors", async () => {
-    const model = "sensitive-model-marker";
-    const sensitiveDetails = ["sensitive-route", "sensitive-session", "sensitive-transcript"];
-    const startup = createHarness({
-      autoStart: false,
-      model,
-      afterOpen: (socket) => {
-        const error = new Error(`startup rejected ${model} ${sensitiveDetails.join(" ")}`);
-        error.name = `Transport${model}`;
-        socket.emit("error", error);
-      },
-    });
-
-    const startupError = await startup.bridge.connect().catch((error: unknown) => error);
-    expect(startupError).toBeInstanceOf(Error);
-    expect(startupError).toMatchObject({
-      message: "OpenAI GPT-Live transport failed",
-      name: "Error",
-    });
-
-    const active = createHarness({ model });
-    await active.bridge.connect();
-    const error = new Error(`active transport failed ${model}`);
-    error.name = `Socket${model}`;
-    active.socket.emit("error", error);
-
-    expect(active.onError).toHaveBeenCalledOnce();
-    const activeError = active.onError.mock.calls[0]?.[0] as Error;
-    expect(activeError).toBeInstanceOf(Error);
-    expect(activeError).toMatchObject({
-      message: "OpenAI GPT-Live transport failed",
-      name: "Error",
-    });
-  });
-
-  it("captures only fixed metadata for private transport activity", async () => {
-    captureWsEventAsyncMock.mockClear();
-    const model = "sensitive-model-marker";
-    const transcript = "sensitive-frame-marker";
-    const harness = createHarness({ model });
-
-    await harness.bridge.connect();
-    harness.bridge.sendUserMessage(transcript);
-    harness.socket.serverEvent({
-      type: "turn.done",
-      turn: { role: "user", transcript },
-    });
-
-    expect(harness.connections[0]?.options).not.toHaveProperty("agent");
-    expect(captureWsEventAsyncMock).toHaveBeenCalled();
-    const captureCalls = captureWsEventAsyncMock.mock.calls as Array<[Record<string, unknown>]>;
-    for (const [event] of captureCalls) {
-      expect(event).toEqual({
-        url: "wss://realtime.invalid/private",
-        direction: expect.stringMatching(/^(inbound|outbound|local)$/),
-        kind: expect.stringMatching(/^ws-(frame|open)$/),
-        flowId: "private-realtime",
-        meta: { provider: "openai", capability: "gpt-live-voice" },
-      });
-    }
-    const captured = JSON.stringify(captureCalls);
-    expect(captured).not.toContain(model);
-    expect(captured).not.toContain(transcript);
-  });
-
-  it("bounds direct tool results before sideband sends", async () => {
-    const harness = createHarness();
-    await harness.bridge.connect();
-
-    harness.socket.serverEvent({
-      type: "delegation.created",
-      item: {
-        type: "delegation",
-        target: "client",
-        id: "delegation-large",
-        content: [{ type: "input_text", text: "summarize everything" }],
-      },
-    });
-    harness.bridge.submitToolResult("delegation-large", { text: "x".repeat(10_000) });
-
-    const appends = sentEvents(harness.socket).filter(
-      (event) => event.type === "delegation.context.append",
-    );
-    expect(appends.length).toBeGreaterThan(0);
-    expect(appends.length).toBeLessThanOrEqual(11);
-    expect(
-      appends.map((event) => (event.content as Array<{ text: string }>)[0]?.text ?? "").join(""),
-    ).toMatch(/^x+ \[truncated\]$/);
-  });
-
-  it("normalizes assistant completion to the shared response lifecycle", async () => {
-    const harness = createHarness();
-    await harness.bridge.connect();
-
-    harness.socket.serverEvent({
-      type: "turn.done",
-      turn: { role: "user", transcript: "hello" },
-    });
-    expect(harness.onEvent).toHaveBeenLastCalledWith({
-      direction: "server",
-      type: "turn.done",
-    });
-
-    harness.socket.serverEvent({
-      type: "turn.done",
-      turn: { role: "assistant", transcript: "hi there" },
-    });
-    expect(harness.onEvent).toHaveBeenLastCalledWith({
-      direction: "server",
-      type: "response.done",
-    });
-  });
-
-  it("converts telephony mu-law audio to and from GPT-Live PCM16", async () => {
-    const harness = createHarness({ audioFormat: "g711_ulaw" });
-    await harness.bridge.connect();
-    harness.bridge.sendAudio(Buffer.alloc(160, 0xff));
-
-    const inputEvent = sentEvents(harness.socket).at(-1);
-    expect(inputEvent?.type).toBe("input_audio.append");
-    expect(Buffer.from(String(inputEvent?.audio), "base64")).toHaveLength(870);
-
-    harness.socket.serverEvent({
-      type: "output_audio.delta",
-      audio: Buffer.alloc(960).toString("base64"),
-    });
-    harness.socket.serverEvent({
-      type: "turn.done",
-      turn: { role: "assistant", transcript: "first response" },
-    });
-    harness.socket.serverEvent({
-      type: "output_audio.delta",
-      audio: Buffer.alloc(960).toString("base64"),
-    });
-    harness.socket.serverEvent({
-      type: "turn.done",
-      turn: { role: "assistant", transcript: "second response" },
-    });
-
-    expect(harness.onAudio.mock.calls.map(([audio]) => audio)).toEqual([
-      Buffer.alloc(155, 0xff),
-      Buffer.alloc(5, 0xff),
-      Buffer.alloc(155, 0xff),
-      Buffer.alloc(5, 0xff),
-    ]);
-    expect(harness.onAudio.mock.invocationCallOrder.at(-1)).toBeLessThan(
-      harness.onEvent.mock.invocationCallOrder.at(-1) ?? 0,
-    );
-  });
-
-  it("uses session context for forced consult results without a provider delegation", async () => {
-    const harness = createHarness();
-    await harness.bridge.connect();
-    harness.bridge.sendUserMessage("Legacy speech request");
-    expect(sentEvents(harness.socket).at(-1)).toEqual({
-      type: "session.context.append",
-      content: [{ type: "input_text", text: "Legacy speech request" }],
-    });
-    harness.bridge.submitToolResult("forced-consult", { text: "Forced answer" });
-
-    expect(sentEvents(harness.socket).at(-1)).toEqual({
-      type: "session.context.append",
-      channel: "speakable",
-      content: [{ type: "input_text", text: "Forced answer" }],
-    });
-
-    harness.bridge.triggerGreeting();
-    expect(sentEvents(harness.socket).at(-1)).toEqual({
-      type: "session.context.append",
-      channel: "speakable",
-      content: [{ type: "input_text", text: "Greet the user briefly." }],
-    });
-  });
+it("uses session context for forced consult results without a provider delegation", async () => {
+  const harness = await connectHarness();
+  harness.bridge.sendUserMessage("Legacy speech request");
+  expectContext(harness.socket, "Legacy speech request", false);
+  harness.bridge.submitToolResult("forced-consult", { text: "Forced answer" });
+  expectContext(harness.socket, "Forced answer");
+  harness.bridge.triggerGreeting();
+  expectContext(harness.socket, "Greet the user briefly.");
 });

@@ -12,6 +12,7 @@ import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runti
 import {
   createAccountScopedBindingAdapterV2,
   registerSessionBindingAdapterV2,
+  warnPluginSdkDeprecation,
 } from "openclaw/plugin-sdk/thread-bindings-session-runtime";
 import { loadTelegramSendModule } from "./send-runtime.js";
 import {
@@ -214,6 +215,11 @@ async function initializeThreadBindingManager(
         }),
       ),
     updateConversationSync: (conversationIdRaw, update) => {
+      warnPluginSdkDeprecation({
+        family: "conversation-bindings",
+        method: "TelegramThreadBindingManager.updateConversationSync",
+        replacement: "TelegramThreadBindingManager.touchConversation or updateBySessionKey",
+      });
       if (stopping) {
         return null;
       }
@@ -551,6 +557,15 @@ function createSyncLifecycleSetter<Field extends TelegramThreadBindingLifecycleF
   field: Field,
 ) {
   return (params: TelegramThreadBindingLifecycleParams<Field>): TelegramThreadBindingRecord[] => {
+    const method =
+      field === "idleTimeoutMs"
+        ? "setTelegramThreadBindingIdleTimeoutBySessionKey"
+        : "setTelegramThreadBindingMaxAgeBySessionKey";
+    warnPluginSdkDeprecation({
+      family: "conversation-bindings",
+      method,
+      replacement: `${method}Async`,
+    });
     const value = resolveNonNegativeIntegerOption(params[field], 0);
     const prepared = { ...params };
     const manager = getTelegramThreadBindingManager(prepared.accountId);
@@ -574,9 +589,9 @@ function createSyncLifecycleSetter<Field extends TelegramThreadBindingLifecycleF
   };
 }
 
-/** @deprecated Use setTelegramThreadBindingIdleTimeoutBySessionKeyAsync; removal follows a stable deprecation period. */
+/** @deprecated Use setTelegramThreadBindingIdleTimeoutBySessionKeyAsync; compatible through 2026-12-31, removed in the first January 2027 stable. */
 export const setTelegramThreadBindingIdleTimeoutBySessionKey =
   createSyncLifecycleSetter("idleTimeoutMs");
 
-/** @deprecated Use setTelegramThreadBindingMaxAgeBySessionKeyAsync; removal follows a stable deprecation period. */
+/** @deprecated Use setTelegramThreadBindingMaxAgeBySessionKeyAsync; compatible through 2026-12-31, removed in the first January 2027 stable. */
 export const setTelegramThreadBindingMaxAgeBySessionKey = createSyncLifecycleSetter("maxAgeMs");

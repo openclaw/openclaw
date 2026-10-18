@@ -64,13 +64,11 @@ export function BoardTabs(props: {
           items={visible().map((tab) => ({
             value: tab.tabId,
             label: tab.title,
-            className: [
-              "board-tabs__tab",
-              tab.tabId === props.activeTabId ? "board-tabs__tab--active" : "",
-              tab.tabId === props.hoverTabId ? "board-tabs__tab--drop" : "",
-            ]
-              .filter(Boolean)
-              .join(" "),
+            className: {
+              "board-tabs__tab": true,
+              "board-tabs__tab--active": tab.tabId === props.activeTabId,
+              "board-tabs__tab--drop": tab.tabId === props.hoverTabId,
+            },
             attributes: { "data-board-tab-id": tab.tabId },
           }))}
           onSelect={(tabId) => props.onSelect(tabId)}

@@ -42,6 +42,19 @@ why a negative response budget alone did not fail earlier. Neither extends the
 lease or operation budget. The diagnostics do not change timeout or recovery
 behavior, and a successful retry does not establish the cause of an earlier failure.
 
+## Captured baseline evidence hashes
+
+Read-only baseline evidence hashes pass the already-captured bytes to the selected
+Git executable through a complete, private temporary file. The writer closes before
+a fresh read-only descriptor is opened at offset zero; on the supported POSIX
+host the pathname and directory are removed before Git starts. Write hashes,
+signatures, authority checks, and operation supervision are unchanged.
+
+Temporary storage must accommodate the largest individual captured file. Ordinary
+write, spawn, and Git failures fail closed and clean up owned resources. Unlinking
+is not secure erasure, and abrupt termination before unlink can retain a private
+snapshot under `TMPDIR`; no automatic sweep of another operation's files occurs.
+
 ## Rerun failed CI tests
 
 `pnpm test:ci-failed <pr-number|run-id|run-or-pr-url>` reads failed CI jobs using

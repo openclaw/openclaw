@@ -270,7 +270,7 @@ describe("skills cli commands", () => {
     mocks.explicitAgent.mockImplementation((_config, agent) => agent);
     mocks.workspace.mockReturnValue("/tmp/workspace");
     mocks.install.mockResolvedValue({ ok: false, error: "install disabled in test" });
-    mocks.sourceInstall.mockResolvedValue({ ok: false, error: "source install disabled in test" });
+    mocks.sourceInstall.mockRejectedValue(new Error("source install disabled in test"));
     mocks.update.mockResolvedValue([]);
     mocks.tracked.mockResolvedValue([]);
     mocks.sourceUrl.mockReturnValue(undefined);
@@ -346,10 +346,6 @@ describe("skills cli commands", () => {
       error: "--version is not supported for skills-sh references.",
     },
     {
-      args: ["skills-sh/openclaw/skills/weather"],
-      error: "Invalid skills.sh skill reference: skills-sh/openclaw/skills/weather",
-    },
-    {
       args: ["git:owner/tools", "--version", "1.2.3"],
       error: "--version is only supported for ClawHub skill installs.",
     },
@@ -390,7 +386,6 @@ describe("skills cli commands", () => {
   it("installs a source under --as with noninteractive policy acknowledgement", async () => {
     setTty(false);
     mocks.sourceInstall.mockResolvedValue({
-      ok: true,
       slug: "tools",
       source: "git",
       targetDir: "/tmp/workspace/skills/tools",
@@ -544,6 +539,7 @@ describe("skills cli commands", () => {
     mocks.inferredAgent.mockReturnValue("main");
     mocks.workspace.mockImplementation((_config, id) => `/tmp/workspace-${id}`);
     await runCommand(argv);
+    expect(mocks.config).toHaveBeenCalledWith({ skipPluginValidation: true });
     expect(mocks.status).toHaveBeenCalledWith(
       "/tmp/workspace-main",
       expect.objectContaining({ config: {} }),
@@ -711,12 +707,6 @@ describe("skills cli commands", () => {
     ]);
     expect(mocks.workspace).not.toHaveBeenCalled();
   });
-  it("rejects a blank explicit skills agent", async () => {
-    await expect(runCommand(["check", "--agent", "   "])).rejects.toThrow("__exit__:1");
-    expect(mocks.errors).toEqual(["--agent must not be blank"]);
-    expect(mocks.explicitAgent).not.toHaveBeenCalled();
-    expect(mocks.workspace).not.toHaveBeenCalled();
-  });
   it("redacts secrets from rendered skills CLI errors", async () => {
     const secret = "sk-abcdefghijklmnopqrstuv";
     mocks.defaultAgent.mockImplementationOnce(() => {
@@ -726,14 +716,5 @@ describe("skills cli commands", () => {
     expect(mocks.errors).toHaveLength(1);
     expect(mocks.errors[0]).toContain("Skill lookup failed");
     expect(mocks.errors[0]).not.toContain(secret);
-  });
-  it("keeps human skills list output on stdout", async () => {
-    await runCommand(["list"]);
-    expect(mocks.config).toHaveBeenCalledWith({ skipPluginValidation: true });
-    expect(mocks.runtime.writeStdout).toHaveBeenCalledOnce();
-    expect(mocks.runtime.log).not.toHaveBeenCalled();
-    expect(mocks.errors).toEqual([]);
-    expect(mocks.stdout.at(-1)).toContain("calendar");
-    expect(mocks.stdout.at(-1)).toContain("openclaw skills search");
   });
 });

@@ -4,9 +4,50 @@ import type { CodexThread } from "./app-server/protocol.js";
 import type { CodexSessionCatalogControl } from "./session-catalog-types.js";
 import {
   commandRpcMocks,
+  config,
   createCodexSessionCatalogControlFactory,
+  createCodexTestBindingStore,
+  createGatewayApi,
+  createRuntime,
   idleThread,
+  registerCodexSessionCatalog,
 } from "./session-catalog.test-helpers.js";
+
+export function catalogFactory(
+  options: Partial<Parameters<typeof createCodexSessionCatalogControlFactory>[0]> = {},
+) {
+  return createCodexSessionCatalogControlFactory({
+    getPluginConfig: () => ({ supervision: { enabled: true } }),
+    getRuntimeConfig: () => undefined,
+    ...options,
+  });
+}
+
+export function remoteCatalogFactory(
+  host: string,
+  options: Parameters<typeof catalogFactory>[0] = {},
+) {
+  return catalogFactory({
+    getPluginConfig: () => ({
+      appServer: {
+        transport: "websocket",
+        url: `wss://${host}.example.test/codex`,
+        authToken: "synthetic-catalog-token",
+      },
+    }),
+    ...options,
+  });
+}
+
+export function catalogProvider(
+  control: Parameters<typeof registerCodexSessionCatalog>[0]["control"],
+  runtime = createRuntime().runtime,
+  bindingStore = createCodexTestBindingStore(),
+) {
+  const { api, getProvider } = createGatewayApi(runtime, config);
+  registerCodexSessionCatalog({ api, bindingStore, control, getRuntimeConfig: () => config });
+  return getProvider()!;
+}
 
 export function nativeCatalogFixture(count = 160, previewBytes = 32) {
   let now = 1_000;
@@ -45,11 +86,7 @@ export function nativeCatalogFixture(count = 160, previewBytes = 32) {
     };
   });
   const make = async () => {
-    const factory = createCodexSessionCatalogControlFactory({
-      getPluginConfig: () => ({ supervision: { enabled: true } }),
-      getRuntimeConfig: () => undefined,
-      now: () => now,
-    });
+    const factory = catalogFactory({ now: () => now });
     const home = (await factory.homesForAgent("main"))[0]!;
     const control = factory.forRequest("main", { ...home, localSessionsRoot: undefined });
     await control.initialize();

@@ -35,8 +35,8 @@ delivery order, replay behavior, and completion contract.
 
 | Module                   | Owners                                                            |
 | ------------------------ | ----------------------------------------------------------------- |
-| `application.ts`         | Gateway snapshots, config, agent selection, overlays, Web Push    |
-| `application-native.ts`  | Native device settings and notifications                          |
+| `application.ts`         | Gateway snapshots, config, agent selection, overlays              |
+| `application-native.ts`  | Native device settings                                            |
 | `domain-capabilities.ts` | Agents, agent identity, roster activity, channels, runtime config |
 | `events-browser.ts`      | Lobster visits                                                    |
 
@@ -48,18 +48,17 @@ loads or applies CSS itself.
 
 Solid consumers import `t` from `lib/reactive/i18n.ts` and keep the call shape
 `t("key", params)`. It reads a locale/catalog revision through `projectI18n()`.
-The existing Lit translator and English registrars are unchanged. Locale loading,
-fallback, persistence, and stale-load rejection stay in the i18n manager. Solid
-consumers call `registerEnglishCatalog(registerPageEnglish)` before reading that
-page's lazy keys. This delegates to the existing owner and notifies the Solid
-projections; repeated English registration does not trigger render loops.
-Calling a legacy registrar directly does not notify Solid readers.
+Locale loading, fallback, persistence, and stale-load rejection stay in the i18n
+manager. Solid consumers call `registerEnglishCatalog(registerPageEnglish)`
+before reading that page's lazy keys. This delegates to the existing owner and
+notifies the Solid projections; repeated English registration does not trigger
+render loops. Calling a legacy registrar directly does not notify Solid readers.
 
 `ApplicationContext` and its supporting types live in `app/context-types.ts`.
-`app/context.ts` retains the Lit token during migration. Solid callers use
-`ApplicationProvider` and `useApplication()` from `context.ts` in this directory;
-both renderers receive the same capability object. Providers do not assume
-ownership of those capabilities.
+`app/context.ts` defines the native context-request token. Solid callers use
+`ApplicationProvider` and `useApplication()` from `context.ts` in this directory.
+Native hosts request the same capability object through the DOM context
+transport. Providers do not assume ownership of those capabilities.
 
 These foundations do not mount new product UI. The tests exercise real owner
 publication paths plus shared subscription, replacement, and disposal contracts.
@@ -74,19 +73,19 @@ Return immutable presentation values from `read`: parking does not clone or
 freeze mutable domain objects. Project their displayed fields rather than
 holding a mutable object and reading its fields directly from JSX.
 
-Chat's `createSolidRenderLifecycle` in `pages/chat/solid-render-lifecycle.ts`
-uses this projection for its `snapshot` accessor. Create it in the pane's Solid
-owner, pass the pane's `presented` accessor (including document visibility when
-the pane owns that policy), and render from `snapshot()`. `read` may consume
-existing owner projections; imperative owners call `invalidate()` after their
-synchronous mutations. The existing frame-coalescing owner still controls
-stream invalidation cadence.
+The chat pane reads domain projections and projected presentation fields through
+`createParkedProjection`. Synchronous owner mutations publish those values;
+the pane has no generic redraw callback. Its `updateComplete` getter observes
+pending DOM work, while `awaitDomCommit()` explicitly fences pane-level focus and
+layout tasks without rendering an unchanged pane. Parked tasks wait for reveal
+or disposal. The stream owner still controls publication cadence.
 
+Imperative transcript and detail-panel islands use `createSolidRenderLifecycle`
+in `pages/chat/solid-render-lifecycle.ts`. It wraps this projection in a `snapshot`
+accessor and exposes `invalidate()` for their synchronous mutations. Their
 `afterCommit` requests a new generation and runs in Solid's split-effect apply
 phase, after DOM bindings. Requests made from a callback wait for the following
 generation. ResizeObserver, child custom elements, images, and overlay animations
 retain their own settlement contracts. The method owns returned cleanup until the
 callback calls `complete`, is cancelled, the pane parks, or the owner disposes.
-Pending callbacks wait through parking; disposal cancels them. Lit callers keep
-using the renderer-neutral interface and the existing controller adapter until
-their port lands.
+Pending callbacks wait through parking; disposal cancels them.

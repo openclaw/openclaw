@@ -19,7 +19,7 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { callGateway } from "../../gateway/call.js";
 import { createDirectChatContext } from "../../gateway/server-chat.agent-events.test-helpers.js";
 import { persistGatewaySessionLifecycleEvent } from "../../gateway/session-lifecycle-state.js";
-import { resolveSessionMutationAuthorization } from "../../gateway/session-sharing.js";
+import { resolveSessionMutationAuthorizationAsync } from "../../gateway/session-sharing-authorization-async.js";
 import { sharingPolicyClient } from "../../gateway/session-sharing.test-utils.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -30,7 +30,6 @@ import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-ag
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { createOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import type { TemplateContext } from "../templating.js";
-import { SILENT_REPLY_TOKEN } from "../tokens.js";
 import type { ReplyPayload } from "../types.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import { scheduleFollowupDrain, type FollowupRun } from "./queue.js";
@@ -175,7 +174,7 @@ export function registerReplyAdmissionCases({
       });
       const reply = await run();
       expect(runEmbeddedAgentMock).toHaveBeenCalledOnce();
-      expect(reply).toMatchObject({ text: SILENT_REPLY_TOKEN });
+      expect(reply).toEqual({});
       if (order === "after cleanup") {
         await persistAbort();
       }
@@ -250,7 +249,7 @@ export function registerReplyAdmissionCases({
     const cfg: OpenClawConfig = { session: { store: storePath } };
     const profileId = "retirement-operator";
     const scopes = ["operator.admin"];
-    const authorized = resolveSessionMutationAuthorization({
+    const authorized = await resolveSessionMutationAuthorizationAsync({
       client: sharingPolicyClient({ user: profileId, scopes }),
       context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
       method: "sessions.patch",
@@ -267,6 +266,7 @@ export function registerReplyAdmissionCases({
       authorized.authorization,
       "session-backed retirement authority",
     );
+    onTestFinished(() => authority.release?.());
     duplicate.followupRun.operatorAuthority = createAdmittedRunOperatorAuthority({
       profileId,
       scopes,
@@ -331,12 +331,13 @@ export function registerReplyAdmissionCases({
             : undefined,
       });
       try {
-        await expect(run()).resolves.toMatchObject({
-          text:
-            stage === "backend"
-              ? SILENT_REPLY_TOKEN
-              : "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
-        });
+        await expect(run()).resolves.toEqual(
+          stage === "backend"
+            ? {}
+            : {
+                text: "⚠️ Gateway is restarting. Please wait a few seconds and try again.",
+              },
+        );
         expect(runEmbeddedAgentMock).toHaveBeenCalledTimes(stage === "backend" ? 1 : 0);
         expect(scheduleFollowupDrain).toHaveBeenCalledOnce();
         expect(loadSessionEntry({ storePath, sessionKey: "main" })).toMatchObject({

@@ -4,10 +4,6 @@ import { bindWorkerToolPreparation } from "../../agents/harness/host-private-cap
 import { bindPreparedToolAuthority } from "../../agents/harness/tool-authority-preparation.js";
 import { isIngressAdoptionLostError } from "../../channels/message/ingress-drain.js";
 import { logVerbose } from "../../globals.js";
-import {
-  assertAgentRunLifecycleGenerationCurrent,
-  getAgentEventLifecycleGeneration,
-} from "../../infra/agent-events.js";
 import { formatErrorMessage } from "../../infra/errors.js";
 import { diagnosticLogger } from "../../logging/diagnostic-runtime.js";
 import { markReplyPayloadForSourceSuppressionDelivery } from "../reply-payload.js";
@@ -108,9 +104,7 @@ export async function runActiveReplySteer(
   // would miss the live target run.
   const activeReplyOperation = params.providedReplyOperation;
   const activeReplyKey = activeReplyOperation?.key;
-  const readGeneration = getAgentEventLifecycleGeneration();
   const assertReadCurrent = () => {
-    assertAgentRunLifecycleGenerationCurrent(readGeneration);
     resolveFollowupAbortSignal(followupRun)?.throwIfAborted();
     params.opts?.abortSignal?.throwIfAborted();
     followupRun.operatorAuthority?.assertCurrent();
@@ -175,13 +169,10 @@ export async function runActiveReplySteer(
       !activeReplyOperation ||
       activeReplyKey === undefined ||
       activeReplyOperation.key !== activeReplyKey ||
-      replyRunRegistry.get(activeReplyKey) !== activeReplyOperation ||
       !(await waitForReplyOperationBackend(
         activeReplyOperation,
         resolveFollowupAbortSignal(followupRun),
-      )) ||
-      activeReplyOperation.key !== activeReplyKey ||
-      replyRunRegistry.get(activeReplyKey) !== activeReplyOperation
+      ))
     ) {
       return await fallback("reply-owner-ended");
     }
@@ -208,20 +199,13 @@ export async function runActiveReplySteer(
     );
     releaseToolAuthority = steeringAuthority.toolAuthority.release;
     assertReadCurrent();
-    if (
-      activeReplyOperation.key !== activeReplyKey ||
-      replyRunRegistry.get(activeReplyKey) !== activeReplyOperation
-    ) {
-      return await fallback("reply-owner-ended", injectionTarget.runId);
-    }
     if (steeringAuthority.shouldQueueAuthorityMismatch) {
       return await fallback("tool_authority_mismatch", injectionTarget.runId);
     }
     const automaticFallbackRoute = steeringAuthority.automaticFallbackRoute;
     const isCurrentFallback = () =>
       !automaticFallbackRoute ||
-      (activeReplyOperation?.automaticFallbackRoute === automaticFallbackRoute &&
-        activeReplyOperation.toolAuthorityRoute?.provider === automaticFallbackRoute.provider &&
+      (activeReplyOperation.toolAuthorityRoute?.provider === automaticFallbackRoute.provider &&
         activeReplyOperation.toolAuthorityRoute.model === automaticFallbackRoute.model);
     if (!isCurrentFallback()) {
       return await fallback("model-fallback-changed", injectionTarget.runId);

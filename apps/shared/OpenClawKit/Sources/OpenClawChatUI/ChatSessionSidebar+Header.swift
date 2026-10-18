@@ -11,7 +11,7 @@ extension ChatSessionSidebar {
                     Image(systemName: "square.and.pencil")
                     Text("New Thread")
                     Spacer(minLength: 4)
-                    Text(verbatim: "⇧⌘N")
+                    Text(verbatim: "⌘N")
                         .font(OpenClawChatTypography.caption)
                         .foregroundStyle(.tertiary)
                 }

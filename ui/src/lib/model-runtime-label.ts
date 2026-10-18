@@ -1,3 +1,5 @@
+import type { Static } from "typebox";
+import type { GatewayCompletionRouteSchema } from "../../../packages/gateway-protocol/src/schema/model-runtime-options.js";
 import { resolveModelRuntimeRoute } from "../../../src/shared/model-runtime-route.js";
 import { t } from "../i18n/index.ts";
 import { registerModelControlsEnglish } from "../i18n/locales/en-model-controls.ts";
@@ -41,7 +43,7 @@ export function formatModelRuntimeLabel(
 }
 
 /** A completion route as the Gateway reports it (system.info, models.list). */
-export type CompletionRoute = { id: string; kind: "api" | "cli" | "harness"; label: string };
+export type CompletionRoute = Static<typeof GatewayCompletionRouteSchema>;
 
 /** Provider-neutral route label and billing note for a Gateway-reported completion route. */
 export function formatCompletionRoute(

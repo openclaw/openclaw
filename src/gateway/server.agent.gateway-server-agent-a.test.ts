@@ -45,8 +45,8 @@ type GatewayModelFixture = {
 };
 
 const TEXT_ONLY_AGENT_MODEL: GatewayModelFixture = {
-  id: "deepseek-v4-flash",
-  name: "DeepSeek V4 Flash",
+  id: "deepseek-v4-pro",
+  name: "DeepSeek V4 Pro",
   provider: "ollama-cloud",
   input: ["text"],
 };
@@ -205,7 +205,7 @@ describe("gateway server agent", () => {
     agentCommandMock.mockImplementationOnce(async () => {
       const admitted = getAgentRunContext("idem-agent-owned-global");
       admittedOwner = { sessionKey: admitted?.sessionKey, agentId: admitted?.agentId };
-      return { payloads: [], meta: { durationMs: 0 } };
+      return { payloads: [], meta: { durationMs: 0, terminalReply: { disposition: "empty" } } };
     });
     const res = await rpcReq(gatewaySuite.ws, "agent", {
       message: "hi",
@@ -247,6 +247,8 @@ describe("gateway server agent", () => {
   });
 
   test("discards sessionless offloaded media without a transcript owner", async () => {
+    testState.agentConfig = { model: { primary: "ollama-cloud/gemma4:31b" } };
+    await setGatewayModelCatalogForTest([VISION_AGENT_MODEL]);
     vi.mocked(agentCommandMock).mockResolvedValueOnce(undefined);
     const inboundBefore = await listInboundMedia();
     const runId = "sessionless-media-success";
@@ -263,6 +265,8 @@ describe("gateway server agent", () => {
       idempotencyKey: runId,
     });
     expect(res.ok, JSON.stringify(res)).toBe(true);
+    const outcome = await rpcReq(gatewaySuite.ws, "agent.wait", { runId, timeoutMs: 2_000 });
+    expect(outcome, JSON.stringify(outcome)).toMatchObject({ ok: true, payload: { status: "ok" } });
     const call = await waitForAgentCommandCall(runId);
     expect(call.sessionKey).toBeUndefined();
     expect(call.media).toHaveLength(2);
@@ -393,7 +397,7 @@ describe("gateway server agent", () => {
   });
 
   test("agent validates first image attachment against per-agent model for fresh sessions", async () => {
-    testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-flash" } };
+    testState.agentConfig = { model: { primary: "ollama-cloud/deepseek-v4-pro" } };
     testState.agentsConfig = {
       entries: {
         main: {},

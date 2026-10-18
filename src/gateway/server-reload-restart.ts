@@ -331,6 +331,7 @@ class GatewayRestartTransaction {
     }
     const requestRecoveryRestart = params.requestRecoveryRestart;
     let emissionPrepared = true;
+    let preparing = false;
     const prepareForEmit = async () => {
       try {
         await params.assertRestartReady?.(nextConfig);
@@ -371,10 +372,17 @@ class GatewayRestartTransaction {
         maxWaitMs: resolveGatewayRestartDeferralTimeoutMs(undefined),
         timeoutIntent: { force: true, reason: "config reload forced restart" },
         reason: restartReason,
-        emitHooks: {
-          beforeEmit: async () => {
+        // Preparation can wait for the plugin lifecycle lease, whose holders need
+        // root admission; the deferral runs it before taking the signal fence.
+        prepareEmission: async () => {
+          preparing = true;
+          try {
             emissionPrepared = await prepareForEmit();
-          },
+          } finally {
+            preparing = false;
+          }
+        },
+        emitHooks: {
           emitRestart: (reason, intent) => {
             if (!this.isCurrentRequest(requestGeneration)) {
               return { status: "coalesced" };
@@ -406,7 +414,7 @@ class GatewayRestartTransaction {
           },
           onStillPending: (_pending, elapsedMs) => {
             params.logReload.warn(
-              `restart still deferred after ${elapsedMs}ms with ${this.options.formatDeferredWorkStatus("active")}`,
+              `restart still deferred after ${elapsedMs}ms with ${preparing ? "restart preparation pending; " : ""}${this.options.formatDeferredWorkStatus("active")}`,
             );
           },
           onTimeout: (_pending, elapsedMs) => {

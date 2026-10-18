@@ -75,7 +75,7 @@ type QueuedRefresh = "none" | "quiet" | "visible";
 type InventoryState = NodesRequestState & {
   nodesLoading: boolean;
   nodesQueuedRefresh: QueuedRefresh;
-  nodes: Array<Record<string, unknown>>;
+  nodes: NodeListNode[];
   lastError: string | null;
   devicesLoading: boolean;
   devicesQueuedRefresh: QueuedRefresh;
@@ -492,15 +492,17 @@ export async function loadExecApprovals(
 }
 
 function applyExecApprovalsSnapshot(state: ExecApprovalsState, snapshot: ExecApprovalsSnapshot) {
+  // A refresh must not rebase an authored security policy onto another writer's hash.
+  if (state.execApprovalsDirty) {
+    return;
+  }
   state.execApprovalsSnapshot = snapshot;
   if (isNativeExecApprovalsSnapshot(snapshot)) {
     state.execApprovalsForm = null;
     state.execApprovalsDirty = false;
     return;
   }
-  if (!state.execApprovalsDirty) {
-    state.execApprovalsForm = structuredClone(snapshot.file);
-  }
+  state.execApprovalsForm = structuredClone(snapshot.file);
 }
 
 export function isNativeExecApprovalsSnapshot(

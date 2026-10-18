@@ -284,17 +284,32 @@ describe("artifact usage", () => {
     expect(readFile).not.toHaveBeenCalled();
   });
 
-  test("retains a meaningful zero-cost artifact snapshot for a delivery mirror", async () => {
-    const id = "usage-zero-cost";
+  test.each(["command", "delivery-mirror", "gateway-injected", "automation-result"])(
+    "retains a meaningful zero-cost artifact snapshot without a %s model identity",
+    async (model) => {
+      const id = "usage-zero-cost";
+      writeUsage(id, [
+        {
+          role: "assistant",
+          provider: "openclaw",
+          model,
+          usage: { cost: { total: 0 } },
+        },
+      ]);
+      await expect(usage(id)).resolves.toEqual({ costUsd: 0 });
+    },
+  );
+
+  test("keeps the provider model after a delivered command", async () => {
+    const id = "usage-command-model";
     writeUsage(id, [
-      {
-        role: "assistant",
-        provider: "openclaw",
-        model: "delivery-mirror",
-        usage: { cost: { total: 0 } },
-      },
+      { role: "assistant", provider: "anthropic", model: "claude-sonnet-4-6" },
+      { role: "assistant", provider: "openclaw", model: "command" },
     ]);
-    await expect(usage(id)).resolves.toEqual({ costUsd: 0 });
+    await expect(usage(id)).resolves.toMatchObject({
+      modelProvider: "anthropic",
+      model: "claude-sonnet-4-6",
+    });
   });
 
   test("treats unavailable JSONL context as terminal until a later valid snapshot", async () => {
@@ -714,18 +729,17 @@ describe("buildSessionPreviewItems bounded projection", () => {
     { role: "system", content: "system metadata" },
   ];
   test.each([
-    ...(
-      [
-        ["display", { role: "user", text: "question" }],
-        ["model-context", { role: "assistant", text: "model only" }],
-      ] as const
-    ).map(([view, preceding]) => ({
+    ...(["display", "model-context"] as const).map((view) => ({
       name: `${view} visibility, order and UTF-16 bounds`,
       messages: visibilityMessages,
       view,
-      limit: 2,
+      limit: 3,
       maxChars: 20,
-      expected: [preceding, { role: "assistant", text: `${"x".repeat(16)}...` }],
+      expected: [
+        { role: "user", text: "question" },
+        { role: "assistant", text: `${"x".repeat(16)}...` },
+        { role: "assistant", text: "REPLY_SKIP" },
+      ],
     })),
     {
       name: "fewer visible items than the limit",
@@ -754,6 +768,7 @@ describe("buildSessionPreviewItems bounded projection", () => {
       maxChars: 120,
       expected: [
         { role: "user", text: "first" },
+        { role: "assistant", text: "ANNOUNCE_SKIP" },
         { role: "assistant", text: "last" },
       ],
     },

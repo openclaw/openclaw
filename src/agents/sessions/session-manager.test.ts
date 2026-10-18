@@ -1,4 +1,3 @@
-import fs from "node:fs/promises";
 import path from "node:path";
 import { serialize } from "node:v8";
 import { redactIdentifier } from "@openclaw/normalization-core/node-crypto";
@@ -26,7 +25,8 @@ import { createNestedToolActivity } from "../../sessions/nested-tool-activity.js
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { withMockedPlatform } from "../../test-utils/vitest-spies.js";
-import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
+import { makeAgentAssistantMessage } from "../test-helpers/agent-message-fixtures.js";
+import { sessionScope } from "./session-manager-fixtures.test-support.js";
 import { buildSessionContext, CURRENT_SESSION_VERSION, SessionManager } from "./session-manager.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -40,15 +40,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
 
 function createScope(sessionId: string) {
   const dir = tempDirs.make("openclaw-session-manager-");
-  return {
-    dir,
-    scope: {
-      agentId: "main",
-      sessionId,
-      sessionKey: `agent:main:${sessionId}`,
-      storePath: path.join(dir, "sessions.json"),
-    },
-  };
+  return { dir, scope: sessionScope(path.join(dir, "sessions.json"), sessionId) };
 }
 
 function sessionHeader(id: string, cwd: string, version = CURRENT_SESSION_VERSION) {
@@ -61,6 +53,24 @@ function openMarker(marker: string, sessionKey: string, cwd: string): SessionMan
     throw new Error("expected SQLite transcript marker fixture");
   }
   return SessionManager.open({ ...target, sessionKey }, cwd);
+}
+
+function appendState(manager: SessionManager) {
+  return [manager.getEntries(), manager.getLeafId(), manager.getAppendParentId()];
+}
+
+function branchIds(manager: SessionManager) {
+  return manager.getBranch().map((entry) => entry.id);
+}
+
+async function expectRejectedAppend(
+  manager: SessionManager,
+  events: () => Promise<unknown>,
+  append: () => unknown,
+) {
+  const before = [manager.getBranch(), await events()];
+  expect(append).toThrow("SQLite transcript changed while preparing rewrite");
+  expect([manager.getBranch(), await events()]).toEqual(before);
 }
 
 describe("SessionManager.open", () => {
@@ -90,12 +100,12 @@ describe("SessionManager.open", () => {
     let ids: Array<string | undefined>;
     try {
       ids = await Promise.all([
-        manager.appendModelChange("test-provider", "test-model"),
+        manager.appendModelChange("p", "m"),
         manager.appendThinkingLevelChange("high"),
         manager.appendMessageAsync({
           role: "custom",
           customType: "synthetic-note",
-          content: "saved on the canonical worker",
+          content: "worker note",
           display: false,
           timestamp: 1,
         }),
@@ -104,73 +114,21 @@ describe("SessionManager.open", () => {
       sql.restore();
       clone.mockRestore();
     }
-    expect(
-      sql.queries.filter((query) =>
-        /\b(?:transcript_events|transcript_payloads|session_windows|session_nodes)\b|BEGIN\s+IMMEDIATE/i.test(
-          query,
-        ),
-      ),
-    ).toEqual([]);
+    const dataSql =
+      /\b(?:transcript_events|transcript_payloads|session_windows|session_nodes)\b|BEGIN\s+IMMEDIATE/i;
+    expect(sql.queries.filter((query) => dataSql.test(query))).toEqual([]);
     expect(manager.getEntries()).toMatchObject([
-      {
-        type: "model_change",
-        id: ids[0],
-        parentId: null,
-        provider: "test-provider",
-        modelId: "test-model",
-      },
+      { type: "model_change", id: ids[0], parentId: null, provider: "p", modelId: "m" },
       { type: "thinking_level_change", id: ids[1], parentId: ids[0], thinkingLevel: "high" },
       {
         type: "message",
         id: ids[2],
         parentId: ids[1],
-        message: { role: "custom", content: "saved on the canonical worker" },
+        message: { role: "custom", content: "worker note" },
       },
     ]);
     expect(SessionManager.open(target, dir).getEntries()).toEqual(manager.getEntries());
     expect(loadSessionEntry(target)?.sessionId).toBe(target.sessionId);
-  });
-
-  it("opens SQLite markers without creating marker-named files and persists assistant replies", async () => {
-    const { dir, scope } = createScope("sqlite-session");
-    const marker = formatSqliteSessionFileMarker(scope);
-    await upsertSessionEntryCore(scope, {
-      sessionFile: marker,
-      sessionId: scope.sessionId,
-      updatedAt: 10,
-    });
-    await appendTranscriptMessage(scope, {
-      cwd: dir,
-      message: { role: "user", content: "question" },
-    });
-    const manager = openMarker(marker, scope.sessionKey, dir);
-    expect(manager.buildSessionContext().messages).toMatchObject([
-      { content: "question", role: "user" },
-    ]);
-    const assistantId = manager.appendMessage(buildAssistantMessage("answer"));
-    const thinkingId = await manager.appendThinkingLevelChange("high");
-    const modelId = await manager.appendModelChange("openai", "gpt-5.5");
-    const compactionId = manager.appendCompaction("summary", "assistant-1", 42);
-    const resetId = manager.appendResetBoundary("new", assistantId);
-    expect(manager.getBoundaryCount()).toBe(2);
-    await expect(fs.stat(path.join(process.cwd(), marker))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-    await expect(loadTranscriptEvents(scope)).resolves.toMatchObject([
-      { type: "session" },
-      { type: "message", message: { content: "question", role: "user" } },
-      {
-        type: "message",
-        id: assistantId,
-        parentId: expect.any(String),
-        message: { content: [{ type: "text", text: "answer" }], role: "assistant" },
-      },
-      { type: "thinking_level_change", id: thinkingId, thinkingLevel: "high" },
-      { type: "model_change", id: modelId, modelId: "gpt-5.5", provider: "openai" },
-      { type: "compaction", id: compactionId, firstKeptEntryId: "assistant-1", summary: "summary" },
-      { type: "reset", id: resetId, firstKeptEntryId: assistantId, reason: "new" },
-    ]);
-    expect(openMarker(marker, scope.sessionKey, dir).getEntries()).toEqual(manager.getEntries());
   });
 
   it("does not overwrite a rebound session row when the first append seeds its header", async () => {
@@ -183,9 +141,9 @@ describe("SessionManager.open", () => {
     const before = loadSessionEntry(scope);
     const manager = SessionManager.open(scope, dir);
 
-    expect(() =>
-      manager.appendMessage({ role: "user", content: "stale message", timestamp: 1 }),
-    ).toThrow("Session transcript header was not persisted");
+    expect(() => manager.appendMessage(makeUserMessage("stale", 1))).toThrow(
+      "Session transcript header was not persisted",
+    );
     expect(loadSessionEntry(scope)).toEqual(before);
   });
 
@@ -196,24 +154,22 @@ describe("SessionManager.open", () => {
     await expect(manager.appendModelChange("", "")).rejects.toThrow(
       "Invalid session transcript entry",
     );
-    expect(manager.getEntries()).toEqual(entriesBefore);
-    expect(manager.getLeafId()).toBeNull();
-    expect(manager.getAppendParentId()).toBeNull();
+    expect(appendState(manager)).toEqual([entriesBefore, null, null]);
   });
 
   it("uses the selected logical leaf immediately after a side append control", () => {
     const manager = SessionManager.inMemory("/tmp");
-    const firstId = manager.appendMessage({ role: "user", content: "first", timestamp: 1 });
-    const secondId = manager.appendMessage({ role: "user", content: "second", timestamp: 2 });
+    const firstId = manager.appendMessage(makeUserMessage("first", 1));
+    const secondId = manager.appendMessage(makeUserMessage("second", 2));
     const control = manager.appendLeafControl({
       targetId: firstId,
       appendParentId: secondId,
       appendMode: "side",
     });
 
-    const thirdId = manager.appendMessage({ role: "user", content: "third", timestamp: 3 });
+    const thirdId = manager.appendMessage(makeUserMessage("third", 3));
 
-    expect(manager.getBranch().map((entry) => entry.id)).toEqual([firstId, thirdId]);
+    expect(branchIds(manager)).toEqual([firstId, thirdId]);
     manager.branch(control.id);
     expect(manager.getLeafId()).toBe(firstId);
     expect(() =>
@@ -226,11 +182,7 @@ describe("SessionManager.open", () => {
 
   it("refreshes cwd when switching persisted targets and rejects identity reset", async () => {
     const { dir, scope: firstTarget } = createScope("first-target");
-    const secondTarget = {
-      ...firstTarget,
-      sessionId: "second-target",
-      sessionKey: "agent:main:second-target",
-    };
+    const secondTarget = sessionScope(firstTarget.storePath, "second-target");
     await upsertSessionEntryCore(firstTarget, { sessionId: firstTarget.sessionId, updatedAt: 1 });
     await upsertSessionEntryCore(secondTarget, { sessionId: secondTarget.sessionId, updatedAt: 1 });
     await appendTranscriptMessage(firstTarget, {
@@ -300,7 +252,7 @@ describe("SessionManager.open", () => {
     const staleManager = openMarker(marker, scope.sessionKey, dir);
     const resetManager = openMarker(marker, scope.sessionKey, dir);
     resetManager.appendResetBoundary("reset");
-    expect(() => staleManager.appendMessage(buildAssistantMessage("late append"))).not.toThrow();
+    expect(() => staleManager.appendMessage(rebaseAssistant("late append"))).not.toThrow();
 
     expect(readTranscriptRawDelta(scope, { cursor: cursor.cursor }).kind).toBe("page");
     const events = await loadTranscriptEvents(scope);
@@ -316,19 +268,10 @@ describe("SessionManager.open", () => {
     });
   });
 
-  it("reads the latest normalized name even off the selected branch", () => {
-    const manager = SessionManager.inMemory();
-    expect(manager.getSessionName()).toBeUndefined();
-    const root = manager.appendMessage({ role: "user", content: "root", timestamp: 1 });
-    manager.appendSessionInfo("old name");
-    manager.appendSessionInfo("  first\nsecond\r\nthird  ");
-    manager.branch(root);
-    expect(manager.getSessionName()).toBe("first second third");
-  });
-
   it("rejects persistence after the session target rebounds", async () => {
     const { dir, scope } = createScope("sqlite-prompt-release-rebound");
     const sensitivePeer = "+15551234567";
+    const replacement = "replacement-session";
     const sessionKey = `agent:main:whatsapp:direct:${sensitivePeer}\n\x1b[31mspoof`;
     scope.sessionKey = sessionKey;
     const { sessionId, storePath } = scope;
@@ -342,17 +285,17 @@ describe("SessionManager.open", () => {
     const assistant = await appendTranscriptMessage(scope, {
       cwd: dir,
       eventId: "rebound-assistant",
-      message: buildAssistantMessage("answer"),
+      message: rebaseAssistant("answer"),
       parentId: user.messageId,
     });
     const sessionManager = openMarker(marker, sessionKey, dir);
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey, storePath },
-      { sessionId: "replacement-session", updatedAt: 20 },
+      { sessionId: replacement, updatedAt: 20 },
     );
 
     const expectedCause = {
-      actualSessionIdHash: redactIdentifier("replacement-session"),
+      actualSessionIdHash: redactIdentifier(replacement),
       agentIdHash: redactIdentifier(scope.agentId),
       code: "session-rebound",
       expectedSessionIdHash: redactIdentifier(sessionId),
@@ -371,19 +314,15 @@ describe("SessionManager.open", () => {
     );
     expect(compactionError).toMatchObject({ cause: expectedCause });
 
-    const entriesBeforeRejectedAppends = sessionManager.getEntries();
-    const leafBeforeRejectedAppends = sessionManager.getLeafId();
-    const appendParentBeforeRejectedAppends = sessionManager.getAppendParentId();
+    const beforeRejectedAppends = appendState(sessionManager);
     expect(() => sessionManager.branchWithSummary(null, "late summary")).toThrow(
       "entry was not persisted",
     );
-    const eventError = await captureError(() =>
-      sessionManager.appendModelChange("openai", "gpt-5.5"),
-    );
-    const messageError = await captureError(() =>
-      sessionManager.appendMessage({ role: "user", content: "late message", timestamp: 1 }),
-    );
-    for (const error of [eventError, messageError]) {
+    for (const append of [
+      () => sessionManager.appendModelChange("openai", "gpt-5.5"),
+      () => sessionManager.appendMessage(makeUserMessage("late message", 1)),
+    ]) {
+      const error = await captureError(append);
       expect(error).toMatchObject({ cause: expectedCause });
       const operatorFacingReason = formatErrorMessage(error);
       for (const hash of Object.values(expectedCause).filter((value) =>
@@ -395,40 +334,20 @@ describe("SessionManager.open", () => {
       expect(operatorFacingReason).not.toContain(sensitivePeer);
       expect(operatorFacingReason).not.toContain("spoof");
       expect(operatorFacingReason).not.toContain(sessionId);
-      expect(operatorFacingReason).not.toContain("replacement-session");
+      expect(operatorFacingReason).not.toContain(replacement);
       expect(operatorFacingReason).not.toContain("\n");
       expect(operatorFacingReason).not.toContain("\x1b");
     }
-    expect(sessionManager.getEntries()).toEqual(entriesBeforeRejectedAppends);
-    expect(sessionManager.getLeafId()).toBe(leafBeforeRejectedAppends);
-    expect(sessionManager.getAppendParentId()).toBe(appendParentBeforeRejectedAppends);
+    expect(appendState(sessionManager)).toEqual(beforeRejectedAppends);
   });
 });
 
-function buildAssistantMessage(text: string) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "messages" as const,
-    provider: "anthropic" as const,
-    model: "sonnet-4.6" as const,
-    usage: createZeroUsageFixture(),
-    stopReason: "stop" as const,
-    timestamp: Date.now(),
-  };
-}
-
 function rebaseAssistant(text: string, timestamp = 2) {
-  return {
-    role: "assistant" as const,
-    content: [{ type: "text" as const, text }],
-    api: "openai-responses" as const,
-    provider: "openai",
+  return makeAgentAssistantMessage({
+    content: [{ type: "text", text }],
     model: "gpt-5.5",
-    usage: createZeroUsageFixture(),
-    stopReason: "stop" as const,
     timestamp,
-  };
+  });
 }
 
 function nestedTool(timestamp: number) {
@@ -448,13 +367,7 @@ function nestedTool(timestamp: number) {
 }
 
 async function setup(content = "base") {
-  const dir = tempDirs.make("openclaw-session-manager-");
-  const target = {
-    agentId: "main",
-    sessionId: "rebase",
-    sessionKey: "agent:main:rebase",
-    storePath: path.join(dir, "sessions.json"),
-  };
+  const { dir, scope: target } = createScope("rebase");
   await upsertSessionEntryCore(target, { sessionId: target.sessionId, updatedAt: 1 });
   const persist = (eventId: string, message: unknown, now = 2, parentId?: string | null) =>
     appendTranscriptMessage(target, { eventId, message, now, parentId });
@@ -482,7 +395,7 @@ describe("SessionManager stale-parent rebase", () => {
       { id, parentId: "out-of-band" },
     ]);
     expect(manager.getEntry(id)?.parentId).toBe("out-of-band");
-    expect(manager.getBranch().map((entry) => entry.id)).toEqual(["base", "out-of-band", id]);
+    expect(branchIds(manager)).toEqual(["base", "out-of-band", id]);
     expect(
       await appendTranscriptMessage(target, {
         appendIntent: "active-branch",
@@ -509,7 +422,7 @@ describe("SessionManager stale-parent rebase", () => {
       ]),
     ).toBe(true);
     const id = await manager.appendModelChange("openai", "gpt-5.6");
-    expect(manager.getBranch().map((entry) => entry.id)).toEqual(["base", id]);
+    expect(branchIds(manager)).toEqual(["base", id]);
     expect(manager.getEntry("base")).toMatchObject({
       type: "message",
       message: { role: "user", content: "rewritten" },
@@ -538,13 +451,9 @@ describe("SessionManager stale-parent rebase", () => {
       },
       { id, parentId: "status-assistant", message: continuation },
     ]);
-    expect(manager.buildSessionContext().messages).toEqual([
-      makeUserMessage("base", 1),
-      continuation,
-    ]);
-    expect(SessionManager.open(target, dir).buildSessionContext()).toEqual(
-      manager.buildSessionContext(),
-    );
+    const context = manager.buildSessionContext();
+    expect(context.messages).toEqual([makeUserMessage("base", 1), continuation]);
+    expect(SessionManager.open(target, dir).buildSessionContext()).toEqual(context);
   });
 
   it.each([
@@ -564,24 +473,18 @@ describe("SessionManager stale-parent rebase", () => {
     async ({ kind, metadata }) => {
       const { manager, persist, events } = await setup();
       await persist("new-user", { ...makeUserMessage("/status", 2), ...metadata });
-      const beforeBranch = manager.getBranch();
-      const beforeEvents = await events();
-      expect(() =>
+      await expectRejectedAppend(manager, events, () =>
         manager.appendMessage(
           kind === "assistant" ? rebaseAssistant("stale reply", 3) : nestedTool(3),
         ),
-      ).toThrow("SQLite transcript changed while preparing rewrite");
-      expect(manager.getBranch()).toEqual(beforeBranch);
-      expect(await events()).toEqual(beforeEvents);
+      );
     },
   );
 
   it("rejects a stale custom message after a same-turn assistant append", async () => {
     const { manager, persist, events } = await setup();
     await persist("delivered-reply", rebaseAssistant("stale reply"));
-    const beforeBranch = manager.getBranch();
-    const beforeEvents = await events();
-    expect(() =>
+    await expectRejectedAppend(manager, events, () =>
       manager.appendMessage({
         role: "custom",
         customType: "extension-input",
@@ -589,15 +492,13 @@ describe("SessionManager stale-parent rebase", () => {
         display: true,
         timestamp: 3,
       }),
-    ).toThrow("SQLite transcript changed while preparing rewrite");
-    expect(manager.getBranch()).toEqual(beforeBranch);
-    expect(await events()).toEqual(beforeEvents);
+    );
   });
 
   it("fences a prepared assistant retry to the snapshot that passed validation", async () => {
     const { target, manager, persist, events } = await setup();
     await persist("intermediate-assistant", rebaseAssistant("late"));
-    const beforeBranch = manager.getBranch().map((entry) => entry.id);
+    const beforeBranch = branchIds(manager);
     const { db } = openOpenClawAgentDatabase({
       agentId: target.agentId,
       path: resolveSessionTranscriptDatabasePath(target),
@@ -625,7 +526,7 @@ describe("SessionManager stale-parent rebase", () => {
     } finally {
       spy.mockRestore();
     }
-    expect(manager.getBranch().map((entry) => entry.id)).toEqual(beforeBranch);
+    expect(branchIds(manager)).toEqual(beforeBranch);
     expect(await events()).toMatchObject([
       { type: "session" },
       { id: "base" },
@@ -641,13 +542,7 @@ describe("SessionManager stale-parent rebase", () => {
     source.branch("base");
     source.appendMessage(makeUserMessage("side user", 3));
     source.branch(parentId);
-    const beforeBranch = stale.getBranch();
-    const beforeEvents = await events();
-    expect(() => stale.appendMessage(nestedTool(4))).toThrow(
-      "SQLite transcript changed while preparing rewrite",
-    );
-    expect(stale.getBranch()).toEqual(beforeBranch);
-    expect(await events()).toEqual(beforeEvents);
+    await expectRejectedAppend(stale, events, () => stale.appendMessage(nestedTool(4)));
   });
 
   it("preserves a stale manager branch when the concurrent tail is unrelated", async () => {
@@ -657,7 +552,7 @@ describe("SessionManager stale-parent rebase", () => {
     await persist("second-root", makeUserMessage("second", 3), 3, null);
     const id = manager.appendMessage(makeUserMessage("branch", 4));
     expect(manager.getEntry(id)?.parentId).toBe("first-tail");
-    expect(manager.getBranch().map((entry) => entry.id)).toEqual(["base", "first-tail", id]);
+    expect(branchIds(manager)).toEqual(["base", "first-tail", id]);
     expect(buildSessionContext(manager.getEntries(), "first-tail").messages).toMatchObject([
       { role: "user", content: "first" },
       { role: "assistant", content: [{ type: "text", text: "first" }] },
@@ -675,11 +570,8 @@ describe("SessionManager stale-parent rebase", () => {
     await persist("concurrent-tail", rebaseAssistant("concurrent"), 2, "base");
     const id = manager.appendMessage(makeUserMessage("side", 3));
     expect(await events()).toContainEqual(expect.objectContaining({ id, parentId: "base" }));
-    expect(manager.getEntries()).toEqual(
-      expect.arrayContaining([
-        expect.objectContaining({ id: "concurrent-tail" }),
-        expect.objectContaining({ id }),
-      ]),
+    expect(manager.getEntries().map((entry) => entry.id)).toEqual(
+      expect.arrayContaining(["concurrent-tail", id]),
     );
     expect(() => manager.prepareTranscriptRewrite()).not.toThrow();
   });

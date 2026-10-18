@@ -11,7 +11,11 @@ import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { PersonalInstructions } from "./personal-instructions.tsx";
-import { createConnectedContext, mountProfilePage } from "./profile-page.test-support.tsx";
+import {
+  createConnectedContext,
+  modelAccountProfile,
+  mountProfilePage,
+} from "./profile-page.test-support.tsx";
 
 const file = {
   agentId: "main",
@@ -413,7 +417,42 @@ it("retains drafts privately while offline and restores them only for the same p
 });
 
 it("keeps the actual Profile editor mounted across an offline transition", async () => {
-  const { context, emit } = createContext(vi.fn().mockResolvedValue(file));
+  const request = vi.fn().mockImplementation(async (method: string) => {
+    switch (method) {
+      case "users.self":
+        return { profile: modelAccountProfile };
+      case "users.personalFile.get":
+        return file;
+      case "users.listModelAccounts":
+        return { profileId: modelAccountProfile.id, accounts: [], links: [] };
+      case "users.github.status":
+        return {
+          personal: {
+            state: "disconnected",
+            generation: null,
+            account: null,
+            accessExpiresAtMs: null,
+            refreshState: "not_applicable",
+            pending: null,
+          },
+          system: {
+            source: "system-detected",
+            credentialKind: "native",
+            credentialState: "unavailable",
+            account: null,
+            gitAuthor: { name: null, email: null },
+            evidence: "none",
+            accessExpiresAtMs: null,
+            refreshState: "not_applicable",
+            oauthScopes: [],
+            repositoryGrants: "unknown",
+          },
+        };
+      default:
+        throw new Error(`Unexpected request: ${method}`);
+    }
+  });
+  const { context, emit } = createContext(request);
   const page = mountProfilePage(context);
   flush();
   const editor = page.querySelector<HTMLElement>("openclaw-personal-instructions")!;

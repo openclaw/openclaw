@@ -1,4 +1,3 @@
-// Shared status scan overview used by compact status, status --json, and status --all.
 // It collects config, update, gateway, channel, and local agent state before specialized callers add details.
 
 import { measureCliCommandStartup } from "../cli/command-startup-timing.js";
@@ -107,6 +106,7 @@ export type StatusScanOverviewResult = {
         | "childRuntime"
         | "secretEgressProxy"
         | "sqliteWal"
+        | "databaseStores"
       > &
         Partial<Pick<StatusSummary, "heartbeat">>)
     | null;
@@ -285,7 +285,7 @@ export async function collectStatusScanOverview(params: {
                   config: cfg,
                   configPath: snapshot.path,
                   method: "status",
-                  params: { includeChannelSummary: false },
+                  params: { includeChannelSummary: false, includeCliProjection: true },
                   timeoutMs: Math.min(5000, resolveStatusGatewayProbeTimeoutMs(params.opts)),
                   ...gatewaySnapshot.gatewayCallOverrides,
                 }).catch(() => null),
@@ -302,6 +302,7 @@ export async function collectStatusScanOverview(params: {
           ...(params.opts.deep && status.childRuntime ? { childRuntime: status.childRuntime } : {}),
           secretEgressProxy: status.secretEgressProxy,
           sqliteWal: status.sqliteWal,
+          ...(status.databaseStores ? { databaseStores: status.databaseStores } : {}),
           // The Gateway owns route readiness; CLI channel runtimes stay unloaded.
           ...(status.heartbeat ? { heartbeat: status.heartbeat } : {}),
         }

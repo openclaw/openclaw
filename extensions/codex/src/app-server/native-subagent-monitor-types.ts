@@ -221,6 +221,7 @@ export type ChildState = NativeSubagentAssignment & {
   pendingCompletion?: RecoveredCompletion;
   subscriptionClosed?: true;
   nativeCompletionDelivered: boolean;
+  completionDeliveryAbandoned?: true;
   completionDeliveryAttempt: number;
   completionDeliveryTimer?: ReturnType<typeof setTimeout>;
   deliveryOwnerKey?: string;
@@ -269,6 +270,8 @@ export type ThreadRecovery = {
 
 export type NativeDescendantCancellation = Parameters<DescendantCancellation>[0] & {
   parentThreadId: string;
+  /** Optional native binding guard; persistence compares the row inside its own mutation. */
+  assertBindingCurrent?: () => void;
 };
 
 export type MonitorOptions = {

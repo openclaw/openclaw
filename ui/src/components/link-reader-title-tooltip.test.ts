@@ -256,7 +256,7 @@ it("keeps rendered GitHub links free of native titles across preview closure and
   await vi.advanceTimersByTimeAsync(300);
   expect(document.querySelector(".link-reader-hovercard")).not.toBeNull();
   noNativeTitles();
-  expect(links[0]?.textContent).toBe("#99815");
+  expect(links[0]?.textContent).toBe("openclaw/openclaw#99815");
   expect(anchor.textContent).toBe("the related issue");
   expect(links[2]?.querySelector("img")?.alt).toBe("Issue icon");
   expect(links[3]?.getAttribute("aria-label")).toBe("Issue details");

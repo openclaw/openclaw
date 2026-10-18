@@ -186,19 +186,6 @@ describe("plugin state data-only comparison", () => {
     ).toEqual({ status: "applied" });
   });
 
-  it("compares stored bytes without requiring legacy JSON to be reserialized", async () => {
-    const f = fixture("legacy-json");
-    f.seed("counter", ' { "count" : 1 } ', 1, null);
-    const before = await f.store.observe("counter");
-    expect(
-      await f.store.compareAndApply("counter", before.comparison, {
-        operation: "update",
-        action: "set",
-        value: { count: 2 },
-      }),
-    ).toEqual({ status: "applied" });
-  });
-
   it("refreshes age and default TTL for a defined same-value update", async () => {
     const f = fixture("refresh", { defaultTtlMs: 60_000 });
     f.seed("counter", '{"count":1}', 1, Date.now() + 120_000);

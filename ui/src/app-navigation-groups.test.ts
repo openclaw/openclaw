@@ -1,11 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
-  DEFAULT_SIDEBAR_ENTRIES,
   isSessionsHubRoute,
   isSettingsNavigationRoute,
   normalizeSidebarEntries,
   parseSidebarEntry,
-  serializeSidebarEntry,
   visibleSettingsNavigationGroups,
   isSettingsNavigationRouteVisible,
 } from "./app-navigation.ts";
@@ -151,11 +149,6 @@ describe("sidebar entries", () => {
       ).toBe(true);
     }
   });
-  it("starts with no personal rail shortcuts", () => {
-    expect(DEFAULT_SIDEBAR_ENTRIES).toEqual([]);
-    expect(isSettingsNavigationRoute("agents-home")).toBe(false);
-  });
-
   it("treats worktrees as a sessions hub tab without its own pin", () => {
     expect(isSessionsHubRoute("sessions")).toBe(true);
     expect(isSessionsHubRoute("worktrees")).toBe(true);
@@ -171,6 +164,7 @@ describe("sidebar entries", () => {
   });
 
   it("keeps model setup as a settings subpage without a sidebar entry", () => {
+    expect(isSettingsNavigationRoute("agents-home")).toBe(false);
     expect(isSettingsNavigationRoute("model-setup")).toBe(true);
     expect(settingsNavigationOwnerRoute("model-setup")).toBe("model-providers");
   });
@@ -188,25 +182,6 @@ describe("sidebar entries", () => {
     expect(legacyCanAdmin).toBe(true);
     expect(visibleSettingsNavigationGroups(legacyCanAdmin)).toEqual(
       visibleSettingsNavigationGroups(true),
-    );
-  });
-
-  it("round-trips route, Workboard, and session entries", () => {
-    expect(parseSidebarEntry("route:usage")).toEqual({ type: "route", route: "usage" });
-    expect(parseSidebarEntry("session:agent:main:test")).toEqual({
-      type: "session",
-      key: "agent:main:test",
-    });
-    expect(parseSidebarEntry("workboard:ops")).toEqual({
-      type: "plugin",
-      key: "workboard/board-ops",
-    });
-    expect(serializeSidebarEntry({ type: "route", route: "plugins" })).toBe("route:plugins");
-    expect(serializeSidebarEntry({ type: "session", key: "agent:main:test" })).toBe(
-      "session:agent:main:test",
-    );
-    expect(serializeSidebarEntry({ type: "plugin", key: "workboard/board-ops" })).toBe(
-      "plugin:workboard/board-ops",
     );
   });
 

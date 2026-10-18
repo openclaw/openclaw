@@ -228,12 +228,9 @@ export async function handleDiscordMessageManagementAction(ctx: DiscordMessaging
         },
         ctx.withOpts(),
       );
-      const messages = results.messages;
-      const normalizedMessages = Array.isArray(messages)
-        ? messages.map((group) =>
-            Array.isArray(group) ? group.map((msg) => ctx.normalizeMessage(msg)) : group,
-          )
-        : messages;
+      const normalizedMessages = results.messages.map((group) =>
+        Array.isArray(group) ? group.map((msg) => ctx.normalizeMessage(msg)) : group,
+      );
       return jsonResult({
         ok: true,
         results: {

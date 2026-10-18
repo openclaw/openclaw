@@ -10,9 +10,10 @@
 //
 // Only repo-owned tags may be dropped. Dependency packages are externalized, so
 // they evaluate once per worker through native ESM and never re-register; dropping
-// their definitions would leave `wa-*` and friends permanently unupgraded.
+// their definitions would leave external custom elements permanently unupgraded.
 
 import {
+  isRepoOwnedRegistrationStack,
   jsdomCustomElementDefinitions,
   type JsdomCustomElementDefinition,
 } from "./jsdom-compat.mts";
@@ -24,20 +25,6 @@ export type CustomElementTracking = {
   definitions: JsdomCustomElementDefinition[];
   repoOwnedTags: Set<string>;
 };
-
-const VITEST_SPY_FRAME = /[\\/]node_modules[\\/]vitest[\\/]dist[\\/]chunks[\\/]spy\.[^\\/]+\.js:/u;
-
-// Conservative on an unreadable stack: keeping a repo tag costs a stale class in
-// one lane, dropping a dependency tag would leave it unupgraded for the whole run.
-export function isRepoOwnedDefineStack(stack: string | undefined): boolean {
-  const frames = (stack ?? "").split("\n").slice(2);
-  // A Vitest spy on define forwards here, possibly through a fixture's mock
-  // implementation. Neither owns the registered class; whoever called the spy does.
-  const spyFrame = frames.findIndex((frame) => VITEST_SPY_FRAME.test(frame));
-  const callerFrame =
-    frames.slice(spyFrame + 1).find((frame) => !VITEST_SPY_FRAME.test(frame)) ?? "";
-  return callerFrame.trim() !== "" && !/[\\/]node_modules[\\/]/u.test(callerFrame);
-}
 
 // Returns undefined for anything that is not a jsdom registry: mixed lanes run
 // `@vitest-environment node` files whose leftover global has no definitions to track.
@@ -51,7 +38,7 @@ export function trackCustomElementRegistry(
   const tracking: CustomElementTracking = { registry, definitions, repoOwnedTags: new Set() };
   const define = registry.define.bind(registry);
   registry.define = (name, constructor, options) => {
-    if (isRepoOwnedDefineStack(new Error().stack)) {
+    if (isRepoOwnedRegistrationStack(new Error().stack)) {
       tracking.repoOwnedTags.add(name);
     }
     define(name, constructor, options);

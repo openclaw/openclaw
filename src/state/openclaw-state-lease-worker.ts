@@ -41,7 +41,7 @@ function takeLeaseExpiryObservation(identity: OpenClawStateLeaseIdentity): BigIn
     !isDeepStrictEqual(attachment.identity, identity) ||
     !(attachment.observation instanceof SharedArrayBuffer) ||
     attachment.observation.byteLength !==
-      (leaseHeartbeatState.startupPhase + 1) * BigInt64Array.BYTES_PER_ELEMENT
+      (leaseHeartbeatState.ownerFence + 1) * BigInt64Array.BYTES_PER_ELEMENT
   ) {
     throw new Error("State lease worker requires its original expiry observation attachment");
   }

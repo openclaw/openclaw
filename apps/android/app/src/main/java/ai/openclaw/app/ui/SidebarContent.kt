@@ -87,11 +87,12 @@ import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import androidx.lifecycle.repeatOnLifecycle
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.flow.collectLatest
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 import java.util.Collections
 import kotlin.math.sign
-
-private const val SIDEBAR_CATALOG_REFRESH_MS = 30_000L
 
 internal enum class SidebarSessionDragSource {
   Catalog,
@@ -532,10 +533,19 @@ internal fun OpenClawSidebar(
     if (!catalogRefreshNeeded) return@LaunchedEffect
     lifecycle.repeatOnLifecycle(Lifecycle.State.STARTED) {
       viewModel.refreshSessionCatalog(selectedAgentId)
-      while (true) {
-        delay(SIDEBAR_CATALOG_REFRESH_MS)
-        viewModel.refreshSessionCatalog(selectedAgentId)
-      }
+      viewModel.sessionCatalogState
+        .map { state ->
+          state.errorText != null ||
+            state.catalogs.any { catalog ->
+              catalog.errorText != null || catalog.hosts.any { it.errorText != null }
+            }
+        }.distinctUntilChanged()
+        .collectLatest { failed ->
+          while (true) {
+            delay(if (failed) 30_000L else 120_000L)
+            viewModel.refreshSessionCatalog(selectedAgentId)
+          }
+        }
     }
   }
   // Canonical debounced gateway search shared with the Sessions browser; the

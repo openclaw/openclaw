@@ -1,9 +1,6 @@
 import type { JSX } from "@solidjs/web";
-import { For } from "solid-js";
-import type {
-  WorkerMachineOption,
-  WorkerOperatingSystem,
-} from "../../../../packages/gateway-protocol/src/schema/environments.ts";
+import { createMemo, For } from "solid-js";
+import type { WorkerMachineOption } from "../../../../packages/gateway-protocol/src/schema/environments.ts";
 import {
   compareCloudProfiles,
   resolveCloudProfileIconData,
@@ -238,14 +235,12 @@ export function SessionMenuItem(props: { item: NativeSessionMenuItem; submitting
 
 export function CloudProfileMenuItems(props: { params: CloudProfileMenuItemsOptions }) {
   return (
-    <>
-      <For
-        each={props.params.profiles.toSorted(compareCloudProfiles)}
-        keyed={(profile) => profile.id}
-      >
-        {(profile) => <CloudProfileMenuItem profile={profile()} params={props.params} />}
-      </For>
-    </>
+    <For
+      each={props.params.profiles.toSorted(compareCloudProfiles)}
+      keyed={(profile) => profile.id}
+    >
+      {(profile) => <CloudProfileMenuItem profile={profile()} params={props.params} />}
+    </For>
   );
 }
 
@@ -254,16 +249,21 @@ function CloudProfileMenuItem(props: {
   params: CloudProfileMenuItemsOptions;
 }) {
   const selected = () => props.params.selectedId === props.profile.id;
-  const osId = () =>
-    (selected() ? props.params.selectedOs : undefined) || defaultCloudOs(props.profile);
-  const os = () => props.profile.operatingSystems?.find((option) => option.id === osId());
-  const machines = () => cloudMachinesForOs(props.profile, osId());
-  const machine = () =>
-    (selected() && props.params.selectedMachine
-      ? machines().find((option) => option.id === props.params.selectedMachine)
-      : undefined) ?? defaultCloudMachine(props.profile, osId());
+  const osId = createMemo(
+    () => (selected() ? props.params.selectedOs : undefined) || defaultCloudOs(props.profile),
+  );
+  const os = createMemo(() =>
+    props.profile.operatingSystems?.find((option) => option.id === osId()),
+  );
+  const machines = createMemo(() => cloudMachinesForOs(props.profile, osId()));
+  const machine = createMemo(
+    () =>
+      (selected() && props.params.selectedMachine
+        ? machines().find((option) => option.id === props.params.selectedMachine)
+        : undefined) ?? defaultCloudMachine(props.profile, osId()),
+  );
   const disabledReason = () => props.params.profileDisabledReason?.(props.profile);
-  const presentation = () => resolveCloudProfileIconData(props.profile);
+  const presentation = createMemo(() => resolveCloudProfileIconData(props.profile));
   const hasSubmenu = () =>
     Boolean(
       props.params.compact &&
@@ -337,7 +337,6 @@ function CloudProfileMenuItem(props: {
             </span>
             <CloudConfiguration
               profile={props.profile}
-              operatingSystems={props.profile.operatingSystems ?? []}
               machines={machines()}
               suggested={!selected()}
               selectedOs={selected() ? osId() : ""}
@@ -368,7 +367,6 @@ function CloudProfileMenuItem(props: {
 function CloudConfiguration(props: {
   profile: DraftCloudProfile;
   suggested: boolean;
-  operatingSystems: readonly WorkerOperatingSystem[];
   machines: readonly WorkerMachineOption[];
   selectedOs: string;
   selectedMachine: string;
@@ -376,27 +374,29 @@ function CloudConfiguration(props: {
   onSelectOs: (id: string) => void;
   onSelectMachine: (id: string) => void;
 }) {
-  const groups = () =>
-    [
-      {
-        kind: "os",
-        label: t("newSession.operatingSystem"),
-        choices: props.operatingSystems.filter((os) => !os.disabledReason),
-        selectedId: props.selectedOs,
-        suggestedId: props.suggested ? defaultCloudOs(props.profile) : undefined,
-        onSelect: props.onSelectOs,
-      },
-      {
-        kind: "machine",
-        label: t("newSession.machine"),
-        choices: props.machines,
-        selectedId: props.selectedMachine,
-        suggestedId: props.suggested
-          ? defaultCloudMachine(props.profile, props.selectedOs)?.id
-          : undefined,
-        onSelect: props.onSelectMachine,
-      },
-    ] as const;
+  const groups = createMemo(
+    () =>
+      [
+        {
+          kind: "os",
+          label: t("newSession.operatingSystem"),
+          choices: props.profile.operatingSystems?.filter((os) => !os.disabledReason) ?? [],
+          selectedId: props.selectedOs,
+          suggestedId: props.suggested ? defaultCloudOs(props.profile) : undefined,
+          onSelect: props.onSelectOs,
+        },
+        {
+          kind: "machine",
+          label: t("newSession.machine"),
+          choices: props.machines,
+          selectedId: props.selectedMachine,
+          suggestedId: props.suggested
+            ? defaultCloudMachine(props.profile, props.selectedOs)?.id
+            : undefined,
+          onSelect: props.onSelectMachine,
+        },
+      ] as const,
+  );
   return (
     <section class="new-session-page__cloud-configuration" aria-label={props.profile.id}>
       <For each={groups()} keyed={(group) => group.kind}>
@@ -444,31 +444,29 @@ function CloudConfiguration(props: {
 
 export function CloudChoiceMenuItems(props: { params: CloudChoiceMenuItemsOptions }) {
   return (
-    <>
-      <For each={props.params.choices} keyed={(choice) => choice.id}>
-        {(choice) => (
-          <SessionMenuItem
-            submitting={props.params.submitting}
-            item={{
-              suggested: props.params.suggestedId === choice().id,
-              value: `${props.params.kind}:${choice().id}`,
-              label: choice().label,
-              ...(props.params.kind === "machine"
-                ? { sub: machineShapeText(choice()) }
-                : {
-                    description: choice().disabledReason,
-                    disabled: Boolean(choice().disabledReason),
-                    title: choice().disabledReason,
-                  }),
-              checked:
-                props.params.selectedId === choice().id ||
-                (!props.params.selectedId && props.params.suggestedId === choice().id),
-              keepOpen: true,
-              onSelect: () => props.params.onSelect(choice().id),
-            }}
-          />
-        )}
-      </For>
-    </>
+    <For each={props.params.choices} keyed={(choice) => choice.id}>
+      {(choice) => (
+        <SessionMenuItem
+          submitting={props.params.submitting}
+          item={{
+            suggested: props.params.suggestedId === choice().id,
+            value: `${props.params.kind}:${choice().id}`,
+            label: choice().label,
+            ...(props.params.kind === "machine"
+              ? { sub: machineShapeText(choice()) }
+              : {
+                  description: choice().disabledReason,
+                  disabled: Boolean(choice().disabledReason),
+                  title: choice().disabledReason,
+                }),
+            checked:
+              props.params.selectedId === choice().id ||
+              (!props.params.selectedId && props.params.suggestedId === choice().id),
+            keepOpen: true,
+            onSelect: () => props.params.onSelect(choice().id),
+          }}
+        />
+      )}
+    </For>
   );
 }

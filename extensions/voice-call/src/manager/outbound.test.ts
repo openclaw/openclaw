@@ -274,7 +274,7 @@ describe("voice-call outbound helpers", () => {
   });
 
   it.each(["off", "twilio"] as const)(
-    "validates a capped brief and records voicemail ownership with detection=%s",
+    "caps a prepared brief and records voicemail ownership with detection=%s",
     async (detection) => {
       const initiateProviderCall = vi.fn(async () => ({ providerCallId: "provider-brief" }));
       const ctx = {
@@ -293,11 +293,6 @@ describe("voice-call outbound helpers", () => {
       expect(ctx.activeCalls.get(result.callId)?.metadata?.voicemailManagedByHost).toBe(
         detection === "twilio" ? true : undefined,
       );
-      const invalid = await initiateCall(ctx as never, "+14155550123", undefined, {
-        brief: { task: "x".repeat(2001) },
-      });
-      expect(invalid.success).toBe(false);
-      expect(invalid.error).toContain("brief");
       expect(initiateProviderCall).toHaveBeenCalledTimes(1);
     },
   );

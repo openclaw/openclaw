@@ -9,10 +9,8 @@ import {
   trackAsyncWork,
 } from "../../shared/async-work-scope.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
-import {
-  runContextEngineMaintenance,
-  waitForDeferredTurnMaintenanceForSession,
-} from "./context-engine-maintenance.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
+import { runContextEngineMaintenance } from "./context-engine-maintenance.js";
 import { resetDeferredTurnMaintenanceStateForTest } from "./context-engine-maintenance.test-support.js";
 const enqueueMaintenance = commandQueue.enqueueCommandInLane;
 vi.mock("../../context-engine/registry.js", () => ({
@@ -156,7 +154,7 @@ function fixture(failQueue = false) {
       await Promise.allSettled(foreground);
       await Promise.allSettled(creatorTails);
       await Promise.allSettled(deferred);
-      await waitForDeferredTurnMaintenanceForSession(sessionKey);
+      await waitForSessionMaintenance(sessionKey);
     },
   };
 }
@@ -186,7 +184,7 @@ describe("deferred maintenance synchronous preparation", () => {
     let checkpoint: Promise<void> | undefined;
     let checkpointSettled = false;
     f.onBoundary(() => {
-      checkpoint = waitForDeferredTurnMaintenanceForSession(sessionKey).then(() => {
+      checkpoint = waitForSessionMaintenance(sessionKey).then(() => {
         checkpointSettled = true;
       });
       void f.schedule();

@@ -14,8 +14,8 @@ import { createPluginRecord } from "../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { closePreparedModelRuntimeSnapshots } from "../prepared-model-runtime.lifecycle.js";
+import { waitForSessionMaintenance } from "../session-maintenance/coordinator.js";
 import { compactEmbeddedAgentSession } from "./compact.queued.js";
-import { waitForDeferredTurnMaintenanceForSession } from "./context-engine-maintenance.js";
 
 it("keeps an actual prepared registration alive through queued engine maintenance and disposal", async () => {
   await withOpenClawTestState(
@@ -193,7 +193,7 @@ module.exports = { id: '${pluginId}', register(api) {
         expect.soft(registration.db.isOpen).toBe(true);
         expect.soft(registration.disposals).toBe(0);
         bridge.finishDisposal.resolve();
-        await waitForDeferredTurnMaintenanceForSession(target.sessionKey);
+        await waitForSessionMaintenance(target.sessionKey);
         await bridge.closed.promise;
         await vi.waitFor(() =>
           expect(bridge.connections.every((connection) => connection.disposals === 1)).toBe(true),
@@ -210,7 +210,7 @@ module.exports = { id: '${pluginId}', register(api) {
       } finally {
         bridge.resume.resolve();
         bridge.finishDisposal.resolve();
-        await waitForDeferredTurnMaintenanceForSession(target.sessionKey);
+        await waitForSessionMaintenance(target.sessionKey);
         await closePreparedModelRuntimeSnapshots();
         await source.release();
         resetPluginRuntimeStateForTest();

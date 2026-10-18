@@ -5,6 +5,7 @@ import { fileKindForPath, shortestFileLabels } from "./file-kind.ts";
 import { isGitHubHost } from "./github-link-eligibility.ts";
 import {
   decodeGitHubPathSegment,
+  formatGitHubItemReference,
   parseGitHubItemPath,
   parseGitHubLinkTarget,
 } from "./github-link-target.ts";
@@ -484,9 +485,9 @@ export function createMarkdownParser(): MarkdownItParser {
           if (itemChip) {
             open.attrJoin("class", "markdown-github-item");
             open.attrSet("data-github-kind", item.kind);
-          }
-          if (generatedUrlLabel) {
-            labelToken.content = item ? `#${item.number}` : formatGitHubLinkLabel(url);
+            labelToken.content = formatGitHubItemReference(item);
+          } else if (generatedUrlLabel) {
+            labelToken.content = formatGitHubLinkLabel(url);
           }
           if (!githubPreview && (generatedUrlLabel || itemChip)) {
             open.attrSet("title", href);

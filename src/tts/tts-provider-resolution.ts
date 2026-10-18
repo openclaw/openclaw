@@ -498,7 +498,7 @@ export function resolvePrimaryTtsProviderCandidate(
   });
 }
 
-/** @deprecated Use isTtsProviderConfiguredAsync. Removed at the next Plugin SDK major. */
+/** @deprecated Use isTtsProviderConfiguredAsync. Final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
 export function isTtsProviderConfigured(
   config: ResolvedTtsConfig,
   provider: TtsProvider | SpeechProviderPlugin,
@@ -560,8 +560,15 @@ export async function isTtsProviderConfiguredAsync(
   config: ResolvedTtsConfig,
   provider: TtsProvider | SpeechProviderPlugin,
   cfg?: OpenClawConfig,
+  onError?: (error: unknown) => void,
 ): Promise<boolean> {
-  return await isSpeechProviderConfiguredAsync(config, provider, cfg, defaultProviderRegistry);
+  return await isSpeechProviderConfiguredAsync(
+    config,
+    provider,
+    cfg,
+    defaultProviderRegistry,
+    onError,
+  );
 }
 
 async function isSpeechProviderConfiguredAsync(
@@ -569,6 +576,7 @@ async function isSpeechProviderConfiguredAsync(
   provider: TtsProvider | SpeechProviderPlugin,
   cfg: OpenClawConfig | undefined,
   registry: TtsProviderRegistry,
+  onError?: (error: unknown) => void,
 ): Promise<boolean> {
   try {
     const configured = resolveSpeechProviderConfiguration(config, provider, cfg, registry);
@@ -587,8 +595,9 @@ async function isSpeechProviderConfiguredAsync(
         ? configured.provider.isConfiguredAsync(configured.context)
         : configured.provider.isConfigured(configured.context))) ?? false
     );
-  } catch {
-    // A broken provider must not hide other usable providers in selection or status.
+  } catch (error) {
+    // Snapshot owners retain last-good readiness when a provider check fails.
+    onError?.(error);
     return false;
   }
 }

@@ -49,7 +49,8 @@ server.listen(0, "127.0.0.1", () => process.stdout.write(JSON.stringify({
     await fs.writeFile(
       wrapper,
       `import { runRespawnedChild } from ${JSON.stringify(new URL("../../node-runtime-recovery.mjs", import.meta.url).href)};
-const handled = await runRespawnedChild(process.execPath, [${JSON.stringify(worker)}], process.env);
+import { resolveOpenClawCliRespawn } from ${JSON.stringify(new URL("../../cli-invocation.mjs", import.meta.url).href)};
+const handled = await runRespawnedChild(resolveOpenClawCliRespawn({ entryPath: ${JSON.stringify(worker)}, execArgv: [], args: [] }));
 process.stdout.write("launcher-completed:" + handled + "\\n");
 `,
     );

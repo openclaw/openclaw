@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { spawn, type ChildProcess } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs/promises";
@@ -17,10 +18,7 @@ import * as processLineage from "../process/supervisor/inherited-process-lineage
 import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import { createMcpStdioClient, type McpStdioClient } from "./mcp-stdio-client.js";
 
-const fixture = vi.hoisted(() => ({
-  preload: "",
-  relay: undefined as ChildProcess | undefined,
-}));
+const fixture = vi.hoisted(() => ({ preload: "", relay: undefined as ChildProcess | undefined }));
 vi.mock("node:child_process", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:child_process")>();
   return {
@@ -50,9 +48,7 @@ afterEach(async () => {
   vi.restoreAllMocks();
   const relay = fixture.relay;
   if (relay && relay.exitCode === null && relay.signalCode === null) {
-    const exited = new Promise<void>((resolve) => {
-      relay.once("exit", () => resolve());
-    });
+    const exited = once(relay, "exit");
     relay.kill("SIGKILL");
     await exited;
   }
@@ -133,28 +129,24 @@ if (process.argv.some(arg => arg.includes("service-child-group-anchor"))) {
     clients.push(client);
     return client;
   };
-  return { createClient, heldPath, releasePath };
+  const client = createClient();
+  await expect(client.request("ping", {}, { timeoutMs: 10_000 })).resolves.toEqual({ ok: true });
+  assert(fixture.relay, "expected the real relay");
+  return { client, relay: fixture.relay, createClient, heldPath, releasePath };
 }
 
 describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () => {
   it.each(["accepted", "reported failure", "blocked relay"] as const)(
     "confirms forced relay exit and permits a fresh client after graceful cleanup stalls (%s)",
     async (signalReport) => {
-      const { createClient } = await createFixture(
+      const { client, relay, createClient } = await createFixture(
         signalReport === "blocked relay" ? "blocked-relay" : "relay",
       );
-      const client = createClient();
-      await expect(client.request("ping", {}, { timeoutMs: 10_000 })).resolves.toEqual({
-        ok: true,
-      });
 
       if (signalReport === "reported failure") {
-        if (!fixture.relay) {
-          throw new Error("expected the real relay");
-        }
-        const kill = fixture.relay.kill.bind(fixture.relay);
+        const kill = relay.kill.bind(relay);
         // Report failed delivery while the native exit is still on its way to the owner.
-        vi.spyOn(fixture.relay, "kill").mockImplementation((signal) => {
+        vi.spyOn(relay, "kill").mockImplementation((signal) => {
           kill(signal);
           return false;
         });
@@ -172,7 +164,7 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
       });
       expect(result?.durationMs).toBeLessThan(GRACEFUL_CANCEL_TIMEOUT_MS);
       expect(result?.escalationAfterMs).toBeGreaterThanOrEqual(2_000);
-      expect(fixture.relay?.signalCode).toBe("SIGKILL");
+      expect(relay.signalCode).toBe("SIGKILL");
 
       fixture.preload = "";
       const next = createClient();
@@ -182,24 +174,19 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
   );
 
   it("retains timing and closure evidence when SIGKILL cannot be delivered", async () => {
-    const { createClient } = await createFixture();
-    const client = createClient();
-    await client.request("ping", {}, { timeoutMs: 10_000 });
-    if (!fixture.relay) {
-      throw new Error("expected the real relay");
-    }
+    const { client, relay } = await createFixture();
     // A real process cannot ignore SIGKILL. Fault only delivery; native pipes and joins remain real.
-    const kill = vi.spyOn(fixture.relay, "kill").mockReturnValue(false);
+    const kill = vi.spyOn(relay, "kill").mockReturnValue(false);
     await expect(client.stop()).rejects.toMatchObject({
       message: "unavailable: proxy cleanup could not be confirmed",
-      cause: expect.objectContaining({
+      cause: {
         message: expect.stringContaining('"relayExit":true'),
-        cause: expect.objectContaining({
+        cause: {
           durationMs: expect.any(Number),
           escalationAfterMs: expect.any(Number),
           signalError: expect.any(Error),
-        }),
-      }),
+        },
+      },
     });
     expect(kill).toHaveBeenCalledWith("SIGKILL");
   });
@@ -207,16 +194,10 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
   it("escalates and reaps an anchor whose group persists after its closing receipt", async ({
     signal,
   }) => {
-    const { createClient, heldPath, releasePath } = await createFixture("anchor");
-    const client = createClient();
-    await client.request("ping", {}, { timeoutMs: 10_000 });
-    if (!fixture.relay) {
-      throw new Error("expected the real relay");
-    }
-    const exited = once(fixture.relay, "exit");
+    const { client, relay, heldPath, releasePath } = await createFixture("anchor");
+    const exited = once(relay, "exit");
     const stopping = client.stop();
     void stopping.catch(() => {});
-    let anchorPid = 0;
     try {
       await withinTest(
         Promise.race([
@@ -241,7 +222,7 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
         ]),
         signal,
       );
-      anchorPid = Number(await fs.readFile(heldPath, "utf8"));
+      const anchorPid = Number(await fs.readFile(heldPath, "utf8"));
       expect(anchorPid).toBeGreaterThan(0);
       // This is a real still-live process group, not a mocked absence result.
       expect(() => process.kill(-anchorPid, 0)).not.toThrow();
@@ -260,22 +241,13 @@ describe.skipIf(process.platform === "win32")("MCP retained relay cleanup", () =
   });
 
   it("releases the reaper after the hard deadline without turning late exit into success", async () => {
-    const { createClient, releasePath } = await createFixture("anchor-kill-fails");
-    const client = createClient();
-    await client.request("ping", {}, { timeoutMs: 10_000 });
-    const relay = fixture.relay;
-    if (!relay) {
-      throw new Error("expected the real relay");
-    }
+    const { client, relay, releasePath } = await createFixture("anchor-kill-fails");
     const exited = once(relay, "exit");
     try {
       await expect(client.stop()).rejects.toMatchObject({
-        cause: expect.objectContaining({
-          cause: expect.objectContaining({
-            escalationAfterMs: expect.any(Number),
-            signalError: expect.any(Error),
-          }),
-        }),
+        cause: {
+          cause: { escalationAfterMs: expect.any(Number), signalError: expect.any(Error) },
+        },
       });
       expect(relay.connected).toBe(false);
       expect(client.cleanupResult).toBeUndefined();

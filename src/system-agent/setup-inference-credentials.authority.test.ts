@@ -34,95 +34,93 @@ import {
   throwIfSetupInferenceCancelled,
 } from "./setup-inference-core.js";
 import { saveSetupCredential } from "./setup-inference-credentials.js";
-import { pluginRecord } from "./verified-inference.test-support.js";
+import { mockPluginRegistry, pluginRecord } from "./verified-inference.test-support.js";
 
 afterEach(() => vi.restoreAllMocks());
 
-it.each([false, true])(
-  "checks setup authority at the credential transaction after OAuth lock wait (revoked=%s)",
-  async (revoke) => {
-    await withOpenClawTestState({ label: "setup-credential-authority" }, async (state) => {
-      const config: OpenClawConfig = { agents: { entries: { main: {} } } };
-      const existing = {
-        type: "api_key" as const,
-        provider: "fixture",
-        key: "existing-fixture-key",
-      };
-      await state.writeAuthProfiles({ version: 1, profiles: { "fixture:existing": existing } });
-      const lockEntered = createDeferred();
-      const releaseLock = createDeferred();
-      const withLocks = oauthLocks.withOAuthProfileLocks;
-      vi.spyOn(oauthLocks, "withOAuthProfileLocks").mockImplementation(
-        async (keys, operation, options) => {
-          lockEntered.resolve();
-          await releaseLock.promise;
-          return await withLocks(keys, operation, options);
+function authChoice(
+  providerId: string,
+  appGuidedAuth: "oauth" | "device-code",
+  choiceLabel = "Fixture sign-in",
+) {
+  return {
+    pluginId: providerId,
+    providerId,
+    methodId: "fixture-login",
+    choiceId: "fixture-login",
+    choiceLabel,
+    appGuidedAuth,
+  };
+}
+
+it.each([false, true])("fences credential writes after OAuth lock (revoked=%s)", async (revoke) => {
+  await withOpenClawTestState({ label: "setup-credential-authority" }, async (state) => {
+    const config: OpenClawConfig = { agents: { entries: { main: {} } } };
+    const existing = { type: "api_key" as const, provider: "fixture", key: "existing-fixture-key" };
+    await state.writeAuthProfiles({ version: 1, profiles: { "fixture:existing": existing } });
+    const lockEntered = createDeferred();
+    const releaseLock = createDeferred();
+    const withLocks = oauthLocks.withOAuthProfileLocks;
+    vi.spyOn(oauthLocks, "withOAuthProfileLocks").mockImplementation(
+      async (keys, operation, options) => {
+        lockEntered.resolve();
+        await releaseLock.promise;
+        return await withLocks(keys, operation, options);
+      },
+    );
+    let revoked = false;
+    const beforePersistentEffect = vi.fn();
+    const saving = saveSetupCredential({
+      profile: {
+        profileId: "openai:codex-cli",
+        credential: {
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-codex-access",
+          refresh: "synthetic-codex-refresh",
+          expires: 4_102_444_800_000,
         },
-      );
-      let revoked = false;
-      const beforePersistentEffect = vi.fn();
-      const saving = saveSetupCredential({
-        profile: {
-          profileId: "openai:codex-cli",
-          credential: {
-            type: "oauth",
-            provider: "openai",
-            access: "synthetic-codex-access",
-            refresh: "synthetic-codex-refresh",
-            expires: 4_102_444_800_000,
-            accountId: "synthetic-codex-account",
-          },
-        },
-        config,
-        baseConfig: config,
-        agentDir: state.agentDir(),
-        modelRef: "openai/fixture-model",
-        pluginId: "codex",
-        beforePersistentEffect,
-        beforeWrite: () => throwIfSetupInferenceCancelled({ isCancelled: () => revoked }),
-      });
-      const settled = saving.then(
-        (value) => ({ ok: true as const, value }),
-        (error: unknown) => ({ ok: false as const, error }),
-      );
-      try {
-        await awaitGateBeforeSettlement(
-          lockEntered.promise,
-          settled,
-          "credential did not reach OAuth lock",
-        );
-        expect(beforePersistentEffect).toHaveBeenCalledOnce();
-        revoked = revoke;
-        releaseLock.resolve();
-        const outcome = await settled;
-        const stored = (await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir()))
-          .profiles;
-        expect(stored["fixture:existing"]).toEqual(existing);
-        if (revoke) {
-          expect(outcome).toMatchObject({
-            ok: false,
-            error: expect.any(SetupInferenceCancelledError),
-          });
-          expect(Object.keys(stored)).toEqual(["fixture:existing"]);
-        } else {
-          expect(outcome.ok).toBe(true);
-          if (!outcome.ok) {
-            throw outcome.error;
-          }
-          expect(stored[outcome.value.profile.profileId]).toMatchObject({
-            type: "oauth",
-            provider: "openai",
-            access: "synthetic-codex-access",
-            setup: { modelRef: "openai/fixture-model", pluginId: "codex" },
-          });
-        }
-      } finally {
-        releaseLock.resolve();
-        await settled;
-      }
+      },
+      config,
+      baseConfig: config,
+      agentDir: state.agentDir(),
+      modelRef: "openai/fixture-model",
+      pluginId: "codex",
+      beforePersistentEffect,
+      beforeWrite: () => throwIfSetupInferenceCancelled({ isCancelled: () => revoked }),
     });
-  },
-);
+    const settled = saving.catch(() => undefined);
+    try {
+      await awaitGateBeforeSettlement(
+        lockEntered.promise,
+        settled,
+        "credential did not reach OAuth lock",
+      );
+      expect(beforePersistentEffect).toHaveBeenCalledOnce();
+      revoked = revoke;
+      releaseLock.resolve();
+      await settled;
+      const stored = (await loadAuthProfileStoreWithoutExternalProfilesAsync(state.agentDir()))
+        .profiles;
+      if (revoke) {
+        await expect(saving).rejects.toBeInstanceOf(SetupInferenceCancelledError);
+        expect(stored).toEqual({ "fixture:existing": existing });
+      } else {
+        expect(stored["fixture:existing"]).toEqual(existing);
+        const saved = await saving;
+        expect(stored[saved.profile.profileId]).toMatchObject({
+          type: "oauth",
+          provider: "openai",
+          access: "synthetic-codex-access",
+          setup: { modelRef: "openai/fixture-model", pluginId: "codex" },
+        });
+      }
+    } finally {
+      releaseLock.resolve();
+      await settled;
+    }
+  });
+});
 
 describe("native setup authority", () => {
   afterEach(async () => {
@@ -134,9 +132,7 @@ describe("native setup authority", () => {
     vi.unstubAllEnvs();
   });
 
-  it("blocks native Muse login after the admin connection is invalidated without aborting", async ({
-    signal,
-  }) => {
+  it("blocks native Muse login after owner invalidation without abort", async ({ signal }) => {
     const setup = await fixture({ surface: "gateway" });
     const binaryPath = path.join(path.dirname(setup.configPath), "muse");
     const attemptsPath = path.join(path.dirname(setup.configPath), "muse-attempts");
@@ -170,14 +166,7 @@ process.exit(1);
       return muse.run(ctx);
     };
     vi.spyOn(providerChoices, "resolveManifestDeclaredProviderAuthChoices").mockReturnValue([
-      {
-        pluginId: "openai",
-        providerId: "openai",
-        methodId: "fixture-login",
-        choiceId: "fixture-login",
-        choiceLabel: "Fixture sign-in",
-        appGuidedAuth: "oauth",
-      },
+      authChoice("openai", "oauth"),
     ]);
     const activate = setupExecution.activateGatewaySetupInference;
     vi.spyOn(setupExecution, "activateGatewaySetupInference").mockImplementation((params) =>
@@ -222,8 +211,7 @@ process.exit(1);
         expect.objectContaining({ selectModel: false }),
       );
       client.invalidated = true;
-      expect(controller.signal.aborted).toBe(false);
-      expect(providerSignal?.aborted).toBe(false);
+      expect([controller.signal.aborted, providerSignal?.aborted]).toEqual([false, false]);
       release.resolve();
       await whenAdmittedWizardSessionSettled(session);
       expect(session.getStatus()).toBe("error");
@@ -245,54 +233,27 @@ process.exit(1);
     const candidate = "meta/muse-spark-1.3";
     const proxy = "https://proxy.example/v1";
     assert.ok(setup.config.models?.providers);
+    const templateModel = setup.config.models.providers.openai?.models[0];
+    assert.ok(templateModel);
     setup.config.models.providers.meta = {
       baseUrl: proxy,
       api: "openai-responses",
-      models: [
-        {
-          id: "muse-spark-1.3",
-          name: "Muse Spark 1.3",
-          reasoning: true,
-          input: ["text"],
-          cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-          contextWindow: 8192,
-          maxTokens: 1024,
-        },
-      ],
+      models: [{ ...templateModel, id: "muse-spark-1.3", name: "Muse Spark 1.3" }],
     };
     const before = `${JSON.stringify(setup.config, null, 2)}\n`;
     await fs.writeFile(setup.configPath, before);
     clearConfigCache();
+    const login = async () => ({ profiles: [], defaultModel: candidate, agentRuntimeId: "muse" });
     const provider: ProviderPlugin = {
       id: "meta",
       pluginId: "meta",
       label: "Meta",
-      auth: [
-        {
-          id: "fixture-login",
-          label: "Muse Code",
-          kind: "device_code",
-          run: async () => ({ profiles: [], defaultModel: candidate, agentRuntimeId: "muse" }),
-        },
-      ],
+      auth: [{ id: "fixture-login", label: "Muse Code", kind: "device_code", run: login }],
     };
     setup.deps.resolvePluginProviders = () => [provider];
-    setup.deps.resolveManifestProviderAuthChoice = () => ({
-      pluginId: "meta",
-      providerId: "meta",
-      methodId: "fixture-login",
-      choiceId: "fixture-login",
-      choiceLabel: "Muse Code",
-      appGuidedAuth: "device-code",
-    });
-    setup.deps.loadPluginRegistrySnapshot = () => ({
-      plugins: [
-        pluginRecord("meta"),
-        pluginRecord("muse"),
-        pluginRecord("codex"),
-        pluginRecord("openai"),
-      ],
-    });
+    setup.deps.resolveManifestProviderAuthChoice = () =>
+      authChoice("meta", "device-code", "Muse Code");
+    mockPluginRegistry(["meta", "muse", "codex", "openai"].map((id) => pluginRecord(id)));
     vi.spyOn(runtimePluginInstall, "ensureModelSelectionRuntimePlugins").mockImplementation(
       async ({ cfg }) => ({ ok: true, cfg, codexInstalled: false }),
     );

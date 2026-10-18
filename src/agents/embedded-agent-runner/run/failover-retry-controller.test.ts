@@ -43,6 +43,8 @@ function createController(
   fallbackConfigured = false,
   abortSignal?: AbortSignal,
   onRetryWait?: ControllerInput["runInput"]["runParams"]["onRetryWait"],
+  isFinalFallbackAttempt?: boolean,
+  retryTransientErrors?: boolean,
 ) {
   return createEmbeddedRunFailoverRetryController({
     runInput: {
@@ -50,6 +52,8 @@ function createController(
         runId: "run:failover-retry-controller-test",
         abortSignal,
         onRetryWait,
+        isFinalFallbackAttempt,
+        retryTransientErrors,
       } as ControllerInput["runInput"]["runParams"],
       globalLane: "test",
       agentDir: "/tmp/openclaw-failover-retry-controller-test",
@@ -223,6 +227,42 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     }
   });
 
+  it.each([
+    [true, true, false],
+    [false, true, false],
+    [true, false, false],
+    [true, true, true],
+  ])(
+    "paces organization TPM recovery before failover (fallback=%s, replaySafe=%s, final=%s)",
+    async (fallback, replaySafe, isFinal) => {
+      const advanceAuthProfile = vi.fn(async () => true);
+      const controller = createController(
+        advanceAuthProfile,
+        fallback,
+        undefined,
+        undefined,
+        isFinal,
+      );
+      const message =
+        "429 Rate limit reached for mock-1 in organization org-example on tokens per min (TPM): Limit 10000, Used 9900, Requested 200. Please try again in 2s.";
+      controller.observeAttempt({ providerRetryMaxRetries: 1 });
+      const retry = {
+        reason: "rate_limit" as const,
+        message,
+        retryAfterMs: resolveRetryAfterMs(message),
+        failoverEligible: replaySafe,
+      };
+      await expect(controller.maybeRetryTransient(retry)).resolves.toBe(true);
+      expect(mocks.sleepWithAbort).toHaveBeenCalledExactlyOnceWith(2000, undefined);
+      await expect(controller.maybeRetryTransient(retry)).resolves.toBe(false);
+      expect(controller.rateLimitRetriesExhausted).toBe(1);
+      await expect(controller.advanceAuthProfile("rate_limit", rateLimitContext)).resolves.toBe(
+        true,
+      );
+      expect(advanceAuthProfile).toHaveBeenCalledOnce();
+    },
+  );
+
   it("leaves exhausted usage windows to profile failover", async () => {
     const message = "429 daily request limit reached";
     const controller = createController(vi.fn(async () => false));
@@ -237,8 +277,9 @@ describe("createEmbeddedRunFailoverRetryController", () => {
 
   it.each([
     ["fallback", true, undefined, 30_000, "rate_limit", 9_897_000, false],
-    ["no fallback", false, undefined, 30_000, "rate_limit", 9_897_000, true],
+    ["no fallback", false, undefined, 30_000, "rate_limit", 9_897_000, false],
     ["replay-unsafe", true, false, 30_000, "rate_limit", 9_897_000, true],
+    ["replay-unsafe without fallback", false, false, 30_000, "rate_limit", 9_897_000, true],
     ["disabled cap", true, undefined, 0, "rate_limit", 9_897_000, true],
     ["absent cap", true, undefined, undefined, "rate_limit", 9_897_000, true],
     ["inside cap", true, undefined, 30_000, "rate_limit", 20_000, true],
@@ -481,6 +522,28 @@ describe("createEmbeddedRunFailoverRetryController", () => {
     }
     await expect(controller.maybeRetryTransient({ reason: "server_error" })).resolves.toBe(false);
     expect(controller.transientRetryCount).toBe(8);
+  });
+
+  it("lets auxiliary runs defer provider failures without sleeping or replaying", async () => {
+    const advanceAuthProfile = vi.fn(async () => true);
+    const controller = createController(
+      advanceAuthProfile,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      false,
+    );
+    controller.observeAttempt({ providerRetryMaxRetries: 9 });
+    const onRetry = vi.fn();
+    for (const reason of ["rate_limit", "overloaded", "timeout", "server_error"] as const) {
+      await expect(controller.maybeRetryTransient({ reason, onRetry })).resolves.toBe(false);
+      await expect(controller.advanceAuthProfile(reason, rateLimitContext)).resolves.toBe(false);
+    }
+    expect(advanceAuthProfile).not.toHaveBeenCalled();
+    expect(mocks.sleepWithAbort).not.toHaveBeenCalled();
+    expect(onRetry).not.toHaveBeenCalled();
+    expect(controller.transientRetryCount).toBe(0);
   });
 
   it.each([

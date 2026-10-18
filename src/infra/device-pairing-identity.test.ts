@@ -2,6 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { expect, test } from "vitest";
 import {
   isPairedDeviceTokenIdentityCurrent,
+  hasEffectivePairedDeviceRole,
+  listEffectivePairedDeviceRoles,
   resolveNodePairingState,
   resolveAuthenticatedDeviceTokenIdentity,
 } from "./device-pairing-identity.js";
@@ -176,4 +178,23 @@ test("node connection identity is unaffected by an unrelated operator-token upgr
   expectDefined(device.tokens?.operator, "operator token").token = "replacement-operator-token";
   device.approvedAtMs = 2;
   expect(resolveNodePairingState(device)).toEqual(original);
+});
+
+test("filters active token roles to the approved pairing role set", () => {
+  const device = {
+    role: "operator",
+    roles: ["operator"],
+    tokens: {
+      node: { token: "forged-node", role: "node", scopes: [], createdAtMs: 1 },
+      operator: {
+        token: "operator",
+        role: "operator",
+        scopes: ["operator.read"],
+        createdAtMs: 1,
+      },
+    },
+  };
+
+  expect(listEffectivePairedDeviceRoles(device)).toEqual(["operator"]);
+  expect(hasEffectivePairedDeviceRole(device, "node")).toBe(false);
 });

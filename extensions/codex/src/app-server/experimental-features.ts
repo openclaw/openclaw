@@ -10,7 +10,7 @@ export async function readCodexExperimentalFeature(
   featureName: string,
   threadId?: string,
 ): Promise<boolean | undefined> {
-  let cursor: string | undefined;
+  let cursor: string | null | undefined;
   const visited = new Set<string>();
   do {
     const response = await request({
@@ -22,7 +22,7 @@ export async function readCodexExperimentalFeature(
     if (feature) {
       return feature.enabled;
     }
-    cursor = response.nextCursor ?? undefined;
+    cursor = response.nextCursor;
     if (cursor && visited.has(cursor)) {
       return undefined;
     }

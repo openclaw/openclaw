@@ -511,6 +511,12 @@ export interface ContextEngine {
      * fires; engines should stop work and reject promptly when it aborts.
      */
     abortSignal?: AbortSignal;
+    /**
+     * Report meaningful compaction progress to refresh the host's idle window.
+     * Requires "onProgress" in info.acceptedHostParams. The same ten-window
+     * overall ceiling applies; reports after completion or abort have no effect.
+     */
+    onProgress?: () => void;
   }): Promise<CompactResult>;
 
   /**

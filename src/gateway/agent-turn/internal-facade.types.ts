@@ -1,5 +1,6 @@
 import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
+import type { ReplyExpectation } from "../../agents/reply-completion.js";
 import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatch.types.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
 import type { GatewayClient } from "../server-methods/client-types.js";
@@ -25,6 +26,8 @@ export type RequesterSettleWakeReplay = {
 export type InternalAgentTurnDispatchOptions = {
   /** Internal completion delivery owns its hidden input and durable processing receipt. */
   privateCompletion?: true;
+  /** Trusted input-owner policy; not accepted from the wire request. */
+  replyExpectation?: ReplyExpectation;
   settleWakeReplay?: RequesterSettleWakeReplay;
   /** Refresh the source before dispatch; accepted turns own their later execution. */
   prepareDispatchCurrent?: () => Promise<void>;

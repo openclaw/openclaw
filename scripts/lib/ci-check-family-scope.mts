@@ -1,4 +1,5 @@
 import { detectChangedLanes, hasProtocolEventCoverageInput } from "../changed-lanes.mts";
+import { isCiDocumentationPath } from "../ci-changed-scope.mjs";
 import {
   getChangedPathFacts,
   isTestFileTarget,
@@ -36,6 +37,7 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
   const bunLauncher = changedPaths.some(
     (file) =>
       file === "openclaw.mjs" ||
+      file === "cli-invocation.mjs" ||
       file === "test/openclaw-launcher.e2e.test.ts" ||
       /^src\/plugins\/plugin-module-generation(?:\.|-)/u.test(file) ||
       file.startsWith("src/infra/sqlite-existing-database."),
@@ -93,7 +95,9 @@ export function resolveCiCheckFamilyScope(changedPaths: readonly string[]): CiCh
   // the package scanner, method descriptors, and existing event owner edges.
   const protocolInput =
     matches(PROTOCOL_OUTPUT_PATH_RE) ||
-    paths.some((file) => file.startsWith("packages/gateway-protocol/")) ||
+    paths.some(
+      (file) => !isCiDocumentationPath(file) && file.startsWith("packages/gateway-protocol/"),
+    ) ||
     paths.includes("src/gateway/methods/core-descriptors.ts") ||
     hasProtocolEventCoverageInput(paths);
   const types =

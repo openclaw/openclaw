@@ -185,50 +185,29 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
     });
     captureOpenAIQuicksilverTransportEvent(this.runtime, "local", "ws-open");
 
-    let reachedReady = false;
-    let readySettled = false;
-    const ready = createDeferred();
-    const settleReady = (providerReady = true, error?: Error) => {
-      if (readySettled) {
-        return;
-      }
-      readySettled = true;
-      if (!error) {
-        reachedReady = providerReady;
-      }
-      clearTimeout(readyTimeout);
-      connection.signal.removeEventListener("abort", onAbort);
-      if (error) {
-        ready.reject(error);
-      } else {
-        ready.resolve();
-      }
-    };
+    const ready = this.lifecycle.createConnectAttempt({
+      connection,
+      onAbort: () => {},
+      onTimeout: () => failStartup("session-start timeout"),
+      timeoutError: () => new Error(projectOpenAIQuicksilverErrorMessage("transport")),
+      timeoutMs: OPENAI_QUICKSILVER_READY_TIMEOUT_MS,
+      ref: false,
+    });
+    const settleReady = () => ready.resolve(true);
     const failStartup = (reason: string) => {
       if (this.lifecycle.terminalOutcome(connection) === "completed") {
-        settleReady(false);
+        ready.resolve();
         return;
       }
-      if (!this.lifecycle.acceptsEvents(connection) || reachedReady) {
+      if (!this.lifecycle.acceptsEvents(connection) || ready.ready) {
         return;
       }
+      // Settle the provider error before lifecycle failure aborts the connection.
+      ready.reject(new Error(projectOpenAIQuicksilverErrorMessage("transport")));
       this.failLifecycle(connection);
-      settleReady(false, new Error(projectOpenAIQuicksilverErrorMessage("transport")));
       this.closeSocket(reason, connected.socket);
     };
-    const readyTimeout = setTimeout(() => {
-      failStartup("session-start timeout");
-    }, OPENAI_QUICKSILVER_READY_TIMEOUT_MS);
-    readyTimeout.unref?.();
-    const onAbort = () => {
-      if (this.lifecycle.terminalOutcome(connection) === "completed") {
-        settleReady(false);
-      }
-    };
-    connection.signal.addEventListener("abort", onAbort, { once: true });
-    if (connection.signal.aborted) {
-      onAbort();
-    }
+    ready.startTimeout();
 
     connected.socket.on("message", (data: RawData, isBinary: boolean) => {
       const draining =
@@ -244,7 +223,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       if (isBinary) {
-        if (!reachedReady) {
+        if (!ready.ready) {
           failStartup("unexpected binary frame");
         } else {
           this.fail(connection);
@@ -265,7 +244,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       if (!this.lifecycle.acceptsEvents(connection) || this.socket !== connected.socket) {
         return;
       }
-      if (!reachedReady) {
+      if (!ready.ready) {
         failStartup("startup error");
       } else {
         this.fail(connection);
@@ -276,15 +255,15 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
         return;
       }
       this.socket = undefined;
-      if (!reachedReady) {
+      if (!ready.ready) {
         if (this.lifecycle.terminalOutcome(connection) === "completed") {
           settleReady();
           this.notifyClose(connection, "completed");
           return;
         }
         const error = new Error("GPT-Live WebSocket closed before session.started");
+        ready.reject(error);
         this.failLifecycle(connection);
-        settleReady(false, error);
         this.lifecycle.close(connection, "error");
         return;
       }
@@ -316,7 +295,7 @@ export class OpenAIQuicksilverVoiceBridge implements RealtimeVoiceBridge {
       }
     }
     if (terminalEvent) {
-      if (reachedReady) {
+      if (ready.ready) {
         if (
           terminalEvent.kind === "close" &&
           terminalEvent.code === 1000 &&

@@ -54,16 +54,11 @@ type FixtureJournal = {
 };
 
 function fixtureSource(mode: FixtureMode, root: string): string {
-  const stateImport =
-    mode.startsWith("scenario-") || mode.startsWith("resources-")
-      ? `import { createOpenClawTestState } from ${JSON.stringify(path.join(repoRoot, "src/test-utils/openclaw-test-state.ts"))};`
-      : "";
   return `
 import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { afterAll, expect, it, vi } from "vitest";
-${stateImport}
 const state = vi.hoisted(() => {
   let release;
   const gate = new Promise(resolve => { release = resolve; });
@@ -157,6 +152,7 @@ vi.mock("playwright", () => ({ chromium: { launch: async () => {
             if (!registration) throw new Error("missing held-module route: " + name);
             const route = {
               request: () => ({ url: () => url }),
+              fallback: async () => { state.events.push("fell through " + label); },
               fetch: async () => {
                 if (pageClosed) throw state.disposalFault;
                 if (label === "later" || scope === "context") {
@@ -244,6 +240,23 @@ const record = () => fs.writeFileSync(${JSON.stringify(path.join(root, "journal.
 }));
 fs.writeFileSync(${JSON.stringify(path.join(root, "worker.pid"))}, String(process.pid));
 record();
+// These synthetic gateways open no databases. Keep their state fixture limited to
+// the directory and selector whose lifetime belongs to the suite release callback.
+function createFixtureState() {
+  const root = ${JSON.stringify(path.join(root, "retained-state"))};
+  const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+  fs.mkdirSync(root);
+  process.env.OPENCLAW_STATE_DIR = root;
+  return {
+    root,
+    stateDir: root,
+    cleanup: async () => {
+      if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      await fs.promises.rm(root, { recursive: true, force: true });
+    },
+  };
+}
 let sharedFixture;
 const suite = createControlUiE2eSuite({ name: "owned context fixture",
   trackBrowserContexts: ${mode.startsWith("tracked-") || mode === "diagnostic-tracked-timeout"},
@@ -251,7 +264,7 @@ const suite = createControlUiE2eSuite({ name: "owned context fixture",
     resources: {
       retainedState: () => sharedFixture?.root,
       run: async (signal) => {
-        sharedFixture = await createOpenClawTestState({ label: "native-shared-resource" });
+        sharedFixture = createFixtureState();
         fs.writeFileSync(${JSON.stringify(path.join(root, "retained-root.txt"))}, sharedFixture.root);
         state.events.push("resource acquired"); record();
         if (${JSON.stringify(mode)} === "resources-late-setup") {
@@ -376,7 +389,9 @@ suite.define(() => {
       const callbacks = [];
       let firstHold;
       let otherHold;
+      let heldPage;
       const outcome = suite.withPage({}, async ({ context, page }) => {
+        heldPage = page;
         firstHold = await holdModuleResponse(page, /module-a/u);
         otherHold = await holdModuleResponse(page, /module-b/u);
         callbacks.push(page.dispatchModule("module-a", "first"));
@@ -397,12 +412,17 @@ suite.define(() => {
       let failure;
       let callbackOutcomes;
       try {
-        // The old helper closes immediately; waiting only for drain would turn red into a timeout.
-        state.firstCleanupEvent = await state.cleanupStarted.promise;
+        await state.contextFetchStarted.promise;
+        await Promise.all(callbacks.slice(0, 2));
+        await nextTurn();
         state.pendingCloseCalls = state.closeCalls;
         state.fulfilledBeforeFetchRelease = state.events.filter(event => event.startsWith("fulfilled "));
+        expect(state.events).not.toContain("drain");
+        callbacks.push(heldPage.dispatchModule("module-a", "late"));
+        await callbacks.at(-1);
         record();
         state.laterFetch.resolve();
+        state.firstCleanupEvent = await state.cleanupStarted.promise;
         state.contextCleanupEvent = await state.contextCleanupStarted.promise;
       } finally {
         firstHold?.release();
@@ -491,7 +511,7 @@ suite.define(() => {
       await suite.runScenario(context, {
         retainedState: () => fixture?.root,
         run: async (signal) => {
-          fixture = await createOpenClawTestState({ label: "native-scenario" });
+          fixture = createFixtureState();
           fs.writeFileSync(${JSON.stringify(path.join(root, "retained-root.txt"))}, fixture.root);
           state.events.push("acquired"); record();
           if (${JSON.stringify(mode)} === "scenario-noncooperative") await new Promise(() => {});
@@ -796,6 +816,7 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       { label: "other", status: "fulfilled", disposed: false },
       { label: "later", status: "fulfilled", disposed: false },
       { label: "context", status: "fulfilled", disposed: false },
+      { label: "late", status: "fulfilled", disposed: false },
     ]);
     expect(result.journal.pendingCloseCalls).toBe(0);
     expect(result.journal.fulfilledBeforeFetchRelease).toEqual([
@@ -803,6 +824,11 @@ it("drains held modules and cancels unrequested observations during cleanup", (c
       "fulfilled other",
     ]);
     expect(result.journal.events).toContain("fulfilled later");
+    expect(result.journal.events).toContain("fell through late");
+    expect(result.journal.events).not.toContain("fetched late");
+    expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
+      result.journal.events.indexOf("drain"),
+    );
     expect(result.journal.events.indexOf("fulfilled later")).toBeLessThan(
       result.journal.events.indexOf("close"),
     );

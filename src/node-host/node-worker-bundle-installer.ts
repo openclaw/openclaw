@@ -14,7 +14,7 @@ import {
   type WorkerAdmissionHandshake,
 } from "../../packages/gateway-protocol/src/index.js";
 import { resolveStateDir } from "../config/paths.js";
-import { extractErrorCode, hasErrnoCode } from "../infra/errors.js";
+import { extractErrorCode, hasErrnoCode, isMissingPathError } from "../infra/errors.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { resolveOpenClawPackageRootSync } from "../infra/openclaw-root.js";
 import { isPathInside } from "../infra/path-guards.js";
@@ -285,7 +285,14 @@ async function readReceipt(bundleDir: string): Promise<WorkerAdmissionHandshake 
       await fsp.readFile(path.join(bundleDir, INSTALL_RECEIPT), "utf8"),
     ) as unknown;
     return validateWorkerAdmissionHandshake(raw) ? raw : undefined;
-  } catch {
+  } catch (error) {
+    // Missing or malformed cache receipts are repaired by the next installation.
+    if (!isMissingPathError(error) && !(error instanceof SyntaxError)) {
+      log.warn(
+        "Worker bundle receipt read failed; treating installation as missing. Check node-host storage permissions and disk health.",
+        { errorCode: extractErrorCode(error) },
+      );
+    }
     return undefined;
   }
 }
@@ -314,7 +321,15 @@ async function validateInstalledBundle(
     const root = await fsp.realpath(bundleDir);
     const entry = await fsp.realpath(path.join(root, WORKER_BUNDLE_ENTRY_PATH));
     return isPathInside(root, entry) && (await fsp.stat(entry)).isFile();
-  } catch {
+  } catch (error) {
+    // Invalid inventory is regenerable; filesystem failures still need a diagnostic.
+    const errorCode = extractErrorCode(error);
+    if (errorCode && !isMissingPathError(error)) {
+      log.warn(
+        "Worker bundle cache read failed; treating installation as missing. Check node-host storage permissions and disk health.",
+        { errorCode },
+      );
+    }
     return false;
   }
 }
@@ -336,6 +351,10 @@ export class NodeWorkerBundleInstaller {
   readonly #operations = new KeyedAsyncQueue();
   readonly #currentGenerationByNamespace = new Map<string, number>();
   readonly #prewarmedBundles = new Set<string>();
+  readonly #pendingValidations = new Map<
+    string,
+    { build: WorkerAdmissionHandshake; result: Promise<boolean> }
+  >();
   readonly #workerEnv: NodeJS.ProcessEnv;
 
   constructor(options: { root?: string; env?: NodeJS.ProcessEnv } = {}) {
@@ -379,6 +398,31 @@ export class NodeWorkerBundleInstaller {
     this.#prewarmedBundles.add(bundleDir);
   }
 
+  async #validatePrewarmedBundle(
+    gatewayNamespace: string,
+    destination: string,
+    build: WorkerAdmissionHandshake,
+  ): Promise<boolean> {
+    let pending = this.#pendingValidations.get(gatewayNamespace);
+    if (!pending || !sameWorkerBuild(pending.build, build)) {
+      pending = {
+        build,
+        result: this.#operations.enqueue(gatewayNamespace, () =>
+          validateInstalledBundle(destination, build),
+        ),
+      };
+      this.#pendingValidations.set(gatewayNamespace, pending);
+    }
+    try {
+      return await pending.result;
+    } finally {
+      // Installed files remain mutable: only overlapping readers share this scan.
+      if (this.#pendingValidations.get(gatewayNamespace) === pending) {
+        this.#pendingValidations.delete(gatewayNamespace);
+      }
+    }
+  }
+
   async ensure(params: {
     input: NodeWorkerBundleInstallInput;
     gatewayUrl: string;
@@ -389,11 +433,23 @@ export class NodeWorkerBundleInstaller {
     const { input } = params;
     // One namespace owns every staging sibling, so serialize it before sweeping crash residue.
     const key = input.gatewayNamespace;
-    return await this.#operations.enqueue(key, async () => {
-      try {
+    const bundlesRoot = path.join(this.#root, key, "bundles");
+    const destination = path.join(bundlesRoot, input.build.bundleHash);
+    try {
+      params.signal?.throwIfAborted();
+      // Share read-only checks after prewarm; downloads and child execution keep caller custody.
+      if (
+        this.#prewarmedBundles.has(destination) &&
+        (await this.#validatePrewarmedBundle(key, destination, input.build))
+      ) {
         params.signal?.throwIfAborted();
-        const bundlesRoot = path.join(this.#root, input.gatewayNamespace, "bundles");
-        const destination = path.join(bundlesRoot, input.build.bundleHash);
+        this.#recordInstall(key);
+        return input.build;
+      }
+      // New callers must queue behind this possible replacement, not join an earlier read.
+      this.#pendingValidations.delete(key);
+      return await this.#operations.enqueue(key, async () => {
+        params.signal?.throwIfAborted();
         const installed = await validateInstalledBundle(destination, input.build);
         params.signal?.throwIfAborted();
         if (!installed) {
@@ -450,31 +506,31 @@ export class NodeWorkerBundleInstaller {
         }
         params.signal?.throwIfAborted();
         this.#recordInstall(input.gatewayNamespace);
-        return structuredClone(input.build);
-      } catch (error) {
-        if (error instanceof NodeWorkerBundleInstallError) {
-          throw error;
-        }
-        if (error instanceof NodeWorkerTransferHttpError) {
-          throw new NodeWorkerBundleInstallError(
-            error.reason === "tls-fingerprint-mismatch"
-              ? "worker-bundle-install-failed: gateway TLS fingerprint mismatch"
-              : error.reason === "cloudflare-access-requires-tls"
-                ? "worker-bundle-install-failed: Cloudflare Access credentials require HTTPS"
-                : "worker-bundle-install-failed: gateway transfer is unavailable",
-            { cause: error },
-          );
-        }
-        const detail = truncateUtf16Safe(
-          redactSensitiveText(error instanceof Error ? error.message : String(error)),
-          512,
-        );
+        return input.build;
+      });
+    } catch (error) {
+      if (error instanceof NodeWorkerBundleInstallError) {
+        throw error;
+      }
+      if (error instanceof NodeWorkerTransferHttpError) {
         throw new NodeWorkerBundleInstallError(
-          `worker-bundle-install-failed: ${detail || "bundle installation did not complete"}`,
+          error.reason === "tls-fingerprint-mismatch"
+            ? "worker-bundle-install-failed: gateway TLS fingerprint mismatch"
+            : error.reason === "cloudflare-access-requires-tls"
+              ? "worker-bundle-install-failed: Cloudflare Access credentials require HTTPS"
+              : "worker-bundle-install-failed: gateway transfer is unavailable",
           { cause: error },
         );
       }
-    });
+      const detail = truncateUtf16Safe(
+        redactSensitiveText(error instanceof Error ? error.message : String(error)),
+        512,
+      );
+      throw new NodeWorkerBundleInstallError(
+        `worker-bundle-install-failed: ${detail || "bundle installation did not complete"}`,
+        { cause: error },
+      );
+    }
   }
 
   async inspect(params: {
@@ -501,6 +557,7 @@ export class NodeWorkerBundleInstaller {
     bundleHashes: readonly string[];
     acknowledgedGeneration?: number;
   }): Promise<{ deleted: number; hasMore: boolean; generation: number }> {
+    this.#pendingValidations.delete(params.gatewayNamespace);
     return await this.#operations.enqueue(params.gatewayNamespace, async () => {
       const bundlesRoot = path.join(this.#root, params.gatewayNamespace, "bundles");
       let entries: Dirent[];

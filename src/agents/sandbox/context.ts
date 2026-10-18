@@ -262,8 +262,10 @@ function assertSandboxSessionSecretOwnerAvailable(
 async function prepareSandboxWorkspaceSelection(
   params: ResolveSandboxContextParams,
   resolved: ResolvedSandboxSession,
+  guard?: WorkspaceStateGuard,
 ) {
   const { rawSessionKey, runtime } = resolved;
+  const operatorAuthority = readAdmittedRunOperatorAuthority(params.admittedRunContext);
   const localWorkspace = params.config
     ? await (
         await import("./local-workspace.js")
@@ -273,8 +275,16 @@ async function prepareSandboxWorkspaceSelection(
         sessionKey: rawSessionKey,
         workspaceDir: params.workspaceDir,
         sandbox: resolved.cfg,
-        signal: readAdmittedRunOperatorAuthority(params.admittedRunContext)?.signal,
+        signal: operatorAuthority?.signal,
         assertCurrent: params.assertCurrent,
+        assertHost: () => {
+          guard?.assertHost?.();
+          if (params.admittedRunContext) {
+            operatorAuthority?.assertCurrent();
+          } else {
+            params.assertCurrent?.();
+          }
+        },
       })
     : undefined;
   try {
@@ -310,7 +320,7 @@ async function resolveProvisionedSandboxContext(
   resolved: ResolvedSandboxSession,
   guard?: WorkspaceStateGuard,
 ): Promise<SandboxContext> {
-  const selected = await prepareSandboxWorkspaceSelection(params, resolved);
+  const selected = await prepareSandboxWorkspaceSelection(params, resolved, guard);
   try {
     params.assertCurrent?.();
     const { rawSessionKey, runtime, cfg, localWorkspace } = selected;
@@ -586,7 +596,17 @@ export async function resolveSandboxContext(
   }
 }
 
+/** Information-only callers release preparation ownership before returning. */
 export async function ensureSandboxWorkspaceForSession(
+  params: Parameters<typeof prepareSandboxWorkspaceForSession>[0],
+  readSource?: CapturedSessionEntryReadSource,
+): Promise<SandboxWorkspaceInfo | null> {
+  using prepared = await prepareSandboxWorkspaceForSession(params, readSource);
+  return prepared?.workspace ?? null;
+}
+
+/** A writer owns this preparation until its final effect settles. */
+export async function prepareSandboxWorkspaceForSession(
   params: {
     skillsSnapshot?: SkillSnapshot;
     config?: OpenClawConfig;
@@ -595,11 +615,17 @@ export async function ensureSandboxWorkspaceForSession(
     workspaceDir?: string;
   },
   readSource?: CapturedSessionEntryReadSource,
-): Promise<SandboxWorkspaceInfo | null> {
+): Promise<{
+  workspace: SandboxWorkspaceInfo;
+  assertCurrent: () => void;
+  [Symbol.dispose]: () => void;
+} | null> {
   const readAuthority = captureChannelReadAuthority();
   const assertCurrent = () => readAuthority?.();
   const ownedParams = { ...params, assertCurrent };
-  return withSandboxRuntimeStatusInWorker(
+  using resources = new DisposableStack();
+  let assertWorkspaceCurrent = assertCurrent;
+  const workspaceInfo = await withSandboxRuntimeStatusInWorker(
     { cfg: params.config, agentId: params.agentId, sessionKey: params.sessionKey },
     { env: process.env, cwd: process.cwd(), assertCurrent, readSource },
     async (preparedRuntimeStatus) => {
@@ -609,9 +635,9 @@ export async function ensureSandboxWorkspaceForSession(
       }
       assertSandboxSessionSecretOwnerAvailable(params.config, resolved);
       const selected = await prepareSandboxWorkspaceSelection(ownedParams, resolved);
-      using localWorkspace = selected.localWorkspace;
-      void localWorkspace;
-      assertCurrent();
+      resources.use(selected.localWorkspace);
+      assertWorkspaceCurrent = selected.localWorkspace?.assertCurrent ?? assertCurrent;
+      assertWorkspaceCurrent();
       const { rawSessionKey, cfg } = selected;
 
       const { agentWorkspaceDir, scopeKey, workspaceDir, ...workspace } =
@@ -633,4 +659,14 @@ export async function ensureSandboxWorkspaceForSession(
       };
     },
   );
+  if (!workspaceInfo) {
+    return null;
+  }
+  assertWorkspaceCurrent();
+  const lifetime = resources.move();
+  return {
+    workspace: workspaceInfo,
+    assertCurrent: assertWorkspaceCurrent,
+    [Symbol.dispose]: () => lifetime.dispose(),
+  };
 }

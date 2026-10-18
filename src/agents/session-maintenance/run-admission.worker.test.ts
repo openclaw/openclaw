@@ -2,9 +2,14 @@ import { copyFileSync, renameSync } from "node:fs";
 import { beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { createTestFollowupRun } from "../../auto-reply/reply/agent-runner.test-fixtures.js";
+import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import * as entryReads from "../../config/sessions/session-entry-read-runtime.js";
-import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
+import type { GatewayRequestContext } from "../../gateway/server-methods/types.js";
+import {
+  getAgentEventLifecycleGeneration,
+  rotateAgentEventLifecycleGeneration,
+} from "../../infra/agent-events.js";
 import { createEmptyPluginRegistry } from "../../plugins/registry-empty.js";
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../../state/openclaw-agent-db-lifecycle.js";
@@ -24,8 +29,8 @@ vi.mock("../command/runtime-loaders.js", () => ({
 }));
 
 beforeEach(() => {
-  memory.runMemoryFlushIfNeeded.mockClear();
-  memory.runSessionCompactionIfNeeded.mockClear();
+  memory.runMemoryFlushIfNeeded.mockReset();
+  memory.runSessionCompactionIfNeeded.mockReset();
 });
 
 it("rejects a replacement database while waiting for the foreground owner", async () => {
@@ -79,6 +84,95 @@ it("rejects a replacement database while waiting for the foreground owner", asyn
       await waitForSessionMaintenance(sessionKey);
       memory.runMemoryFlushIfNeeded.mockClear();
       memory.runSessionCompactionIfNeeded.mockClear();
+    }
+  });
+});
+
+it.each([
+  "completed-owner",
+  "unsuccessful-owner",
+  "gateway-lifecycle-retired",
+  "gateway-instance-retired",
+  "session-replaced",
+  "gateway-lifecycle-retired-during-flush",
+  "gateway-instance-retired-during-flush",
+] as const)("fences scheduled effects for %s", async (mode) => {
+  await withOpenClawTestState({ label: `maintenance-${mode}` }, async ({ env }) => {
+    const database = openOpenClawAgentDatabase({ agentId: "main", env });
+    const sessionKey = `agent:main:maintenance-${mode}`;
+    const entry = { sessionId: mode, lifecycleRevision: "initial", updatedAt: 1 };
+    writeSessionEntry(database, sessionKey, entry);
+    await closeOpenClawAgentDatabaseByPathAsync(database.path);
+    const predecessor = createDeferred<boolean>();
+    const flushStarted = createDeferred();
+    const releaseFlush = createDeferred();
+    const duringFlush = mode.endsWith("-during-flush");
+    if (duringFlush) {
+      memory.runMemoryFlushIfNeeded.mockImplementationOnce(async () => {
+        flushStarted.resolve();
+        await releaseFlush.promise;
+        return {};
+      });
+    }
+    let gatewayLive = true;
+    const gatewayContext = {
+      resolveGatewayContext: (): GatewayRequestContext | undefined =>
+        gatewayLive ? gatewayContext : undefined,
+    } as GatewayRequestContext;
+    const request = {
+      prepared: { cfg: {}, sessionKey, storePath: database.path, timeoutMs: 60_000 },
+      followupRun: createTestFollowupRun({ sessionKey, sessionId: entry.sessionId }),
+      sessionId: entry.sessionId,
+      lifecycleRevision: entry.lifecycleRevision,
+      lifecycleGeneration: getAgentEventLifecycleGeneration(),
+      startedAt: Date.now(),
+    };
+    const retireGateway = () => {
+      if (mode.startsWith("gateway-lifecycle-retired")) {
+        rotateAgentEventLifecycleGeneration();
+      } else if (mode.startsWith("gateway-instance-retired")) {
+        gatewayLive = false;
+      }
+    };
+    try {
+      expect(gatewayContext.resolveGatewayContext?.()).toBe(gatewayContext);
+      withPluginRuntimeGatewayRequestScope(
+        {
+          pluginRegistry: createEmptyPluginRegistry(),
+          resolveGatewayContext: () => gatewayContext,
+          isWebchatConnect: () => false,
+        },
+        () => scheduleSessionMaintenance(request, predecessor.promise),
+      );
+      await Promise.resolve();
+      expect(memory.runMemoryFlushIfNeeded).not.toHaveBeenCalled();
+      if (!duringFlush) {
+        retireGateway();
+      }
+      if (mode === "session-replaced") {
+        await replaceSessionEntry(
+          { agentId: "main", sessionKey, storePath: database.path },
+          { ...entry, lifecycleRevision: "replacement" },
+        );
+      }
+      predecessor.resolve(mode !== "unsuccessful-owner");
+      if (duringFlush) {
+        await Promise.race([flushStarted.promise, waitForSessionMaintenance(sessionKey)]);
+        expect(memory.runMemoryFlushIfNeeded).toHaveBeenCalledOnce();
+        retireGateway();
+        releaseFlush.resolve();
+      }
+      await waitForSessionMaintenance(sessionKey);
+      expect(memory.runMemoryFlushIfNeeded).toHaveBeenCalledTimes(
+        mode === "completed-owner" || duringFlush ? 1 : 0,
+      );
+      expect(memory.runSessionCompactionIfNeeded).toHaveBeenCalledTimes(
+        mode === "completed-owner" ? 1 : 0,
+      );
+    } finally {
+      predecessor.resolve(false);
+      releaseFlush.resolve();
+      await waitForSessionMaintenance(sessionKey);
     }
   });
 });

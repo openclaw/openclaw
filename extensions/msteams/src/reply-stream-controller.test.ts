@@ -152,18 +152,14 @@ describe("createTeamsReplyStreamController", () => {
     );
   });
 
-  it("suppresses a replacement when emit synchronously discovers Stop", async () => {
+  it("suppresses a replacement after the native stream discovers Stop", async () => {
     const stream = makeAcknowledgedStream();
     const ctrl = makeController({ stream });
 
     ctrl.onPartialReply({ text: "abcde" });
     stream.acknowledge("abcde");
     ctrl.onPartialReply({ text: "provider replacement" });
-    stream.emit.mockImplementation(() => {
-      const error = new Error("stream canceled");
-      error.name = "StreamCancelledError";
-      throw error;
-    });
+    stream.canceled = true;
 
     expect(ctrl.preparePayload({ text: "provider replacement" })).toBeUndefined();
     await expect(ctrl.finalize()).resolves.toEqual({
@@ -305,37 +301,10 @@ describe("createTeamsReplyStreamController", () => {
     expect(stream.update).not.toHaveBeenCalled();
   });
 
-  it("falls back to normal delivery when progress final streaming fails", async () => {
-    const stream = makeStream();
-    stream.close.mockRejectedValueOnce(new Error("progress final failed"));
-    const ctrl = createTeamsReplyStreamController({
-      allowProviderPreview: true,
-      conversationType: "personal",
-      context: makeContext(stream),
-      feedbackLoopEnabled: false,
-      log: { debug: vi.fn() } as never,
-      msteamsConfig: { streaming: { mode: "progress", progress: { toolProgress: true } } } as never,
-    });
-
-    expect(ctrl.preparePayload({ text: "complete final answer" })).toBeUndefined();
-    await expect(ctrl.finalize()).resolves.toMatchObject({
-      visibleReplySent: false,
-      fallbackPayload: { text: "complete final answer" },
-    });
-  });
-
-  describe("StreamCancelledError handling", () => {
-    function makeCancelError(): Error {
-      const err = new Error("stream canceled");
-      err.name = "StreamCancelledError";
-      return err;
-    }
-
-    it("swallows StreamCancelledError thrown from progress stream.update", async () => {
+  describe("canceled native stream", () => {
+    it("does not update progress after the native stream discovers Stop", async () => {
       const stream = makeStream();
-      stream.update.mockImplementation(() => {
-        throw makeCancelError();
-      });
+      stream.canceled = true;
       const ctrl = createTeamsReplyStreamController({
         allowProviderPreview: true,
         conversationType: "personal",
@@ -352,23 +321,7 @@ describe("createTeamsReplyStreamController", () => {
         phase: "end",
         status: "failed",
       });
-      expect(stream.update).toHaveBeenCalled();
-    });
-
-    it("swallows StreamCancelledError thrown from stream.emit during finalize", async () => {
-      const stream = makeStream();
-      const ctrl = makeController({ stream });
-      ctrl.onPartialReply({ text: "partial" });
-      expect(ctrl.preparePayload({ text: "partial" })).toBeUndefined();
-      // Cancel after we've started streaming, then make the final emit throw.
-      stream.emit.mockImplementation(() => {
-        throw makeCancelError();
-      });
-      // Must not throw — finalize's pre-check on stream.canceled may miss
-      // the cancellation that happens between check and emit.
-      await expect(ctrl.finalize()).resolves.toEqual({
-        visibleReplySent: false,
-      });
+      expect(stream.update).not.toHaveBeenCalled();
     });
 
     it("does not trim an independent later payload using a previous stream acknowledgement", async () => {
@@ -429,13 +382,10 @@ describe("createTeamsReplyStreamController", () => {
 
     it("treats post-cancel stream as inactive without further emit attempts", () => {
       const stream = makeStream();
-      stream.emit.mockImplementationOnce(() => {
-        throw makeCancelError();
-      });
       const ctrl = makeController({ stream });
-      ctrl.onPartialReply({ text: "first chunk after stop" });
-      // Subsequent partial replies should short-circuit and not call emit
-      // again (the SDK would throw on every call once canceled).
+      ctrl.onPartialReply({ text: "first chunk" });
+      stream.canceled = true;
+      // Later partials must respect the Stop already observed by the SDK.
       ctrl.onPartialReply({ text: "second chunk" });
       ctrl.onPartialReply({ text: "third chunk" });
       expect(stream.emit).toHaveBeenCalledTimes(1);
@@ -446,12 +396,6 @@ describe("createTeamsReplyStreamController", () => {
 
 describe("flattenInformativeStatus", () => {
   const bytes = (v: string) => new TextEncoder().encode(v).length;
-
-  it("joins rows onto one line without bullets", () => {
-    expect(flattenInformativeStatus("Working\n• tool: search\n- tool: exec\n\n")).toBe(
-      "Working · tool: search · tool: exec",
-    );
-  });
 
   it("keeps the newest rows within 1000 characters", () => {
     const rows = Array.from({ length: 40 }, (_, i) => `row ${i} ${"x".repeat(40)}`);

@@ -1,4 +1,3 @@
-// Mattermost maps transport mention facts into the shared channel evaluator.
 import {
   resolveInboundMentionDecision,
   type InboundImplicitMentionKind,

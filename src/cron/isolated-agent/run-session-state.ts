@@ -1,7 +1,6 @@
 /** Owns admission and persistence for isolated cron sessions. */
 import { isDeepStrictEqual } from "node:util";
 import { normalizeOptionalAgentRuntimeId } from "../../agents/agent-runtime-id.js";
-import { clearBootstrapSnapshotOnSessionBoundary } from "../../agents/bootstrap-cache.js";
 import { resolveSessionLane } from "../../agents/embedded-agent-runner/lanes.js";
 import type { LiveSessionModelSelection } from "../../agents/live-model-switch.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
@@ -9,6 +8,7 @@ import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionAuthProfileOverrideSource } from "../../config/sessions/auth-profile-override-provenance.js";
 import { resolveSessionWorkStartError } from "../../config/sessions/lifecycle.js";
 import type { SessionResetBoundaryWrite } from "../../config/sessions/session-accessor.lifecycle-types.js";
+import type { SessionEntryPatchOperation } from "../../config/sessions/session-entry-patch-operation.js";
 import {
   buildSessionCreationStamp,
   inheritSessionCreationPolicy,
@@ -16,6 +16,7 @@ import {
 import type { SessionCreatedActor } from "../../config/sessions/session-entry-provenance.js";
 import { mergeSessionSnapshotChanges } from "../../config/sessions/session-snapshot-merge.js";
 import { readSessionTranscriptWatermarkAsync } from "../../config/sessions/session-transcript-watermark.js";
+import { isSessionWorkStartInvalidatedError } from "../../config/sessions/work-start-error.js";
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { enqueueCommandInLane } from "../../process/command-queue.js";
@@ -24,7 +25,6 @@ import {
   beginSessionWorkAdmission,
   getCompetingSessionWorkAdmissionRelease,
   getSessionWorkAdmissionOwnerRelease,
-  isSessionWorkAdmissionActive,
 } from "../../sessions/session-lifecycle-admission.js";
 import {
   normalizeCronScheduledToolCallerOrigin,
@@ -63,7 +63,7 @@ export async function withCronSessionPreparation<T>(
     owner: CRON_SESSION_PREPARATION_OWNER,
   };
   if (getSessionWorkAdmissionOwnerRelease(target)) {
-    params.onLaneWait?.({ waiting: true });
+    params.onLaneWait?.({ waiting: true, stage: "session-preparation" });
   }
   const admission = await beginSessionWorkAdmission({
     agentId: params.agentId,
@@ -88,21 +88,21 @@ export async function withCronSessionPreparation<T>(
             if (release) {
               return { kind: "waiting" as const, release };
             }
-            params.onLaneWait?.({ waiting: false });
+            params.onLaneWait?.({ waiting: false, stage: "session-preparation" });
             return { kind: "prepared" as const, value: await prepare() };
           },
           {
             abortSignal: params.signal,
             priority: "background",
             taskIdentity: { taskKind: "cron", sessionKey: params.sessionKey },
-            onQueued: () => params.onLaneWait?.({ waiting: true }),
+            onQueued: () => params.onLaneWait?.({ waiting: true, stage: "session-preparation" }),
           },
         );
         if (result.kind === "prepared") {
           return result.value;
         }
         // Queued owners may need this lane. Await their settlement only after releasing it.
-        params.onLaneWait?.({ waiting: true });
+        params.onLaneWait?.({ waiting: true, stage: "session-preparation" });
         await racePromiseWithAbortSignal(result.release, params.signal, (signal) =>
           toErrorObject(signal.reason, "Queued command aborted"),
         );
@@ -122,20 +122,14 @@ function clearCronContextOwnerState(entry: SessionEntry) {
 /** Resolved cron session plus its mutable backing store and active entry. */
 export type MutableCronSession = ReturnType<typeof resolveCronSession>;
 
-/**
- * Accessor-backed guarded write: `update` receives the freshest persisted row
- * (undefined when absent), may throw to reject a stale lifecycle claim, and
- * returns the full entry to commit. `fallbackEntry` seeds creation when the
- * row does not exist yet.
- */
+/** Commits a closed cron operation and returns its acknowledged entry. */
 export type CronSessionRowWriter = (params: {
-  fallbackEntry: SessionEntry;
+  operation: Extract<SessionEntryPatchOperation, { kind: "cron-session" }>;
   resetBoundary?: SessionResetBoundaryWrite;
   sessionKey: string;
   storePath: string;
-  update: (currentEntry: SessionEntry | undefined) => SessionEntry;
   assertCommitAllowed?: () => void;
-}) => Promise<void>;
+}) => Promise<SessionEntry | null>;
 
 /** Persists the currently selected mutable cron session entry to the session store. */
 export type PersistCronSessionEntry = (
@@ -175,6 +169,7 @@ export async function beginCronSessionWorkAdmission(params: {
   cronSession: MutableCronSession;
   agentSessionKey: string;
   runSessionKey: string;
+  usesDetachedRunSession: boolean;
   signal?: AbortSignal;
   onInterrupt: () => void;
 }) {
@@ -194,6 +189,10 @@ export async function beginCronSessionWorkAdmission(params: {
     signal: params.signal,
     onInterrupt: params.onInterrupt,
     assertAllowed: async (signal) => {
+      // Bound sessions borrow workspace authority; detached rows claim only at their write.
+      if (params.usesDetachedRunSession) {
+        return;
+      }
       const currentEntry = await loadCronSessionEntryLatest(cronSession.storePath, agentSessionKey);
       signal.throwIfAborted();
       const changed = initialSessionEntry
@@ -277,9 +276,7 @@ export function createPersistCronSessionEntry(params: {
     const persistedEntry =
       isCronSessionKey(params.agentSessionKey) &&
       liveEntry.sessionId &&
-      (liveEntry.sessionStartedAt !== undefined ||
-        liveEntry.lastInteractionAt !== undefined ||
-        liveEntry.cliSessionIds !== undefined ||
+      (liveEntry.cliSessionIds !== undefined ||
         liveEntry.cliSessionBindings !== undefined ||
         liveEntry.claudeCliSessionId !== undefined) &&
       !(await cronTranscriptExists({
@@ -289,98 +286,50 @@ export function createPersistCronSessionEntry(params: {
       }))
         ? toNonResumableCronSessionEntry(liveEntry)
         : liveEntry;
-    let committedEntry = persistedEntry;
-    let mergedLiveEntry = liveEntry;
-    await params.persistSessionEntry({
-      storePath: params.cronSession.storePath,
-      sessionKey: params.agentSessionKey,
-      fallbackEntry: persistedEntry,
-      assertCommitAllowed,
-      ...(resetBoundaryPending
-        ? {
-            resetBoundary: {
-              context: "preserve-tail",
-              reason: "cron-stale",
-              cwd: params.workspaceDir,
-            } satisfies SessionResetBoundaryWrite,
-          }
-        : {}),
-      update: (currentEntry) => {
-        if (!currentEntry) {
-          const creationStamp = buildSessionCreationStamp({
+    let committedEntry: SessionEntry | null;
+    try {
+      committedEntry = await params.persistSessionEntry({
+        storePath: params.cronSession.storePath,
+        sessionKey: params.agentSessionKey,
+        operation: {
+          kind: "cron-session",
+          sessionKey: params.agentSessionKey,
+          initial: params.cronSession.initialSessionEntry,
+          next: persistedEntry,
+          creation: buildSessionCreationStamp({
             via: "cron",
             actor: params.createdActor ?? { type: "system" },
             sandbox: params.sandbox,
-          });
-          committedEntry = { ...persistedEntry, ...creationStamp };
-          mergedLiveEntry = { ...liveEntry, ...creationStamp };
-        }
-        // A reused in-place revision is shared with the session's other writers, so
-        // revision equality alone cannot prove this run still holds the incarnation it
-        // last committed; a same-revision session-id replacement must reject.
-        const ownsCurrentRevision =
-          currentEntry?.lifecycleRevision === params.cronSession.lifecycleRevision &&
-          (params.cronSession.initialSessionEntry === undefined ||
-            currentEntry?.sessionId === params.cronSession.initialSessionEntry.sessionId);
-        const currentRevisionActive = Boolean(
-          currentEntry?.lifecycleRevision &&
-          isSessionWorkAdmissionActive(params.cronSession.storePath, [
-            resolveCronLifecycleRevisionIdentity(currentEntry.lifecycleRevision),
-          ]),
-        );
-        const initialEntryMatchesOwnershipFields =
-          currentEntry !== undefined &&
-          params.cronSession.initialSessionEntry !== undefined &&
-          isDeepStrictEqual(
-            projectCronOwnershipFields(currentEntry),
-            projectCronOwnershipFields(params.cronSession.initialSessionEntry),
-          );
-        // Same-generation continuation: the row still carries the lifecycle
-        // revision this run resolved from, so no competing run has claimed it
-        // since. Benign concurrent field writes (delivery, token, status) then
-        // merge into the claim instead of aborting it. Exact ownership-field
-        // equality alone spuriously rejected these on large, busy stores where
-        // such an update lands between resolve and this first persist.
-        const initialEntry = params.cronSession.initialSessionEntry;
-        const initialLifecycleRevision = initialEntry?.lifecycleRevision;
-        const currentContinuesInitialGeneration =
-          currentEntry !== undefined &&
-          initialEntry !== undefined &&
-          initialLifecycleRevision !== undefined &&
-          currentEntry.lifecycleRevision === initialLifecycleRevision &&
-          currentEntry.sessionId === initialEntry.sessionId;
-        const canClaimInitialRevision = params.cronSession.initialSessionEntry
-          ? !currentRevisionActive &&
-            (initialEntryMatchesOwnershipFields || currentContinuesInitialGeneration)
-          : currentEntry === undefined;
-        // Concurrent persistent runs can resolve the same initial row. Once one
-        // revision claims it, older owners must not reclaim it and delete newer state.
-        if (!ownsCurrentRevision && !canClaimInitialRevision) {
-          throw new CronSessionLifecycleClaimError(params.agentSessionKey);
-        }
-        if (currentEntry && params.cronSession.initialSessionEntry) {
-          committedEntry = mergeSessionSnapshotChanges({
-            initial: params.cronSession.initialSessionEntry,
-            next: persistedEntry,
-            current: currentEntry,
-          });
-          mergedLiveEntry = mergeSessionSnapshotChanges({
-            initial: params.cronSession.initialSessionEntry,
-            next: liveEntry,
-            current: currentEntry,
-          });
-        }
-        return committedEntry;
-      },
-    });
-    clearBootstrapSnapshotOnSessionBoundary({
-      boundaryAppended: resetBoundaryPending,
-      sessionKey: params.agentSessionKey,
-    });
+          }),
+        },
+        assertCommitAllowed,
+        ...(resetBoundaryPending
+          ? {
+              resetBoundary: {
+                context: "preserve-tail",
+                reason: "cron-stale",
+                cwd: params.workspaceDir,
+              } satisfies SessionResetBoundaryWrite,
+            }
+          : {}),
+      });
+    } catch (error) {
+      if (isSessionWorkStartInvalidatedError(error)) {
+        throw new CronSessionLifecycleClaimError(params.agentSessionKey, error.message);
+      }
+      throw error;
+    }
+    if (!committedEntry) {
+      throw new CronSessionLifecycleClaimError(params.agentSessionKey);
+    }
     params.cronSession.resetBoundaryPending = undefined;
     // The storage projection may intentionally omit resume identity until its
     // transcript exists. Keep that projection out of the active run object.
-    params.cronSession.sessionEntry = mergedLiveEntry;
+    params.cronSession.sessionEntry = mergeSessionSnapshotChanges({
+      initial: persistedEntry,
+      next: liveEntry,
+      current: committedEntry,
+    });
     params.cronSession.initialSessionEntry = structuredClone(committedEntry);
     params.cronSession.store[params.agentSessionKey] = committedEntry;
   };
@@ -404,7 +353,6 @@ export function createCronRunContinuationSession(params: {
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     requireExplicitMessageTarget?: boolean;
   };
-  persistSessionEntry: CronSessionRowWriter;
 }): CronRunContinuationSession {
   const scheduledToolPolicy =
     params.toolsAllow === undefined
@@ -438,8 +386,6 @@ export function createCronRunContinuationSession(params: {
       ? { cliSessionBindingFacts: { ...params.cliSessionBindingFacts } }
       : {}),
   };
-  const owns = (entry: SessionEntry | undefined) =>
-    entry?.cronRunContinuation?.lifecycleRevision === continuation.lifecycleRevision;
   let sealed = false;
   let persistedSnapshot: { source: SessionEntry; continuation: typeof continuation } | undefined;
   const persist = async (
@@ -458,64 +404,55 @@ export function createCronRunContinuationSession(params: {
     delete source.createdVia;
     delete source.createdActor;
     delete source.createdAt;
-    // Node-local lineage must not leak across keys: the base row's generation
-    // chain and fork ancestry describe the cron root, not this :run: node.
+    // Node-local lineage must not leak across keys: generation history and
+    // fork ancestry describe the cron root, not this :run: node.
     delete source.previousSessionId;
     delete source.forkSource;
+    delete source.usageFamilySessionIds;
     const snapshot = { source, continuation: structuredClone(continuation) };
     if (phase === "running" && isDeepStrictEqual(snapshot, persistedSnapshot)) {
       return;
     }
-    let persisted = false;
-    let alreadySealed = false;
-    await params.persistSessionEntry({
-      storePath: params.cronSession.storePath,
-      sessionKey: params.runSessionKey,
-      fallbackEntry: source,
-      assertCommitAllowed,
-      update: (current) => {
-        if ((current && !owns(current)) || (!current && !create)) {
-          throw new CronSessionLifecycleClaimError(params.runSessionKey);
-        }
-        // Leaving running transfers ownership to gateway continuation turns.
-        // The initial cron owner must never overwrite their newer state.
-        if (current && current.cronRunContinuation?.phase !== "running") {
-          alreadySealed = phase === "ready" && current.cronRunContinuation?.phase === "ready";
-          if (alreadySealed) {
-            return current;
-          }
-          throw new CronSessionLifecycleClaimError(params.runSessionKey);
-        }
-        persisted = true;
-        return {
-          ...current,
-          ...source,
-          // Snapshot merges remove cleared keys; continuity copies must carry
-          // their absence too, or this row resurrects an invalid native handle.
-          cliSessionBindings: source.cliSessionBindings,
-          cliSessionIds: source.cliSessionIds,
-          claudeCliSessionId: source.claudeCliSessionId,
-          ...(!current
-            ? buildSessionCreationStamp({
-                via: "cron",
-                ...inheritSessionCreationPolicy(
-                  params.cronSession.sessionEntry,
-                  params.createdActor ?? { type: "system" },
-                ),
-                sandbox: params.cronSession.sessionEntry.sandbox ?? params.sandbox,
-              })
-            : {}),
-          ...(params.thinkingLevel ? { thinkingLevel: params.thinkingLevel } : {}),
-          cronRunContinuation: {
+    try {
+      const { applySessionEntryOperation } =
+        await import("../../config/sessions/session-accessor.sqlite-entry.js");
+      const persisted = await applySessionEntryOperation(
+        { storePath: params.cronSession.storePath, sessionKey: params.runSessionKey },
+        {
+          kind: "cron-run-continuation",
+          sessionKey: params.runSessionKey,
+          source,
+          create,
+          creation: buildSessionCreationStamp({
+            via: "cron",
+            ...inheritSessionCreationPolicy(
+              params.cronSession.sessionEntry,
+              params.createdActor ?? { type: "system" },
+            ),
+            sandbox: params.cronSession.sessionEntry.sandbox ?? params.sandbox,
+          }),
+          thinkingLevel: params.thinkingLevel,
+          continuation: {
             ...continuation,
             phase,
             ...(phase === "ready" ? { basePersisted } : {}),
           },
-        };
-      },
-    });
-    if (!persisted && !alreadySealed) {
-      throw new CronSessionLifecycleClaimError(params.runSessionKey);
+        },
+        {
+          fallbackEntry: source,
+          replaceEntry: true,
+          skipMaintenance: true,
+          workerGuard: { assertCurrent: assertCommitAllowed },
+        },
+      );
+      if (!persisted) {
+        throw new CronSessionLifecycleClaimError(params.runSessionKey);
+      }
+    } catch (error) {
+      if (isSessionWorkStartInvalidatedError(error)) {
+        throw new CronSessionLifecycleClaimError(params.runSessionKey, error.message);
+      }
+      throw error;
     }
     // Only acknowledged writes advance the snapshot. After handoff the cron
     // owner has no further writes, including its unconditional final cleanup.

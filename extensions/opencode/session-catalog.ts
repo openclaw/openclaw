@@ -58,11 +58,9 @@ const SAFE_ENV_KEYS = [
 type OpenCodeQueryCacheEntry = {
   expiresAt: number;
   result: Promise<unknown>;
-  resolved?: true;
 };
 
 type OpenCodeQueryCacheOptions = {
-  configIdentity?: object;
   forceRefresh?: boolean;
 };
 
@@ -84,9 +82,7 @@ export async function isOpenCodeV2(): Promise<boolean> {
     });
     cliVersion = { key, expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS, result };
     result.catch(() => {
-      if (cliVersion?.result === result) {
-        cliVersion = undefined;
-      }
+      cliVersion = undefined;
     });
   }
   return cliVersion.result;
@@ -266,9 +262,7 @@ async function queryCachedOpenCodeSessions(
     openCodeQueryCache.set(key, cached);
     return await cached.result;
   }
-  if (cached) {
-    openCodeQueryCache.delete(key);
-  }
+  openCodeQueryCache.delete(key);
   const result = queryOpenCodeSessions(query, count);
   const entry: OpenCodeQueryCacheEntry = {
     expiresAt: Date.now() + OPENCODE_QUERY_CACHE_TTL_MS,
@@ -277,17 +271,9 @@ async function queryCachedOpenCodeSessions(
   openCodeQueryCache.set(key, entry);
   pruneMapToMaxSize(openCodeQueryCache, OPENCODE_QUERY_CACHE_MAX_ENTRIES);
   try {
-    const value = await result;
-    entry.resolved = true;
-    return value;
+    return await result;
   } catch (error) {
-    if (openCodeQueryCache.get(key) === entry) {
-      if (cached?.resolved) {
-        openCodeQueryCache.set(key, cached);
-      } else {
-        openCodeQueryCache.delete(key);
-      }
-    }
+    openCodeQueryCache.delete(key);
     throw error;
   }
 }

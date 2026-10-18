@@ -5,7 +5,6 @@ import type { Model } from "openclaw/plugin-sdk/llm";
 import { resolveHeartbeatPromptForResponseTool } from "../../../src/auto-reply/heartbeat.js";
 import {
   buildSourceConversationContext,
-  buildGroupChatContext,
   buildGroupIntro,
 } from "../../../src/auto-reply/reply/groups.js";
 import {
@@ -14,7 +13,6 @@ import {
 } from "../../../src/auto-reply/reply/inbound-meta.js";
 import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
-import { SILENT_REPLY_TOKEN } from "../../../src/auto-reply/tokens.js";
 import { normalizeChatType } from "../../../src/channels/chat-type.js";
 import type { OpenClawConfig } from "../../../src/config/types.openclaw.js";
 import type {
@@ -648,11 +646,9 @@ async function createScenarios(codexApi: CodexPromptSnapshotApi): Promise<Prompt
       ),
       extraSystemPrompt: createExtraSystemPrompt({
         ctx: discordGroupCtx,
-        chatContext: buildGroupChatContext({
+        chatContext: buildSourceConversationContext({
           sessionCtx: discordGroupCtx,
           sourceReplyDeliveryMode: "message_tool_only",
-          silentReplyPolicy: "allow",
-          silentToken: SILENT_REPLY_TOKEN,
         }),
         intro: buildGroupIntro({
           defaultActivation: "mention",

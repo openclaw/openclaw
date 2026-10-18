@@ -2,9 +2,28 @@ import { describe, expect, it } from "vitest";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { CronJob } from "../types.js";
 import {
+  prepareCronModelResolveInput,
   resolveCronFallbacksOverride,
   resolveCronPreflightCandidates,
 } from "./run-fallback-policy.js";
+
+it.each([undefined, "cron", "event"] as const)(
+  "classifies model routing as %s only from the trusted caller, not the hook session key",
+  async (trigger) => {
+    const { modelResolve } = await prepareCronModelResolveInput({
+      cwd: "/tmp/event-model-routing",
+      prompt: "Synthetic immediate event",
+      cronSession: { sessionEntry: {} },
+      job: { id: "caller-classification" },
+      trigger,
+      runSessionKey: "agent:main:hook:caller-classification",
+      resolvedDelivery: {},
+      messageChannel: undefined,
+    });
+
+    expect(modelResolve.context?.trigger).toBe(trigger ?? "cron");
+  },
+);
 
 function makeJob(payload: CronJob["payload"]): CronJob {
   return {

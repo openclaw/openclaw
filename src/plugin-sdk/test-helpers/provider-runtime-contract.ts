@@ -78,104 +78,93 @@ function expectFields(value: unknown, fields: Record<string, unknown>) {
   }
 }
 
-type ProviderRuntimeContractFixture = {
-  providerIds: string[];
-  pluginId: string;
-  name: string;
-  load: ProviderRuntimeContractPluginLoader;
-};
-
 export type ProviderRuntimeContractPluginLoader = () => Promise<{
   default: Parameters<typeof registerProviderPlugin>[0]["plugin"];
 }>;
 
-function installRuntimeHooks(fixtures: readonly ProviderRuntimeContractFixture[]) {
+function installRuntimeHooks(
+  load: ProviderRuntimeContractPluginLoader,
+  pluginId: string,
+  name: string,
+  providerIds = [pluginId],
+) {
   const providers = new Map<string, ProviderPlugin>();
-  let loadPromise: Promise<void> | null = null;
-
-  function requireProviderContractProvider(providerId: string): ProviderPlugin {
-    const provider = providers.get(providerId);
-    if (!provider) {
-      throw new Error(`provider runtime contract fixture missing for ${providerId}`);
-    }
-    return provider;
-  }
-
-  async function ensureProvidersLoaded() {
-    if (!loadPromise) {
-      loadPromise = (async () => {
-        providers.clear();
-        const registeredFixtures = await Promise.all(
-          fixtures.map(async (fixture) => {
-            const plugin = await fixture.load();
-            return {
-              fixture,
-              providers: (
-                await registerProviderPlugin({
-                  plugin: plugin.default,
-                  id: fixture.pluginId,
-                  name: fixture.name,
-                })
-              ).providers,
-            };
-          }),
-        );
-        for (const { fixture, providers: registeredProviders } of registeredFixtures) {
-          for (const providerId of fixture.providerIds) {
-            providers.set(
-              providerId,
-              requireRegisteredProvider(registeredProviders, providerId, "provider"),
-            );
-          }
-        }
-      })();
-    }
-
-    await loadPromise;
-  }
-
   beforeAll(async () => {
     installProviderRuntimeContractMocks();
-    await ensureProvidersLoaded();
+    const plugin = await load();
+    const registered = await registerProviderPlugin({
+      plugin: plugin.default,
+      id: pluginId,
+      name,
+    });
+    for (const id of providerIds) {
+      providers.set(id, requireRegisteredProvider(registered.providers, id, "provider"));
+    }
   }, CONTRACT_SETUP_TIMEOUT_MS);
-
-  afterAll(() => {
-    removeProviderRuntimeContractMocks();
-  });
-
+  afterAll(removeProviderRuntimeContractMocks);
   beforeEach(() => {
     refreshOpenAICodexTokenMock.mockReset();
   }, CONTRACT_SETUP_TIMEOUT_MS);
+  return (providerId: string) => expectDefined(providers.get(providerId), providerId);
+}
 
-  return requireProviderContractProvider;
+function fetchUsageSnapshot(
+  provider: ProviderPlugin,
+  token: string,
+  path: string,
+  body: unknown,
+  accountId?: string,
+) {
+  const mockFetch = createProviderUsageFetch(async (url) =>
+    url.includes(path) ? makeResponse(200, body) : makeResponse(404, "not found"),
+  );
+  return provider.fetchUsageSnapshot?.({
+    config: {},
+    env: {},
+    provider: provider.id,
+    token,
+    accountId,
+    timeoutMs: 5_000,
+    fetchFn: mockFetch as unknown as typeof fetch,
+  });
+}
+
+type DynamicContext = Parameters<NonNullable<ProviderPlugin["resolveDynamicModel"]>>[0];
+function resolveFromTemplate(
+  provider: ProviderPlugin,
+  modelId: string,
+  template: ProviderRuntimeModel | null,
+  options: Partial<Omit<DynamicContext, "provider" | "modelId" | "modelRegistry">> = {},
+) {
+  return provider.resolveDynamicModel?.({
+    provider: provider.id,
+    modelId,
+    modelRegistry: {
+      find: (_provider: string, id: string) => (id === template?.id ? template : null),
+    } as never,
+    ...options,
+  });
 }
 
 export function describeAnthropicProviderRuntimeContract(
   load: ProviderRuntimeContractPluginLoader,
 ) {
   describe("anthropic provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
-    const requireProviderContractProvider = installRuntimeHooks([
-      { providerIds: ["anthropic"], pluginId: "anthropic", name: "Anthropic", load },
-    ]);
+    const getProvider = installRuntimeHooks(load, "anthropic", "Anthropic");
 
     it("owns anthropic 4.6 forward-compat resolution", () => {
-      const provider = requireProviderContractProvider("anthropic");
+      const provider = getProvider("anthropic");
       // The dated 4.6 template has no owning manifest row; keep its remap fixture literal.
-      const model = provider.resolveDynamicModel?.({
-        provider: "anthropic",
-        modelId: "claude-sonnet-4.6-20260219",
-        modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "claude-sonnet-4-6-20260219"
-              ? createModel({
-                  id,
-                  api: "anthropic-messages",
-                  provider: "anthropic",
-                  baseUrl: "https://api.anthropic.com",
-                })
-              : null,
-        } as never,
-      });
+      const model = resolveFromTemplate(
+        provider,
+        "claude-sonnet-4.6-20260219",
+        createModel({
+          id: "claude-sonnet-4-6-20260219",
+          api: "anthropic-messages",
+          provider: "anthropic",
+          baseUrl: "https://api.anthropic.com",
+        }),
+      );
 
       expectFields(model, {
         id: "claude-sonnet-4.6-20260219",
@@ -186,7 +175,7 @@ export function describeAnthropicProviderRuntimeContract(
     });
 
     it("owns usage auth resolution", async () => {
-      const provider = requireProviderContractProvider("anthropic");
+      const provider = getProvider("anthropic");
       await expect(
         provider.resolveUsageAuth?.({
           config: {} as never,
@@ -203,7 +192,7 @@ export function describeAnthropicProviderRuntimeContract(
     });
 
     it("owns auth doctor hint generation", async () => {
-      const provider = requireProviderContractProvider("anthropic");
+      const provider = getProvider("anthropic");
       const hint = await provider.buildAuthDoctorHint?.({
         provider: "anthropic",
         profileId: "anthropic:default",
@@ -236,25 +225,11 @@ export function describeAnthropicProviderRuntimeContract(
     });
 
     it("owns usage snapshot fetching", async () => {
-      const provider = requireProviderContractProvider("anthropic");
-      const mockFetch = createProviderUsageFetch(async (url) => {
-        if (url.includes("api.anthropic.com/api/oauth/usage")) {
-          return makeResponse(200, {
-            five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
-            seven_day: { utilization: 35, resets_at: "2026-01-09T01:00:00Z" },
-          });
-        }
-        return makeResponse(404, "not found");
-      });
-
+      const provider = getProvider("anthropic");
       await expect(
-        provider.fetchUsageSnapshot?.({
-          config: {} as never,
-          env: {} as NodeJS.ProcessEnv,
-          provider: "anthropic",
-          token: "anthropic-oauth-token",
-          timeoutMs: 5_000,
-          fetchFn: mockFetch as unknown as typeof fetch,
+        fetchUsageSnapshot(provider, "anthropic-oauth-token", "api.anthropic.com/api/oauth/usage", {
+          five_hour: { utilization: 20, resets_at: "2026-01-07T01:00:00Z" },
+          seven_day: { utilization: 35, resets_at: "2026-01-09T01:00:00Z" },
         }),
       ).resolves.toEqual({
         provider: "anthropic",
@@ -276,14 +251,7 @@ export function describeGithubCopilotProviderRuntimeContract(
     "github-copilot provider runtime contract",
     { timeout: CONTRACT_SETUP_TIMEOUT_MS },
     () => {
-      const requireProviderContractProvider = installRuntimeHooks([
-        {
-          providerIds: ["github-copilot"],
-          pluginId: "github-copilot",
-          name: "GitHub Copilot",
-          load,
-        },
-      ]);
+      const getProvider = installRuntimeHooks(load, "github-copilot", "GitHub Copilot");
       const createManifestModel = createManifestModelFactory("github-copilot", manifestCatalog);
 
       async function resolveStaticModel(modelId: string) {
@@ -349,7 +317,7 @@ export function describeGithubCopilotProviderRuntimeContract(
             maxTokensField: "max_tokens",
           });
         }
-        const provider = requireProviderContractProvider("github-copilot");
+        const provider = getProvider("github-copilot");
         expect(
           provider.preferRuntimeResolvedModel?.({
             config,
@@ -381,7 +349,7 @@ export function describeGithubCopilotProviderRuntimeContract(
         const { streamOpenAIResponses, streamSimpleOpenAIResponses } =
           await import("@openclaw/ai/internal/openai");
         const { config, model } = await resolveStaticModel("gpt-5.4-mini");
-        const provider = requireProviderContractProvider("github-copilot");
+        const provider = getProvider("github-copilot");
         const profile = provider.resolveThinkingProfile?.({
           provider: model.provider,
           modelId: model.id,
@@ -437,15 +405,9 @@ export function describeGithubCopilotProviderRuntimeContract(
       });
 
       it("owns Copilot-specific forward-compat fallbacks", () => {
-        const provider = requireProviderContractProvider("github-copilot");
+        const provider = getProvider("github-copilot");
         const expected = createManifestModel("gpt-5.4");
-        const model = provider.resolveDynamicModel?.({
-          provider: "github-copilot",
-          modelId: "gpt-5.4",
-          modelRegistry: {
-            find: () => null,
-          } as never,
-        });
+        const model = resolveFromTemplate(provider, "gpt-5.4", null);
 
         const { baseUrl: _providerDefault, ...manifestFields } = expected;
         expectFields(model, manifestFields);
@@ -456,78 +418,46 @@ export function describeGithubCopilotProviderRuntimeContract(
 
 export function describeGoogleProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {
   describe("google provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
-    const requireProviderContractProvider = installRuntimeHooks([
-      { providerIds: ["google", "google-gemini-cli"], pluginId: "google", name: "Google", load },
+    const getProvider = installRuntimeHooks(load, "google", "Google", [
+      "google",
+      "google-gemini-cli",
     ]);
 
-    it("owns google direct gemini 3.1 forward-compat resolution", () => {
-      const provider = requireProviderContractProvider("google");
-      // Google catalog rows are runtime-discovered, so the retired 3.0 template stays literal.
-      const model = provider.resolveDynamicModel?.({
-        provider: "google",
-        modelId: "gemini-3.1-pro-preview",
-        modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "gemini-3-pro-preview"
-              ? createModel({
-                  id,
-                  api: "google-generative-ai",
-                  provider: "google",
-                  baseUrl: "https://generativelanguage.googleapis.com",
-                  reasoning: false,
-                  contextWindow: 1_048_576,
-                  maxTokens: 65_536,
-                })
-              : null,
-        } as never,
-      });
-
+    it.each([
+      ["google", "google-generative-ai", "https://generativelanguage.googleapis.com"],
+      ["google-gemini-cli", "google-gemini-cli", "https://cloudcode-pa.googleapis.com"],
+    ] as const)("owns %s gemini 3.1 forward-compat resolution", (providerId, api, baseUrl) => {
+      // Runtime-discovered catalogs no longer contain the retired 3.0 template.
+      const model = resolveFromTemplate(
+        getProvider(providerId),
+        "gemini-3.1-pro-preview",
+        createModel({
+          id: "gemini-3-pro-preview",
+          provider: providerId,
+          api,
+          baseUrl,
+          reasoning: false,
+          contextWindow: 1_048_576,
+          maxTokens: 65_536,
+        }),
+      );
       expectFields(model, {
         id: "gemini-3.1-pro-preview",
-        provider: "google",
-        api: "google-generative-ai",
-        baseUrl: "https://generativelanguage.googleapis.com",
+        provider: providerId,
         reasoning: true,
-      });
-    });
-
-    it("owns gemini cli 3.1 forward-compat resolution", () => {
-      const provider = requireProviderContractProvider("google-gemini-cli");
-      const model = provider.resolveDynamicModel?.({
-        provider: "google-gemini-cli",
-        modelId: "gemini-3.1-pro-preview",
-        modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "gemini-3-pro-preview"
-              ? createModel({
-                  id,
-                  api: "google-gemini-cli",
-                  provider: "google-gemini-cli",
-                  baseUrl: "https://cloudcode-pa.googleapis.com",
-                  reasoning: false,
-                  contextWindow: 1_048_576,
-                  maxTokens: 65_536,
-                })
-              : null,
-        } as never,
-      });
-
-      expectFields(model, {
-        id: "gemini-3.1-pro-preview",
-        provider: "google-gemini-cli",
-        reasoning: true,
+        ...(providerId === "google" ? { api, baseUrl } : {}),
       });
     });
 
     it("keeps retired usage telemetry hooks absent", () => {
-      const provider = requireProviderContractProvider("google-gemini-cli");
+      const provider = getProvider("google-gemini-cli");
 
       expect(provider.resolveUsageAuth).toBeUndefined();
       expect(provider.fetchUsageSnapshot).toBeUndefined();
     });
 
     it("owns OAuth auth-profile formatting", () => {
-      const provider = requireProviderContractProvider("google-gemini-cli");
+      const provider = getProvider("google-gemini-cli");
 
       expect(
         provider.formatApiKey?.({
@@ -553,95 +483,44 @@ export function describeOpenAIProviderRuntimeContract(
       api: "openai-chatgpt-responses",
       baseUrl: "https://chatgpt.com/backend-api/codex",
     } as const;
-    const requireProviderContractProvider = installRuntimeHooks([
-      { providerIds: ["openai", "openai"], pluginId: "openai", name: "OpenAI", load },
-    ]);
+    const getProvider = installRuntimeHooks(load, "openai", "OpenAI");
 
-    it("owns openai gpt-5.4 forward-compat resolution", () => {
-      const provider = requireProviderContractProvider("openai");
-      // Neither gpt-5.4-pro nor its 5.2 template has an owning manifest row.
-      const model = provider.resolveDynamicModel?.({
-        provider: "openai",
-        modelId: "gpt-5.4-pro",
-        modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "gpt-5.2-pro"
-              ? createModel({
-                  id,
-                  provider: "openai",
-                  baseUrl: "https://api.openai.com/v1",
-                  input: ["text", "image"],
-                })
-              : null,
-        } as never,
-      });
-
-      expectFields(model, {
-        id: "gpt-5.4-pro",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        contextWindow: 1_050_000,
-        maxTokens: 128_000,
-      });
-    });
-
-    it("owns openai gpt-5.5 forward-compat resolution", () => {
-      const provider = requireProviderContractProvider("openai");
-      const expected = createManifestModel("gpt-5.5", { name: "gpt-5.5" });
-      // OpenAI has no gpt-5.4 manifest row; distinct literal metadata keeps the upgrade asserted.
-      const olderTemplate = createModel({
-        id: "gpt-5.4",
-        provider: "openai",
-        baseUrl: "https://api.openai.com/v1",
-        input: ["text", "image"],
-      });
-      const model = provider.resolveDynamicModel?.({
-        provider: "openai",
-        modelId: "gpt-5.5",
-        modelRegistry: {
-          find: (_provider: string, id: string) => (id === olderTemplate.id ? olderTemplate : null),
-        } as never,
-      });
-
-      expectFields(model, expected);
-    });
-
-    it("owns openai gpt-5.4 mini forward-compat resolution", () => {
-      const provider = requireProviderContractProvider("openai");
-      // The OpenAI manifest has no gpt-5.4-mini row, so its family patch stays literal.
-      const model = provider.resolveDynamicModel?.({
-        provider: "openai",
-        modelId: "gpt-5.4-mini",
-        modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "gpt-5-mini"
-              ? createModel({
-                  id,
-                  provider: "openai",
-                  api: "openai-responses",
-                  baseUrl: "https://api.openai.com/v1",
-                  input: ["text", "image"],
-                  reasoning: true,
-                  contextWindow: 400_000,
-                  maxTokens: 128_000,
-                })
-              : null,
-        } as never,
-      });
-
-      expectFields(model, {
-        id: "gpt-5.4-mini",
-        provider: "openai",
-        api: "openai-responses",
-        baseUrl: "https://api.openai.com/v1",
-        contextWindow: 400_000,
-        maxTokens: 128_000,
-      });
-    });
+    // Literal retired templates keep family patches independent of the current manifest.
+    it.each([
+      ["gpt-5.4-pro", "gpt-5.2-pro", {}, { contextWindow: 1_050_000, maxTokens: 128_000 }],
+      ["gpt-5.5", "gpt-5.4", {}, createManifestModel("gpt-5.5", { name: "gpt-5.5" })],
+      [
+        "gpt-5.4-mini",
+        "gpt-5-mini",
+        { contextWindow: 400_000, maxTokens: 128_000 },
+        { contextWindow: 400_000, maxTokens: 128_000 },
+      ],
+    ] as const)(
+      "owns direct %s forward-compat resolution from %s",
+      (modelId, templateId, overrides, expected) => {
+        const model = resolveFromTemplate(
+          getProvider("openai"),
+          modelId,
+          createModel({
+            id: templateId,
+            provider: "openai",
+            baseUrl: "https://api.openai.com/v1",
+            input: ["text", "image"],
+            ...overrides,
+          }),
+        );
+        expectFields(model, {
+          id: modelId,
+          provider: "openai",
+          api: "openai-responses",
+          baseUrl: "https://api.openai.com/v1",
+          ...expected,
+        });
+      },
+    );
 
     it("owns direct openai transport normalization", () => {
-      const provider = requireProviderContractProvider("openai");
+      const provider = getProvider("openai");
       // The normalized gpt-5.4 input is intentionally outside the current OpenAI manifest.
       expectFields(
         provider.normalizeResolvedModel?.({
@@ -664,7 +543,7 @@ export function describeOpenAIProviderRuntimeContract(
     });
 
     it("owns refresh fallback for accountId extraction failures", async () => {
-      const provider = requireProviderContractProvider("openai");
+      const provider = getProvider("openai");
       const credential = {
         type: "oauth" as const,
         provider: "openai",
@@ -700,7 +579,7 @@ export function describeOpenAIProviderRuntimeContract(
         api: "openai-responses",
         contextTokens: 272_000,
       });
-      const provider = requireProviderContractProvider("openai");
+      const provider = getProvider("openai");
       const model = provider.resolveDynamicModel?.({
         provider: "openai",
         modelId: "gpt-6.1-sol",
@@ -725,25 +604,22 @@ export function describeOpenAIProviderRuntimeContract(
     });
 
     it("owns forward-compat codex models", () => {
-      const provider = requireProviderContractProvider("openai");
+      const provider = getProvider("openai");
       // Codex gpt-5.4 has no OpenAI manifest row; this keeps its transport mapping independent.
-      const model = provider.resolveDynamicModel?.({
-        provider: "openai",
-        modelId: "gpt-5.4",
-        authProfileMode: "oauth",
-        providerConfig: codexProviderConfig,
-        modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "gpt-5.2-codex"
-              ? createModel({
-                  id,
-                  api: "openai-chatgpt-responses",
-                  provider: "openai",
-                  baseUrl: "https://chatgpt.com/backend-api",
-                })
-              : null,
-        } as never,
-      });
+      const model = resolveFromTemplate(
+        provider,
+        "gpt-5.4",
+        createModel({
+          id: "gpt-5.2-codex",
+          api: "openai-chatgpt-responses",
+          provider: "openai",
+          baseUrl: "https://chatgpt.com/backend-api",
+        }),
+        {
+          authProfileMode: "oauth",
+          providerConfig: codexProviderConfig,
+        },
+      );
 
       expectFields(model, {
         id: "gpt-5.4",
@@ -755,20 +631,15 @@ export function describeOpenAIProviderRuntimeContract(
     });
 
     it("keeps OpenClaw cost metadata but applies Codex context metadata for gpt-5.5 models", () => {
-      const provider = requireProviderContractProvider("openai");
+      const provider = getProvider("openai");
       const manifestModel = createManifestModel("gpt-5.5", {
         api: "openai-chatgpt-responses",
         baseUrl: "https://chatgpt.com/backend-api",
         contextWindow: 272_000,
       });
-      const model = provider.resolveDynamicModel?.({
-        provider: "openai",
-        modelId: "gpt-5.5",
+      const model = resolveFromTemplate(provider, "gpt-5.5", manifestModel, {
         authProfileMode: "oauth",
         providerConfig: codexProviderConfig,
-        modelRegistry: {
-          find: (_provider: string, id: string) => (id === "gpt-5.5" ? manifestModel : null),
-        } as never,
       });
 
       expectFields(model, {
@@ -780,7 +651,7 @@ export function describeOpenAIProviderRuntimeContract(
     });
 
     it("claims codex mini models through the Codex OAuth route", () => {
-      const provider = requireProviderContractProvider("openai");
+      const provider = getProvider("openai");
       const manifestTemplate = createManifestModel("gpt-5.5", {
         id: "gpt-5.4",
         name: "gpt-5.4",
@@ -788,14 +659,9 @@ export function describeOpenAIProviderRuntimeContract(
         baseUrl: "https://chatgpt.com/backend-api",
         contextWindow: 272_000,
       });
-      const model = provider.resolveDynamicModel?.({
-        provider: "openai",
-        modelId: "gpt-5.4-mini",
+      const model = resolveFromTemplate(provider, "gpt-5.4-mini", manifestTemplate, {
         authProfileMode: "oauth",
         providerConfig: codexProviderConfig,
-        modelRegistry: {
-          find: (_provider: string, id: string) => (id === "gpt-5.4" ? manifestTemplate : null),
-        } as never,
       });
 
       expectFields(model, {
@@ -810,7 +676,7 @@ export function describeOpenAIProviderRuntimeContract(
     });
 
     it("owns codex transport defaults", () => {
-      const provider = requireProviderContractProvider("openai");
+      const provider = getProvider("openai");
       expect(
         provider.prepareExtraParams?.({
           provider: "openai",
@@ -830,10 +696,13 @@ export function describeOpenAIProviderRuntimeContract(
     });
 
     it("owns usage snapshot fetching", async () => {
-      const provider = requireProviderContractProvider("openai");
-      const mockFetch = createProviderUsageFetch(async (url) => {
-        if (url.includes("chatgpt.com/backend-api/wham/usage")) {
-          return makeResponse(200, {
+      const provider = getProvider("openai");
+      await expect(
+        fetchUsageSnapshot(
+          provider,
+          "codex-token",
+          "chatgpt.com/backend-api/wham/usage",
+          {
             rate_limit: {
               primary_window: {
                 used_percent: 12,
@@ -842,21 +711,9 @@ export function describeOpenAIProviderRuntimeContract(
               },
             },
             plan_type: "Plus",
-          });
-        }
-        return makeResponse(404, "not found");
-      });
-
-      await expect(
-        provider.fetchUsageSnapshot?.({
-          config: {} as never,
-          env: {} as NodeJS.ProcessEnv,
-          provider: "openai",
-          token: "codex-token",
-          accountId: "acc-1",
-          timeoutMs: 5_000,
-          fetchFn: mockFetch as unknown as typeof fetch,
-        }),
+          },
+          "acc-1",
+        ),
       ).resolves.toEqual({
         provider: "openai",
         displayName: "OpenAI",
@@ -871,20 +728,12 @@ export function describeOpenRouterProviderRuntimeContract(
   load: ProviderRuntimeContractPluginLoader,
 ) {
   describe("openrouter provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
-    const requireProviderContractProvider = installRuntimeHooks([
-      { providerIds: ["openrouter"], pluginId: "openrouter", name: "OpenRouter", load },
-    ]);
+    const getProvider = installRuntimeHooks(load, "openrouter", "OpenRouter");
 
     it("owns dynamic OpenRouter model defaults", () => {
-      const provider = requireProviderContractProvider("openrouter");
+      const provider = getProvider("openrouter");
       // OpenRouter owns a runtime-discovered catalog, so these synthetic defaults stay literal.
-      const model = provider.resolveDynamicModel?.({
-        provider: "openrouter",
-        modelId: "x-ai/grok-4-1-fast",
-        modelRegistry: {
-          find: () => null,
-        } as never,
-      });
+      const model = resolveFromTemplate(provider, "x-ai/grok-4-1-fast", null);
 
       expectFields(model, {
         id: "x-ai/grok-4-1-fast",
@@ -903,12 +752,10 @@ export function describeVeniceProviderRuntimeContract(
 ) {
   describe("venice provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
     const createManifestModel = createManifestModelFactory("venice", manifestCatalog);
-    const requireProviderContractProvider = installRuntimeHooks([
-      { providerIds: ["venice"], pluginId: "venice", name: "Venice", load },
-    ]);
+    const getProvider = installRuntimeHooks(load, "venice", "Venice");
 
     it("owns xai downstream compat flags for grok-backed Venice models", () => {
-      const provider = requireProviderContractProvider("venice");
+      const provider = getProvider("venice");
       const manifestModel = createManifestModel("grok-4-5");
       const model = provider.normalizeResolvedModel?.({
         provider: "venice",
@@ -927,31 +774,24 @@ export function describeVeniceProviderRuntimeContract(
 
 export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContractPluginLoader) {
   describe("zai provider runtime contract", { timeout: CONTRACT_SETUP_TIMEOUT_MS }, () => {
-    const requireProviderContractProvider = installRuntimeHooks([
-      { providerIds: ["zai"], pluginId: "zai", name: "Z.AI", load },
-    ]);
+    const getProvider = installRuntimeHooks(load, "zai", "Z.AI");
 
     it("owns glm-5 forward-compat resolution", () => {
-      const provider = requireProviderContractProvider("zai");
+      const provider = getProvider("zai");
       // Neither the synthetic glm-5 id nor its glm-4.7 template has a current manifest row.
-      const model = provider.resolveDynamicModel?.({
-        provider: "zai",
-        modelId: "glm-5",
-        modelRegistry: {
-          find: (_provider: string, id: string) =>
-            id === "glm-4.7"
-              ? createModel({
-                  id,
-                  api: "openai-completions",
-                  provider: "zai",
-                  baseUrl: "https://api.z.ai/api/paas/v4",
-                  reasoning: false,
-                  contextWindow: 202_752,
-                  maxTokens: 16_384,
-                })
-              : null,
-        } as never,
-      });
+      const model = resolveFromTemplate(
+        provider,
+        "glm-5",
+        createModel({
+          id: "glm-4.7",
+          api: "openai-completions",
+          provider: "zai",
+          baseUrl: "https://api.z.ai/api/paas/v4",
+          reasoning: false,
+          contextWindow: 202_752,
+          maxTokens: 16_384,
+        }),
+      );
 
       expectFields(model, {
         id: "glm-5",
@@ -962,7 +802,7 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
     });
 
     it("owns Z.AI token-limit overflow classification", () => {
-      const provider = requireProviderContractProvider("zai");
+      const provider = getProvider("zai");
 
       expect(
         provider.matchesContextOverflowError?.({
@@ -982,7 +822,7 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
     });
 
     it("owns usage auth resolution", async () => {
-      const provider = requireProviderContractProvider("zai");
+      const provider = getProvider("zai");
       await expect(
         provider.resolveUsageAuth?.({
           config: {} as never,
@@ -1000,37 +840,23 @@ export function describeZAIProviderRuntimeContract(load: ProviderRuntimeContract
     });
 
     it("owns usage snapshot fetching", async () => {
-      const provider = requireProviderContractProvider("zai");
-      const mockFetch = createProviderUsageFetch(async (url) => {
-        if (url.includes("api.z.ai/api/monitor/usage/quota/limit")) {
-          return makeResponse(200, {
-            success: true,
-            code: 200,
-            data: {
-              planName: "Pro",
-              limits: [
-                {
-                  type: "TOKENS_LIMIT",
-                  percentage: 25,
-                  unit: 3,
-                  number: 6,
-                  nextResetTime: "2026-01-07T06:00:00Z",
-                },
-              ],
-            },
-          });
-        }
-        return makeResponse(404, "not found");
-      });
-
+      const provider = getProvider("zai");
       await expect(
-        provider.fetchUsageSnapshot?.({
-          config: {} as never,
-          env: {} as NodeJS.ProcessEnv,
-          provider: "zai",
-          token: "env-zai-token",
-          timeoutMs: 5_000,
-          fetchFn: mockFetch as unknown as typeof fetch,
+        fetchUsageSnapshot(provider, "env-zai-token", "api.z.ai/api/monitor/usage/quota/limit", {
+          success: true,
+          code: 200,
+          data: {
+            planName: "Pro",
+            limits: [
+              {
+                type: "TOKENS_LIMIT",
+                percentage: 25,
+                unit: 3,
+                number: 6,
+                nextResetTime: "2026-01-07T06:00:00Z",
+              },
+            ],
+          },
         }),
       ).resolves.toEqual({
         provider: "zai",

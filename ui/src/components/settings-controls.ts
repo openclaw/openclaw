@@ -18,6 +18,7 @@ type SettingsSegmentedOption<T extends string, Label> = {
 export type SettingsSegmentedProps<T extends string, Label> = {
   value: T;
   options: ReadonlyArray<SettingsSegmentedOption<T, Label>>;
+  inputRef?: (value: T, element: HTMLInputElement) => void;
   disabled?: boolean;
   ariaLabel?: string;
   descriptionId?: string;
@@ -76,20 +77,6 @@ export function settingsSwitchKeyDown(event: KeyboardEvent, props: SettingsToggl
   if (props.onChange(checked) === false) {
     input.checked = props.checked;
   }
-}
-
-export function settingsToggleRowClick(event: MouseEvent, props: SettingsToggleControl) {
-  if (event.target instanceof Element && event.target.closest(".settings-toggle")) {
-    return;
-  }
-  // SAFETY: Both renderers bind this listener directly to the settings row div.
-  const input = (event.currentTarget as HTMLElement).querySelector<HTMLInputElement>(
-    'input[role="switch"]',
-  );
-  if (!input || input.matches(":disabled") || props.disabled) {
-    return;
-  }
-  input.click();
 }
 
 export function settingsRadioClick<T extends string, Label>(

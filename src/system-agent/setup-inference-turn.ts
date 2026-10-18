@@ -21,10 +21,9 @@ import { formatErrorMessage } from "../infra/errors.js";
 import { loadInstalledPluginIndexInstallRecords } from "../plugins/installed-plugin-index-record-reader.js";
 import { loadInstalledPluginIndex } from "../plugins/installed-plugin-index.js";
 import { createPluginCache, withPluginCache, type PluginCache } from "../plugins/plugin-cache.js";
-import {
-  resolvePluginMetadataSnapshotAsync,
-  type resolvePluginMetadataSnapshot,
-} from "../plugins/plugin-metadata-snapshot.js";
+import { resolvePluginMetadataSnapshotAsync } from "../plugins/plugin-metadata-snapshot.js";
+import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.types.js";
+import type { PluginRegistry } from "../plugins/registry-types.js";
 import { getPluginRegistryForContext } from "../plugins/runtime/gateway-request-scope.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import { getPluginRuntimeLoadContext } from "../plugins/runtime/load-context.js";
@@ -91,9 +90,7 @@ export async function runSetupInferenceTurn(params: {
   const timeoutMs = deps.timeoutMs ?? SETUP_INFERENCE_TEST_TIMEOUT_MS;
   const started = Date.now();
   // A scratch workspace keeps the probe from reading the real workspace's bootstrap files.
-  const workspaceDir = await (
-    deps.createTempDir ?? (() => fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-")))
-  )();
+  const workspaceDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-setup-inference-"));
   const failed = (status: SetupInferenceFailureStatus, error: string): SetupTurnFailure => {
     setupInferenceLog.warn("Inference setup check failed.", {
       event: "setup_inference_probe_failed",
@@ -156,21 +153,20 @@ export async function runSetupInferenceTurn(params: {
     if (cliError) {
       return failed("unavailable", cliError);
     }
-    const profileError = await resolveSetupInferenceProfileError(route, workspaceDir, deps);
+    const profileError = await resolveSetupInferenceProfileError(route, workspaceDir);
     if (profileError) {
       return failed("auth", profileError);
     }
     let result: AgentRunResultView;
     if (route.runner === "cli") {
-      const runCli = deps.runCliAgent ?? (await import("../agents/cli-runner.js")).runCliAgent;
+      const { runCliAgent: runCli } = await import("../agents/cli-runner.js");
       result = await runCli({
         ...shared,
         executionMode: "side-question",
         cleanupCliLiveSessionOnRunEnd: true,
       });
     } else {
-      const runEmbedded =
-        deps.runEmbeddedAgent ?? (await import("../agents/embedded-agent.js")).runEmbeddedAgent;
+      const { runEmbeddedAgent: runEmbedded } = await import("../agents/embedded-agent.js");
       const harness = route.agentHarnessRuntimeOverride;
       result = await runSetupInferenceProbeWork(runEmbedded, {
         ...shared,
@@ -238,9 +234,7 @@ export async function runSetupInferenceTurn(params: {
     preparedRunAdmission.close();
     clearAgentRunContext(runId);
     try {
-      await (deps.removeTempDir ?? ((dir: string) => fs.rm(dir, { recursive: true, force: true })))(
-        workspaceDir,
-      );
+      await fs.rm(workspaceDir, { recursive: true, force: true });
     } catch (error) {
       params.runtime?.error?.(
         `Could not remove temporary AI setup files: ${await redactSetupInferenceError(error)}`,
@@ -250,6 +244,12 @@ export async function runSetupInferenceTurn(params: {
   }
 }
 
+export type SetupInferencePluginGeneration = {
+  config: OpenClawConfig;
+  metadataSnapshot: PluginMetadataSnapshot;
+  pluginRegistry: PluginRegistry;
+};
+
 /** Setup owns fresh package facts without replacing the Gateway's startup generation. */
 export async function loadSetupInferencePluginGeneration(params: {
   cache: PluginCache;
@@ -257,10 +257,7 @@ export async function loadSetupInferencePluginGeneration(params: {
   workspaceDir: string;
   selection: AgentHarnessPluginSelection;
   pendingPluginInstalls?: Record<string, PluginInstallRecord>;
-  resolvePluginMetadataSnapshot?:
-    | typeof resolvePluginMetadataSnapshot
-    | typeof resolvePluginMetadataSnapshotAsync;
-}) {
+}): Promise<SetupInferencePluginGeneration> {
   // Revalidation must select the probed artifacts: switching a built Gateway
   // owner to source files would report drift even when neither tree changed.
   const preferBuiltPluginArtifacts = getPluginRuntimeLoadContext(
@@ -282,9 +279,7 @@ export async function loadSetupInferencePluginGeneration(params: {
       : undefined;
     const generation = {
       config: params.config,
-      metadataSnapshot: await (
-        params.resolvePluginMetadataSnapshot ?? resolvePluginMetadataSnapshotAsync
-      )({
+      metadataSnapshot: await resolvePluginMetadataSnapshotAsync({
         config: params.config,
         env: process.env,
         workspaceDir: params.workspaceDir,
@@ -357,7 +352,6 @@ async function revalidateSetupInferenceOwner(params: {
             : {}),
         agentId: params.route.agentId,
       },
-      resolvePluginMetadataSnapshot: params.deps.resolvePluginMetadataSnapshot,
     });
     return await withPluginRuntimeGenerationScope(generation, createBinding);
   }
@@ -581,7 +575,6 @@ export async function verifySetupInferenceConfig(
     params.config,
     params.agentId,
     {
-      loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
       modelTarget: params.modelTarget,
     },
     params.configSnapshot,
@@ -606,7 +599,7 @@ export async function verifySetupInferenceConfig(
     try {
       stagedOwnerPluginArtifacts = (
         deps.captureSystemAgentOwnerPluginArtifacts ?? captureSystemAgentOwnerPluginArtifacts
-      )({ config: route.sourceConfig, executionRoute: route, deps });
+      )({ config: route.sourceConfig, executionRoute: route });
     } catch (error) {
       return {
         ok: false,
@@ -639,7 +632,6 @@ export async function verifySetupInferenceConfig(
         currentConfig,
         route.agentId,
         {
-          loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync,
           modelTarget: params.modelTarget,
         },
         currentSnapshot,
@@ -712,7 +704,7 @@ export async function completeSetupInferenceConfig(
   const route = await resolveSystemAgentConfiguredRouteFromConfig(
     params.config,
     params.agentId,
-    { loadAuthProfileStoreForRuntimeAsync: deps.loadAuthProfileStoreForRuntimeAsync },
+    {},
     params.configSnapshot,
   );
   if (!route) {

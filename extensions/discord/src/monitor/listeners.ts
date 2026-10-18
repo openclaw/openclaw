@@ -1,21 +1,18 @@
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { requestHeartbeat } from "openclaw/plugin-sdk/heartbeat-runtime";
+import { enqueueKeyedTask } from "openclaw/plugin-sdk/keyed-async-queue";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { resolveAgentRoute } from "openclaw/plugin-sdk/routing";
 import { danger } from "openclaw/plugin-sdk/runtime-env";
 import { enqueueRoutedSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
 import {
   type Client,
+  GatewayDispatchEvents,
+  type ListenerDataByEvent,
   type DiscordMessageDispatchData,
   GuildCreateListener,
-  GuildDeleteListener,
-  InteractionCreateListener,
-  MessageCreateListener,
-  PresenceUpdateListener,
   ReadyListener,
-  ThreadDeleteListener,
-  ThreadUpdateListener,
 } from "../internal/discord.js";
 import { canViewDiscordGuildChannel } from "../send.permissions.js";
 import { type DiscordGuildEntryResolved, resolveDiscordGuildEntry } from "./allow-list.js";
@@ -41,9 +38,9 @@ export { DiscordReactionListener, DiscordReactionRemoveListener } from "./listen
 
 type Logger = ReturnType<typeof import("openclaw/plugin-sdk/runtime-env").createSubsystemLogger>;
 
-type DiscordRawMessageEvent = Parameters<MessageCreateListener["handle"]>[0];
+type DiscordRawMessageEvent = ListenerDataByEvent[GatewayDispatchEvents.MessageCreate];
 export type DiscordMessageEvent = DiscordMessageDispatchData;
-type DiscordInteractionEvent = Parameters<InteractionCreateListener["handle"]>[0];
+type DiscordInteractionEvent = ListenerDataByEvent[GatewayDispatchEvents.InteractionCreate];
 
 export type DiscordMessageHandler = (
   data: DiscordRawMessageEvent,
@@ -59,14 +56,13 @@ export function registerDiscordListener(listeners: Array<object>, listener: obje
   return true;
 }
 
-export class DiscordMessageListener extends MessageCreateListener {
+export class DiscordMessageListener {
+  readonly type = GatewayDispatchEvents.MessageCreate;
   constructor(
     private handler: DiscordMessageHandler,
     private logger?: Logger,
     private onEvent?: () => void,
-  ) {
-    super();
-  }
+  ) {}
 
   async handle(data: DiscordRawMessageEvent, client: Client) {
     this.onEvent?.();
@@ -81,13 +77,12 @@ export class DiscordMessageListener extends MessageCreateListener {
   }
 }
 
-export class DiscordInteractionListener extends InteractionCreateListener {
+export class DiscordInteractionListener {
+  readonly type = GatewayDispatchEvents.InteractionCreate;
   constructor(
     private logger?: Logger,
     private onEvent?: () => void,
-  ) {
-    super();
-  }
+  ) {}
 
   async handle(data: DiscordInteractionEvent, client: Client) {
     this.onEvent?.();
@@ -102,19 +97,20 @@ export class DiscordInteractionListener extends InteractionCreateListener {
   }
 }
 
-type PresenceUpdateEvent = Parameters<PresenceUpdateListener["handle"]>[0];
+type PresenceUpdateEvent = ListenerDataByEvent[GatewayDispatchEvents.PresenceUpdate];
 type GuildCreateEvent = Parameters<GuildCreateListener["handle"]>[0];
-type GuildDeleteEvent = Parameters<GuildDeleteListener["handle"]>[0];
-type GuildPresenceState = { generation: number; inferUnknownAsNewlyAvailable: boolean };
+type GuildDeleteEvent = ListenerDataByEvent[GatewayDispatchEvents.GuildDelete];
+type GuildPresenceState = { available: boolean; inferUnknownAsNewlyAvailable: boolean };
 
-export class DiscordPresenceListener extends PresenceUpdateListener {
+export class DiscordPresenceListener {
+  readonly type = GatewayDispatchEvents.PresenceUpdate;
   private readonly presenceBaseline: DiscordPresenceBaselineCache;
+  // Retain FIFO across reconnects; each latest chain also settles its predecessors at shutdown.
   private readonly pendingByGuildUser = new Map<string, Promise<void>>();
-  private readonly pendingGuildSeeds = new Map<string, Promise<boolean>>();
+  private readonly pendingGuildSeeds = new Map<string, Promise<void>>();
   private readonly guildPresenceState = new Map<string, GuildPresenceState>();
-  private gatewayGeneration = 0;
+  private hasGatewayReset = false;
   private stopped = false;
-  private readonly activeRuns = new Set<Promise<void>>();
   private readonly cooldownStore: PluginStateKeyedStore<number>;
   private readonly emissionGate: DiscordPresenceEmissionGate;
 
@@ -132,7 +128,6 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       emissionGate?: DiscordPresenceEmissionGate;
     },
   ) {
-    super();
     this.cooldownStore = params.cooldownStore ?? openDiscordPresenceCooldownStore();
     this.presenceBaseline = params.presenceBaseline ?? new DiscordPresenceBaselineCache();
     this.emissionGate = params.emissionGate ?? new DiscordPresenceEmissionGate();
@@ -142,6 +137,11 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     if (this.stopped) {
       return;
     }
+    this.guildPresenceState.set(data.id, {
+      available: data.unavailable !== true,
+      inferUnknownAsNewlyAvailable: false,
+    });
+    this.presenceBaseline.clearScope(data.id);
     // Cache metadata before awaiting greeting policy so updates and READY retain dispatch order.
     if (data.unavailable !== true && "presences" in data && Array.isArray(data.presences)) {
       for (const presence of data.presences) {
@@ -155,20 +155,9 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       this.seedGuildSnapshotWithPolicy(data, this.params.guildEntries);
       return;
     }
-    this.invalidateGuild(data.id);
-    const gatewayGeneration = this.gatewayGeneration;
-    const guildGeneration = this.guildPresenceState.get(data.id)!.generation;
-    const seed = (async () => {
-      const policy = await this.params.readPolicy!();
-      if (
-        !this.isCurrentGeneration(data.id, gatewayGeneration, guildGeneration) ||
-        !policy.isCurrent()
-      ) {
-        return false;
-      }
+    const seed = this.params.readPolicy().then((policy) => {
       this.seedGuildSnapshotWithPolicy(data, policy.guildEntries);
-      return true;
-    })();
+    });
     this.pendingGuildSeeds.set(data.id, seed);
     try {
       await seed;
@@ -187,25 +176,17 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       guildId: data.id,
       guildEntries,
     })?.presenceEvents;
-    if (!config || config.enabled === false) {
+    const state = this.guildPresenceState.get(data.id);
+    if (!state || !config || config.enabled === false) {
       return;
     }
     const keyPrefix = `${this.params.accountId}:${data.id}:`;
-    // A repeated GUILD_CREATE is a replacement snapshot after guild availability changes.
-    // Invalidate older async work before replacing any baseline state.
-    const generation = (this.guildPresenceState.get(data.id)?.generation ?? 0) + 1;
-    this.guildPresenceState.set(data.id, { generation, inferUnknownAsNewlyAvailable: false });
-    this.detachPendingPrefix(keyPrefix);
-    this.presenceBaseline.clearScope(data.id);
     if (data.unavailable === true || !("presences" in data) || !Array.isArray(data.presences)) {
       return;
     }
     // Discord documents snapshots above 75,000 members as partial. Unknown members from those
     // guilds stay suppressed until an explicit offline update establishes the transition.
-    this.guildPresenceState.set(data.id, {
-      generation,
-      inferUnknownAsNewlyAvailable: data.member_count <= 75_000,
-    });
+    state.inferUnknownAsNewlyAvailable = data.member_count <= 75_000;
     for (const presence of data.presences) {
       const userId = presence.user?.id;
       if (!userId || (config.users !== undefined && !config.users.includes(userId))) {
@@ -222,70 +203,49 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     }
     setPresence(this.params.accountId, userId, data);
     const pendingSeed = this.pendingGuildSeeds.get(data.guild_id);
-    if (pendingSeed && !(await pendingSeed)) {
-      return;
-    }
-    if (this.stopped) {
-      return;
+    if (pendingSeed) {
+      await pendingSeed;
+      if (this.stopped) {
+        return;
+      }
     }
     const presenceKey = `${this.params.accountId}:${data.guild_id}:${userId}`;
-    const gatewayGeneration = this.gatewayGeneration;
-    const guildGeneration = this.guildPresenceState.get(data.guild_id)?.generation ?? 0;
-    const previousRun = this.pendingByGuildUser.get(presenceKey) ?? Promise.resolve();
-    const handle = () =>
-      this.handleSerial(data, client, userId, presenceKey, gatewayGeneration, guildGeneration);
-    const run = previousRun.then(handle, handle);
-    this.pendingByGuildUser.set(presenceKey, run);
-    this.activeRuns.add(run);
     try {
-      await run;
+      await enqueueKeyedTask({
+        tails: this.pendingByGuildUser,
+        key: presenceKey,
+        task: () => this.handleSerial(data, client, userId, presenceKey),
+      });
     } catch (err) {
       const logger = this.params.logger ?? discordEventQueueLog;
       logger.error(danger(`discord presence handler failed: ${String(err)}`));
-    } finally {
-      this.activeRuns.delete(run);
-      if (this.pendingByGuildUser.get(presenceKey) === run) {
-        this.pendingByGuildUser.delete(presenceKey);
-      }
     }
   }
 
   async stop(): Promise<void> {
     this.stopped = true;
     this.resetGatewaySession();
-    // Generation resets detach dispatch queues; shutdown still joins their admitted writes.
-    await Promise.allSettled(this.activeRuns);
+    await Promise.allSettled(this.pendingByGuildUser.values());
   }
 
   resetGatewaySession(): void {
-    this.gatewayGeneration += 1;
+    this.hasGatewayReset = true;
     // A READY event starts a new Gateway session and rebuilds guild presence state. Hold emission
     // during that rebuild so the re-observation burst cannot wake the agent per member.
     this.emissionGate.noteGatewaySessionReset(this.params.nowMs?.() ?? Date.now());
     this.presenceBaseline.clear();
     this.guildPresenceState.clear();
     this.pendingGuildSeeds.clear();
-    // Generations make old REST results inert. Detach their chains so a hung lookup cannot block
-    // presence delivery from the replacement gateway session.
-    this.pendingByGuildUser.clear();
     clearPresences(this.params.accountId);
   }
 
   invalidateGuild(guildId: string): void {
     this.pendingGuildSeeds.delete(guildId);
-    const keyPrefix = `${this.params.accountId}:${guildId}:`;
-    const generation = (this.guildPresenceState.get(guildId)?.generation ?? 0) + 1;
-    this.guildPresenceState.set(guildId, { generation, inferUnknownAsNewlyAvailable: false });
+    this.guildPresenceState.set(guildId, {
+      available: false,
+      inferUnknownAsNewlyAvailable: false,
+    });
     this.presenceBaseline.clearScope(guildId);
-    this.detachPendingPrefix(keyPrefix);
-  }
-
-  private detachPendingPrefix(prefix: string): void {
-    for (const key of this.pendingByGuildUser.keys()) {
-      if (key.startsWith(prefix)) {
-        this.pendingByGuildUser.delete(key);
-      }
-    }
   }
 
   private async handleSerial(
@@ -293,20 +253,12 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     client: Client,
     userId: string,
     presenceKey: string,
-    gatewayGeneration: number,
-    guildGeneration: number,
   ) {
-    if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
+    if (this.stopped) {
       return;
     }
     const policy = await this.params.readPolicy?.();
     const cfg = policy?.cfg ?? this.params.cfg;
-    const isCurrent = () =>
-      this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration) &&
-      policy?.isCurrent() !== false;
-    if (!isCurrent()) {
-      return;
-    }
     const config = resolveDiscordGuildEntry({
       guildId: data.guild_id,
       guildEntries: policy ? policy.guildEntries : this.params.guildEntries,
@@ -320,9 +272,6 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     }
 
     const lastEmittedAtMs = await this.cooldownStore.lookup(presenceKey);
-    if (!isCurrent()) {
-      return;
-    }
     const nowMs = this.params.nowMs?.() ?? Date.now();
     const presenceScope = data.guild_id;
     // A complete GUILD_CREATE lists currently online members. A later first-seen member is newly
@@ -385,9 +334,6 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
     try {
       const fetchedUserIsBot =
         data.user.bot === undefined && (await client.fetchUser(userId)).bot === true;
-      if (!this.isCurrentGeneration(data.guild_id, gatewayGeneration, guildGeneration)) {
-        return;
-      }
       if (fetchedUserIsBot) {
         this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
         return;
@@ -402,10 +348,6 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
           rest: client.rest,
         },
       );
-      // Permission lookup cannot authorize an event under a replaced account policy.
-      if (!isCurrent()) {
-        return;
-      }
       if (!canViewTargetChannel) {
         // Presence is guild-wide. Require target-channel visibility so private channel greetings
         // cannot be triggered by unrelated guild members.
@@ -424,9 +366,6 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         cooldownReserved = await this.cooldownStore.registerIfAbsent(presenceKey, nowMs, {
           ttlMs: DISCORD_PRESENCE_GREETING_COOLDOWN_MS,
         });
-        if (!isCurrent()) {
-          return;
-        }
         if (!cooldownReserved) {
           // Another live listener won the durable claim while this one awaited Discord. Treat the
           // member as online locally so overlapping provider generations cannot retry the greeting.
@@ -439,6 +378,22 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         return;
       }
 
+      if (
+        this.stopped ||
+        policy?.isCurrent() === false ||
+        !(this.guildPresenceState.get(data.guild_id)?.available ?? !this.hasGatewayReset)
+      ) {
+        return;
+      }
+      const currentReconnectGate = this.emissionGate.evaluateReconnectWindow(
+        this.params.nowMs?.() ?? Date.now(),
+        gateOptions,
+      );
+      if (!currentReconnectGate.allowed) {
+        logSuppression(currentReconnectGate);
+        this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
+        return;
+      }
       const queued = enqueueRoutedSystemEvent(presenceEvent.text, route, {
         contextKey: `discord:presence-online:${this.params.accountId}:${data.guild_id}:${userId}`,
         deliveryContext: {
@@ -450,11 +405,7 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
       if (!queued) {
         return;
       }
-      this.emissionGate.commitBurst(
-        data.guild_id,
-        burstReservation,
-        this.params.nowMs?.() ?? Date.now(),
-      );
+      this.emissionGate.commitBurst(burstReservation, this.params.nowMs?.() ?? Date.now());
       burstCommitted = true;
       this.recordPresenceBaseline(data.guild_id, presenceKey, "online");
       requestHeartbeat({
@@ -477,18 +428,6 @@ export class DiscordPresenceListener extends PresenceUpdateListener {
         await this.cooldownStore.deleteIfEqual?.(presenceKey, nowMs);
       }
     }
-  }
-
-  private isCurrentGeneration(
-    guildId: string,
-    gatewayGeneration: number,
-    guildGeneration: number,
-  ): boolean {
-    return (
-      !this.stopped &&
-      gatewayGeneration === this.gatewayGeneration &&
-      guildGeneration === (this.guildPresenceState.get(guildId)?.generation ?? 0)
-    );
   }
 
   private recordPresenceBaseline(guildId: string, key: string, status: string | undefined): void {
@@ -518,10 +457,9 @@ export class DiscordPresenceGuildCreateListener extends GuildCreateListener {
   }
 }
 
-export class DiscordPresenceGuildDeleteListener extends GuildDeleteListener {
-  constructor(private readonly presenceListener: DiscordPresenceListener) {
-    super();
-  }
+export class DiscordPresenceGuildDeleteListener {
+  readonly type = GatewayDispatchEvents.GuildDelete;
+  constructor(private readonly presenceListener: DiscordPresenceListener) {}
 
   handle(data: GuildDeleteEvent): void {
     this.presenceListener.invalidateGuild(data.id);
@@ -541,18 +479,17 @@ class DiscordSessionResetListener extends ReadyListener {
 export class DiscordPresenceReadyListener extends DiscordSessionResetListener {}
 export class DiscordThreadReadyListener extends DiscordSessionResetListener {}
 
-type ThreadUpdateEvent = Parameters<ThreadUpdateListener["handle"]>[0];
+type ThreadUpdateEvent = ListenerDataByEvent[GatewayDispatchEvents.ThreadUpdate];
 const DISCORD_THREAD_REJOIN_CLAIM_MAX_ENTRIES = 10_000;
 
-export class DiscordThreadUpdateListener extends ThreadUpdateListener {
-  private readonly rejoinClaims = new Map<string, symbol>();
+export class DiscordThreadUpdateListener {
+  readonly type = GatewayDispatchEvents.ThreadUpdate;
+  private readonly rejoinClaims = new Map<string, true>();
 
   constructor(
     private cfg: OpenClawConfig,
     private logger?: Logger,
-  ) {
-    super();
-  }
+  ) {}
 
   resetGatewaySession(): void {
     this.rejoinClaims.clear();
@@ -586,17 +523,13 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
 
         // Claim before awaiting REST because listener jobs may overlap. Keep the newest claims
         // bounded across long-lived gateway sessions so ordinary updates cannot grow memory forever.
-        const claim = Symbol(threadId);
-        this.rejoinClaims.set(threadId, claim);
+        this.rejoinClaims.set(threadId, true);
         pruneMapToMaxSize(this.rejoinClaims, DISCORD_THREAD_REJOIN_CLAIM_MAX_ENTRIES);
         try {
           await client.rest.put(`/channels/${threadId}/thread-members/@me`);
           logger.info("Discord active thread — rejoined thread", { threadId });
         } catch (err) {
-          // An earlier request may settle after archive or READY; only its own claim may reopen retry.
-          if (this.rejoinClaims.get(threadId) === claim) {
-            this.rejoinClaims.delete(threadId);
-          }
+          this.rejoinClaims.delete(threadId);
           logger.warn(danger(`discord thread rejoin failed: ${String(err)}`), { threadId });
         }
       },
@@ -608,16 +541,15 @@ export class DiscordThreadUpdateListener extends ThreadUpdateListener {
   }
 }
 
-type ThreadDeleteEvent = Parameters<ThreadDeleteListener["handle"]>[0];
+type ThreadDeleteEvent = ListenerDataByEvent[GatewayDispatchEvents.ThreadDelete];
 
-export class DiscordThreadDeleteListener extends ThreadDeleteListener {
+export class DiscordThreadDeleteListener {
+  readonly type = GatewayDispatchEvents.ThreadDelete;
   constructor(
     private cfg: OpenClawConfig,
     private accountId: string,
     private logger?: Logger,
-  ) {
-    super();
-  }
+  ) {}
 
   async handle(data: ThreadDeleteEvent) {
     await runDiscordListenerWithSlowLog({

@@ -3,13 +3,13 @@ import { appendAssistantMessageToSessionTranscript } from "../config/sessions.js
 import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import {
   persistSessionTranscriptTurn,
-  resolveSessionEntrySelection,
   type TranscriptMessageAppendResult,
 } from "../config/sessions/session-accessor.js";
 import {
   readTranscriptEventId,
   readTranscriptEventMessage,
 } from "../config/sessions/session-accessor.sqlite-read.js";
+import { resolveSqliteSessionKey } from "../config/sessions/session-accessor.sqlite-scope-helpers.js";
 import { findTranscriptEvent } from "../config/sessions/session-transcript-match.js";
 import {
   captureOwnedTranscriptWriteAssertion,
@@ -17,6 +17,7 @@ import {
 } from "../config/sessions/transcript-write-context.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getAgentScopedMediaLocalRootsForSources } from "../media/local-roots.js";
+import { resolveAgentIdFromSessionKey } from "../routing/session-key.js";
 import {
   readAssistantDisplayContent,
   retainAssistantModelContent,
@@ -50,10 +51,12 @@ async function completePersistedInternalSourceReply(params: {
   const scope = {
     agentId: params.agentId,
     sessionId: params.expectedSessionId,
-    sessionKey: params.sessionKey,
+    sessionKey: resolveSqliteSessionKey(
+      params.sessionKey,
+      params.agentId ?? resolveAgentIdFromSessionKey(params.sessionKey),
+    ),
     storePath,
   };
-  scope.sessionKey = resolveSessionEntrySelection(scope).normalizedKey;
   const assertCurrent = captureOwnedTranscriptWriteAssertion(scope);
   const expected = {
     expectedSessionId: params.expectedSessionId,
@@ -77,7 +80,6 @@ async function completePersistedInternalSourceReply(params: {
   const options: Parameters<typeof persistSessionTranscriptTurn>[1] = {
     config: params.cfg,
     ...expected,
-    assertCurrent,
     messages: [
       {
         eventId: messageId,
@@ -202,17 +204,7 @@ export async function persistInternalSourceReply(params: {
           attachSourceReplyMedia(result, acceptCompletion);
         },
       };
-      const appended = await appendAssistantMessageToSessionTranscript({
-        ...options,
-        assertCurrent: captureOwnedTranscriptWriteAssertion({
-          agentId: params.agentId,
-          sessionKey: params.sessionKey,
-          sessionId: params.expectedSessionId,
-          storePath: resolveSessionStorePathCore(params.cfg.session?.store, {
-            agentId: params.agentId,
-          }),
-        }),
-      });
+      const appended = await appendAssistantMessageToSessionTranscript(options);
       if (!appended.ok) {
         throw new Error(`Internal source reply persistence failed: ${appended.reason}`);
       }

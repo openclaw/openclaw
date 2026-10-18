@@ -117,24 +117,28 @@ it("reuses registry admission across writes and unrelated pending migrations", (
     );
   const probes = trackSqliteStatementExecutions(
     requireNativeSqliteDatabase(db),
-    ["legacyWatches", "auditSchema", "registryCatalog"],
+    ["legacyWatches", "auditSchema", "registryCatalog", "registryPrimaryKey"],
     (sql) =>
       sql.includes('from "session_watch_cursors"')
         ? "legacyWatches"
         : /select "type" from "sqlite_master"/iu.test(sql)
           ? "registryCatalog"
-          : /\bPRAGMA\s+(?:table_info|index_list|index_info)\([^)]*audit_/iu.test(sql)
-            ? "auditSchema"
-            : null,
+          : /\bPRAGMA\s+table_info\(agent_databases\)/iu.test(sql)
+            ? "registryPrimaryKey"
+            : /\bPRAGMA\s+(?:table_info|index_list|index_info)\([^)]*audit_/iu.test(sql)
+              ? "auditSchema"
+              : null,
   );
   try {
+    expect(read(true)).toEqual([]);
     expect(read()).toEqual([]);
-    expect(probes.counts.legacyWatches).toBe(1);
+    expect(probes.counts.registryPrimaryKey).toBe(0);
+    expect(probes.counts.legacyWatches).toBe(0);
     expect(probes.counts.auditSchema).toBe(0);
     expect(probes.counts.registryCatalog).toBe(0);
     db.exec(`INSERT INTO agent_databases (agent_id, path, schema_version, last_seen_at, size_bytes)
       VALUES ('worker', 'agents/worker/openclaw-agent.sqlite', 1, 10, NULL)`);
-    expect(read()).toEqual([
+    const expectedRows = [
       {
         agentId: "worker",
         path: path.join(options.env.OPENCLAW_STATE_DIR, "agents/worker/openclaw-agent.sqlite"),
@@ -142,17 +146,23 @@ it("reuses registry admission across writes and unrelated pending migrations", (
         lastSeenAt: 10,
         sizeBytes: null,
       },
-    ]);
-    expect(probes.counts.legacyWatches).toBe(1);
+    ];
+    expect(read()).toEqual(expectedRows);
+    expect(read(true)).toEqual(expectedRows);
+    expect(probes.counts.registryPrimaryKey).toBe(0);
+    expect(probes.counts.legacyWatches).toBe(0);
     expect(probes.counts.registryCatalog).toBe(0);
 
     db.exec("ALTER TABLE session_watch_cursors DROP COLUMN provenance");
-    expect(read()).toHaveLength(1);
-    expect(read(true)).toHaveLength(1);
+    expect(read(true)).toEqual(expectedRows);
+    expect(probes.counts.registryPrimaryKey).toBe(1);
+    expect(read()).toEqual(expectedRows);
+    expect(probes.counts.registryPrimaryKey).toBe(2);
     db.exec(`DROP TABLE agent_databases;
       CREATE TABLE agent_databases (agent_id TEXT PRIMARY KEY, path TEXT, schema_version INTEGER,
         last_seen_at INTEGER, size_bytes INTEGER)`);
     expect(() => read(true)).toThrow("unsupported agent database registry schema");
+    expect(() => read()).toThrow("unsupported agent database registry schema");
   } finally {
     probes.restore();
   }

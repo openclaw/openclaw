@@ -1,7 +1,3 @@
-/**
- * Diagnostics, skill telemetry, terminal presentation, and loop outcomes for
- * before_tool_call execution.
- */
 import os from "node:os";
 import path from "node:path";
 import {
@@ -60,6 +56,7 @@ import { normalizeFileToolPathParam } from "./agent-tools.params.js";
 import { getBeforeToolCallSourceTool } from "./before-tool-call-metadata.js";
 import { getChannelAgentToolMeta } from "./channel-tool-metadata.js";
 import { resolveAgentRunAbortLifecycleFields } from "./run-termination.js";
+import { TOOL_LOOP_WARNING_THRESHOLD } from "./tool-loop-thresholds.js";
 import { normalizeToolPolicyName } from "./tool-policy.js";
 import {
   resolveToolExecutionErrorKind,
@@ -625,7 +622,6 @@ export async function reconcileLoopCallExecutionParams(args: {
       getDiagnosticSessionState,
       markDiagnosticArgumentChurnObservation,
       reconcileToolCallExecutionParams,
-      resolveToolLoopWarningThreshold,
     } = await loadBeforeToolCallRuntime();
     const sessionState = getDiagnosticSessionState({
       sessionKey: args.ctx.sessionKey,
@@ -636,7 +632,7 @@ export async function reconcileLoopCallExecutionParams(args: {
       toolParams: args.toolParams,
       toolCallId: args.toolCallId,
       runId: args.ctx.runId,
-      warningThreshold: resolveToolLoopWarningThreshold(),
+      warningThreshold: TOOL_LOOP_WARNING_THRESHOLD,
     });
     markDiagnosticArgumentChurnObservation({
       sessionKey: args.ctx.sessionKey,

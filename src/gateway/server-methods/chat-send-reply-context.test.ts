@@ -5,20 +5,13 @@ import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { resolveChatSendReplyContext } from "./chat-send-reply-context.js";
 
 const readSessionMessageByIdAsyncMock = vi.fn();
-const resolveAssistantIdentityMock = vi.fn((..._args: unknown[]) => ({
-  agentId: "main",
-  name: "Molty",
-  avatar: "M",
-}));
 
 vi.mock("../session-transcript-readers.js", () => ({
   readSessionMessageByIdAsync: (...args: unknown[]) => readSessionMessageByIdAsyncMock(...args),
 }));
-vi.mock("../assistant-identity.js", () => ({
-  resolveAssistantIdentity: (...args: unknown[]) => resolveAssistantIdentityMock(...args),
-}));
-
-const cfg = {} as OpenClawConfig;
+const cfg: OpenClawConfig = {
+  agents: { entries: { main: { identity: { name: "Molty" } } } },
+};
 
 function baseParams(overrides: Partial<Parameters<typeof resolveChatSendReplyContext>[0]> = {}) {
   return {

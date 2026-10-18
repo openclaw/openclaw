@@ -490,13 +490,13 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
       model: generation?.provider?.model ?? "fts-only",
       now: Date.now(),
       vectorReady,
+      retained,
+      removedIds,
       ...(source === "sessions"
         ? {
             source,
             agentId: this.agentId,
             sessionId: expectDefined(entry.sessionId, "memory index session identity"),
-            retained,
-            removedIds,
           }
         : { source }),
     };
@@ -686,7 +686,7 @@ export abstract class MemoryManagerEmbeddingOps extends MemoryManagerEmbeddingCa
     const database = this.database;
     return await retainIndexedSessionChunks(preparedEntry, database, generation, () => {
       if (this.closed || database.closed || this.database !== database) {
-        throw new Error("Memory source owner changed before session delta planning");
+        throw new Error("Memory source owner changed before delta planning");
       }
     });
   }

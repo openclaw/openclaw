@@ -109,6 +109,103 @@ afterEach(() => {
 });
 
 describe("Skills discovery lifecycle", () => {
+  it("retains a library draft across reconnect and retires it on client replacement", async () => {
+    const request = vi.fn(async (method: string) => {
+      if (method === "skills.library.save") {
+        throw new Error("Synthetic save rejection");
+      }
+      return method === "skills.library.list"
+        ? {
+            ...personalLibrary,
+            entries: [
+              {
+                skillId: "12345678-1234-1234-1234-123456789abc",
+                revision: "a".repeat(64),
+                slug: "retained-library-skill",
+                name: "retained-library-skill",
+                description: "Retained library entry",
+                ownerProfileId: "alice",
+                authorProfileId: "alice",
+                ownerLabel: "Alice",
+                shared: false,
+                enabled: true,
+                removed: false,
+                canEdit: true,
+                createdAt: 1,
+                updatedAt: 1,
+              },
+            ],
+          }
+        : { skills: [] };
+    });
+    const { page, connection } = mountSkills(request, "settings");
+    await waitForFast(() => {
+      const create = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Create skill",
+      );
+      expect(create?.disabled).toBe(false);
+    });
+    [...page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Create skill")!
+      .click();
+    flush();
+    const content = page.querySelector<HTMLTextAreaElement>('textarea[name="library-content"]')!;
+    content.value = "# Offline draft\nKeep this authored content.";
+    content.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    const slug = page.querySelector<HTMLInputElement>('input[name="library-slug"]')!;
+    slug.value = "offline-draft";
+    slug.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    const snapshot = connection.gateway.snapshot;
+    connection.publish({ ...snapshot, phase: "reconnecting", hello: null });
+    flush();
+    expect(page.textContent).toContain("retained-library-skill");
+    expect(page.querySelector<HTMLTextAreaElement>('textarea[name="library-content"]')?.value).toBe(
+      content.value,
+    );
+    connection.publish(snapshot);
+    flush();
+    expect(page.querySelector<HTMLTextAreaElement>('textarea[name="library-content"]')?.value).toBe(
+      content.value,
+    );
+    await waitForFast(() => {
+      const save = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+        (button) => button.textContent?.trim() === "Save skill",
+      );
+      expect(save?.disabled).toBe(false);
+    });
+    [...page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Save skill")!
+      .click();
+    await waitForFast(() =>
+      expect(request).toHaveBeenCalledWith("skills.library.save", {
+        expectedRevision: null,
+        slug: "offline-draft",
+        content: "# Offline draft\nKeep this authored content.",
+        files: [],
+      }),
+    );
+    connection.publish({ ...snapshot, client: { request } as unknown as GatewayBrowserClient });
+    flush();
+    expect(page.querySelector('textarea[name="library-content"]')).toBeNull();
+    await waitForFast(() => expect(page.textContent).toContain("retained-library-skill"));
+    [...page.querySelectorAll<HTMLButtonElement>("button")]
+      .find((button) => button.textContent?.trim() === "Create skill")!
+      .click();
+    flush();
+    expect(page.querySelector('textarea[name="library-content"]')).not.toBeNull();
+    connection.publish({
+      ...connection.gateway.snapshot,
+      hello: gatewayHelloForMethods([], ["operator.read"]),
+    });
+    flush();
+    expect(page.querySelector('textarea[name="library-content"]')).toBeNull();
+    connection.publish({ ...connection.gateway.snapshot, hello: gatewayHelloForMethods([], []) });
+    flush();
+    expect(page.textContent).not.toContain("retained-library-skill");
+  });
+
   it("shows a settings heading with its four actions in one row below it", async () => {
     const { page } = mountSkills(
       async (method) => (method === "skills.library.list" ? personalLibrary : { skills: [] }),

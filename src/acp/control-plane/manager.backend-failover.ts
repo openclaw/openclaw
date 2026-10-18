@@ -19,11 +19,9 @@ export function resolveBackendCandidatePlan(params: {
 }) {
   const configuredPrimaryBackend = normalizeText(params.configuredPrimaryBackend);
   const resolvedPrimaryBackend = normalizeText(params.resolvedPrimaryBackend);
-  const fallbackBackends = Array.isArray(params.fallbackBackends)
-    ? params.fallbackBackends
-        .map((backend) => normalizeText(backend))
-        .filter((backend): backend is string => backend != null)
-    : [];
+  const fallbackBackends = (params.fallbackBackends ?? [])
+    .map((backend) => normalizeText(backend))
+    .filter((backend): backend is string => backend != null);
   return {
     candidateBackends: Array.from(
       new Set([configuredPrimaryBackend ?? resolvedPrimaryBackend ?? "", ...fallbackBackends]),

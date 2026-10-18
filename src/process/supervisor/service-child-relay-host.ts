@@ -202,6 +202,7 @@ export async function createServiceChildRelayAdapter(
     if (completionSettled) {
       return;
     }
+    const diagnostics = retirement.diagnostics();
     const error = new Error(
       "service child cleanup did not complete before its hard deadline; pending: " +
         JSON.stringify({
@@ -213,7 +214,23 @@ export async function createServiceChildRelayAdapter(
           stdoutEnd: !stdoutRelay.ended,
           stderrEnd: !stderrRelay.ended,
         }),
-      { cause: retirement.diagnostics() },
+      {
+        // Stability bundles retain bounded Error messages, not arbitrary cause objects.
+        // Keep owner attribution payload-free and the signaling failure in the error graph.
+        cause: new Error(
+          "service child cleanup owner: " +
+            JSON.stringify({
+              generation,
+              relayPid: child.pid,
+              anchorPid,
+              commandPid,
+              treeOwnership: useLinuxSubreaper ? "linux-subreaper" : "process-group",
+              durationMs: diagnostics.durationMs,
+              escalationAfterMs: diagnostics.escalationAfterMs,
+            }),
+          { cause: diagnostics.signalError },
+        ),
+      },
     );
     // Extinction may already be confirmed while an output pipe remains open.
     // Reject pending results before destroy can turn that missing tail into success.
@@ -453,7 +470,11 @@ export async function createServiceChildRelayAdapter(
         });
       }
     } else if (message.type === "startup-error") {
-      if (useWindowsJobAnchor || useLinuxSubreaper || message.errorDetails) {
+      // A failed command never sends ready. Keep its live anchor's identity for
+      // the outside-group extinction join without converting it into kill authority.
+      anchorPid ??= message.anchorPid;
+      cleanupDeadline.begin();
+      if (useWindowsJobAnchor || anchorPid !== undefined) {
         startup.reject(Object.assign(new Error(message.error), message.errorDetails));
       } else {
         loseIdentity(message.error);
@@ -615,9 +636,9 @@ export async function createServiceChildRelayAdapter(
         secretDeliveryResult.status === "rejected" ? secretDeliveryResult.reason : undefined;
       // Preserve admission failure over the secret pipe it closes as a consequence.
       if (startupError !== undefined || secretDeliveryError !== undefined) {
-        if ((useWindowsJobAnchor || useLinuxSubreaper) && startupError !== undefined) {
+        if (startupError !== undefined) {
           await startupErrorAckDelivery;
-          await cleanup.completion.promise;
+          await cleanup.promise;
         }
         throw startupError ?? secretDeliveryError;
       }

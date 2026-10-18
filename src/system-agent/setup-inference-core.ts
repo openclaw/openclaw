@@ -5,8 +5,6 @@ import type {
   SetupInferenceFailureStatus,
 } from "../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
-import type { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
-import type { readCodexCliActiveApiKey } from "../agents/cli-credentials.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
@@ -43,7 +41,6 @@ import type {
   captureSystemAgentOwnerPluginArtifacts,
   createSystemAgentVerifiedInferenceBinding,
   SystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
@@ -133,6 +130,7 @@ export type SetupInferenceStatus = "ok" | SetupInferenceFailureStatus;
 export type ActivateSetupInferenceResult =
   | (Extract<VerifySetupInferenceResult, { ok: true }> & {
       lines: string[];
+      modelName?: string;
       gatewayRestartRequired?: true;
     })
   | (Extract<VerifySetupInferenceResult, { ok: false }> & {
@@ -222,6 +220,8 @@ export type ActivateSetupInferenceParams = {
   beforePersistentEffect?: () => void | Promise<void>;
   /** Preparation effects are complete; the selected route is ready for its live test. */
   onPreparationComplete?: () => void;
+  /** Present installation and activation separately from the live connection test. */
+  onActivationStarted?: () => void;
   /** Observe the authored config held by the inference writer before it commits. */
   onCommitStarted?: (sourceConfig: OpenClawConfig) => void;
   /** Finish application or recovery only after releasing the Gateway setup queue. */
@@ -257,28 +257,11 @@ export async function waitForProviderAuth<T>(
 
 export type ActivateSetupInferenceDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  runEmbeddedAgent?: typeof import("../agents/embedded-agent.js").runEmbeddedAgent;
-  runCliAgent?: typeof import("../agents/cli-runner.js").runCliAgent;
-  ensureCodexRuntimePlugin?: typeof import("../commands/codex-runtime-plugin-install.js").ensureCodexRuntimePluginForModelSelection;
-  transformConfigWithPendingPluginInstalls?: typeof import("../plugins/install-record-commit.js").transformConfigWithPendingPluginInstalls;
   resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  enablePluginInConfig?: typeof enablePluginInConfig;
-  loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
-  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
-  resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
-  resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
-  resolvePluginMetadataSnapshot?: typeof import("../plugins/plugin-metadata-snapshot.js").resolvePluginMetadataSnapshot;
-  readCodexCliActiveApiKey?: typeof readCodexCliActiveApiKey;
-  loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
-  fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
   captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
   createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
-  markRetainedManagedNpmInstall?: typeof import("../plugins/managed-npm-retention.js").markRetainedManagedNpmInstall;
-  createTempDir?: () => Promise<string>;
-  removeTempDir?: (dir: string) => Promise<void>;
   timeoutMs?: number;
 };
 

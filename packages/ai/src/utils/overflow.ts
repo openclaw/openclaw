@@ -29,6 +29,7 @@ const ASSISTANT_OVERFLOW_PATTERNS = [
   /exceeded model token limit/i, // Kimi For Coding
   /tokens? in request more than max tokens? allowed/i, // Z.AI / Zhipu GLM error 1210
   /prompt exceeds max(?:imum)? length/i, // Z.AI / Zhipu GLM error 1261
+  /range of input length should be \[1, [\d,]+\]/i, // DashScope (Model Studio) input-length limit
   /too large for model with \d+ maximum context length/i, // Mistral
   CONFIGURED_CONTEXT_SIZE_OVERFLOW_RE, // DS4 server
   /model_context_window_exceeded/i, // z.ai non-standard finish_reason surfaced as error text

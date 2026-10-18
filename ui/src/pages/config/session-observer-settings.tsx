@@ -3,7 +3,7 @@ import type { SystemInfoResult } from "../../../../packages/gateway-protocol/src
 import { dedupeByKey } from "../../../../src/shared/dedupe-by-key.js";
 import "../../components/select-picker.ts";
 import type { ModelCatalogEntry } from "../../api/types.ts";
-import { renderProviderBrandIcon } from "../../components/provider-icon.ts";
+import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { SettingsRow, SettingsToggleRow } from "../../components/solid/settings-ui.tsx";
 import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import { formatCompletionRoute } from "../../lib/model-runtime-label.ts";
@@ -108,11 +108,12 @@ export function SessionObserverSettings(props: SessionObserverSettingsProps) {
                 disabled: props.disabled,
                 searchable: true,
                 renderLeading: (option: { provider?: string }) =>
-                  option.provider
-                    ? renderProviderBrandIcon(option.provider, {
-                        className: "model-picker__provider-icon",
-                      })
-                    : undefined,
+                  option.provider ? (
+                    <ProviderBrandIcon
+                      provider={option.provider}
+                      class="model-picker__provider-icon"
+                    />
+                  ) : undefined,
                 showOptionTooltips: false,
                 className: "model-picker__select ",
                 onChange: (value: string) =>

@@ -1,5 +1,6 @@
 import { expect, it } from "vitest";
 import { selectChatLayoutAction } from "../test-helpers/chat-layout-menu.ts";
+import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
 import {
   installMockGateway,
   createControlUiMockSameOriginGatewayScript,
@@ -71,6 +72,7 @@ suite.define(() => {
           reloads += 1;
         });
         await gateway.setOnline(true);
+        await waitForControlUiGatewayReady(page);
         if (cachedSplit) {
           await selectChatLayoutAction(page, "Open split view");
           await page
@@ -451,7 +453,7 @@ suite.define(() => {
       await reloaded;
       expect(reloads).toBe(1);
       await siblingPane.locator(composer).waitFor();
-      expect(await siblingPane.locator(composer).inputValue()).toBe(siblingDraft);
+      await expect.poll(() => siblingPane.locator(composer).inputValue()).toBe(siblingDraft);
     } catch (error) {
       await page.screenshot({
         path: `${suite.artifactDir}/private-draft-update-failure.png`,

@@ -4,6 +4,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { observeSqliteReadSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { resolveAdmittedRunActiveAssertion } from "../../agents/admitted-run-context.js";
 import { runWithAgentToolSourceExecutionScope } from "../../agents/agent-tool-source-execution-guard.js";
+import {
+  clearActiveEmbeddedRun,
+  setActiveEmbeddedRun,
+} from "../../agents/embedded-agent-runner/runs.js";
+import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import {
@@ -64,6 +69,42 @@ afterEach(async () => {
 });
 
 describe("runSkillExperienceReview", () => {
+  it("yields an in-flight review when interactive work starts", async () => {
+    const candidate = await createExperienceReviewCandidate(
+      "review-yield",
+      [{ role: "user", content: "Remember the verified procedure.", timestamp: 1 }],
+      { workspaceDir: state.workspaceDir, modelId: "gpt-test" },
+    );
+    setRuntimeConfigSnapshot(candidate.config);
+    const review = await vi.importActual<{ runSkillWorkshopReview: typeof runSkillWorkshopReview }>(
+      "./review-run.js",
+    );
+    mocks.runSkillWorkshopReview.mockImplementation(review.runSkillWorkshopReview);
+    const ownHandle = createEmbeddedRunHandle();
+    const interactiveHandle = createEmbeddedRunHandle({ abort: vi.fn() });
+    mocks.runEmbeddedAgent.mockImplementation(
+      async (params: Parameters<typeof runSkillWorkshopReview>[0]) => {
+        setActiveEmbeddedRun(params.sessionId, ownHandle, params.sessionKey);
+        try {
+          expect(params.abortSignal?.aborted).toBe(false);
+          setActiveEmbeddedRun("interactive-session", interactiveHandle, "agent:other:interactive");
+          expect(params.abortSignal?.aborted).toBe(true);
+          expect(interactiveHandle.abort).not.toHaveBeenCalled();
+          return { meta: { durationMs: 1, aborted: true } };
+        } finally {
+          clearActiveEmbeddedRun("interactive-session", interactiveHandle);
+          clearActiveEmbeddedRun(params.sessionId, ownHandle);
+        }
+      },
+    );
+    try {
+      await expect(runSkillExperienceReview(candidate)).rejects.toThrow("yielded to foreground");
+      expect(mocks.runEmbeddedAgent).toHaveBeenCalledOnce();
+    } finally {
+      mocks.runEmbeddedAgent.mockReset();
+    }
+  });
+
   it("does not dispatch user reply hooks for a detached experience review", async () => {
     const candidate = await createExperienceReviewCandidate(
       "review-user-reply-hook",

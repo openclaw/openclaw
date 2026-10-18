@@ -13,6 +13,7 @@ import { prepareSessionEventProjection } from "./session-event-projection.js";
 import type { persistGatewaySessionLifecycleEvent } from "./session-lifecycle-state.js";
 import type { SessionRowReadView } from "./session-row-prepared-read.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { resolveSessionSubscriptionKey } from "./session-subscription-keys.js";
 import type { GatewaySessionRow } from "./session-utils.js";
 import { formatForLog } from "./ws-log.js";
 
@@ -134,6 +135,9 @@ export function createSessionLifecyclePublisher(
         sessionEventConnIds,
         {
           dropIfSlow: true,
+          sessionEventSubscriptionKeys: [
+            agentId ? resolveSessionSubscriptionKey(sessionKey, agentId) : sessionKey,
+          ],
           ...(read && projection
             ? { prepareSessionProjection: prepareSessionEventProjection(projection, read) }
             : {}),
@@ -182,10 +186,8 @@ export function createSessionLifecyclePublisher(
             .persistGatewaySessionLifecycleEventForEvent({
               sessionKey,
               agentId,
-              event: {
-                ...event,
-                ...(clientRunId !== event.runId ? { clientRunId } : {}),
-              },
+              event,
+              ...(clientRunId !== event.runId ? { clientRunId } : {}),
             })
             .catch((err: unknown) => {
               logError(

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { makeUserMessage } from "../../../test/helpers/user-message.js";
@@ -11,6 +12,7 @@ import {
 import { createMessageTool } from "../../agents/tools/message-tool-execution.js";
 import * as dispatch from "../../auto-reply/dispatch.js";
 import { mintReplyMessageActionTurnCapability } from "../../auto-reply/reply/agent-runner-utils.js";
+import { createQueueTestRun } from "../../auto-reply/reply/queue.test-helpers.js";
 import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { getRuntimeConfig } from "../../config/config.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
@@ -29,6 +31,7 @@ import {
 } from "../../config/sessions/session-sharing-store.native.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { clearAgentRunContext } from "../../infra/agent-run-registry.js";
+import { loadOrCreateProcessDeviceIdentityAsync } from "../../infra/device-identity-async.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
 import { readUserTurnPromptReactionSource } from "../../sessions/user-turn-transcript-admission.js";
@@ -44,11 +47,90 @@ import { createChatRunState } from "../server-chat-state.js";
 import { handleGatewayRequest } from "../server-methods.js";
 import { resolveSessionMutationAuthorizationAsync } from "../session-sharing-authorization-async.js";
 import * as chatDispatch from "./chat-send-agent-dispatch.js";
+import { holdProjectedChatDispatch } from "./chat-send-authority.test-support.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import { handleChatSend } from "./chat-send-handler.js";
 import type { GatewayClient, GatewayRequestContext } from "./types.js";
 
 type DispatchOptions = Parameters<typeof dispatch.dispatchInboundMessageWithProjectedDispatcher>[0];
+
+function createBindingContext() {
+  return {
+    chatAbortControllers: new Map(),
+    chatQueuedTurns: new Map(),
+    chatRunState: createChatRunState(),
+    dedupe: new Map(),
+    agentRunSeq: new Map(),
+    getRuntimeConfig,
+    addChatRun: vi.fn(),
+    removeChatRun: vi.fn(),
+    broadcast: vi.fn(),
+    broadcastToConnIds: vi.fn(),
+    nodeSendToSession: vi.fn(),
+    getSessionEventSubscriberConnIds: () => new Set<string>(),
+    logGateway: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
+  } as unknown as GatewayRequestContext;
+}
+
+function createBindingClient(options: {
+  profileId: string;
+  signal: AbortSignal;
+  scopes: string[];
+  dashboard: boolean;
+  attested?: boolean;
+  admin?: boolean;
+}): GatewayClient {
+  return {
+    connId: "authoring-binding",
+    connectionSignal: options.signal,
+    ...(options.dashboard && options.attested !== false
+      ? {
+          internal: {
+            authenticatedControlUi: true as const,
+            ...(options.admin ? { controlUiAdmin: true as const } : {}),
+          },
+        }
+      : {}),
+    authenticatedUserProfile: {
+      profileId: options.profileId,
+      displayName: null,
+      hasAvatar: false,
+      updatedAt: 1,
+    },
+    connect: {
+      minProtocol: 1,
+      maxProtocol: 1,
+      role: "operator",
+      scopes: options.scopes,
+      client: options.dashboard
+        ? { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" }
+        : { id: "cli", version: "test", platform: "test", mode: "cli" },
+    },
+  };
+}
+
+async function prepareBindingRequest(
+  params: { sessionKey: string; message: string; idempotencyKey: string },
+  client: GatewayClient,
+  context: GatewayRequestContext,
+) {
+  const authorization = await resolveSessionMutationAuthorizationAsync({
+    client,
+    context,
+    method: "chat.send",
+    requestParams: params,
+  });
+  expect(authorization.error).toBeNull();
+  return {
+    params,
+    client,
+    context,
+    respond: vi.fn(),
+    req: { type: "req" as const, id: params.idempotencyKey, method: "chat.send", params },
+    sessionMutationAuthorization: authorization.authorization,
+    isWebchatConnect: () => false,
+  };
+}
 
 const admissionScenarios = [
   "removed",
@@ -84,6 +166,7 @@ it.each(admissionScenarios)(
             ? "released"
             : scenario;
     await withOpenClawTestState({ scenario: "minimal", prepareProfileCatalog: true }, async () => {
+      await loadOrCreateProcessDeviceIdentityAsync();
       setRuntimeConfigSnapshot({});
       const runId = "retained-preparation";
       const sessionKey = scenario === "dashboard" ? "agent:main:main" : "agent:main:binding";
@@ -118,100 +201,48 @@ it.each(admissionScenarios)(
       }
       const connection = new AbortController();
       const hasCurrentClientAuthority = vi.fn(() => true);
-      const client: GatewayClient = {
-        connId: "authoring-binding",
-        connectionSignal: connection.signal,
-        ...(dashboard && scenario !== "dashboard-unattested"
-          ? {
-              internal: {
-                authenticatedControlUi: true as const,
-                ...(scenario !== "dashboard-writer" && !membershipRequired
-                  ? { controlUiAdmin: true as const }
-                  : {}),
-              },
-            }
-          : {}),
-        authenticatedUserProfile: {
-          profileId: profile.id,
-          displayName: null,
-          hasAvatar: false,
-          updatedAt: 1,
-        },
-        connect: {
-          minProtocol: 1,
-          maxProtocol: 1,
-          role: "operator",
-          scopes:
-            scenario === "narrow-first-send"
-              ? ["operator.sessions.write"]
-              : scenario === "dashboard-writer" || membershipRequired
-                ? ["operator.write"]
-                : dashboard
-                  ? ["operator.admin"]
-                  : ["operator.read", "operator.write", "operator.admin"],
-          client: dashboard
-            ? { id: "openclaw-control-ui", version: "test", platform: "web", mode: "webchat" }
-            : { id: "cli", version: "test", platform: "test", mode: "cli" },
-        },
-      };
+      const client = createBindingClient({
+        profileId: profile.id,
+        signal: connection.signal,
+        dashboard,
+        attested: scenario !== "dashboard-unattested",
+        admin: scenario !== "dashboard-writer" && !membershipRequired,
+        scopes:
+          scenario === "narrow-first-send"
+            ? ["operator.sessions.write"]
+            : scenario === "dashboard-writer" || membershipRequired
+              ? ["operator.write"]
+              : dashboard
+                ? ["operator.admin"]
+                : ["operator.read", "operator.write", "operator.admin"],
+      });
       const namespaceRun = prepareSystemAgentRunAdmission({}, runId, "main", "test");
-      const entered = createDeferred<DispatchOptions>();
-      const release = createDeferred();
-      const observeDispatch = vi.spyOn(chatDispatch, "startChatDispatch");
-      const holdDispatch = vi
-        .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
-        .mockImplementation(async (options) => {
-          entered.resolve(options);
-          await release.promise;
-          return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
-        });
-      const context = {
-        chatAbortControllers: new Map(),
-        chatQueuedTurns: new Map(),
-        chatRunState: createChatRunState(),
-        dedupe: new Map(),
-        agentRunSeq: new Map(),
-        getRuntimeConfig,
-        addChatRun: vi.fn(),
-        removeChatRun: vi.fn(),
-        broadcast: vi.fn(),
-        broadcastToConnIds: vi.fn(),
-        nodeSendToSession: vi.fn(),
-        getSessionEventSubscriberConnIds: () => new Set<string>(),
-        logGateway: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
-      } as unknown as GatewayRequestContext;
+      const {
+        entered,
+        release,
+        observe: observeDispatch,
+        hold: holdDispatch,
+      } = holdProjectedChatDispatch();
+      const context = createBindingContext();
       let owned: Parameters<typeof chatDispatch.startChatDispatch>[0] | undefined;
       let reply: ReturnType<typeof createReplyOperation> | undefined;
       let successor: ReturnType<typeof registerChatAbortController> | undefined;
       let options: DispatchOptions | undefined;
       let releaseAuthorization: (() => void) | undefined;
       try {
-        const respond = vi.fn();
         const params = {
           // Exercise the ordinary dashboard alias without an explicit agentId.
           sessionKey: scenario === "dashboard" ? "main" : sessionKey,
           message: "Keep this user turn in its session",
           idempotencyKey: runId,
         };
-        const authorization = await resolveSessionMutationAuthorizationAsync({
-          client,
-          context,
-          method: "chat.send",
-          requestParams: params,
-        });
-        releaseAuthorization = authorization.authorization?.release;
-        expect(authorization.error).toBeNull();
-        const sendChat = directDashboard ? handleDirectExternalChatSend : handleChatSend;
         const request = {
-          params,
-          req: { type: "req" as const, id: runId, method: "chat.send", params },
-          respond,
-          context,
-          client,
+          ...(await prepareBindingRequest(params, client, context)),
           hasCurrentClientAuthority,
-          sessionMutationAuthorization: authorization.authorization,
-          isWebchatConnect: () => false,
         };
+        releaseAuthorization = request.sessionMutationAuthorization?.release;
+        const { respond } = request;
+        const sendChat = directDashboard ? handleDirectExternalChatSend : handleChatSend;
         if (scenario === "narrow-first-send") {
           await handleGatewayRequest({
             ...request,
@@ -238,9 +269,7 @@ it.each(admissionScenarios)(
         const prepared = options.replyOptions?.onSessionPrepared;
         const runStarted = options.replyOptions?.onAgentRunStart;
         const capability = options.replyOptions?.skillLibraryAuthoring;
-        if (!owned || !prepared || !runStarted || !capability) {
-          throw new Error("chat.send did not hand off its prepared-session callback");
-        }
+        assert(owned && prepared && runStarted && capability);
         // Initial resolution needs detached entries; later admission must not clone unrelated rows.
         expect.soft(unrelatedCloneCount()).toBeLessThanOrEqual(1);
         const admittedContext = await namespaceRun.admit("embedded");
@@ -266,9 +295,7 @@ it.each(admissionScenarios)(
           const snapshot = await loadReplySessionInitializationSnapshot(creationScope);
           const bindCreation = options.replyOptions?.bindSessionCreation;
           const onCreated = options.replyOptions?.onSessionCreated;
-          if (!bindCreation || !onCreated) {
-            throw new Error("chat.send did not hand off its session creation owner");
-          }
+          assert(bindCreation && onCreated);
           const result = await commitReplySessionInitialization({
             ...creationScope,
             activeSessionKey: sessionKey,
@@ -283,9 +310,7 @@ it.each(admissionScenarios)(
           await upsertSessionEntryCore(scope, preparedEntry);
         }
         const committed = loadExactSessionEntryReadOnly(scope);
-        if (!committed) {
-          throw new Error("session writer did not commit");
-        }
+        assert(committed, "session writer did not commit");
         const binding = {
           sessionKey,
           sessionId: committed.entry.sessionId,
@@ -426,6 +451,7 @@ it.each(
     await withOpenClawTestState(
       { scenario: "minimal", prepareProfileCatalog: true },
       async (state) => {
+        await loadOrCreateProcessDeviceIdentityAsync();
         setRuntimeConfigSnapshot({});
         const sessionKey = "agent:main:reaction-source";
         const sessionId = "reaction-source-session";
@@ -441,45 +467,22 @@ it.each(
         });
         addSessionMember(scope, { identityId: profile.id, addedBy: owner.id });
         const connection = new AbortController();
-        const client: GatewayClient = {
-          connId: "reaction-source-client",
-          connectionSignal: connection.signal,
-          internal: { authenticatedControlUi: true },
-          authenticatedUserProfile: {
-            profileId: profile.id,
-            displayName: null,
-            hasAvatar: false,
-            updatedAt: 1,
-          },
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            role: "operator",
-            scopes: ["operator.write"],
-            client: {
-              id: "openclaw-control-ui",
-              version: "test",
-              platform: "web",
-              mode: "webchat",
-            },
-          },
-        };
+        const client = createBindingClient({
+          profileId: profile.id,
+          signal: connection.signal,
+          dashboard: true,
+          scopes: ["operator.write"],
+        });
+        client.connId = "reaction-source-client";
         const broadcast = vi.fn();
-        const context = {
-          chatAbortControllers: new Map(),
-          chatQueuedTurns: new Map(),
-          chatRunState: createChatRunState(),
-          dedupe: new Map(),
-          agentRunSeq: new Map(),
-          getRuntimeConfig,
-          addChatRun: vi.fn(),
-          removeChatRun: (runId: string) => sources.get(runId)?.finished.resolve(),
-          broadcast,
-          broadcastToConnIds: vi.fn(),
-          nodeSendToSession: vi.fn(),
-          getSessionEventSubscriberConnIds: () => new Set<string>(),
-          logGateway: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() },
-        } as unknown as GatewayRequestContext;
+        const reactionEvents = () =>
+          broadcast.mock.calls.filter(([event]) => event === "session.reaction");
+        const context = createBindingContext();
+        context.removeChatRun = (runId: string) => {
+          sources.get(runId)?.finished.resolve();
+          return undefined;
+        };
+        context.broadcast = broadcast;
         type Source = {
           entered: ReturnType<typeof createDeferred<DispatchOptions>>;
           release: ReturnType<typeof createDeferred<void>>;
@@ -494,9 +497,7 @@ it.each(
           .spyOn(dispatch, "dispatchInboundMessageWithProjectedDispatcher")
           .mockImplementation(async (options) => {
             const source = sources.get(options.ctx.MessageSid ?? "");
-            if (!source) {
-              throw new Error("Unexpected source dispatch");
-            }
+            assert(source, "Unexpected source dispatch");
             source.entered.resolve(options);
             await source.release.promise;
             return { queuedFinal: false, counts: { tool: 0, block: 0, final: 0 } };
@@ -518,24 +519,10 @@ it.each(
           };
           sources.set(runId, source);
           const params = { sessionKey, message, idempotencyKey: runId };
-          const authorization = await resolveSessionMutationAuthorizationAsync({
-            client,
-            context,
-            method: "chat.send",
-            requestParams: params,
-          });
-          source.releaseAuthorization = authorization.authorization?.release;
-          expect(authorization.error).toBeNull();
-          const respond = vi.fn();
-          await handleDirectExternalChatSend({
-            params,
-            req: { type: "req", id: runId, method: "chat.send", params },
-            respond,
-            context,
-            client,
-            sessionMutationAuthorization: authorization.authorization,
-            isWebchatConnect: () => false,
-          });
+          const request = await prepareBindingRequest(params, client, context);
+          source.releaseAuthorization = request.sessionMutationAuthorization?.release;
+          const { respond } = request;
+          await handleDirectExternalChatSend(request);
           expect(respond).toHaveBeenCalledWith(
             true,
             expect.objectContaining({ runId, status: "started" }),
@@ -544,9 +531,7 @@ it.each(
           );
           const options = await source.entered.promise;
           const owned = observeDispatch.mock.calls.at(-1)?.[0];
-          if (!owned || !options.replyOptions?.dashboardReadAdmission) {
-            throw new Error("Direct authenticated chat did not capture its source");
-          }
+          assert(owned && options.replyOptions?.dashboardReadAdmission);
           source.owned = owned;
           source.options = options;
           options.replyOptions.onSessionPrepared?.({
@@ -570,33 +555,26 @@ it.each(
           }
           await initial.owned.userTurn.persist();
           const original = initialRecorder.getAdmissionReceipt();
-          if (!original) {
-            throw new Error("Original prompt did not commit");
-          }
+          assert(original, "Original prompt did not commit");
           if (mode === "queued") {
             initial.owned.admission.cleanupAdmittedRun();
             expect(context.chatQueuedTurns.has("reaction-original-source")).toBe(true);
           }
           const config = getRuntimeConfig();
+          const followupRun = createQueueTestRun({ prompt: "Original prompt" });
+          followupRun.userTurnTranscriptRecorder = initialRecorder;
+          followupRun.run = {
+            ...followupRun.run,
+            ...scope,
+            sessionFile: sessionKey,
+            agentDir: state.agentDir(),
+            workspaceDir: state.workspaceDir,
+            config,
+            messageProvider: "webchat",
+          };
           token = mintReplyMessageActionTurnCapability(
             {
-              followupRun: {
-                prompt: "Original prompt",
-                enqueuedAt: 0,
-                userTurnTranscriptRecorder: initialRecorder,
-                run: {
-                  ...scope,
-                  sessionFile: sessionKey,
-                  agentDir: state.agentDir(),
-                  workspaceDir: state.workspaceDir,
-                  config,
-                  provider: "openai",
-                  model: "test",
-                  messageProvider: "webchat",
-                  timeoutMs: 1000,
-                  blockReplyBreak: "message_end",
-                },
-              },
+              followupRun,
               sessionCtx: { Provider: "webchat" },
               // Deliberately offer the original read admission. It must not transfer to this run.
               opts: {
@@ -627,13 +605,6 @@ it.each(
             currentChannelProvider: "webchat",
             messageActionTurnCapability: token,
             runMessageAction: external,
-            getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-            resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-              resolvedConfig,
-              diagnostics: [],
-              targetStatesByPath: {},
-              hadUnresolvedTargets: false,
-            }),
           });
           const react = (args: Record<string, unknown> = {}) =>
             withGatewayToolCallerIdentity(caller, () =>
@@ -648,9 +619,7 @@ it.each(
               messageId: original.entryId,
             });
             const prepared = await prompt.resolveMessage();
-            if (!prepared) {
-              throw new Error("Steered prompt was not staged");
-            }
+            assert(prepared, "Steered prompt was not staged");
             const manager = guardSessionManager(
               await SessionManager.openAsync(
                 { ...scope, storePath: original.storePath },
@@ -668,9 +637,7 @@ it.each(
             expect(prompt.getAdmissionReceipt()?.entryId).not.toBe(original.entryId);
           }
           const messageId = prompt.getAdmissionReceipt()?.entryId;
-          if (!messageId) {
-            throw new Error("Consumed prompt did not commit");
-          }
+          assert(messageId, "Consumed prompt did not commit");
           // Existing human rows use the same durable store before any agent reaction.
           await setSessionReactionAsync(scope, {
             messageId,
@@ -720,7 +687,7 @@ it.each(
                 ]),
               },
             ]);
-            expect(broadcast.mock.calls.filter(([event]) => event === "session.reaction")).toEqual([
+            expect(reactionEvents()).toEqual([
               [
                 "session.reaction",
                 expect.objectContaining({
@@ -743,9 +710,7 @@ it.each(
               expect(preparationRevoked).toBe(true);
             }
             expect(listSessionReactions(scope, { sessionId })).toEqual(before);
-            expect(broadcast.mock.calls.filter(([event]) => event === "session.reaction")).toEqual(
-              [],
-            );
+            expect(reactionEvents()).toEqual([]);
           }
           probe.mockRestore();
           if (outcome === "allowed") {

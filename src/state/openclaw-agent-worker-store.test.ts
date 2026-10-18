@@ -25,6 +25,7 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   retainAgentDatabase,
@@ -102,7 +103,7 @@ beforeEach(() => {
   options = { agentId: "main", path: path.join(root, "agent.sqlite") };
 });
 async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
-  const { db } = openOpenClawAgentDatabase(options);
+  const db = requireNativeSqliteDatabase(openOpenClawAgentDatabase(options).db);
   db.exec("CREATE TABLE worker_proof (value TEXT NOT NULL)");
   const execution =
     sourceMode === "captured" ? captureOpenClawAgentDatabaseExecution(options) : undefined;
@@ -120,6 +121,13 @@ async function setup(input?: Parameters<typeof bindSqliteWorkerBackend>[0]) {
   workers.add(worker);
   return { db, worker };
 }
+
+it("leaves agent worker checkpoints to maintenance instead of foreground commits", async () => {
+  const { worker } = await setup();
+  expect(
+    await worker.execute({ type: "inspect", input: "wal_autocheckpoint" }, () => undefined),
+  ).toBe(0);
+});
 
 it("retains an idle agent executor for thirty minutes and renews the window after reborrowing", async () => {
   const { db, worker } = await setup();

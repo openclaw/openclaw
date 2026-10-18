@@ -10,12 +10,6 @@ import {
   classifyCompactionReason,
   isBenignCompactionSkipResult,
 } from "../../agents/embedded-agent-runner/compact-reasons.js";
-import { resolveAgentHarnessPolicy } from "../../agents/harness/policy.js";
-import {
-  OPENAI_CODEX_PROVIDER_ID,
-  OPENAI_PROVIDER_ID,
-  resolveContextConfigProviderForRuntime,
-} from "../../agents/openai-routing.js";
 import { resolveOwnerPromptNumbers } from "../../agents/owner-display.js";
 import { resolveManualCompactionCliTarget } from "../../agents/session-runtime-compat.js";
 import { normalizeChatType } from "../../channels/chat-type.js";
@@ -86,8 +80,6 @@ function resolveManualCompactContextTokenBudget(params: {
   cfg: OpenClawConfig;
   provider?: string;
   model?: string;
-  agentId: string;
-  sessionKey: string;
   liveContextTokens?: number;
   persistedContextTokens?: number;
 }): number | undefined {
@@ -99,29 +91,16 @@ function resolveManualCompactContextTokenBudget(params: {
     return liveContextTokens ?? normalizeContextTokenBudget(params.persistedContextTokens);
   }
 
-  const harnessPolicy = resolveAgentHarnessPolicy({
-    provider,
-    modelId: model,
-    config: params.cfg,
-    agentId: params.agentId,
-    sessionKey: params.sessionKey,
-  });
-  const contextConfigProvider = resolveContextConfigProviderForRuntime({
-    provider,
-    runtimeId: harnessPolicy.runtime,
-    config: params.cfg,
-  });
   const configuredContextTokens = resolveContextTokensForModel({
     cfg: params.cfg,
-    provider: contextConfigProvider,
+    provider,
     model: resolveManualCompactContextModelId({
       provider,
-      contextConfigProvider,
       model,
     }),
     allowAsyncLoad: false,
   });
-  if (typeof configuredContextTokens === "number" && configuredContextTokens > 0) {
+  if (configuredContextTokens !== undefined && configuredContextTokens > 0) {
     const configuredBudget = Math.floor(configuredContextTokens);
     return liveContextTokens !== undefined
       ? Math.min(liveContextTokens, configuredBudget)
@@ -132,16 +111,10 @@ function resolveManualCompactContextTokenBudget(params: {
 }
 
 function normalizeContextTokenBudget(value: number | undefined): number | undefined {
-  return typeof value === "number" && Number.isFinite(value) && value > 0
-    ? Math.floor(value)
-    : undefined;
+  return value !== undefined && Number.isFinite(value) && value > 0 ? Math.floor(value) : undefined;
 }
 
-function resolveManualCompactContextModelId(params: {
-  provider: string;
-  contextConfigProvider: string;
-  model: string;
-}): string {
+function resolveManualCompactContextModelId(params: { provider: string; model: string }): string {
   const model = params.model;
   const slashIndex = model.indexOf("/");
   if (slashIndex <= 0) {
@@ -150,17 +123,12 @@ function resolveManualCompactContextModelId(params: {
 
   const modelProvider = normalizeProviderId(model.slice(0, slashIndex));
   const selectedProvider = normalizeProviderId(params.provider);
-  const contextConfigProvider = normalizeProviderId(params.contextConfigProvider);
   const modelId = model.slice(slashIndex + 1).trim();
   if (!modelId) {
     return model;
   }
 
-  if (
-    modelProvider === selectedProvider ||
-    modelProvider === contextConfigProvider ||
-    (modelProvider === OPENAI_PROVIDER_ID && contextConfigProvider === OPENAI_CODEX_PROVIDER_ID)
-  ) {
+  if (modelProvider === selectedProvider) {
     return modelId;
   }
 
@@ -212,8 +180,6 @@ export async function handleCompactCommand(
     cfg: params.cfg,
     provider: params.provider,
     model: params.model,
-    agentId: sessionAgentId,
-    sessionKey: params.sessionKey,
     liveContextTokens: params.contextTokens,
     persistedContextTokens: targetSessionEntry.contextTokens,
   });
@@ -426,7 +392,7 @@ export async function handleCompactCommand(
     result.ok || isBenignCompactionSkipResult(result) ? "Compaction skipped" : "Compaction failed";
   if (didCompact) {
     compactLabel =
-      typeof tokensAfterCompaction !== "number"
+      tokensAfterCompaction === undefined
         ? "Compaction finished (resulting context unknown)"
         : result.result?.tokensBefore != null
           ? `${result.compactionKind === "server-endpoint" ? "Server-side compaction" : "Compacted"} (${runtime.formatTokenCount(result.result.tokensBefore)} → ${runtime.formatTokenCount(tokensAfterCompaction)})`
@@ -454,7 +420,7 @@ export async function handleCompactCommand(
     ? tokensAfterCompaction
     : runtime.resolveFreshSessionTotalTokens(targetSessionEntry);
   const contextSummary = runtime.formatContextUsageShort(
-    typeof totalTokens === "number" && totalTokens > 0 ? totalTokens : null,
+    totalTokens !== undefined && totalTokens > 0 ? totalTokens : null,
     contextTokenBudget ?? null,
   );
   const reason = formatCompactionReason(result.reason);

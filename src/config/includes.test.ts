@@ -63,6 +63,26 @@ function expectResolveIncludeError(
 }
 
 describe("resolveConfigIncludes", () => {
+  it("projects archived includes before enforcing the existing root boundary", () => {
+    const source = path.join(ROOT_DIR, "old-install", "database.json");
+    const restored = configPath("captured", "database.json");
+    const resolver = {
+      ...createMockResolver({ [restored]: { database: { engine: "postgres" } } }),
+      mapPath: () => restored,
+    };
+    expect(resolveConfigIncludes({ $include: source }, DEFAULT_BASE_PATH, resolver)).toEqual({
+      database: { engine: "postgres" },
+    });
+    expectResolveIncludeError(
+      () =>
+        resolveConfigIncludes({ $include: source }, DEFAULT_BASE_PATH, {
+          ...resolver,
+          mapPath: () => source,
+        }),
+      /escapes config directory/,
+    );
+  });
+
   it("rejects sibling keys beside an array-valued include", () => {
     const files = { [configPath("list.json")]: ["a", "b"] };
     expectResolveIncludeError(

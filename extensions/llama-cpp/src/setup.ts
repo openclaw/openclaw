@@ -1,7 +1,7 @@
-import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { listAgentIds, resolveAgentConfig } from "openclaw/plugin-sdk/agent-scope-runtime";
+import { safeStat } from "openclaw/plugin-sdk/path-existence-runtime";
 import { mergeDeep } from "openclaw/plugin-sdk/plugin-config-runtime";
 import type {
   ProviderAppGuidedSetupContext,
@@ -108,13 +108,6 @@ async function configuredCandidates(
   );
 }
 
-async function isFile(filePath: string): Promise<boolean> {
-  return await fs
-    .stat(filePath)
-    .then((stat) => stat.isFile())
-    .catch(() => false);
-}
-
 async function resolveCachedArtifact(source: string, cacheDir: string, signal?: AbortSignal) {
   return await ensureLlamaCppModel({ source, cacheDir, download: false, signal }).catch(() => {
     signal?.throwIfAborted();
@@ -128,7 +121,7 @@ async function resolveCachedCandidate(
 ): Promise<string | undefined> {
   const source = resolveLlamaCppModelSource(candidate.model);
   const resolved = resolveCachedLlamaCppModelPath(candidate);
-  if (resolved && (await isFile(resolved))) {
+  if (resolved && (await safeStat(resolved))?.isFile()) {
     return resolved;
   }
   if (candidate.model.id === DEFAULT_LLAMA_CPP_MODEL_ID) {
@@ -136,7 +129,7 @@ async function resolveCachedCandidate(
       resolveLegacyLlamaCppModelCacheDir(),
       DEFAULT_LLAMA_CPP_MODEL_CACHE_FILE,
     );
-    if (await isFile(legacy)) {
+    if ((await safeStat(legacy))?.isFile()) {
       return legacy;
     }
   }
@@ -197,9 +190,9 @@ export async function detectLlamaCppSetup(ctx: ProviderAppGuidedSetupContext) {
   if (
     !command ||
     !path.isAbsolute(command) ||
-    !(await isFile(command)) ||
+    !(await safeStat(command))?.isFile() ||
     !presetPath ||
-    !(await isFile(presetPath))
+    !(await safeStat(presetPath))?.isFile()
   ) {
     return null;
   }
@@ -345,7 +338,7 @@ async function resolveSetupPlan(
     modelIds: new Set(cachedModels.keys()),
     embedding: cachedEmbedding,
     // An existing pinned command is validated by the installer; it will not be downloaded again.
-    runtime: await isFile(resolveManagedLlamaServerPaths(asset).command),
+    runtime: (await safeStat(resolveManagedLlamaServerPaths(asset).command))?.isFile() === true,
   });
   if (recommendation.kind === "recommended") {
     const { recipe } = recommendation;

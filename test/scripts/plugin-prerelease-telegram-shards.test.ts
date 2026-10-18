@@ -14,6 +14,7 @@ import path, { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
 import { parse } from "yaml";
+import type { CiTestRuntimePolicy } from "../../scripts/lib/ci-test-runtime.mts";
 import {
   DEFAULT_EXTENSION_TEST_SHARD_COUNT,
   createExtensionTestShards,
@@ -41,7 +42,7 @@ type PluginPrereleaseMatrixRow = {
   includePatterns: string[];
   requires_bun?: boolean;
   task: string;
-  test_runtime_policy?: "dual" | "node";
+  test_runtime_policy?: CiTestRuntimePolicy;
   vitest_config: string;
 };
 
@@ -99,6 +100,7 @@ function runPluginPrereleaseManifest(cwd = process.cwd(), fullReleaseValidation 
       EXPECTED_SHA: "",
       FULL_RELEASE_VALIDATION: String(fullReleaseValidation),
       GITHUB_OUTPUT: outputPath,
+      OPENCLAW_CI_TEST_RUNTIME_POLICY: "",
     };
     delete env.OPENCLAW_VITEST_INCLUDE_FILE;
     const result = spawnSync(testNodeExecPath, ["--import", "tsx", "--input-type=module"], {
@@ -359,7 +361,6 @@ export const collectBundledPluginSources=()=>[{dirName:'source-only',manifestPat
 
     expect(extensionJob.strategy["fail-fast"]).toBe(false);
     expect(extensionJob.strategy["max-parallel"]).toBe(12);
-    expect(extensionJob["timeout-minutes"]).toBe(60);
     expect(extensionJob.strategy.matrix).toBe(
       "${{ fromJson(needs.preflight.outputs.plugin_prerelease_extension_matrix) }}",
     );

@@ -474,6 +474,16 @@
       "dependencies": [],
       "activation": "version-additive",
       "file": "fragment-worker_session_placement_moves.postgres.sql"
+    },
+    {
+      "id": "agent_deletion_journal",
+      "tables": [
+        "agent_deletion_journal"
+      ],
+      "indexes": [],
+      "dependencies": [],
+      "activation": "version-additive",
+      "file": "fragment-agent_deletion_journal.postgres.sql"
     }
   ],
   "pendingPromotion": [],

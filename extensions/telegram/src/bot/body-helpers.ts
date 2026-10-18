@@ -77,7 +77,7 @@ const TELEGRAM_RICH_MESSAGE_PLACEHOLDER = "[unsupported Telegram rich_message re
 
 type TelegramTextMessage = Pick<
   Message,
-  "text" | "caption" | "entities" | "caption_entities" | "poll"
+  "text" | "caption" | "entities" | "caption_entities" | "poll" | "contact"
 > & { rich_message?: Message.RichMessageMessage["rich_message"] };
 
 function compactRichText(value: string): string {
@@ -239,6 +239,17 @@ export function getTelegramTextParts(msg: TelegramTextMessage): {
   if (text) {
     return { text, entities: msg.entities ?? msg.caption_entities ?? [] };
   }
+  if (msg.contact) {
+    const name = [msg.contact.first_name, msg.contact.last_name]
+      .map((value) => normalizeOptionalString(value))
+      .filter(Boolean)
+      .join(" ");
+    const phone = normalizeOptionalString(msg.contact.phone_number);
+    return {
+      text: `[Shared contact] ${[name, phone].filter(Boolean).join(", ") || "no details"}`,
+      entities: [],
+    };
+  }
   return { text: msg.poll ? formatTelegramPollText(msg.poll) : "", entities: [] };
 }
 
@@ -303,6 +314,9 @@ function isBotCommandAddressedToMention(command: string, mention: string): boole
 }
 
 export function hasBotMention(msg: Message, botUsername: string, botId?: number) {
+  if (msg.contact) {
+    return false;
+  }
   const { text, entities } = getTelegramTextParts(msg);
   const mention = normalizeLowercaseStringOrEmpty(`@${botUsername}`);
   if (hasStandaloneTelegramMention(normalizeLowercaseStringOrEmpty(text), mention)) {

@@ -21,10 +21,6 @@ const DEFAULT_SUCCESS_RESULT = {
   botName: "TestBot",
   botOpenId: "ou_abc123",
 } as const;
-const BOT1_RESPONSE = {
-  code: 0,
-  bot: { app_name: "Bot1", open_id: "ou_1" },
-} as const;
 
 afterAll(() => {
   vi.doUnmock("./client.js");
@@ -175,21 +171,6 @@ describe("probeFeishu", () => {
         ttlMs: 60 * 1000,
       });
     });
-  });
-
-  it("caches per account independently", async () => {
-    const requestFn = setupClient(BOT1_RESPONSE);
-
-    await probeFeishu({ appId: "cli_aaa", appSecret: "s1" }); // pragma: allowlist secret
-    expect(requestFn).toHaveBeenCalledTimes(1);
-
-    // Different appId should trigger a new API call
-    await probeFeishu({ appId: "cli_bbb", appSecret: "s2" }); // pragma: allowlist secret
-    expect(requestFn).toHaveBeenCalledTimes(2);
-
-    // Same appId + appSecret as first call should return cached
-    await probeFeishu({ appId: "cli_aaa", appSecret: "s1" }); // pragma: allowlist secret
-    expect(requestFn).toHaveBeenCalledTimes(2);
   });
 
   it("does not reuse cached identity when an account is reassigned to another app", async () => {

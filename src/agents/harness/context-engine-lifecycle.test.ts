@@ -133,57 +133,42 @@ describe("harness context engine lifecycle", () => {
     expect(windowed).toEqual(messages.slice(3));
   });
 
-  it.each(["absent", "assembled", "fallback"] as const)(
-    "repairs the final tool conversation when the engine is %s",
-    async (mode) => {
-      const messages: AgentMessage[] = [
-        textMessage("user", "Run the tool", 1),
-        {
-          role: "assistant",
-          content: [{ type: "toolCall", id: "call_fixture", name: "exec", arguments: {} }],
-          timestamp: 2,
-        } as AgentMessage,
-      ];
-      const before = JSON.stringify(messages);
-      const warn = vi.fn();
-      const result = await prepareHarnessContextEnginePrompt({
-        ...sessionParams,
-        modelId: "test-model",
-        messages,
-        ...(mode === "absent"
-          ? {}
-          : {
-              contextEngine: createContextEngine({
-                assemble: async () => {
-                  if (mode === "fallback") {
-                    throw new Error("synthetic assembly failure");
-                  }
-                  return { messages, estimatedTokens: 0 };
-                },
-              }),
-            }),
-        promptBudget: {
-          contextTokens: 100_000,
-          reserveTokens: 0,
-          systemPrompt: "system",
-          prompt: "next",
-        },
-        repairToolUseResultPairing: true,
-        isOpenAIResponsesApi: true,
-        warn,
-      });
-      expect(result.messages).toHaveLength(3);
-      expect(result.messages[2]).toMatchObject({
-        role: "toolResult",
-        toolCallId: "call_fixture",
-        toolName: "exec",
-        isError: true,
-        content: [{ type: "text", text: "aborted" }],
-      });
-      expect(JSON.stringify(messages)).toBe(before);
-      expect(warn).toHaveBeenCalledTimes(mode === "fallback" ? 1 : 0);
-    },
-  );
+  it("repairs the final tool conversation without a context engine", async () => {
+    const messages: AgentMessage[] = [
+      textMessage("user", "Run the tool", 1),
+      {
+        role: "assistant",
+        content: [{ type: "toolCall", id: "call_fixture", name: "exec", arguments: {} }],
+        timestamp: 2,
+      } as AgentMessage,
+    ];
+    const before = JSON.stringify(messages);
+    const warn = vi.fn();
+    const result = await prepareHarnessContextEnginePrompt({
+      ...sessionParams,
+      modelId: "test-model",
+      messages,
+      promptBudget: {
+        contextTokens: 100_000,
+        reserveTokens: 0,
+        systemPrompt: "system",
+        prompt: "next",
+      },
+      repairToolUseResultPairing: true,
+      isOpenAIResponsesApi: true,
+      warn,
+    });
+    expect(result.messages).toHaveLength(3);
+    expect(result.messages[2]).toMatchObject({
+      role: "toolResult",
+      toolCallId: "call_fixture",
+      toolName: "exec",
+      isError: true,
+      content: [{ type: "text", text: "aborted" }],
+    });
+    expect(JSON.stringify(messages)).toBe(before);
+    expect(warn).not.toHaveBeenCalled();
+  });
 
   it.each(["repair", "bounding"] as const)(
     "falls back when plugin output fails during %s",
@@ -319,73 +304,65 @@ describe("harness context engine lifecycle", () => {
     },
   );
 
-  it.each([false, true])(
-    "bounds oversized assembly without changing stored messages (engine throws=%s)",
-    async (throws) => {
-      const engineId = uniqueConfiguredProofEngineId();
-      const messages = [
-        textMessage("user", "old history ".repeat(500), 1),
-        textMessage("assistant", "old answer", 2),
-        textMessage("user", "recent ask", 3),
-        textMessage("assistant", "recent answer", 4),
-      ];
-      const original = JSON.stringify(messages);
-      await registerTestContextEngine(engineId, () =>
-        createContextEngine({
-          info: { id: engineId, name: engineId },
-          assemble: async ({ messages: input }) => {
-            if (throws) {
-              throw new Error("fixture assembly failure");
-            }
-            return {
-              messages: input,
-              estimatedTokens: 10_000,
-              systemPromptAddition: "Required engine instructions",
-            };
-          },
-        }),
-      );
-      const lease = await createContextEngineLogicalTurnLease({
-        identity: { runId: engineId, sessionId: sessionParams.sessionId },
-        config: {
-          plugins: { slots: { contextEngine: engineId } },
-          agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1024 } } },
+  it("bounds oversized assembly without changing stored messages", async () => {
+    const engineId = uniqueConfiguredProofEngineId();
+    const messages = [
+      textMessage("user", "old history ".repeat(500), 1),
+      textMessage("assistant", "old answer", 2),
+      textMessage("user", "recent ask", 3),
+      textMessage("assistant", "recent answer", 4),
+    ];
+    const original = JSON.stringify(messages);
+    await registerTestContextEngine(engineId, () =>
+      createContextEngine({
+        info: { id: engineId, name: engineId },
+        assemble: async ({ messages: input }) => {
+          return {
+            messages: input,
+            estimatedTokens: 10_000,
+            systemPromptAddition: "Required engine instructions",
+          };
         },
-      });
-      const contextEngine = lease.engine;
-      const params = {
-        ...sessionParams,
-        contextEngine,
-        messages,
-        modelId: "test-model",
-        tokenBudget: 2000,
-      };
-      const bounded = await prepareHarnessContextEnginePrompt({
-        ...params,
-        promptBudget: {
-          contextTokens: 4000,
-          reserveTokens: 1000,
-          systemPrompt: "Required system instructions",
-          prompt: "Current request",
-        },
-        repairToolUseResultPairing: true,
-        isOpenAIResponsesApi: false,
-        warn: vi.fn(),
-      });
-      expect(bounded.messages).toEqual(messages.slice(2));
-      expect(bounded.systemPrompt).toContain("Required system instructions");
-      expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(1024);
-      expect(JSON.stringify(messages)).toBe(original);
-      if (!throws) {
-        const first = await assembleHarnessContextEngine(params);
-        const second = await assembleHarnessContextEngine(params);
-        expect(first?.contextProjection?.mode).toBe("thread_bootstrap");
-        expect(first?.contextProjection).toEqual(second?.contextProjection);
-        expect(first?.systemPromptAddition).toBe("Required engine instructions");
-      }
-      await lease.dispose();
-    },
-  );
+      }),
+    );
+    const lease = await createContextEngineLogicalTurnLease({
+      identity: { runId: engineId, sessionId: sessionParams.sessionId },
+      config: {
+        plugins: { slots: { contextEngine: engineId } },
+        agents: { defaults: { compaction: { maxActiveTranscriptBytes: 1024 } } },
+      },
+    });
+    const contextEngine = lease.engine;
+    const params = {
+      ...sessionParams,
+      contextEngine,
+      messages,
+      modelId: "test-model",
+      tokenBudget: 2000,
+    };
+    const bounded = await prepareHarnessContextEnginePrompt({
+      ...params,
+      promptBudget: {
+        contextTokens: 4000,
+        reserveTokens: 1000,
+        systemPrompt: "Required system instructions",
+        prompt: "Current request",
+      },
+      repairToolUseResultPairing: true,
+      isOpenAIResponsesApi: false,
+      warn: vi.fn(),
+    });
+    expect(bounded.messages).toEqual(messages.slice(2));
+    expect(bounded.systemPrompt).toContain("Required system instructions");
+    expect(Buffer.byteLength(JSON.stringify(bounded.messages))).toBeLessThanOrEqual(1024);
+    expect(JSON.stringify(messages)).toBe(original);
+    const first = await assembleHarnessContextEngine(params);
+    const second = await assembleHarnessContextEngine(params);
+    expect(first?.contextProjection?.mode).toBe("thread_bootstrap");
+    expect(first?.contextProjection).toEqual(second?.contextProjection);
+    expect(first?.systemPromptAddition).toBe("Required engine instructions");
+    await lease.dispose();
+  });
 
   it("isolates prepared memory tools across sandboxed non-legacy turns", async () => {
     const sandboxed = true;
@@ -582,6 +559,7 @@ describe("harness context engine lifecycle", () => {
       modelId: "anthropic/claude-sonnet-4-6",
       fallbackReason: "primary_provider_5xx",
       runtimeContext: bootstrapRuntimeContext,
+      tokenBudget: 2048,
       warn: () => {},
     });
 
@@ -672,6 +650,7 @@ describe("harness context engine lifecycle", () => {
     for (const entry of captured) {
       expect(entry.runtimeSettings).toMatchObject({
         schemaVersion: 1,
+        limits: { promptTokenBudget: 2048 },
         runtime: { mode: "fallback" },
         model: {
           requested: "openai/gpt-5.5",

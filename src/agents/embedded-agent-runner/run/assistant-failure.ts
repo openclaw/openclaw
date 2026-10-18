@@ -42,7 +42,7 @@ import { createFailoverDecisionLogger } from "./failover-observation.js";
 import { mergeRetryFailoverReason, resolveRunFailoverDecision } from "./failover-policy.js";
 import type { EmbeddedRunFailoverRetryController } from "./failover-retry-controller.js";
 import { shouldRetrySilentErrorAssistantTurn } from "./incomplete-turn-recovery.js";
-import type { prepareEmbeddedRunRuntime } from "./runtime-preparation.js";
+import type { prepareEmbeddedRunRuntime } from "./runtime.js";
 import { isEmbeddedRunTerminalInterrupted, isEmbeddedRunTimeoutFinal } from "./terminal-outcome.js";
 
 const MAX_EMPTY_ERROR_RETRIES = 3;
@@ -337,7 +337,7 @@ export async function handleEmbeddedAssistantFailure(input: {
       result: effectiveFailoverReason === "timeout" ? "timeout" : result,
       ...(effectiveFailoverReason ? { reason: effectiveFailoverReason } : {}),
       stage: "assistant",
-      ...(typeof status === "number" ? { status } : {}),
+      ...(status !== undefined ? { status } : {}),
     });
   };
   const throwFailure = (error: FailoverError): never => {

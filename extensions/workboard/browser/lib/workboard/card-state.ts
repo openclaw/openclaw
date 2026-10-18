@@ -122,6 +122,7 @@ function parentDependencyIds(card: WorkboardCard): string[] {
 export function getWorkboardDependencyState(
   card: WorkboardCard,
   cards: readonly WorkboardCard[],
+  complete = true,
 ): WorkboardDependencyState {
   const cardsById = new Map(cards.map((entry) => [entry.id, entry]));
   const parents = parentDependencyIds(card).map((id) => {
@@ -131,12 +132,14 @@ export function getWorkboardDependencyState(
       title: parent?.title ?? id,
       status: parent?.status,
       done: parent?.status === "done",
-      missing: !parent,
+      missing: !parent && complete,
     };
   });
   return {
     parents,
-    blockedParents: parents.filter((parent) => !parent.done),
+    blockedParents: parents.filter(
+      (parent) => !parent.done && (parent.status !== undefined || parent.missing),
+    ),
   };
 }
 

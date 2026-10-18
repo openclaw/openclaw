@@ -1,7 +1,7 @@
 import type { ChatCommandDefinition, CommandArgs } from "openclaw/plugin-sdk/command-auth-native";
 import type { ResolvedAgentRoute } from "openclaw/plugin-sdk/routing";
 import { withTimeout } from "openclaw/plugin-sdk/text-utility-runtime";
-import type { ButtonInteraction, StringSelectMenuInteraction } from "../internal/discord.js";
+import type { BaseComponentInteraction } from "../internal/discord.js";
 import {
   recordDiscordModelPickerRecentModel,
   type DiscordModelPickerPreferenceScope,
@@ -21,7 +21,7 @@ type DiscordModelPickerApplyResult =
 
 export async function applyDiscordModelPickerSelection(
   params: DiscordCommandArgContext & {
-    interaction: ButtonInteraction | StringSelectMenuInteraction;
+    interaction: BaseComponentInteraction;
     selectionCommand: DiscordModelPickerSelectionCommand;
     dispatchCommandInteraction: DispatchDiscordCommandInteraction;
     route: ResolvedAgentRoute;

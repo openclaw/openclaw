@@ -35,7 +35,7 @@ export function agentsApiNativeTool(
     name = "bash";
     args = {
       ...(item.command !== undefined ? { command: item.command } : {}),
-      ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
+      ...(item.cwd != null ? { cwd: item.cwd } : {}),
     };
   } else if (item.type === "mcp_call") {
     name = item.server_label ? `${item.server_label}.${item.name ?? "mcp"}` : (item.name ?? "mcp");
@@ -44,7 +44,7 @@ export function agentsApiNativeTool(
       (item.arguments === undefined ? {} : { arguments: item.arguments });
   } else if (item.type === "web_search_call") {
     name = "web_search";
-    args = item.action ? { ...item.action } : {};
+    args = item.action ?? {};
   } else {
     return undefined;
   }
@@ -68,7 +68,7 @@ export function agentsApiNativeToolOutcome(
   const errorCode = typeof errorRecord?.code === "string" ? errorRecord.code : undefined;
   const errorText = nativeError === undefined ? undefined : nativeValueText(nativeError);
   const failedCommand =
-    item.type === "command_execution" && typeof item.exit_code === "number" && item.exit_code !== 0;
+    item.type === "command_execution" && item.exit_code != null && item.exit_code !== 0;
   let status: AgentsApiNativeToolOutcome["status"];
   if (item.status === "failed" || nativeError !== undefined || failedCommand) {
     status = "failed";
@@ -116,42 +116,34 @@ export function agentsApiNativeToolDetails(
     nativeOutput === undefined || nativeOutput === null
       ? undefined
       : boundedNativeValue(nativeOutput);
-  return (
-    asOptionalRecord(
-      sanitizeToolResult({
-        status: outcome.status,
-        native: {
-          backend: "agentsapi",
-          sessionId,
-          turnId,
-          itemId: item.id,
-          itemType: item.type,
-          status: item.status ?? null,
-        },
-        ...(typeof item.exit_code === "number" ? { exitCode: item.exit_code } : {}),
-        ...(typeof item.duration_ms === "number" ? { durationMs: item.duration_ms } : {}),
-        ...(typeof item.cwd === "string" ? { cwd: item.cwd } : {}),
-        ...(item.server_label ? { serverLabel: item.server_label } : {}),
-        ...(item.type === "web_search_call"
-          ? { ...(item.action ? { action: item.action } : {}), resultAvailability: "unavailable" }
-          : {
-              outputAvailability:
-                output === undefined
-                  ? "unavailable"
-                  : item.output == null
-                    ? "partial"
-                    : "canonical",
-              ...(output
-                ? { output: output.value, ...(output.truncated ? { outputTruncated: true } : {}) }
-                : {}),
-            }),
-        ...(item.error != null ? { nativeError: boundedNativeValue(item.error).value } : {}),
-        ...(outcome.error ? { error: outcome.error } : {}),
-        ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
-        ...(outcome.outcomeUnknown ? { outcomeUnknown: true } : {}),
-      }),
-    ) ?? {}
-  );
+  return {
+    status: outcome.status,
+    native: {
+      backend: "agentsapi",
+      sessionId,
+      turnId,
+      itemId: item.id,
+      itemType: item.type,
+      status: item.status ?? null,
+    },
+    ...(item.exit_code != null ? { exitCode: item.exit_code } : {}),
+    ...(item.duration_ms != null ? { durationMs: item.duration_ms } : {}),
+    ...(item.cwd != null ? { cwd: item.cwd } : {}),
+    ...(item.server_label ? { serverLabel: item.server_label } : {}),
+    ...(item.type === "web_search_call"
+      ? { ...(item.action ? { action: item.action } : {}), resultAvailability: "unavailable" }
+      : {
+          outputAvailability:
+            output === undefined ? "unavailable" : item.output == null ? "partial" : "canonical",
+          ...(output
+            ? { output: output.value, ...(output.truncated ? { outputTruncated: true } : {}) }
+            : {}),
+        }),
+    ...(item.error != null ? { nativeError: boundedNativeValue(item.error).value } : {}),
+    ...(outcome.error ? { error: outcome.error } : {}),
+    ...(outcome.errorCode ? { errorCode: outcome.errorCode } : {}),
+    ...(outcome.outcomeUnknown ? { outcomeUnknown: true } : {}),
+  };
 }
 
 export function agentsApiNativeToolOutput(

@@ -2,8 +2,9 @@ import type { JSX } from "@solidjs/web";
 import { createSignal } from "solid-js";
 import { vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
-import type { ApplicationContext } from "../../app/context.ts";
 import type { PresenceViewer } from "../../lib/presence-users.ts";
+import { createContext, createGateway, createSessions } from "../../test-helpers/app-sidebar.ts";
+import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid as mountSolidRoot } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import type { renderSessionActivityView } from "./session-activity-view.tsx";
@@ -56,17 +57,14 @@ export function props({
 } = {}): Parameters<typeof renderSessionActivityView>[0] {
   return {
     context: {
+      ...createContext(
+        createGateway(createTestGatewayClient(vi.fn(async () => ({})))),
+        createSessions("main", []),
+        { defaultId: "main", mainKey: "main", scope: "per-sender", agents: [] },
+      ),
       basePath: "",
       navigate: vi.fn(),
-      gateway: {
-        snapshot: { hello: null, client: null, phase: "stopped" },
-        subscribe: () => () => {},
-        subscribeEvents: () => () => {},
-      },
-      agents: { state: { agentsList: { defaultId: "main", mainKey: "main" } } },
-      agentSelection: { state: { selectedId: "main" } },
-      sessions: { state: { result: { sessions: [] } } },
-    } as unknown as ApplicationContext,
+    },
     filters: { personId: null, query: "", time: "7d" as const },
     presenceViewers: [] as PresenceViewer[],
     result: {

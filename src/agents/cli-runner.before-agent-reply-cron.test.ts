@@ -2,7 +2,6 @@
 import path from "node:path";
 import { afterEach, beforeAll, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import { SILENT_REPLY_TOKEN } from "../auto-reply/tokens.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import {
   getAgentEventLifecycleGeneration,
@@ -445,6 +444,7 @@ describe("runCliAgent before_agent_reply seam", () => {
     expect(authSuccessMock).toHaveBeenCalledWith({
       store,
       profileId,
+      modelId: runParams.model,
       provider: "google-gemini-cli",
       agentDir: "/tmp/agent",
     });
@@ -643,7 +643,8 @@ describe("runCliAgent before_agent_reply seam", () => {
     });
     expect(result.meta.agentMeta?.sessionId).toBe("");
     expect(result.meta.agentMeta?.clearCliSessionBinding).toBe(true);
-    expect(result.payloads?.[0]?.text).toBe(SILENT_REPLY_TOKEN);
+    expect(result.payloads).toEqual([]);
+    expect(result.meta.terminalReply).toEqual({ disposition: "silent" });
     expect(prepareMock).not.toHaveBeenCalled();
     expect(executeMock).not.toHaveBeenCalled();
   });
@@ -655,11 +656,15 @@ describe("runCliAgent before_agent_reply seam", () => {
     const result = await runCliAgent({ ...runParams, trigger: "cron" });
 
     expect(result.meta).toMatchObject({
-      finalAssistantRawText: "NO_REPLY",
+      finalAssistantRawText: "",
+      finalAssistantVisibleText: "",
+      terminalReply: { disposition: "silent" },
       providerStarted: false,
     });
     const { resolveDiagnosticModelResponse } = await import("./diagnostic-model-response.js");
     expect(resolveDiagnosticModelResponse(result)).toBeUndefined();
+    expect(prepareMock).not.toHaveBeenCalled();
+    expect(executeMock).not.toHaveBeenCalled();
   });
 
   it("dispatches a declining hook once when model fallback re-enters the CLI runner", async () => {

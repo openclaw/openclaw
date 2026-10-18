@@ -66,8 +66,10 @@ function registryPath(agentDir: string, env?: NodeJS.ProcessEnv, registering = f
       ),
     );
   }
+  // Fit the registered fleet plus this registration while bounding extra aliases.
+  const capacity = Math.max(256, agentIdsByDir.size + 1);
   for (const [oldestPath, oldest] of preparedPaths) {
-    if (preparedPaths.size <= 256) {
+    if (preparedPaths.size <= capacity) {
       break;
     }
     preparedPaths.delete(oldestPath);

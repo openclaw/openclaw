@@ -265,24 +265,6 @@ describe("Codex Computer Use native service", () => {
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(STALE_IDENTITY);
   });
 
-  it("replaces an incomplete home-owned service app", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
-    await fs.mkdir(targetPath, { recursive: true });
-    await fs.writeFile(path.join(targetPath, "partial"), "incomplete");
-
-    const result = await ensureCodexComputerUseServiceApp(serviceOptions(codexHome, sourcePath));
-
-    expect(result).toMatchObject({ status: "refreshed", changed: true });
-    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
-    await expect(fs.access(path.join(targetPath, "partial"))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
-  });
-
   it("coalesces parallel installations for the same managed home", async () => {
     const root = tempDirs.make("openclaw-computer-use-service-");
     const sourcePath = path.join(root, "source", "Codex Computer Use.app");

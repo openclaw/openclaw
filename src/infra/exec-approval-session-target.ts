@@ -226,7 +226,7 @@ function warnLegacyTarget(name: string): void {
   });
 }
 
-/** @deprecated Use resolveExecApprovalSessionTargetAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use resolveExecApprovalSessionTargetAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveExecApprovalSessionTarget(
   params: Parameters<typeof resolveExecApprovalSessionTargetFromDelivery>[0],
 ): ExecApprovalSessionTarget | null {
@@ -247,7 +247,7 @@ export async function resolveExecApprovalSessionTargetAsync(
   );
 }
 
-/** @deprecated Use resolveApprovalRequestSessionTargetAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use resolveApprovalRequestSessionTargetAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveApprovalRequestSessionTarget(
   params: Parameters<typeof resolveApprovalRequestSessionTargetFromDelivery>[0],
 ): ExecApprovalSessionTarget | null {
@@ -268,7 +268,7 @@ export async function resolveApprovalRequestSessionTargetAsync(
   );
 }
 
-/** @deprecated Use resolveApprovalRequestOriginTargetAsync; removed in a later release after stable deprecation. */
+/** @deprecated Use resolveApprovalRequestOriginTargetAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveApprovalRequestOriginTarget<TTarget>(
   params: ApprovalRequestOriginTargetResolver<TTarget>,
 ): TTarget | null {

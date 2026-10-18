@@ -17,7 +17,7 @@ Status: production-ready via WhatsApp Web (Baileys). The gateway owns the linked
 openclaw plugins install @openclaw/whatsapp
 ```
 
-Use `npm:@openclaw/whatsapp` or `clawhub:@openclaw/whatsapp` to force a source; pin an exact version only for a reproducible install.
+The manual package install uses ClawHub by default. Use `npm:@openclaw/whatsapp` to install directly from npm; pin an exact version only for a reproducible install.
 
 <CardGroup cols={3}>
   <Card title="Pairing" icon="link" href="/channels/pairing">
@@ -235,9 +235,14 @@ WhatsApp can render exec and plugin approval prompts as `👍`/`👎` reactions,
 
 WhatsApp approval reactions require explicit approvers in `allowFrom` (or `"*"`). `defaultTo` sets ordinary default message targets, not an approver list. Manual `/approve` commands still pass the normal WhatsApp sender-authorization path before approval resolution.
 
-## Question reactions
+<a id="question-reactions" />
 
-For an `ask_user` prompt with one non-secret, single-select question and one to four options, WhatsApp shows `1️⃣` through `4️⃣` beside the option labels. React to the delivered prompt with the matching number to answer it. OpenClaw maps the number to the stored option through the Gateway; stale or duplicate taps are ignored. Multi-question, multi-select, and free-text prompts remain text-reply-only. Normal WhatsApp DM/group admission rules authorize the reacting sender.
+## Agent questions
+
+WhatsApp does not expose the [`ask_user`](/tools/ask-user) tool. When the agent
+needs your input, it asks in an ordinary message and you reply in plain text.
+Numbered reactions do not answer questions. Approval reactions described above
+are unchanged.
 
 ## Plugin hooks and privacy
 
@@ -522,6 +527,8 @@ Set `messages.statusReactions.enabled: true` to let WhatsApp replace the ack rea
 
 Notes: `messages.ackReactionScope` still controls eligibility for direct messages and groups; the queued state uses the same effective emoji as plain acknowledgment reactions. WhatsApp has one bot reaction slot per message, so lifecycle updates replace the current reaction in place and restore the acknowledgment after the final done/error state.
 
+A message queued behind an active run keeps its acknowledgment until its follow-up delivers a visible reply. Successful execution alone does not produce a success reaction. If transport retains an unconfirmed delivery, the reaction is cleared without claiming success or failure; later durable retries do not update that cleared reaction. A settled turn without a visible reply, including a silent or `NO_REPLY` turn, shows an error reaction just like direct dispatch. Execution failures, terminal admission skips, Stop cancellations, and messages rejected or removed by the queue-cap policy show an error reaction immediately. Collected and summarized follow-ups retain each message's delivery correlation.
+
 ### Active-turn typing
 
 For admitted automatic turns where typing is allowed, WhatsApp sends a
@@ -637,7 +644,7 @@ openclaw channels status
   </Accordion>
 
   <Accordion title="Bun runtime warning">
-    Node remains the primary and recommended Gateway runtime. Bun 1.4+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
+    Node remains the primary and recommended Gateway runtime. Bun 1.4.3+ builds with WAL-reset-safe `node:sqlite` are supported as an explicit opt-in; doctor migrates only unsupported Bun services to Node.
   </Accordion>
 </AccordionGroup>
 

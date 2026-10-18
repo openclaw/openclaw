@@ -1,4 +1,5 @@
 import path from "node:path";
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   consumeCodexAppServerLiveThread,
@@ -25,7 +26,9 @@ import {
 
 const sharedClientMocks = vi.hoisted(() => ({
   retainByInstanceId: undefined as
-    | ((clientId: string | undefined) => { client: never; release: () => void } | undefined)
+    | ((
+        clientId: string | undefined,
+      ) => { client: never; release: () => Promise<void> | undefined } | undefined)
     | undefined,
 }));
 
@@ -42,7 +45,7 @@ vi.mock("./shared-client.js", async (importOriginal) => {
 
 function scheduledStartOptions(sessionFile: string, cwd: string) {
   return {
-    params: createParams(sessionFile, cwd),
+    params: { ...createParams(sessionFile, cwd), disableTools: false },
     cwd,
     dynamicTools: [],
     appServer: createAppServerOptions(),
@@ -138,7 +141,7 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     await retainCodexAppServerLiveThread(currentClient, "thread-sibling", releaseSibling);
     const common = {
       client: currentClient,
-      params: createParams(sessionFile, workspaceDir),
+      params: { ...createParams(sessionFile, workspaceDir), disableTools: false },
       cwd: workspaceDir,
       dynamicTools: [],
       appServer: createAppServerOptions(),
@@ -195,7 +198,77 @@ describe("startOrResumeThread — configured MCP ownership", () => {
     expect(sibling).toBeDefined();
     expect(releaseSibling).not.toHaveBeenCalled();
     await sibling?.release("thread-sibling");
-    expect(releaseSibling).toHaveBeenCalledWith("thread-sibling");
+    expect(releaseSibling).toHaveBeenCalledWith("thread-sibling", undefined, undefined);
+  });
+
+  it("does not report a cancelled predecessor wait as pre-write after its successor starts", async () => {
+    const sessionFile = path.join(tempDir, "session-cancelled-migration.jsonl");
+    const workspaceDir = path.join(tempDir, "workspace-cancelled-migration");
+    registerCodexTestSessionIdentity(sessionFile, "session-1", "agent:main:session-1");
+    await writeCodexAppServerBinding(sessionFile, {
+      threadId: "thread-ordinary-old",
+      clientId: "client-old",
+      cwd: workspaceDir,
+      model: "gpt-5.4-codex",
+      modelProvider: "openai",
+      mcpServersFingerprint: "mcp-v1",
+      dynamicToolsFingerprint: "[]",
+    });
+    const clientStub = (instanceId: string, request: (method: string) => Promise<unknown>) =>
+      ({
+        getInstanceId: () => instanceId,
+        request: vi.fn(request),
+        addNotificationHandler: () => () => undefined,
+        addRequestHandler: () => () => undefined,
+        addCloseHandler: () => () => undefined,
+      }) as never;
+    const oldClient = clientStub("client-old", async (method) => {
+      throw new Error(`unexpected method: ${method}`);
+    });
+    ensureCodexAppServerClientRuntime(oldClient, { agentDir: workspaceDir });
+    const exitWaitStarted = createDeferred<void>();
+    // Another lease keeps the retired owner's native writer alive.
+    const ownerExit = createDeferred<void>();
+    sharedClientMocks.retainByInstanceId = (clientId) =>
+      clientId === "client-old"
+        ? {
+            client: oldClient,
+            release: () => {
+              exitWaitStarted.resolve();
+              return ownerExit.promise;
+            },
+          }
+        : undefined;
+    const client = clientStub("client-current", async (method) => {
+      if (method === "config/read") {
+        return { config: {}, origins: {}, layers: [] };
+      }
+      if (method === "thread/start") {
+        return threadStartResult("thread-scheduled");
+      }
+      throw new Error(`unexpected method: ${method}`);
+    });
+    ensureCodexAppServerClientRuntime(client, { agentDir: workspaceDir });
+    const stop = new AbortController();
+    const onPrewriteHandoffCancelled = vi.fn();
+    const run = startOrResumeThreadImpl({
+      bindingStore: testCodexAppServerBindingStore,
+      client,
+      ...scheduledStartOptions(sessionFile, workspaceDir),
+      signal: stop.signal,
+      onPrewriteHandoffCancelled,
+    });
+    await exitWaitStarted.promise;
+    const reason = new Error("stopped during configured MCP migration");
+    stop.abort(reason);
+
+    await expect(run).rejects.toBe(reason);
+    // The successor thread already subscribed this client; its caller must still retire it.
+    expect(onPrewriteHandoffCancelled).not.toHaveBeenCalled();
+    await expect(readCodexAppServerBinding(sessionFile)).resolves.toMatchObject({
+      threadId: "thread-scheduled",
+      clientId: "client-current",
+    });
   });
 
   it.each(["start", "conflict", "error"] as const)(

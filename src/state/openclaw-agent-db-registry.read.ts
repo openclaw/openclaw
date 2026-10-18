@@ -12,6 +12,7 @@ import {
 } from "../infra/sqlite-schema-facts.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import type { OpenClawRegisteredAgentDatabase } from "./openclaw-agent-db-contract.js";
+import { getStateRuntimeSchemaAdmission } from "./openclaw-state-db-admission.js";
 import { tableExists } from "./openclaw-state-db-schema-helpers.js";
 import {
   assertCanonicalAgentDatabasesPrimaryKey,
@@ -88,22 +89,24 @@ export function readRegisteredAgentDatabaseRows(
     if (artifactPreserving) {
       requireNativeDatabaseFile("postgres", "file-snapshot");
     }
-  } else if (artifactPreserving) {
-    assertCanonicalAgentDatabasesPrimaryKey(database, pathname);
-  } else {
-    const schema = getAdmittedSqliteSchemaFacts(database);
-    if (!schema || !readableSchemas.has(schema)) {
-      if (
-        detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).some(
-          ({ kind }) => STATE_SCHEMA_MIGRATION_READ_TABLES[kind].includes("agent_databases"),
-        )
-      ) {
-        throw new Error(
-          `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
-        );
-      }
-      if (schema) {
-        readableSchemas.add(schema);
+  } else if (!getStateRuntimeSchemaAdmission(database)) {
+    if (artifactPreserving) {
+      assertCanonicalAgentDatabasesPrimaryKey(database, pathname);
+    } else {
+      const schema = getAdmittedSqliteSchemaFacts(database);
+      if (!schema || !readableSchemas.has(schema)) {
+        if (
+          detectOpenClawStateDatabaseSchemaMigrationsFromDatabase(database, pathname).some(
+            ({ kind }) => STATE_SCHEMA_MIGRATION_READ_TABLES[kind].includes("agent_databases"),
+          )
+        ) {
+          throw new Error(
+            `OpenClaw state database ${pathname} has a legacy agent database registry schema; run openclaw doctor --fix to migrate it.`,
+          );
+        }
+        if (schema) {
+          readableSchemas.add(schema);
+        }
       }
     }
   }

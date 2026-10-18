@@ -9,6 +9,7 @@ import type {
 import type { PrepareAssistantTranscriptMessage } from "../config/sessions/transcript-assistant-delivery.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import type { DiagnosticTraceContext } from "../infra/diagnostic-trace-context.js";
+import type { InstallPolicyRequestKind as PluginInstallRequestKind } from "../security/install-policy.js";
 import type {
   PluginHookAgentContext,
   PluginHookContextWindow,
@@ -405,7 +406,7 @@ export type PluginHookReplyDispatchContext = {
   dispatcher: ReplyDispatcher;
   abortSignal?: AbortSignal;
   onReplyStart?: () => Promise<void> | void;
-  /** @deprecated Use onPreparedAgentRunStart. */
+  /** @deprecated Use onPreparedAgentRunStart. Final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
   onAgentRunStart?: GetReplyOptions["onAgentRunStart"];
   onPreparedAgentRunStart?: GetReplyOptions["onPreparedAgentRunStart"];
   /** Host-owned input custody; adopt before backend submission and propagate refusal. */
@@ -731,13 +732,6 @@ type PluginHookSubagentEndedEvent = {
 };
 
 export type PluginInstallTargetType = "skill" | "plugin";
-type PluginInstallRequestKind =
-  | "skill-install"
-  | "plugin-dir"
-  | "plugin-archive"
-  | "plugin-file"
-  | "plugin-npm"
-  | "plugin-git";
 export type PluginInstallSourcePathKind = "file" | "directory";
 
 type PluginInstallFinding = {

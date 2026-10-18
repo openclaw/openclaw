@@ -40,6 +40,7 @@ export async function listSessionBranchesForGateway(
         agentId: requestedAgent.agentId,
         excludeInternalEffects: true,
         projection: "list",
+        prepared: read?.prepared,
       },
       async (current, assertCurrent) => {
         const upstreamLink = current.entry?.sessionId

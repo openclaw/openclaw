@@ -5,6 +5,7 @@ import type { ConversationReadInvocationOrigin } from "../../channels/plugins/co
 import type { PreparedMessageToolCatalog } from "../../channels/plugins/message-action-discovery.js";
 import type { resolveCommandSecretRefsViaGateway } from "../../cli/command-secret-gateway.js";
 import type { getScopedChannelsCommandSecretTargets } from "../../cli/command-secret-targets.js";
+import type { ReplyToMode } from "../../config/types.base.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import type { runMessageAction } from "../../infra/outbound/message-action-runner.js";
 import type { SandboxFsBridge } from "../sandbox/fs-bridge.js";
@@ -33,7 +34,7 @@ export type MessageToolOptions = {
   currentMessageId?: string | number;
   currentInboundAudio?: boolean;
   hasCurrentInboundAudio?: () => boolean;
-  replyToMode?: "off" | "first" | "all" | "batched";
+  replyToMode?: ReplyToMode;
   hasRepliedRef?: { value: boolean };
   sameChannelThreadRequired?: boolean;
   sandboxRoot?: string;

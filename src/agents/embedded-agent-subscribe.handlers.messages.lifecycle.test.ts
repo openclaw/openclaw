@@ -56,9 +56,7 @@ describe("handleMessageEnd", () => {
       },
     });
     await endMessage(ctx, { message: textMessage("NO_REPLY") });
-    expect(finalizeAssistantTexts).toHaveBeenCalledWith(
-      expect.objectContaining({ text: "NO_REPLY" }),
-    );
+    expect(finalizeAssistantTexts).toHaveBeenCalledWith(expect.objectContaining({ text: "" }));
     expect(JSON.stringify(onBlockReply.mock.calls)).not.toContain("<internal escalation note>");
   });
 
@@ -255,8 +253,7 @@ describe("handleMessageEnd", () => {
     const ctx = createMessageEndContext({ enforceFinalTag: true, onAgentEvent, onBlockReply });
     await endMessage(ctx, {
       message: {
-        role: "assistant",
-        content: "Hello world",
+        ...textMessage("Hello world"),
         usage: { input: 10, output: 5, total: 15 },
       },
     });
