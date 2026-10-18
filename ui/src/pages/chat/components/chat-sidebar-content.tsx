@@ -295,6 +295,16 @@ export function SidebarPanel(props: SidebarPanelProps) {
               <Match when={props.content?.kind === "session-diff" ? props.content : undefined}>
                 {(content) => (
                   <SessionDiffPanel
+                    mobile={
+                      props.presentation === undefined
+                        ? (content().presentation?.mobile ?? null)
+                        : props.presentation === "mobile"
+                    }
+                    active={props.active ?? content().presentation?.active ?? true}
+                    openFileView={content().presentation?.openFileView ?? null}
+                    onOpenMobilePage={content().presentation?.onOpenMobilePage ?? null}
+                    scopeRequest={content().presentation?.scopeRequest ?? null}
+                    onResult={content().onResult ?? null}
                     owner={content().owner}
                     loader={content().load}
                     loadFileText={content().loadFileText ?? null}

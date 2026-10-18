@@ -1,4 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
+import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import type { ChatMessageGetResult } from "../../../../../packages/gateway-protocol/src/schema/logs-chat.js";
 import type { SessionFileDownload } from "../../../api/session-file-download.ts";
 import type { SessionWorkspaceListResult } from "../../../api/types.ts";
@@ -10,11 +11,6 @@ import type {
   ImageRenderOptions,
   ArtifactDownloadResolver,
 } from "./chat-message-media.ts";
-import type {
-  SessionDiffFileTextLoader,
-  SessionDiffLoader,
-  SessionDiffOwner,
-} from "./session-diff-panel.tsx";
 
 export type SessionWorkspaceFilter = "all" | "changed" | "read" | "artifacts";
 
@@ -85,6 +81,48 @@ export type TranscriptAttachments = {
 };
 
 export type MobileFileBack = { label: string; onBack: () => void };
+
+export type SessionDiffScope =
+  | { scope: "all" | "uncommitted" }
+  | { scope: "commit"; commit: string };
+
+export type SessionDiffLoader = (params: SessionDiffScope) => Promise<SessionsDiffResult>;
+
+export type SessionDiffFileTextLoader = (path: string) => Promise<string | null>;
+
+export type SessionDiffOwner = { agentId: string; sessionKey: string };
+
+export type SessionDiffFileView = "reading" | "highlighted" | "plain" | "edit";
+
+export type SessionDiffMobilePageRequest = {
+  key: "session-diff-sync";
+  title: string;
+  /** Invoke in the native page outlet; dispose on Back, retain only while hidden. */
+  render: () => SolidJSX.Element;
+};
+
+export type SessionDiffProps = {
+  /** Native host presentation, not the width of the panel. Unknown retains the native UI. */
+  mobile?: boolean | null;
+  active?: boolean;
+  /** A new object requests a scope on the same native checkout, including on a retained tab. */
+  scopeRequest?: { owner: SessionDiffOwner; scope: SessionDiffScope } | null;
+  onResult?:
+    | ((value: {
+        owner: SessionDiffOwner | null;
+        scope: SessionDiffScope;
+        result: SessionsDiffResult;
+      }) => void)
+    | null;
+  owner: SessionDiffOwner | null;
+  execNode: string | null;
+  loader: SessionDiffLoader | null;
+  loadFileText: SessionDiffFileTextLoader | null;
+  openFile: ((path: string) => void | Promise<SessionWorkspacePreview | undefined>) | null;
+  revealFile: ((path: string) => void) | null;
+  openFileView?: ((path: string, view: SessionDiffFileView) => void) | null;
+  onOpenMobilePage?: ((page: SessionDiffMobilePageRequest, source: HTMLElement) => void) | null;
+};
 
 type SidebarFullMessageRequest = {
   sessionKey: string;
@@ -190,8 +228,18 @@ type SessionDiffSidebarContent = {
   kind: "session-diff";
   owner: SessionDiffOwner;
   load: SessionDiffLoader;
+  /** Last accepted native Uncommitted result for this exact diff loader. */
+  uncommitted?: SessionsDiffResult;
+  /** Visible Environment demand shares this content's native diff loader. */
+  requestUncommitted?: () => void;
+  onResult?: SessionDiffProps["onResult"];
   loadFileText?: SessionDiffFileTextLoader;
-  openFile?: (path: string) => void;
+  openFile?: (path: string) => void | Promise<SessionWorkspacePreview | undefined>;
+  /** Native host/reader inputs, memoized by the caller for this retained content. */
+  presentation?: Pick<
+    SessionDiffProps,
+    "mobile" | "active" | "openFileView" | "onOpenMobilePage" | "scopeRequest"
+  >;
   rawText?: string | null;
 };
 
