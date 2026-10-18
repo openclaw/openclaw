@@ -176,7 +176,7 @@ describe("session transcript reader marker projection", () => {
       compaction("summary", "before"),
       message("after", "Continued conversation", "assistant"),
     ]);
-    const messages = await readSessionMessagesAsync(scope, {
+    const messages = await readFull(scope, {
       mode: "full",
       reason: "Compaction metrics and retained history regression",
     });
@@ -201,12 +201,12 @@ describe("session transcript reader marker projection", () => {
       compaction("summary", "before"),
       message("after", "Continued conversation", "assistant"),
     ]);
-    const paged = await readSessionMessagesAsync(scope, {
+    const paged = await readFull(scope, {
       mode: "full",
       reason: "Compaction summary stays out of history pages",
     });
-    const defaultRead = await readSessionMessageByIdAsync(scope, "summary");
-    const requestedRead = await readSessionMessageByIdAsync(scope, "summary", {
+    const defaultRead = await readById(scope, "summary");
+    const requestedRead = await readById(scope, "summary", {
       includeCompactionSummary: true,
     });
 
