@@ -7,15 +7,20 @@ export function buildDocumentationSection(params: {
 }): string[] {
   const docsPath = params.docsPath?.trim();
   const sourcePath = params.sourcePath?.trim();
-  const docsUnavailable =
-    params.sandboxed &&
-    !docsPath &&
-    !["web_fetch", "web_search", "browser"].some((name) => params.availableTools.has(name));
+  const webRetrieval = ["web_fetch", "web_search", "browser"].some((name) =>
+    params.availableTools.has(name),
+  );
+  const docsUnavailable = params.sandboxed && !docsPath && !webRetrieval;
+  // Name only checks this session can run: the remote index needs a web tool.
   const capabilityChecks = [
     params.availableTools.has("session_status")
       ? "`session_status` with `capabilities=true`"
       : undefined,
-    docsUnavailable ? undefined : "the docs index https://docs.openclaw.ai/llms.txt",
+    webRetrieval
+      ? "the docs index https://docs.openclaw.ai/llms.txt"
+      : docsPath
+        ? "the local docs"
+        : undefined,
   ].filter((check): check is string => check !== undefined);
   return [
     "## Documentation",
