@@ -66,7 +66,7 @@ function buildTelegramConfig({
   });
 }
 
-function buildPrivateTopicConfig(overrides?: { requireTopic?: boolean }): OpenClawConfig {
+function buildPrivateTopicConfig(): OpenClawConfig {
   return makeTelegramConfig(
     {
       dmPolicy: "open",
@@ -74,7 +74,7 @@ function buildPrivateTopicConfig(overrides?: { requireTopic?: boolean }): OpenCl
       reactionNotifications: "all",
       direct: {
         "5678": {
-          ...(overrides?.requireTopic ? { requireTopic: true } : {}),
+          requireTopic: true,
           topics: { [String(FORUM_TOPIC_ID)]: { enabled: true, agentId: "topicbot" } },
         },
       },
@@ -333,10 +333,7 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     { scope: "direct-messages", recovered: undefined },
     {
       scope: "direct-messages",
-      recovered: {
-        threadSpec: { scope: "forum", id: FORUM_TOPIC_ID },
-        isTopicMessage: false,
-      },
+      recovered: { threadSpec: { scope: "forum", id: FORUM_TOPIC_ID }, isTopicMessage: false },
     },
   ] as const)(
     "drops unresolved $scope topic ($recovered), never guessing General",
@@ -359,48 +356,40 @@ describe("registerTelegramReactionHandler forum topic recovery", () => {
     },
   );
 
-  it("routes a cached private-chat topic reaction to its DM topic session", async () => {
-    resolveCachedMessageThreadSpec.mockResolvedValue({
-      threadSpec: { scope: "dm", id: FORUM_TOPIC_ID },
-      isTopicMessage: true,
-    });
-    enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
-    await registerHandler(buildPrivateTopicConfig({ requireTopic: true }))(
+  it.each([
+    { isTopicMessage: true, sessionKey: "agent:topicbot:telegram:direct:5678:thread:5678:77" },
+    { isTopicMessage: false, sessionKey: "agent:topicbot:telegram:direct:5678" },
+  ])(
+    "routes a cached private-chat thread like its messages (topic: $isTopicMessage)",
+    async ({ isTopicMessage, sessionKey }) => {
+      resolveCachedMessageThreadSpec.mockResolvedValue({
+        threadSpec: { scope: "dm", id: FORUM_TOPIC_ID },
+        isTopicMessage,
+      });
+      enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
+      await registerHandler(buildPrivateTopicConfig())(
+        privateReaction({ user: { id: 5678, first_name: "Bob" } }),
+      );
+
+      expect(resolveCachedMessageThreadSpec).toHaveBeenCalledWith({
+        chatId: 5678,
+        messageId: REACTED_MESSAGE_ID,
+      });
+      expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
+      expect(peekSystemEventEntries(sessionKey)).toEqual([
+        expect.objectContaining({
+          text: `Telegram reaction added: ${FIRE_EMOJI} by Bob on msg 100`,
+        }),
+      ]);
+    },
+  );
+
+  it("drops an uncached private-chat reaction when the DM requires a topic", async () => {
+    await registerHandler(buildPrivateTopicConfig())(
       privateReaction({ user: { id: 5678, first_name: "Bob" } }),
     );
 
-    expect(resolveCachedMessageThreadSpec).toHaveBeenCalledWith({
-      chatId: 5678,
-      messageId: REACTED_MESSAGE_ID,
-    });
-    expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
-    const topicSessionKey = "agent:topicbot:telegram:direct:5678:thread:5678:77";
-    expect(enqueueRoutedSystemEvent.mock.calls[0]?.[1]?.sessionKey).toBe(topicSessionKey);
-    expect(peekSystemEventEntries(topicSessionKey)).toEqual([
-      expect.objectContaining({
-        text: `Telegram reaction added: ${FIRE_EMOJI} by Bob on msg 100`,
-      }),
-    ]);
-    expect(peekSystemEventEntries("agent:topicbot:telegram:direct:5678")).toEqual([]);
-  });
-
-  it("keeps metadata-only private threads on the base DM session", async () => {
-    resolveCachedMessageThreadSpec.mockResolvedValue({
-      threadSpec: { scope: "dm", id: FORUM_TOPIC_ID },
-      isTopicMessage: false,
-    });
-    enqueueRoutedSystemEvent.mockImplementation(enqueueActualSystemEvent);
-    await registerHandler(buildPrivateTopicConfig({ requireTopic: true }))(
-      privateReaction({ user: { id: 5678, first_name: "Bob" } }),
-    );
-
-    expect(enqueueRoutedSystemEvent).toHaveBeenCalledTimes(1);
-    expect(enqueueRoutedSystemEvent.mock.calls[0]?.[1]?.sessionKey).toBe(
-      "agent:topicbot:telegram:direct:5678",
-    );
-    expect(peekSystemEventEntries("agent:topicbot:telegram:direct:5678:thread:5678:77")).toEqual(
-      [],
-    );
+    expect(enqueueRoutedSystemEvent).not.toHaveBeenCalled();
   });
 
   it.each([false, true])(
