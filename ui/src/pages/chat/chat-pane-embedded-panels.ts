@@ -97,7 +97,12 @@ export function sidebarPanelDefinitions(
     definePanel("processes", "terminal"),
     definePanel("detail", "diff", Boolean(data?.detailContent)),
     definePanel("terminal", "terminal", Boolean(state?.terminalAvailable)),
-    definePanel("browser", "globe", Boolean(state?.browserPanelAvailable)),
+    {
+      ...definePanel("browser", "globe", Boolean(state?.browserPanelAvailable)),
+      unavailableReason: state?.browserPanelUnavailableReason
+        ? t(`chat.sidePanel.browserUnavailableReason.${state.browserPanelUnavailableReason}`)
+        : undefined,
+    },
     {
       slot: "link-reader",
       label: t("linkReader.title"),

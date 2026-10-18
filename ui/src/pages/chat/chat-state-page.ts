@@ -149,6 +149,7 @@ export function createPageState(
     canvasPluginSurfaceUrl: null,
     terminalAvailable: false,
     browserPanelAvailable: false,
+    browserPanelUnavailableReason: "disconnected",
     assistantAgentId: context.agentSelection.state.selectedId,
     sessionKey: initialSessionKey,
     currentSessionId: undefined,

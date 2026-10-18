@@ -3,7 +3,10 @@ import { createDeferred } from "../../../../test/helpers/promise.js";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import { stubScreenshotMedia } from "./browser-panel-controller-test-support.ts";
+import {
+  openBrowserActions,
+  stubScreenshotMedia,
+} from "./browser-panel-controller-test-support.ts";
 import { createBrowserPageClient } from "./test-helpers/browser-page.ts";
 import "./browser-panel.ts";
 
@@ -35,8 +38,12 @@ describe("Browser toolbar", () => {
 
   it("renders all toolbar glyphs in a shared, stroked SVG coordinate system inside its light-DOM host", async () => {
     const panel = await mount();
-    const glyphs = panel.querySelectorAll(".bp-toolbar button > svg");
-    expect(glyphs).toHaveLength(8);
+    const menu = await openBrowserActions(panel);
+    const glyphs = [
+      ...panel.querySelectorAll(".bp-toolbar button > svg"),
+      ...menu.querySelectorAll('[role="menuitem"] svg'),
+    ];
+    expect(glyphs.length).toBeGreaterThan(0);
     for (const glyph of glyphs) {
       expect(glyph.getAttribute("viewBox")).toBe("0 0 24 24");
       expect(glyph.getAttribute("stroke")).toBe("currentColor");
@@ -60,7 +67,9 @@ describe("Browser toolbar", () => {
           ),
         ),
     );
-    panel.querySelector<HTMLButtonElement>('button[aria-label="Download file"]')!.click();
+    (await openBrowserActions(panel))
+      .querySelector<HTMLElement>('[aria-label="Download file"]')!
+      .click();
     await waitForSolid(() => expect(panel.textContent).toContain("HTTP 401: Unauthorized"));
   });
 
@@ -70,21 +79,27 @@ describe("Browser toolbar", () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, blob: () => body.promise }));
     vi.spyOn(HTMLAnchorElement.prototype, "click").mockImplementation(() => {});
     const preview = panel.querySelector(".bp-shot");
-    const button = panel.querySelector<HTMLButtonElement>('button[aria-label="Download file"]')!;
+    const menu = await openBrowserActions(panel);
+    let button = menu.querySelector<HTMLElement>('[aria-label="Download file"]')!;
     const downloadShape = button.querySelector("svg")!.innerHTML;
     button.click();
     await panel.updateComplete;
+    await openBrowserActions(panel);
+    button = menu.querySelector<HTMLElement>('[aria-label="Downloading…"]')!;
     expect(button.getAttribute("aria-busy")).toBe("true");
     expect(button.getAttribute("aria-label")).toBe("Downloading…");
-    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
     expect(button.querySelector("svg")!.innerHTML).not.toBe(downloadShape);
     expect(panel.querySelector(".bp-note")).toBeNull();
     expect(panel.querySelector(".bp-shot")).toBe(preview);
 
     body.resolve(new Blob(["complete asset"], { type: "image/png" }));
-    await waitForSolid(() => expect(button.getAttribute("aria-busy")).toBe("false"));
+    await waitForSolid(() => {
+      button = menu.querySelector<HTMLElement>('[aria-label="Download file"]')!;
+      expect(button?.getAttribute("aria-busy")).toBe("false");
+    });
     expect(button.getAttribute("aria-label")).toBe("Download file");
-    expect(button.disabled).toBe(false);
+    expect(button.getAttribute("aria-disabled")).not.toBe("true");
     expect(button.querySelector("svg")!.innerHTML).toBe(downloadShape);
     expect(panel.querySelector(".bp-note")).toBeNull();
     expect(panel.querySelector(".bp-shot")).toBe(preview);

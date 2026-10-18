@@ -3173,6 +3173,11 @@ export const en: TranslationMap & {
       terminalEmpty: "Open a shell for this session's workspace.",
       browser: "Browser",
       browserEmpty: "A shared browser for you and the agent.",
+      browserUnavailableReason: {
+        permission: "You need operator.admin to use Browser.",
+        disconnected: "Disconnected.",
+        unavailable: "Browser unavailable.",
+      },
       files: "Files",
       filesEmpty: "Browse files, artifacts, and changes from this session.",
       companion: "Side chat",
