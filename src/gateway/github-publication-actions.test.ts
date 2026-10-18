@@ -22,15 +22,23 @@ import {
   loadSessionEntryReadOnly,
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
-import { setCanonicalUserProfileRole } from "../state/user-profile-writes.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
+import {
+  ensureCanonicalUserProfileForEmail,
+  setCanonicalUserProfileRole,
+} from "../state/user-profile-writes.js";
 import {
   createGitHubPublicationRequesterFixture,
   createRequesterPublicationFixture,
+  guestScopes,
 } from "./github-publication-requester.test-support.js";
 import { invalidateOperatorRolePolicy } from "./operator-role-policy.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { createContext as createRequestContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { createOperatorWsClient } from "./server/ws-connection/authenticated-request-dispatch.test-support.js";
+import { prepareGatewayConnectOperatorAccess } from "./server/ws-connection/connect-operator-access.js";
+import { resolveSessionMutationAuthorizationAsync } from "./session-sharing-authorization-async.js";
 import {
   resolveLocalWorkspaceOwner,
   withLocalWorkspaceProjection,
@@ -152,6 +160,7 @@ async function fixture(backend: "local" | "repository" = "local") {
     actor: "guest" | "admin" | "writer",
     args: Record<string, unknown>,
     source = SESSION_KEY,
+    client?: typeof f.guestSource.client,
   ) => {
     const principal =
       actor === "guest" ? f.guestSource : actor === "writer" ? writerSource : f.maintainerSource;
@@ -162,7 +171,7 @@ async function fixture(backend: "local" | "repository" = "local") {
       const respond = vi.fn();
       await handleGatewayRequest({
         req: { type: "req", id: randomUUID(), method, params },
-        client: principal.client,
+        client: client ?? principal.client,
         context: {
           ...principal.context,
           githubPublicationService: f.coordinator,
@@ -399,6 +408,78 @@ describe("session PR actions through the agent tool and registered Gateway metho
     expect(f.writes).toEqual([]);
   });
 
+  it("rejects guest readiness for another publishing target, foreign work or an unbound workspace", async () => {
+    const f = await fixture();
+    const args = { action: "ready", ...f.expected };
+    await expect(f.invoke("guest", { ...args, publishingSessionKey: SESSION_KEY })).rejects.toThrow(
+      /scope|permission/iu,
+    );
+    const foreign = { agentId: "main", sessionKey: "agent:main:foreign-publication" };
+    await upsertSessionEntryCore(foreign, {
+      sessionId: randomUUID(),
+      updatedAt: 1,
+      createdActor: { type: "human", source: "profile", id: f.maintainerProfile },
+    });
+    await expect(f.invoke("guest", args, foreign.sessionKey)).rejects.toThrow(
+      "session is shared for this connection",
+    );
+    await upsertSessionEntryCore(
+      { agentId: "main", sessionKey: SESSION_KEY },
+      { worktree: undefined },
+    );
+    await expect(f.invoke("guest", args)).rejects.toThrow("no completed shared publication");
+    expect(f.writes).toEqual([]);
+  });
+
+  it("denies readiness to a shared-session participant who did not create its published draft", async () => {
+    const f = await fixture();
+    const participant = await ensureCanonicalUserProfileForEmail("publication-peer@example.test");
+    const client = createOperatorWsClient({ connId: participant.id, scopes: [...guestScopes] });
+    client.authenticatedUserProfile = {
+      profileId: participant.id,
+      displayName: null,
+      avatarRevision: "fixture",
+      hasAvatar: false,
+      updatedAt: 1,
+    };
+    prepareGatewayConnectOperatorAccess(client);
+    const scope = { agentId: "main", sessionKey: SESSION_KEY };
+    await upsertSessionEntryCore(scope, { visibility: "shared" });
+    addSessionMember(scope, { identityId: participant.id, addedBy: f.guestProfile });
+    const admission = await resolveSessionMutationAuthorizationAsync({
+      client,
+      context: Object.assign(createRequestContext(), f.guestSource.context),
+      method: "sessions.patch",
+      requestParams: { key: SESSION_KEY, label: "Shared work" },
+    });
+    try {
+      expect(admission.error).toBeNull();
+      expect(admission.authorization).toBeDefined();
+      admission.authorization!.assertCurrent();
+      await expect(
+        f.invoke("guest", { action: "ready", ...f.expected }, SESSION_KEY, client),
+      ).rejects.toThrow("The original GitHub publication requester is no longer authorized.");
+      expect(f.writes).toEqual([]);
+      expect(f.state.draft).toBe(true);
+    } finally {
+      admission.authorization?.release?.();
+    }
+  });
+
+  it("rejects guest readiness when authority or publisher identity changes during the read", async () => {
+    const f = await fixture();
+    f.onRead(async () => {
+      mocks.matchesIdentity.mockReturnValue(false);
+    });
+    await expect(f.invoke("guest", { action: "ready", ...f.expected })).rejects.toThrow(
+      "publisher changed",
+    );
+    mocks.matchesIdentity.mockReturnValue(true);
+    f.onRead(async () => await f.revoke());
+    await expect(f.invoke("guest", { action: "ready", ...f.expected })).rejects.toThrow();
+    expect(f.writes).toEqual([]);
+  });
+
   it("reports a rejected edit without a write retry or a publication fallback", async () => {
     const f = await fixture();
     f.rejectEdit();
@@ -418,7 +499,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
   });
 
   it.each(["local", "repository"] as const)(
-    "lands a %s draft for the current full-write actor without elevating later guest turns",
+    "lets a guest ready its own %s draft while only a full-write actor can land it",
     async (backend) => {
       const f = await fixture(backend);
       const actor = backend === "repository" ? "writer" : "admin";
@@ -428,10 +509,6 @@ describe("session PR actions through the agent tool and registered Gateway metho
         expect(await f.local.git("rev-list", "--count", "main..HEAD")).toBe("1");
         expect(await f.local.git("log", "-1", "--format=%s")).toBe("Publish session work");
       }
-      await expect(f.invoke("guest", { action: "ready", ...f.expected })).rejects.toThrow(
-        /scope|permission/iu,
-      );
-      expect(f.writes).toEqual([]);
       await f.invoke("guest", {
         action: "edit",
         ...f.expected,
@@ -443,7 +520,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
         mergeCommit: null,
         publication: { requestId: f.publication.requestId },
       });
-      expect((await f.invoke(actor, { action: "ready", ...f.expected })).details).toMatchObject({
+      expect((await f.invoke("guest", { action: "ready", ...f.expected })).details).toMatchObject({
         state: "open",
       });
       if (backend === "repository") {
@@ -559,7 +636,9 @@ describe("session PR actions through the agent tool and registered Gateway metho
       args.action = "merge";
       args.mergeMethod = "merge";
     }
-    await expect(f.invoke("admin", args)).rejects.toThrow(/changed|inspect|closed/iu);
+    await expect(f.invoke(args.action === "ready" ? "guest" : "admin", args)).rejects.toThrow(
+      /changed|inspect|closed/iu,
+    );
     expect(f.writes).toEqual([]);
   });
 
@@ -578,7 +657,7 @@ describe("session PR actions through the agent tool and registered Gateway metho
   it("retains the selected publisher when credentials are unavailable", async () => {
     const f = await fixture();
     mocks.prepareIdentity.mockRejectedValue(new Error("Publisher credentials unavailable"));
-    await expect(f.invoke("admin", { action: "ready", ...f.expected })).rejects.toThrow(
+    await expect(f.invoke("guest", { action: "ready", ...f.expected })).rejects.toThrow(
       "credentials unavailable",
     );
     expect(f.writes).toEqual([]);
@@ -589,10 +668,10 @@ describe("session PR actions through the agent tool and registered Gateway metho
     async (mergeMethod) => {
       const f = await fixture();
       f.loseResponse();
-      expect((await f.invoke("admin", { action: "ready", ...f.expected })).details).toMatchObject({
+      expect((await f.invoke("guest", { action: "ready", ...f.expected })).details).toMatchObject({
         state: "open",
       });
-      await f.invoke("admin", { action: "ready", ...f.expected });
+      await f.invoke("guest", { action: "ready", ...f.expected });
       expect(
         (await f.invoke("admin", { action: "merge", ...f.expected, mergeMethod })).details,
       ).toMatchObject({ state: "merged" });

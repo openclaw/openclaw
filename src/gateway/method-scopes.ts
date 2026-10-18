@@ -128,7 +128,9 @@ function resolveDynamicLeastPrivilegeOperatorScopesForMethod(
   const record = asOptionalRecord(params);
   if (method === "sessions.github.action") {
     return [
-      record?.action === "refresh_base" || record?.action === "edit"
+      record?.action === "refresh_base" ||
+      record?.action === "edit" ||
+      (record?.action === "ready" && record.publishingSessionKey === undefined)
         ? SESSION_WRITE_SCOPE
         : WRITE_SCOPE,
     ];
