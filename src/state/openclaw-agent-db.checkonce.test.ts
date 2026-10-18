@@ -140,6 +140,12 @@ it("reuses live agent admission and its seal after writer idle retirement", asyn
     try {
       const first = openAgent(options);
       const firstNative = first.db;
+      expect(
+        exec.mock.calls.filter(
+          ([sql], index) =>
+            exec.mock.contexts[index] === firstNative && /PRAGMA busy_timeout/iu.test(sql),
+        ),
+      ).toEqual([]);
       expect(firstNative.prepare("PRAGMA busy_timeout").get()).toEqual({
         timeout: OPENCLAW_SQLITE_BUSY_TIMEOUT_MS,
       });
@@ -168,8 +174,7 @@ it("reuses live agent admission and its seal after writer idle retirement", asyn
       expect(
         exec.mock.calls.filter(
           ([sql], index) =>
-            [firstNative, reopened.db].some((db) => db === exec.mock.contexts[index]) &&
-            /PRAGMA busy_timeout/iu.test(sql),
+            exec.mock.contexts[index] === reopened.db && /PRAGMA busy_timeout/iu.test(sql),
         ),
       ).toEqual([]);
       expect(validationStatements(observation.queries)).toEqual([]);
