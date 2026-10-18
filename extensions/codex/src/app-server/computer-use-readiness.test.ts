@@ -39,27 +39,14 @@ describe("Codex Computer Use readiness", () => {
     const fixture = createComputerUseRequest({ installed: true });
     const controller = new AbortController();
     let probeSubscribed = false;
-    const harness = createClientHarness({
-      onWrite(line, send) {
-        const frame = JSON.parse(line) as { id: number; method: string; params?: unknown };
-        if (frame.method === "turn/start" || frame.method === "mcpServer/tool/call") {
-          return;
+    const harness = createProbeHarness(fixture, {
+      hold: ["turn/start", "mcpServer/tool/call"],
+      onReply(method) {
+        if (method === "thread/start") {
+          probeSubscribed = true;
+        } else if (method === "thread/unsubscribe") {
+          probeSubscribed = false;
         }
-        void fixture(frame.method, frame.params).then(
-          (result) => {
-            if (frame.method === "thread/start") {
-              probeSubscribed = true;
-            } else if (frame.method === "thread/unsubscribe") {
-              probeSubscribed = false;
-            }
-            send({ id: frame.id, result: result ?? null });
-          },
-          (error: unknown) =>
-            send({
-              id: frame.id,
-              error: { code: -32000, message: String(error) },
-            }),
-        );
       },
     });
     const peer = harness.client.request("turn/start", { threadId: "healthy-peer" });
@@ -95,22 +82,9 @@ describe("Codex Computer Use readiness", () => {
         installed: true,
       });
       const controller = new AbortController();
-      const harness = createClientHarness({
-        onWrite(line, send) {
-          const frame = JSON.parse(line) as { id: number; method: string; params?: unknown };
-          if (frame.method === "mcpServer/tool/call" && cancelled) {
-            return;
-          }
-          if (frame.method === "thread/unsubscribe") {
-            send({ id: frame.id, error: { code: -32000, message: "unsubscribe failed" } });
-            return;
-          }
-          void fixture(frame.method, frame.params).then(
-            (result) => send({ id: frame.id, result: result ?? null }),
-            (error: unknown) =>
-              send({ id: frame.id, error: { code: -32000, message: String(error) } }),
-          );
-        },
+      const harness = createProbeHarness(fixture, {
+        hold: cancelled ? ["mcpServer/tool/call"] : [],
+        unsubscribeError: true,
       });
       try {
         const readiness = ensureCodexComputerUse({
@@ -138,16 +112,7 @@ describe("Codex Computer Use readiness", () => {
 
   it("holds one client lease through a one-off readiness probe and its cleanup", async () => {
     const fixture = createComputerUseRequest({ installed: true });
-    const harness = createClientHarness({
-      onWrite(line, send) {
-        const frame = JSON.parse(line) as { id: number; method: string; params?: unknown };
-        void fixture(frame.method, frame.params).then(
-          (result) => send({ id: frame.id, result: result ?? null }),
-          (error: unknown) =>
-            send({ id: frame.id, error: { code: -32000, message: String(error) } }),
-        );
-      },
-    });
+    const harness = createProbeHarness(fixture);
     sharedClientMocks.getLeasedSharedCodexAppServerClient.mockResolvedValue(harness.client);
     try {
       const status = await readCodexComputerUseStatus({ pluginConfig: readinessConfig() });
@@ -401,3 +366,28 @@ describe("Codex Computer Use readiness", () => {
     ).toHaveLength(1);
   });
 });
+
+function createProbeHarness(
+  fixture: ReturnType<typeof createComputerUseRequest>,
+  options: { hold?: string[]; unsubscribeError?: boolean; onReply?: (method: string) => void } = {},
+) {
+  return createClientHarness({
+    onWrite(line, send) {
+      const frame = JSON.parse(line) as { id: number; method: string; params?: unknown };
+      if (options.hold?.includes(frame.method)) {
+        return;
+      }
+      if (frame.method === "thread/unsubscribe" && options.unsubscribeError) {
+        send({ id: frame.id, error: { code: -32000, message: "unsubscribe failed" } });
+        return;
+      }
+      void fixture(frame.method, frame.params).then(
+        (result) => {
+          options.onReply?.(frame.method);
+          send({ id: frame.id, result: result ?? null });
+        },
+        (error: unknown) => send({ id: frame.id, error: { code: -32000, message: String(error) } }),
+      );
+    },
+  });
+}

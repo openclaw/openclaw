@@ -7,7 +7,7 @@ import {
   expectRequestMethodNotCalled,
   expectSetupErrorStatus,
   expectStatusFields,
-  pluginSummary,
+  marketplaceEntry,
   requestCalls,
 } from "./computer-use.test-support.js";
 import { createClientHarness, useAutoCleanupTempDirTracker } from "./test-support.js";
@@ -84,19 +84,16 @@ describe("Codex Computer Use setup", () => {
 
   afterEach(() => {
     vi.useRealTimers();
-    sharedClientMocks.getLeasedSharedCodexAppServerClient.mockReset();
-    sharedClientMocks.readCodexAppServerClientDesktopGeneration.mockReset();
-    sharedClientMocks.readCodexAppServerClientProcessIdentity.mockReset();
-    sharedClientMocks.releaseLeasedSharedCodexAppServerClient.mockReset();
-    managedProvisioningMocks.ensureCodexManagedBundledMarketplace.mockReset();
-    managedProvisioningMocks.ensureCodexComputerUseServiceApp.mockReset();
-    managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache.mockReset();
+    for (const mock of [
+      ...Object.values(sharedClientMocks),
+      ...Object.values(managedProvisioningMocks),
+    ]) {
+      mock.mockReset();
+    }
     managedProvisioningMocks.ensureCodexComputerUseSharedPluginCache.mockResolvedValue(false);
-    managedProvisioningMocks.resolveCodexManagedBundledMarketplaceSource.mockReset();
     managedProvisioningMocks.resolveCodexManagedBundledMarketplaceSource.mockImplementation(
       async (params: { candidates?: readonly unknown[] }) => params.candidates?.[0],
     );
-    managedProvisioningMocks.resolveCodexComputerUseServiceAppSourcePath.mockReset();
     managedProvisioningMocks.resolveCodexComputerUseServiceAppSourcePath.mockImplementation(
       async (params: { sourceAppCandidates?: readonly string[] }) =>
         params.sourceAppCandidates?.[0],
@@ -618,20 +615,7 @@ function createAmbiguousComputerUseRequest(): CodexComputerUseRequest {
   return vi.fn(async (method: string) => {
     if (method === "plugin/list") {
       return {
-        marketplaces: [
-          {
-            name: "desktop-tools",
-            path: "/marketplaces/desktop-tools/.agents/plugins/marketplace.json",
-            interface: null,
-            plugins: [pluginSummary(true, "desktop-tools")],
-          },
-          {
-            name: "other-tools",
-            path: "/marketplaces/other-tools/.agents/plugins/marketplace.json",
-            interface: null,
-            plugins: [pluginSummary(true, "other-tools")],
-          },
-        ],
+        marketplaces: ["desktop-tools", "other-tools"].map((name) => marketplaceEntry(name, true)),
         marketplaceLoadErrors: [],
         featuredPluginIds: [],
       };
@@ -651,8 +635,14 @@ function createBundledMarketplaceComputerUseRequest(
   const codexHome = path.resolve(bundledMarketplacePath, "../../..");
   let configuredSource = options.configuredSource;
   let registered = configuredSource === bundledMarketplacePath;
-  let installed = false;
-  let threadStartCalls = 0;
+  const pluginRequest = createComputerUseRequest({
+    installed: false,
+    localMarketplace: {
+      name: "openai-bundled",
+      path: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
+    },
+    probeThreadPrefix: "bundled-marketplace-probe-thread",
+  });
   return vi.fn(async (method: string, requestParams?: unknown) => {
     if (method === "experimentalFeature/enablement/set") {
       return { enablement: { plugins: true } };
@@ -709,76 +699,22 @@ function createBundledMarketplaceComputerUseRequest(
         alreadyAdded: false,
       };
     }
-    if (method === "plugin/list") {
-      return {
-        marketplaces: registered
-          ? [
-              {
-                name: "openai-bundled",
-                path: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
-                interface: null,
-                plugins: [pluginSummary(installed, "openai-bundled")],
-              },
-            ]
-          : [],
-        marketplaceLoadErrors: [],
-        featuredPluginIds: [],
-      };
+    if (method === "plugin/list" && !registered) {
+      return { marketplaces: [], marketplaceLoadErrors: [], featuredPluginIds: [] };
     }
-    if (method === "plugin/read") {
-      return {
-        plugin: {
-          marketplaceName: "openai-bundled",
-          marketplacePath: `${bundledMarketplacePath}/.agents/plugins/marketplace.json`,
-          summary: pluginSummary(installed, "openai-bundled"),
-          description: "Control desktop apps.",
-          skills: [],
-          apps: [],
-          mcpServers: ["computer-use"],
-        },
-      };
-    }
-    if (method === "plugin/install") {
-      installed = true;
-      return { authPolicy: "ON_INSTALL", appsNeedingAuth: [] };
-    }
-    if (method === "config/mcpServer/reload") {
-      return undefined;
-    }
-    if (method === "mcpServerStatus/list") {
-      return {
-        data: installed
-          ? [
-              {
-                name: "computer-use",
-                tools: {
-                  list_apps: {
-                    name: "list_apps",
-                    inputSchema: { type: "object" },
-                  },
-                },
-                resources: [],
-                resourceTemplates: [],
-                authStatus: "unsupported",
-              },
-            ]
-          : [],
-        nextCursor: null,
-      };
-    }
-    if (method === "thread/start") {
-      threadStartCalls += 1;
-      return {
-        thread: { id: `bundled-marketplace-probe-thread-${threadStartCalls}` },
-        model: "gpt-5.1",
-        modelProvider: "openai",
-      };
-    }
-    if (method === "mcpServer/tool/call") {
-      return { content: [{ type: "text", text: "[]" }] };
-    }
-    if (method === "thread/unsubscribe") {
-      return undefined;
+    if (
+      [
+        "plugin/list",
+        "plugin/read",
+        "plugin/install",
+        "config/mcpServer/reload",
+        "mcpServerStatus/list",
+        "thread/start",
+        "mcpServer/tool/call",
+        "thread/unsubscribe",
+      ].includes(method)
+    ) {
+      return pluginRequest(method, requestParams);
     }
     throw new Error(`unexpected request ${method}`);
   }) as CodexComputerUseRequest;

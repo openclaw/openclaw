@@ -21,27 +21,21 @@ type EnsureParams = Parameters<typeof ensureCodexComputerUseServiceApp>[0];
 type InspectServiceApp = NonNullable<EnsureParams["inspectServiceApp"]>;
 type ServiceIdentity = NonNullable<Awaited<ReturnType<InspectServiceApp>>>;
 
-const CURRENT_IDENTITY = serviceIdentity({
-  version: "26.817.1000761",
-  build: "1000761",
-  cdHash: "current-service",
-  clientCdHash: "current-client",
-});
-const STALE_IDENTITY = serviceIdentity({
-  version: "26.721.1000502",
-  build: "1000502",
-  cdHash: "stale-service",
-  clientCdHash: "stale-client",
-});
-const UNEXPECTED_IDENTITY = serviceIdentity({
-  version: "26.900.1000900",
-  build: "1000900",
-  cdHash: "unexpected-service",
-  clientCdHash: "unexpected-client",
-});
+const CURRENT_IDENTITY = serviceIdentity("26.817.1000761", "1000761", "current");
+const STALE_IDENTITY = serviceIdentity("26.721.1000502", "1000502", "stale");
+const UNEXPECTED_IDENTITY = serviceIdentity("26.900.1000900", "1000900", "unexpected");
 
 describe("Codex Computer Use native service", () => {
   const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+  async function setupService() {
+    const root = tempDirs.make("openclaw-computer-use-service-");
+    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
+    const codexHome = path.join(root, "codex-home");
+    const targetParent = path.join(codexHome, "computer-use");
+    const targetPath = path.join(targetParent, "Codex Computer Use.app");
+    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+    return { root, sourcePath, codexHome, targetParent, targetPath };
+  }
 
   it
     .runIf(process.platform !== "win32")
@@ -91,13 +85,9 @@ describe("Codex Computer Use native service", () => {
   it.runIf(process.platform !== "win32")(
     "rejects a symlinked service target without following its external app",
     async () => {
-      const root = tempDirs.make("openclaw-computer-use-service-symlink-");
-      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-      const codexHome = path.join(root, "codex-home");
-      const targetParent = path.join(codexHome, "computer-use");
-      const targetPath = path.join(targetParent, "Codex Computer Use.app");
+      const { root, sourcePath, codexHome, targetParent, targetPath } = await setupService();
       const externalTarget = path.join(root, "external", "Codex Computer Use.app");
-      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+
       await writeServiceFixture(externalTarget, STALE_IDENTITY);
       await fs.mkdir(targetParent, { recursive: true });
       await fs.symlink(externalTarget, targetPath);
@@ -123,16 +113,12 @@ describe("Codex Computer Use native service", () => {
   it.runIf(process.platform !== "win32")(
     "refuses to publish or clean up through a parent rebound during staging",
     async () => {
-      const root = tempDirs.make("openclaw-computer-use-service-rebind-");
-      const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-      const codexHome = path.join(root, "codex-home");
-      const targetParent = path.join(codexHome, "computer-use");
-      const targetPath = path.join(targetParent, "Codex Computer Use.app");
+      const { root, sourcePath, codexHome, targetParent, targetPath } = await setupService();
       const parkedParent = path.join(codexHome, "computer-use-owned");
       const externalParent = path.join(root, "external-computer-use");
       const externalTarget = path.join(externalParent, "Codex Computer Use.app");
       const externalSentinel = path.join(externalParent, "sentinel.txt");
-      await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+
       await writeServiceFixture(targetPath, STALE_IDENTITY);
       await writeServiceFixture(externalTarget, UNEXPECTED_IDENTITY);
       await fs.writeFile(externalSentinel, "outside");
@@ -175,10 +161,7 @@ describe("Codex Computer Use native service", () => {
   );
 
   it("refreshes when the signed desktop service changes at the same source path", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+    const { sourcePath, codexHome, targetPath } = await setupService();
     const copyServiceApp = vi.fn(copyServiceFixture);
     const inspectServiceApp = vi.fn(inspectServiceFixture);
 
@@ -203,7 +186,6 @@ describe("Codex Computer Use native service", () => {
       sourceBuild: "1000900",
     });
     expect(copyServiceApp).toHaveBeenCalledTimes(2);
-    const targetPath = path.join(codexHome, "computer-use", "Codex Computer Use.app");
     await expect(inspectServiceFixture(targetPath)).resolves.toEqual(UNEXPECTED_IDENTITY);
     await expect(findInstallDebris(path.dirname(targetPath))).resolves.toEqual([]);
   });
@@ -266,10 +248,7 @@ describe("Codex Computer Use native service", () => {
   });
 
   it("coalesces parallel installations for the same managed home", async () => {
-    const root = tempDirs.make("openclaw-computer-use-service-");
-    const sourcePath = path.join(root, "source", "Codex Computer Use.app");
-    const codexHome = path.join(root, "codex-home");
-    await writeServiceFixture(sourcePath, CURRENT_IDENTITY);
+    const { sourcePath, codexHome, targetPath } = await setupService();
     const copyStarted = createDeferred<void>();
     const releaseCopy = createDeferred<void>();
     const copyServiceApp = vi.fn(async (source: string, target: string) => {
@@ -285,9 +264,7 @@ describe("Codex Computer Use native service", () => {
     const results = await Promise.all([first, second]);
     expect(results[0]).toMatchObject({ status: "installed", changed: true });
     expect(copyServiceApp).toHaveBeenCalledOnce();
-    await expect(
-      inspectServiceFixture(path.join(codexHome, "computer-use", "Codex Computer Use.app")),
-    ).resolves.toEqual(CURRENT_IDENTITY);
+    await expect(inspectServiceFixture(targetPath)).resolves.toEqual(CURRENT_IDENTITY);
   });
 
   it("restores the prior service when authorization is revoked before publication", async () => {
@@ -352,15 +329,16 @@ function serviceOptions(codexHome: string, sourcePath: string): EnsureParams {
   };
 }
 
-function serviceIdentity(
-  overrides: Pick<ServiceIdentity, "version" | "build" | "cdHash" | "clientCdHash">,
-): ServiceIdentity {
+function serviceIdentity(version: string, build: string, label: string): ServiceIdentity {
   return {
     bundleId: "com.openai.sky.CUAService",
     teamId: "2DC432GLL2",
     clientBundleId: "com.openai.sky.CUAService.cli",
     clientTeamId: "2DC432GLL2",
-    ...overrides,
+    version,
+    build,
+    cdHash: `${label}-service`,
+    clientCdHash: `${label}-client`,
   };
 }
 

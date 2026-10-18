@@ -61,6 +61,8 @@ export function createComputerUseRequest(params: {
     pluginId?: string | null;
   };
   additionalMarketplaceNames?: readonly string[];
+  localMarketplace?: { name: string; path: string };
+  probeThreadPrefix?: string;
 }): CodexComputerUseRequest {
   let installed = params.installed;
   let enabled = params.enabled ?? installed;
@@ -73,10 +75,14 @@ export function createComputerUseRequest(params: {
   const pluginName = params.pluginName ?? "computer-use";
   const mcpServerName = params.mcpServerName ?? "computer-use";
   const mcpTools = params.mcpTools ?? ["list_apps"];
-  const marketplaceName = params.remoteMarketplace?.name ?? "desktop-tools";
+  const marketplaceName =
+    params.remoteMarketplace?.name ?? params.localMarketplace?.name ?? "desktop-tools";
   const marketplacePath = params.remoteMarketplace
     ? null
-    : `/marketplaces/${marketplaceName}/.agents/plugins/marketplace.json`;
+    : (params.localMarketplace?.path ??
+      `/marketplaces/${marketplaceName}/.agents/plugins/marketplace.json`);
+  const probeThreadId = () =>
+    `${params.probeThreadPrefix ?? "computer-use-probe-thread"}-${threadStartCalls}`;
   const source = params.remoteMarketplace ? "remote" : "local";
   const currentPluginSummary = () =>
     pluginSummary(
@@ -203,7 +209,7 @@ export function createComputerUseRequest(params: {
       threadStartCalls += 1;
       return {
         thread: {
-          id: `computer-use-probe-thread-${threadStartCalls}`,
+          id: probeThreadId(),
         },
         model: "gpt-5.1",
         modelProvider: "openai",
@@ -219,7 +225,7 @@ export function createComputerUseRequest(params: {
         };
       }
       expect(requestRecord).toEqual({
-        threadId: `computer-use-probe-thread-${threadStartCalls}`,
+        threadId: probeThreadId(),
         server: mcpServerName,
         tool,
         arguments: tool === "js" ? { code: "await cua.listApps();" } : {},
@@ -235,14 +241,14 @@ export function createComputerUseRequest(params: {
       return { content: [{ type: "text", text: "[]" }] };
     }
     if (method === "thread/unsubscribe") {
-      expect(requestParams).toEqual({ threadId: `computer-use-probe-thread-${threadStartCalls}` });
+      expect(requestParams).toEqual({ threadId: probeThreadId() });
       return undefined;
     }
     throw new Error(`unexpected request ${method}`);
   }) as CodexComputerUseRequest;
 }
 
-function marketplaceEntry(marketplaceName: string, installed: boolean) {
+export function marketplaceEntry(marketplaceName: string, installed: boolean) {
   return {
     name: marketplaceName,
     path: `/marketplaces/${marketplaceName}/.agents/plugins/marketplace.json`,

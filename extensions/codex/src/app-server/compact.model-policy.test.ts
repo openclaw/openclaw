@@ -85,6 +85,18 @@ describe("native compaction model policy", () => {
       const provider = "allowed-provider";
       const threadId = "compaction-policy-thread";
       const turnId = "compaction-policy-turn";
+      const turnEvent = (method: string, status: string, complete = false) => ({
+        method,
+        params: { threadId, turn: { id: turnId, status, ...(complete ? { items: [] } : {}) } },
+      });
+      const itemEvent = (method: string) => ({
+        method,
+        params: {
+          threadId,
+          turnId,
+          item: { id: "policy-compaction-item", type: "contextCompaction" },
+        },
+      });
       const runId = randomUUID();
       const identity = {
         kind: "session" as const,
@@ -127,18 +139,8 @@ describe("native compaction model policy", () => {
         onWrite(line, send) {
           const request = JSON.parse(line) as { id: number; method: string };
           if (request.method === "thread/compact/start") {
-            send({
-              method: "turn/started",
-              params: { threadId, turn: { id: turnId, status: "inProgress" } },
-            });
-            send({
-              method: "item/started",
-              params: {
-                threadId,
-                turnId,
-                item: { id: "policy-compaction-item", type: "contextCompaction" },
-              },
-            });
+            send(turnEvent("turn/started", "inProgress"));
+            send(itemEvent("item/started"));
             send({ id: request.id, result: {} });
             started.resolve();
           } else if (request.method === "account/read") {
@@ -211,9 +213,7 @@ describe("native compaction model policy", () => {
             origins: {},
           },
         });
-        if (!inference) {
-          throw new Error("Expected a real owned inference qualification");
-        }
+        assert(inference, "Expected a real owned inference qualification");
         assertCodexInferenceRouteConfig(
           harness.client,
           inference.route,
@@ -222,9 +222,10 @@ describe("native compaction model policy", () => {
           inference.providers,
         );
         bindCodexInferenceThread(harness.client, threadId, inference.route, inference.providers);
-        if (!(await retainCodexAppServerLiveThread(harness.client, threadId))) {
-          throw new Error("Expected a retained compaction subscription");
-        }
+        assert(
+          await retainCodexAppServerLiveThread(harness.client, threadId),
+          "Expected a retained compaction subscription",
+        );
         const bindingStore = createCodexTestBindingStore();
         await bindingStore.mutate(identity, {
           kind: "set",
@@ -236,9 +237,7 @@ describe("native compaction model policy", () => {
           params: buildCodexRuntimeModelParams(selectedModel, nativeModel),
         };
         const retainSourceAuthority = host.capabilities.retainSourceAuthority;
-        if (!retainSourceAuthority) {
-          throw new Error("Expected the production operator source capability");
-        }
+        assert(retainSourceAuthority, "Expected the production operator source capability");
         pending = maybeCompactCodexAppServerSession(
           {
             ...identity,
@@ -299,31 +298,12 @@ describe("native compaction model policy", () => {
         if (revokeSource) {
           expect(finalAuthorityFailure).toBeInstanceOf(CodexInferenceAuthorizationError);
         }
-        harness.send({
-          method: "item/completed",
-          params: {
-            threadId,
-            turnId,
-            item: { id: "policy-compaction-item", type: "contextCompaction" },
-          },
-        });
-        harness.send({
-          method: "turn/completed",
-          params: {
-            threadId,
-            turn: { id: turnId, status: forwarded ? "completed" : "interrupted", items: [] },
-          },
-        });
+        harness.send(itemEvent("item/completed"));
+        harness.send(turnEvent("turn/completed", forwarded ? "completed" : "interrupted", true));
         await expect(pending).resolves.toMatchObject({ ok: forwarded, compacted: forwarded });
       } finally {
-        harness.send({
-          method: "turn/started",
-          params: { threadId, turn: { id: turnId, status: "inProgress" } },
-        });
-        harness.send({
-          method: "turn/completed",
-          params: { threadId, turn: { id: turnId, status: "interrupted", items: [] } },
-        });
+        harness.send(turnEvent("turn/started", "inProgress"));
+        harness.send(turnEvent("turn/completed", "interrupted", true));
         controller.abort();
         await pending?.catch(() => undefined);
         await harness.client.closeAndWait();

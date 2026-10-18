@@ -1,7 +1,3 @@
-/**
- * Daybreak cyber-failover policy: what may escalate, and for how long a
- * workspace that cannot use the target stops trying.
- */
 import { makeAgentAssistantMessage } from "openclaw/plugin-sdk/test-fixtures";
 import { describe, expect, it } from "vitest";
 import {
@@ -48,6 +44,10 @@ function outcome(overrides: Partial<CodexCyberAttemptOutcome> = {}): CodexCyberA
   };
 }
 
+function verdict(overrides: Partial<CodexCyberAttemptOutcome> = {}) {
+  return readCodexCyberAttemptVerdict(outcome(overrides));
+}
+
 function refusal(category: string, provider = "openai") {
   return outcome({
     currentAttemptAssistant: makeAgentAssistantMessage({
@@ -61,11 +61,7 @@ function refusal(category: string, provider = "openai") {
 
 describe("config", () => {
   it("defaults to automatic Daybreak Blue escalation with a cooloff", () => {
-    expect(resolveCodexCyberFailoverConfig(undefined)).toEqual({
-      mode: "auto",
-      model: DAYBREAK,
-      cooloffMs: 600_000,
-    });
+    expect(resolveCodexCyberFailoverConfig(undefined)).toEqual(config());
   });
 
   it("reads operator overrides from the codex app-server config", () => {
@@ -86,11 +82,10 @@ describe("attempt verdict", () => {
     expect(readCodexCyberAttemptVerdict(refusal("bio")).cyberRefused).toBe(false);
     expect(readCodexCyberAttemptVerdict(refusal("misalignment")).cyberRefused).toBe(false);
     expect(readCodexCyberAttemptVerdict(refusal("cyber", "other")).cyberRefused).toBe(false);
-    expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ lastAssistant: refusal("cyber").currentAttemptAssistant }),
-      ),
-    ).toMatchObject({ cyberRefused: false, replaySafe: false });
+    expect(verdict({ lastAssistant: refusal("cyber").currentAttemptAssistant })).toMatchObject({
+      cyberRefused: false,
+      replaySafe: false,
+    });
     expect(readCodexCyberAttemptVerdict(undefined)).toMatchObject({
       cyberRefused: false,
       replaySafe: false,
@@ -99,44 +94,36 @@ describe("attempt verdict", () => {
 
   it("counts only a real reply as answered", () => {
     expect(
-      readCodexCyberAttemptVerdict(
-        outcome({
-          currentAttemptAssistant: makeAgentAssistantMessage({
-            content: [{ type: "text", text: "Reply" }],
-          }),
+      verdict({
+        currentAttemptAssistant: makeAgentAssistantMessage({
+          content: [{ type: "text", text: "Reply" }],
         }),
-      ).answered,
+      }).answered,
     ).toBe(true);
     expect(
-      readCodexCyberAttemptVerdict(
-        outcome({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
-      ),
+      verdict({ terminal: { kind: "failed", source: "prompt", error: "stream disconnected" } }),
     ).toMatchObject({ answered: false, unavailable: false });
     expect(
-      readCodexCyberAttemptVerdict(
-        outcome({
-          terminal: { kind: "aborted", source: "runtime" },
-          currentAttemptAssistant: makeAgentAssistantMessage({
-            content: [],
-            stopReason: "aborted",
-          }),
+      verdict({
+        terminal: { kind: "aborted", source: "runtime" },
+        currentAttemptAssistant: makeAgentAssistantMessage({
+          content: [],
+          stopReason: "aborted",
         }),
-      ).answered,
+      }).answered,
     ).toBe(false);
     expect(readCodexCyberAttemptVerdict(refusal("bio")).answered).toBe(false);
-    expect(readCodexCyberAttemptVerdict(outcome()).answered).toBe(false);
+    expect(verdict().answered).toBe(false);
   });
 
-  it.each([new Error("unexpected status 401 Unauthorized: not authorized to access this model.")])(
-    "reads an unauthorized target from the canonical terminal",
-    (error) => {
-      expect(
-        readCodexCyberAttemptVerdict(
-          outcome({ terminal: { kind: "failed", source: "prompt", error } }),
-        ).unavailable,
-      ).toBe(true);
-    },
-  );
+  it("reads an unauthorized target from the canonical terminal", () => {
+    const error = new Error(
+      "unexpected status 401 Unauthorized: not authorized to access this model.",
+    );
+    expect(verdict({ terminal: { kind: "failed", source: "prompt", error } }).unavailable).toBe(
+      true,
+    );
+  });
 });
 
 describe("escalation planning", () => {
