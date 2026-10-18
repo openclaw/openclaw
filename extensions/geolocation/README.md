@@ -30,8 +30,8 @@ lookups down. A body that does not parse as an MMDB is discarded without
 replacing a working database.
 
 After one minute without lookups, the opened reader is released from memory.
-The next lookup reopens the disk cache. A download that could not be saved stays
-in memory because it is the only usable copy.
+The next lookup reopens the disk cache. Downloads that could not be saved are
+exempt from idle eviction; their existing refresh deadline still applies.
 
 ## Data source and license
 
