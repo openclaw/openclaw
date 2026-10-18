@@ -176,6 +176,7 @@ export const STATE_SCHEMA_MIGRATION_DESCRIPTIONS = {
   "subagent-operator-recovery-v25": "subagent recovery → original operator authority required",
   "session-state-head-layout-v26": "session state heads → composite primary-key storage",
   "state-write-indexes-v27": "replay, skill usage, and lease writes → smaller index maintenance",
+  "github-publication-draft-v28": "GitHub publication requests → durable draft choice",
   "predicate-columns-v21": "meeting transcripts and delivery retention → derived predicate columns",
   "operator-approvals-system-agent": "operator approvals → OpenClaw system changes",
   "session-watch-cursor-provenance-v4": "session watch cursors → provenance column",

@@ -5,7 +5,11 @@ import { afterEach, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { digestGitHubPublicationRequest } from "../gateway/github-publication-receipt.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
-import { closeOpenClawStateDatabaseAsync, openOpenClawStateDatabase } from "./openclaw-state-db.js";
+import {
+  closeOpenClawStateDatabaseAsync,
+  detectOpenClawStateDatabaseSchemaMigrations,
+  openOpenClawStateDatabase,
+} from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { assertSqliteMigrationScopePreserved } from "./sqlite-migration-scope.test-support.js";
@@ -59,6 +63,9 @@ it.each([false, true])(
   "migrates accepted publication intent with lazy tables absent=%s",
   async (absent) => {
     const { options, pathname, before } = legacyDatabase(absent);
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([
+      { kind: "github-publication-draft-v28", path: pathname },
+    ]);
     using witness = new DatabaseSync(pathname);
     const database = await assertSqliteMigrationScopePreserved(
       witness,
@@ -72,6 +79,7 @@ it.each([false, true])(
     expect(database.db.prepare("PRAGMA user_version").get()).toEqual({
       user_version: OPENCLAW_STATE_SCHEMA_VERSION,
     });
+    expect(detectOpenClawStateDatabaseSchemaMigrations(options)).toEqual([]);
     for (const table of tables.slice(1)) {
       const columns = database.db.prepare(`PRAGMA table_info(${table})`).all();
       expect(columns.some((column) => column.name === "draft")).toBe(!absent);

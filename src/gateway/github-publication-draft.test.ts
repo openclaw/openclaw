@@ -19,7 +19,10 @@ import { repositoryGitHubPublicationDigest } from "./github-repository-publicati
 
 const mocks = githubPublicationTestMocks();
 const checkpoint = vi.hoisted(() => vi.fn());
-vi.mock("./worker-environments/session-repository-checkpoints.js", () => ({
+vi.mock("./worker-environments/session-repository-checkpoints.js", async (importOriginal) => ({
+  ...(await importOriginal<
+    typeof import("./worker-environments/session-repository-checkpoints.js")
+  >()),
   withSessionRepositoryCheckpoint: (...args: unknown[]) => checkpoint(...args),
 }));
 const creations = () =>
