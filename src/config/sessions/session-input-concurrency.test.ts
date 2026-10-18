@@ -18,19 +18,41 @@ import { captureSessionEntryReadSource } from "./session-entry-read-source.js";
 import { acquireSessionInputActor, bindUserTurnInputActor } from "./session-input-actor.js";
 import { recordSessionParticipantInWorker } from "./session-sharing-store.async.js";
 
+async function acquireInput(
+  target: Parameters<typeof acquireSessionInputActor>[0],
+  assertCurrent = () => {},
+) {
+  return expectDefined(
+    await acquireSessionInputActor(target, { assertCurrent, assertReadable: assertCurrent }),
+    "admitted input actor",
+  );
+}
+
+function recorderFor(
+  f: ReturnType<typeof createSessionCompoundWorkerFixture>,
+  text: string,
+  idempotencyKey: string,
+  overrides: Partial<Parameters<typeof createUserTurnTranscriptRecorder>[0]> = {},
+) {
+  return createUserTurnTranscriptRecorder({
+    input: { text, idempotencyKey },
+    target: overrides.target ?? {
+      ...f.scope,
+      expectedSessionId: f.scope.sessionId,
+      sessionEntry: f.read(),
+    },
+    updateMode: "none",
+    ...overrides,
+  });
+}
+
 it("acquires a captured input actor outside unrelated writer work and checks authority before writing", async ({
   signal,
 }) => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     setRuntimeConfigSnapshot({});
     const f = createSessionCompoundWorkerFixture();
-    const warmed = expectDefined(
-      await acquireSessionInputActor(
-        { ...f.scope, target: f.target },
-        { assertCurrent() {}, assertReadable() {} },
-      ),
-      "prepared input actor",
-    );
+    const warmed = await acquireInput({ ...f.scope, target: f.target });
     await warmed.actor.release();
     const readSource = captureSessionEntryReadSource(f.database, undefined);
     const entered = createDeferred();
@@ -58,10 +80,7 @@ it("acquires a captured input actor outside unrelated writer work and checks aut
         { assertCurrent, assertReadable: assertCurrent },
       );
       input = expectDefined(await withinTest(acquiring, signal), "captured input actor");
-      const recorder = createUserTurnTranscriptRecorder({
-        input: { text: "Retain authority at the actual write", idempotencyKey: "captured-input" },
-        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
-        updateMode: "none",
+      const recorder = recorderFor(f, "Retain authority at the actual write", "captured-input", {
         onPersistenceError() {},
       });
       bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
@@ -93,30 +112,19 @@ it("accepts input through a captured path alias using the native owner's canonic
       process.platform === "win32" ? "junction" : "dir",
     );
     const aliasPath = path.join(alias, path.basename(f.database.path));
-    const input = expectDefined(
-      await acquireSessionInputActor(
-        {
-          ...f.scope,
-          storePath: aliasPath,
-          target: f.target,
-          readSource: {
-            ...captureSessionEntryReadSource(f.database, undefined),
-            path: aliasPath,
-          },
-        },
-        { assertCurrent() {}, assertReadable() {} },
-      ),
-      "aliased input actor",
-    );
-    const recorder = createUserTurnTranscriptRecorder({
-      input: { text: "Accept through the original native owner", idempotencyKey: "aliased-input" },
+    const input = await acquireInput({
+      ...f.scope,
+      storePath: aliasPath,
+      target: f.target,
+      readSource: { ...captureSessionEntryReadSource(f.database, undefined), path: aliasPath },
+    });
+    const recorder = recorderFor(f, "Accept through the original native owner", "aliased-input", {
       target: {
         ...f.scope,
         storePath: aliasPath,
         expectedSessionId: f.scope.sessionId,
         sessionEntry: f.read(),
       },
-      updateMode: "none",
     });
     bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
     try {
@@ -138,18 +146,8 @@ it.each(["before", "after"] as const)(
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       setRuntimeConfigSnapshot({});
       const f = createSessionCompoundWorkerFixture();
-      const input = expectDefined(
-        await acquireSessionInputActor(
-          { ...f.scope, target: f.target },
-          { assertCurrent() {}, assertReadable() {} },
-        ),
-        "admitted session actor",
-      );
-      const recorder = createUserTurnTranscriptRecorder({
-        input: { text: "Continue after the previous run", idempotencyKey: "next-input" },
-        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
-        updateMode: "none",
-      });
+      const input = await acquireInput({ ...f.scope, target: f.target });
+      const recorder = recorderFor(f, "Continue after the previous run", "next-input");
       bindUserTurnInputActor(recorder, { phase: "acceptInput", acquire: async () => input });
       const completePrevious = () =>
         patchSessionEntryCore(f.scope, () => ({ restartRecoveryTerminalRunIds: ["previous-run"] }));
@@ -223,16 +221,10 @@ it.each(["stage", "acceptInput", "adoptRun"] as const)(
           };
           const entry = { sessionId: scope.sessionId, updatedAt: 1 };
           await replaceSessionEntry(scope, entry);
-          const input = expectDefined(
-            await acquireSessionInputActor(
-              {
-                ...scope,
-                target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
-              },
-              { assertCurrent() {}, assertReadable() {} },
-            ),
-            "created session actor",
-          );
+          const input = await acquireInput({
+            ...scope,
+            target: { canonicalKey: scope.sessionKey, storeKeys: [scope.sessionKey] },
+          });
           const message = {
             role: "user" as const,
             content: `Initial input ${index}`,
@@ -327,18 +319,8 @@ it.each([
           throw new Error("Input authority revoked");
         }
       };
-      const input = expectDefined(
-        await acquireSessionInputActor(
-          { ...f.scope, target: f.target },
-          { assertCurrent, assertReadable: assertCurrent },
-        ),
-        "admitted session actor",
-      );
-      const recorder = createUserTurnTranscriptRecorder({
-        input: { text: "Keep the original admission", idempotencyKey: "fenced-input" },
-        target: { ...f.scope, expectedSessionId: f.scope.sessionId, sessionEntry: f.read() },
-        updateMode: "none",
-      });
+      const input = await acquireInput({ ...f.scope, target: f.target }, assertCurrent);
+      const recorder = recorderFor(f, "Keep the original admission", "fenced-input");
       await input.actor.read({ assertCurrent, authorize: assertCurrent });
       bindUserTurnInputActor(recorder, { phase, acquire: async () => input });
       let metadataWrites = 0;

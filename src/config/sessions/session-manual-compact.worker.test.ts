@@ -39,6 +39,22 @@ const metadataFault = useSqliteWorkerFault([
 
 afterEach(() => vi.restoreAllMocks());
 
+function fixture(entry?: Partial<Parameters<typeof replaceSessionEntrySync>[1]>) {
+  const f = createSessionCompoundWorkerFixture();
+  if (entry) {
+    replaceSessionEntrySync(f.scope, { sessionId: f.scope.sessionId, updatedAt: 1, ...entry });
+  }
+  const records = createManualCompactRecords(f.scope.sessionId);
+  replaceTranscriptEventsSync(f.scope, records);
+  return {
+    ...f,
+    records,
+    compact: (
+      options: Omit<Parameters<typeof trimSessionTranscriptForManualCompact>[1], "maxLines"> = {},
+    ) => trimSessionTranscriptForManualCompact(f.scope, { maxLines: 3, ...options }),
+  };
+}
+
 it("commits a bounded next-turn projection after trimming a large compressed transcript", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
     const f = createSessionCompoundWorkerFixture();
@@ -110,21 +126,15 @@ it("commits a bounded next-turn projection after trimming a large compressed tra
 
 it("trims through the worker and clears accounting without host data SQL", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createSessionCompoundWorkerFixture();
-    replaceSessionEntrySync(f.scope, {
-      sessionId: f.scope.sessionId,
-      updatedAt: 1,
+    const f = fixture({
       inputTokens: 10,
       totalTokens: 30,
       totalTokensFresh: true,
       cliSessionIds: { synthetic: "obsolete" },
     });
-    replaceTranscriptEventsSync(f.scope, createManualCompactRecords(f.scope.sessionId));
     const sql = observeHostDataSql();
     try {
-      await expect(
-        trimSessionTranscriptForManualCompact(f.scope, { maxLines: 3, nowMs: 500 }),
-      ).resolves.toEqual({ compacted: true, kept: 3 });
+      await expect(f.compact({ nowMs: 500 })).resolves.toEqual({ compacted: true, kept: 3 });
       expect(sql.queries).toEqual([]);
     } finally {
       sql.restore();
@@ -135,19 +145,19 @@ it("trims through the worker and clears accounting without host data SQL", async
       { id: "entry-4", parentId: "entry-3" },
     ]);
     const entry = f.read();
-    expect(entry?.updatedAt).toBe(500);
-    expect(entry?.inputTokens).toBeUndefined();
-    expect(entry?.totalTokens).toBeUndefined();
-    expect(entry?.cliSessionIds).toBeUndefined();
+    expect([
+      entry?.updatedAt,
+      entry?.inputTokens,
+      entry?.totalTokens,
+      entry?.cliSessionIds,
+    ]).toEqual([500, undefined, undefined, undefined]);
   });
 });
 
 it("rolls back transcript and accounting when host authority closes at commit", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createSessionCompoundWorkerFixture();
-    const records = createManualCompactRecords(f.scope.sessionId);
-    replaceTranscriptEventsSync(f.scope, records);
-    const before = f.read();
+    const f = fixture();
+    const before = f.read()!;
     let live = true;
     let commitRequested = false;
     probe.admission(admission, (request, grant, callback) => {
@@ -158,10 +168,9 @@ it("rolls back transcript and accounting when host authority closes at commit", 
       callback(request, grant);
     });
     await expect(
-      trimSessionTranscriptForManualCompact(f.scope, {
-        maxLines: 3,
+      f.compact({
         authority: {
-          expectedLifecycleRevision: before?.lifecycleRevision,
+          expectedLifecycleRevision: before.lifecycleRevision,
           source: () => {},
           assertHostCurrent: () => {
             if (!live) {
@@ -172,16 +181,14 @@ it("rolls back transcript and accounting when host authority closes at commit", 
       }),
     ).rejects.toThrow("manual compaction authority closed");
     expect(commitRequested).toBe(true);
-    expect(f.events()).toEqual(records);
+    expect(f.events()).toEqual(f.records);
     expect(f.read()).toEqual(before);
   });
 });
 
 it("rejects an entry rebound after prepared manual-compaction admission", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createSessionCompoundWorkerFixture();
-    const records = createManualCompactRecords(f.scope.sessionId);
-    replaceTranscriptEventsSync(f.scope, records);
+    const f = fixture();
     const before = f.read()!;
     const execute = rewrite.executeSessionMessageRewriteOperation;
     vi.spyOn(rewrite, "executeSessionMessageRewriteOperation").mockImplementation((...args) => {
@@ -189,8 +196,7 @@ it("rejects an entry rebound after prepared manual-compaction admission", async 
       return execute(...args);
     });
     await expect(
-      trimSessionTranscriptForManualCompact(f.scope, {
-        maxLines: 3,
+      f.compact({
         authority: {
           source: () => {},
           assertHostCurrent: () => {},
@@ -200,16 +206,14 @@ it("rejects an entry rebound after prepared manual-compaction admission", async 
     ).rejects.toThrow(
       "SQLite session state changed while preparing session.transcript.manual-compact",
     );
-    expect(f.events()).toEqual(records);
+    expect(f.events()).toEqual(f.records);
     expect(f.read()?.lifecycleRevision).toBe("successor");
   });
 });
 
 it("rechecks a foreign source changed during the commit grant", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createSessionCompoundWorkerFixture();
-    const records = createManualCompactRecords(f.scope.sessionId);
-    replaceTranscriptEventsSync(f.scope, records);
+    const f = fixture();
     const before = f.read()!;
     const foreignScope = {
       ...f.scope,
@@ -252,8 +256,7 @@ it("rechecks a foreign source changed during the commit grant", async () => {
       },
     });
     await expect(
-      trimSessionTranscriptForManualCompact(f.scope, {
-        maxLines: 3,
+      f.compact({
         authority: {
           source,
           assertHostCurrent() {},
@@ -262,7 +265,7 @@ it("rechecks a foreign source changed during the commit grant", async () => {
       }),
     ).rejects.toThrow(/source changed|source revoked|confirmed native completion/i);
     expect(changed).toBe(true);
-    expect(f.events()).toEqual(records);
+    expect(f.events()).toEqual(f.records);
     expect(f.read()).toEqual(before);
   });
 });
@@ -276,9 +279,7 @@ it.each([
   "keeps conversation alternatives live at $boundary (revoked=$revoked, bothActive=$bothActive)",
   async ({ boundary, revoked, bothActive, succeeds }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const f = createSessionCompoundWorkerFixture();
-      const records = createManualCompactRecords(f.scope.sessionId);
-      replaceTranscriptEventsSync(f.scope, records);
+      const f = fixture();
       const before = f.read()!;
       const sourceScope = {
         ...f.scope,
@@ -351,8 +352,7 @@ it.each([
             }, attachment),
         );
       }
-      const compact = trimSessionTranscriptForManualCompact(f.scope, {
-        maxLines: 3,
+      const compact = f.compact({
         authority: {
           source: current.source,
           assertHostCurrent() {},
@@ -366,7 +366,7 @@ it.each([
         await expect(compact).rejects.toThrow(
           /authority revoked|source changed|confirmed native completion/i,
         );
-        expect(f.events()).toEqual(records);
+        expect(f.events()).toEqual(f.records);
         expect(f.read()).toEqual(before);
       }
       expect(changed).toBe(true);
@@ -376,29 +376,21 @@ it.each([
 
 it("rolls back the worker manual trim when accounting cannot be cleared", async () => {
   await withOpenClawTestState({ scenario: "minimal" }, async () => {
-    const f = createSessionCompoundWorkerFixture();
-    replaceSessionEntrySync(f.scope, {
-      sessionId: f.scope.sessionId,
-      updatedAt: 1,
+    const f = fixture({
       inputTokens: 10,
       totalTokens: 30,
       totalTokensFresh: true,
     });
-    const records = createManualCompactRecords(f.scope.sessionId);
-    replaceTranscriptEventsSync(f.scope, records);
     const before = f.read();
     metadataFault.enable();
     try {
-      await expect(
-        trimSessionTranscriptForManualCompact(f.scope, {
-          maxLines: 3,
-          nowMs: 500,
-        }),
-      ).rejects.toThrow("injected manual compact metadata failure");
+      await expect(f.compact({ nowMs: 500 })).rejects.toThrow(
+        "injected manual compact metadata failure",
+      );
     } finally {
       metadataFault.disable();
     }
-    expect(f.events()).toEqual(records);
+    expect(f.events()).toEqual(f.records);
     expect(f.read()).toEqual(before);
   });
 });
