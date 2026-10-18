@@ -109,6 +109,34 @@ describe("modelsAuthListCommand", () => {
 
   afterEach(() => vi.restoreAllMocks());
 
+  it.each([NOW - 1, NOW])(
+    "omits expired cooldown and disabled diagnostics (until=%s)",
+    async (until) => {
+      vi.spyOn(Date, "now").mockReturnValue(NOW);
+      setOAuthProfile("anthropic:expired", "anthropic", {
+        cooldownUntil: until,
+        cooldownReason: "auth",
+        cooldownClassification: "wham_token_expired",
+        disabledUntil: until,
+        disabledReason: "billing",
+      });
+
+      const { text, json } = await listBoth();
+      expect(text.at(-1)).not.toMatch(/cooldown|disabled|Top up credits/u);
+      const { profiles } = json as { profiles: Array<Record<string, unknown>> };
+      for (const field of [
+        "cooldownUntil",
+        "cooldownReason",
+        "cooldownClassification",
+        "disabledUntil",
+        "disabledReason",
+        "recoveryHint",
+      ]) {
+        expect(profiles[0]).not.toHaveProperty(field);
+      }
+    },
+  );
+
   it("shows the cooldown reason and re-authentication action in text and JSON", async () => {
     setOAuthProfile("anthropic:claude-cli", "claude-cli", {
       cooldownUntil: 1_900_000_100_000,

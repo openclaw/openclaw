@@ -28,14 +28,19 @@ function summarizeProfile(params: {
 }) {
   const expiresAt =
     params.profile.type === "api_key" ? undefined : timestampMsToIsoString(params.profile.expires);
-  const blockedActive = isActiveUnusableWindow(params.usage?.blockedUntil, Date.now());
+  const now = Date.now();
+  const blockedActive = isActiveUnusableWindow(params.usage?.blockedUntil, now);
   const blockedUntil = blockedActive
     ? timestampMsToIsoString(params.usage?.blockedUntil)
     : undefined;
   const blockedModel =
     params.usage?.blockedScope === "model" ? params.usage.blockedModel : undefined;
-  const cooldownUntil = timestampMsToIsoString(params.usage?.cooldownUntil);
-  const disabledUntil = timestampMsToIsoString(params.usage?.disabledUntil);
+  const cooldownUntil = isActiveUnusableWindow(params.usage?.cooldownUntil, now)
+    ? timestampMsToIsoString(params.usage?.cooldownUntil)
+    : undefined;
+  const disabledUntil = isActiveUnusableWindow(params.usage?.disabledUntil, now)
+    ? timestampMsToIsoString(params.usage?.disabledUntil)
+    : undefined;
   const disabledActive = Boolean(disabledUntil);
   const reason = disabledActive
     ? params.usage?.disabledReason
@@ -74,11 +79,15 @@ function summarizeProfile(params: {
       : {}),
     ...(cooldownUntil ? { cooldownUntil } : {}),
     ...(disabledUntil ? { disabledUntil } : {}),
-    ...(params.usage?.cooldownReason ? { cooldownReason: params.usage.cooldownReason } : {}),
-    ...(params.usage?.cooldownClassification
+    ...(cooldownUntil && params.usage?.cooldownReason
+      ? { cooldownReason: params.usage.cooldownReason }
+      : {}),
+    ...(cooldownUntil && params.usage?.cooldownClassification
       ? { cooldownClassification: params.usage.cooldownClassification }
       : {}),
-    ...(params.usage?.disabledReason ? { disabledReason: params.usage.disabledReason } : {}),
+    ...(disabledUntil && params.usage?.disabledReason
+      ? { disabledReason: params.usage.disabledReason }
+      : {}),
     ...(recoveryHint ? { recoveryHint } : {}),
   };
 }
