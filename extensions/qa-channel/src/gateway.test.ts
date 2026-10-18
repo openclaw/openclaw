@@ -1,6 +1,5 @@
 import { once } from "node:events";
 import { createServer } from "node:http";
-import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createStartAccountContext } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -8,20 +7,12 @@ import { createQaBusState, startQaBusServer } from "../../qa-lab/bus-api.js";
 import type { QaBusMessage } from "./bus-client.js";
 import { startQaGatewayAccount } from "./gateway.js";
 import { handleQaInbound } from "./inbound.js";
-import type { ResolvedQaChannelAccount } from "./types.js";
 
 vi.mock("./inbound.js", () => ({
   handleQaInbound: vi.fn(async () => undefined),
 }));
 
-function startGateway(
-  baseUrl: string,
-  options: {
-    abortSignal?: AbortSignal;
-    pollTimeoutMs?: number;
-    setStatus?: ChannelGatewayContext<ResolvedQaChannelAccount>["setStatus"];
-  } = {},
-) {
+function startGateway(baseUrl: string, abortSignal: AbortSignal, pollTimeoutMs = 1) {
   return startQaGatewayAccount("qa-channel", "QA Channel", {
     ...createStartAccountContext({
       account: {
@@ -32,11 +23,11 @@ function startGateway(
         config: {},
         configured: true,
         enabled: true,
-        pollTimeoutMs: options.pollTimeoutMs ?? 1,
+        pollTimeoutMs,
       },
-      abortSignal: options.abortSignal,
+      abortSignal,
     }),
-    setStatus: options.setStatus ?? vi.fn(),
+    setStatus: vi.fn(),
   });
 }
 
@@ -54,8 +45,8 @@ function makeInbound(text: string, overrides: Partial<QaBusMessage> = {}): QaBus
   };
 }
 
-function pollBody(messages: QaBusMessage[]) {
-  return JSON.stringify({
+async function startPollServer(messages: QaBusMessage[]) {
+  const body = JSON.stringify({
     cursor: messages.length,
     events: messages.map((message, index) => ({
       cursor: index + 1,
@@ -64,12 +55,9 @@ function pollBody(messages: QaBusMessage[]) {
       message,
     })),
   });
-}
-
-async function startPollServer(messages: QaBusMessage[]) {
   const server = createServer((_req, res) => {
     res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
-    res.end(pollBody(messages));
+    res.end(body);
   });
   const listening = once(server, "listening");
   server.listen(0, "127.0.0.1");
@@ -117,7 +105,7 @@ describe("qa-channel gateway", () => {
       }
     });
 
-    const gateway = startGateway(server.baseUrl, { abortSignal: controller.signal });
+    const gateway = startGateway(server.baseUrl, controller.signal);
 
     await vi.waitFor(() => {
       const handled = vi.mocked(handleQaInbound).mock.calls.map(([params]) => params.message.text);
@@ -202,9 +190,7 @@ describe("qa-channel gateway", () => {
       throw new Error("inbound failed");
     });
 
-    await expect(startGateway(server.baseUrl, { abortSignal: controller.signal })).rejects.toThrow(
-      "inbound failed",
-    );
+    await expect(startGateway(server.baseUrl, controller.signal)).rejects.toThrow("inbound failed");
     expect(handleQaInbound).toHaveBeenCalledTimes(1);
   });
 
@@ -239,10 +225,7 @@ describe("qa-channel gateway", () => {
         }
       }
     });
-    const firstGateway = startGateway(bus.baseUrl, {
-      abortSignal: new AbortController().signal,
-      pollTimeoutMs: 10,
-    });
+    const firstGateway = startGateway(bus.baseUrl, new AbortController().signal, 10);
 
     await vi.waitFor(() => {
       expect(pollCount).toBeGreaterThanOrEqual(2);
@@ -255,10 +238,7 @@ describe("qa-channel gateway", () => {
     expect(state.getAcknowledgedPollCursor("default")).toBe(1);
 
     restarting = true;
-    const restartedGateway = startGateway(bus.baseUrl, {
-      abortSignal: restartedController.signal,
-      pollTimeoutMs: 10,
-    });
+    const restartedGateway = startGateway(bus.baseUrl, restartedController.signal, 10);
     try {
       await vi.waitFor(() => {
         expect(new Set(recoveredMessageIds)).toEqual(
@@ -283,7 +263,7 @@ describe("qa-channel gateway", () => {
       }
     });
 
-    await startGateway(bus.baseUrl, { abortSignal: controller.signal, pollTimeoutMs: 10 });
+    await startGateway(bus.baseUrl, controller.signal, 10);
 
     expect(state.getAcknowledgedPollCursor("default")).toBe(1);
   });

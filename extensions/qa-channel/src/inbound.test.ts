@@ -18,6 +18,19 @@ import {
 
 const QA_GENERATED_IMAGE_BASE64 =
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO7Z0nQAAAAASUVORK5CYII=";
+const imageAnswer = { text: "single answer", mediaUrl: "/tmp/answer.png" };
+type Attachment = NonNullable<
+  Parameters<typeof handleQaInbound>[0]["message"]["attachments"]
+>[number];
+
+function generatedImage(fileName?: string) {
+  return {
+    buffer: Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64"),
+    kind: "image" as const,
+    contentType: "image/png",
+    fileName,
+  };
+}
 
 vi.mock("./bus-client.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./bus-client.js")>();
@@ -33,12 +46,9 @@ vi.mock("openclaw/plugin-sdk/outbound-media", async (importOriginal) => {
   const actual = await importOriginal<typeof import("openclaw/plugin-sdk/outbound-media")>();
   return {
     ...actual,
-    loadOutboundMediaFromUrl: vi.fn(async (mediaUrl: string) => ({
-      buffer: Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64"),
-      kind: "image" as const,
-      contentType: "image/png",
-      fileName: path.basename(mediaUrl),
-    })),
+    loadOutboundMediaFromUrl: vi.fn(async (mediaUrl: string) =>
+      generatedImage(path.basename(mediaUrl)),
+    ),
   };
 });
 
@@ -58,9 +68,13 @@ describe("handleQaInbound", () => {
     runtime = createPluginRuntimeMock();
     setQaChannelRuntime(runtime);
   });
+  afterEach(() => vi.restoreAllMocks());
 
   function receive(overrides: Parameters<typeof createQaInboundParams>[0]) {
     return handleQaInbound(createQaInboundParams(overrides));
+  }
+  function receiveAttachments(...attachments: Attachment[]) {
+    return receive({ message: { attachments } });
   }
 
   it("uses one session for inbound channel threads and explicit thread replies", async () => {
@@ -134,12 +148,9 @@ describe("handleQaInbound", () => {
   it("does not suppress the final caption after a failed media delivery", async () => {
     const assembled = await assembledTurn(runtime);
     vi.mocked(loadOutboundMediaFromUrl).mockRejectedValueOnce(new Error("media too large"));
-    await expect(
-      assembled.delivery.deliver(
-        { text: "single answer", mediaUrl: "/tmp/answer.png" },
-        { kind: "block" },
-      ),
-    ).rejects.toThrow("media too large");
+    await expect(assembled.delivery.deliver(imageAnswer, { kind: "block" })).rejects.toThrow(
+      "media too large",
+    );
     expect(sendQaBusMessage).not.toHaveBeenCalled();
     await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
     expect(sendQaBusMessage).toHaveBeenCalledOnce();
@@ -163,16 +174,9 @@ describe("handleQaInbound", () => {
     await assembled.replyOptions?.onToolStart?.({ phase: "start", name: "image" });
     vi.mocked(loadOutboundMediaFromUrl).mockImplementationOnce(async () => {
       await assembled.replyOptions?.onToolStart?.({ phase: "start", name: "search" });
-      return {
-        buffer: Buffer.from(QA_GENERATED_IMAGE_BASE64, "base64"),
-        kind: "image",
-        contentType: "image/png",
-      };
+      return generatedImage();
     });
-    await assembled.delivery.deliver(
-      { text: "single answer", mediaUrl: "/tmp/answer.png" },
-      { kind: "block" },
-    );
+    await assembled.delivery.deliver(imageAnswer, { kind: "block" });
     await assembled.delivery.deliver({ text: "single answer" }, { kind: "final" });
     expect(sendQaBusMessage).toHaveBeenCalledTimes(2);
     expectSend(1, { toolCalls: [{ name: "image" }] });
@@ -194,43 +198,29 @@ describe("handleQaInbound", () => {
 
   it("escapes control characters in dispatch error logs", async () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    const c1Control = String.fromCharCode(0x9b);
-    const lineSeparator = String.fromCodePoint(0x2028);
-    const paragraphSeparator = String.fromCodePoint(0x2029);
     vi.mocked(deleteQaBusMessage).mockRejectedValueOnce(
-      new Error(`cleanup\nforged\u001b[31m${c1Control}32m${lineSeparator}next`),
+      new Error("cleanup\nforged\u001b[31m\u009b32m\u2028next"),
     );
-    try {
-      const assembled = await assembledTurn(runtime);
-      await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
-      await Promise.resolve(
-        assembled.delivery.onError?.(new Error(`dispatch\r\nforged${paragraphSeparator}next`), {
-          kind: "final",
-        }),
-      );
+    const assembled = await assembledTurn(runtime);
+    await assembled.replyOptions?.onPartialReply?.({ text: "unfinished preview" });
+    await assembled.delivery.onError?.(new Error("dispatch\r\nforged\u2029next"), {
+      kind: "final",
+    });
 
-      await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(2));
-      await Promise.resolve(assembled.delivery.onError?.(undefined, { kind: "final" }));
-      await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(3));
-      const output = warn.mock.calls.flat().join(" ");
-      expect(output).not.toContain("\r");
-      expect(output).not.toContain("\n");
-      expect(output).not.toContain(String.fromCharCode(0x1b));
-      expect(output).not.toContain(c1Control);
-      expect(output).not.toContain(lineSeparator);
-      expect(output).not.toContain(paragraphSeparator);
-      expect(output).toContain("dispatch\\u000d\\u000aforged\\u2029next");
-      expect(output).toContain("cleanup\\u000aforged\\u001b[31m\\u009b32m\\u2028next");
-      expect(output).toContain("reply dispatch failed: undefined");
-    } finally {
-      warn.mockRestore();
-    }
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(2));
+    await assembled.delivery.onError?.(undefined, { kind: "final" });
+    await vi.waitFor(() => expect(warn).toHaveBeenCalledTimes(3));
+    const output = warn.mock.calls.flat().join(" ");
+    expect(
+      ["\r", "\n", "\u001b", "\u009b", "\u2028", "\u2029"].filter((char) => output.includes(char)),
+    ).toEqual([]);
+    expect(output).toContain("dispatch\\u000d\\u000aforged\\u2029next");
+    expect(output).toContain("cleanup\\u000aforged\\u001b[31m\\u009b32m\\u2028next");
+    expect(output).toContain("reply dispatch failed: undefined");
   });
 
   it("drops direct messages outside the configured sender allowlist", async () => {
-    await receive({
-      accountConfig: { allowFrom: ["bob"] },
-    });
+    await receive({ accountConfig: { allowFrom: ["bob"] } });
 
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
@@ -254,15 +244,9 @@ describe("handleQaInbound", () => {
   });
 
   it("preserves the complete native command in its slash session", async () => {
-    const name = "think";
     const text = "/think high";
 
-    await receive({
-      message: {
-        text,
-        nativeCommand: { name },
-      },
-    });
+    await receive({ message: { text, nativeCommand: { name: "think" } } });
 
     const assembled = firstRunAssembledParams(runtime);
     expect(assembled.ctxPayload).toMatchObject({
@@ -278,18 +262,7 @@ describe("handleQaInbound", () => {
   });
 
   it("skips malformed inline attachment base64 without dropping the message", async () => {
-    await receive({
-      message: {
-        attachments: [
-          {
-            id: "attachment-1",
-            kind: "image",
-            mimeType: "image/png",
-            contentBase64: "AAA@@@",
-          },
-        ],
-      },
-    });
+    await receiveAttachments(attachment({ contentBase64: "AAA@@@" }));
 
     expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
     const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
@@ -297,60 +270,38 @@ describe("handleQaInbound", () => {
   });
 
   it("projects saved inline attachments through a media-store URL", async () => {
-    await receive({
-      message: {
-        attachments: [
-          {
-            id: "audio-1",
-            kind: "audio",
-            mimeType: "audio/ogg",
-            fileName: "voice-note.ogg",
-            contentBase64: Buffer.alloc(2048, 0x52).toString("base64"),
-            mediaFactCarrier: "media-store-url",
-          },
-        ],
-      },
-    });
+    await receiveAttachments(
+      attachment({
+        id: "audio-1",
+        kind: "audio",
+        mimeType: "audio/ogg",
+        contentBase64: Buffer.alloc(2048, 0x52).toString("base64"),
+        mediaFactCarrier: "media-store-url",
+      }),
+    );
 
     expect(saveMediaBuffer).toHaveBeenCalledOnce();
-    const media = firstRunAssembledParams(runtime).ctxPayload.media;
-    expect(media).toHaveLength(1);
-    expect(media?.[0]).toMatchObject({
-      path: undefined,
-      url: "media://inbound/stored-audio.ogg",
-      contentType: "audio/ogg",
-    });
+    expect(firstRunAssembledParams(runtime).ctxPayload.media).toMatchObject([
+      { path: undefined, url: "media://inbound/stored-audio.ogg", contentType: "audio/ogg" },
+    ]);
   });
 
   it("rejects non-http attachment URLs without dropping the message", async () => {
-    const warn = vi.spyOn(console, "warn").mockImplementation(() => undefined);
-    try {
-      await receive({
-        message: {
-          attachments: [
-            {
-              id: "attachment-1",
-              kind: "image",
-              mimeType: "image/png",
-              url: "file:///etc/passwd",
-            },
-            {
-              id: "attachment-2",
-              kind: "file",
-              mimeType: "text/plain",
-              url: "data:text/plain;base64,SGVsbG8=",
-            },
-          ],
-        },
-      });
+    vi.spyOn(console, "warn").mockImplementation(() => undefined);
+    await receiveAttachments(
+      attachment({ url: "file:///etc/passwd" }),
+      attachment({
+        id: "attachment-2",
+        kind: "file",
+        mimeType: "text/plain",
+        url: "data:text/plain;base64,SGVsbG8=",
+      }),
+    );
 
-      expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
-      const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
-      expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
-      expect(warn).toHaveBeenCalledTimes(2);
-    } finally {
-      warn.mockRestore();
-    }
+    expect(runtime.channel.inbound.dispatch).toHaveBeenCalledTimes(1);
+    const ctxPayload = firstRunAssembledParams(runtime).ctxPayload;
+    expect(ctxPayload.media?.every((fact) => fact.path === undefined)).toBe(true);
+    expect(console.warn).toHaveBeenCalledTimes(2);
   });
 
   it("uses allowFrom as the group sender fallback for allowlist policy", async () => {
@@ -379,11 +330,9 @@ describe("handleQaInbound", () => {
   it("skips configured group messages that miss mention activation", async () => {
     vi.mocked(runtime.channel.mentions.buildMentionRegexes).mockReturnValue([/\b@?openclaw\b/i]);
     await receive({
-      accountConfig: {
-        groups: { "qa-room": { requireMention: true } },
-      },
+      accountConfig: { groups: { "qa-room": { requireMention: true } } },
       message: {
-        conversation: { kind: "group", id: "qa-room", title: "QA Room" },
+        conversation: { kind: "group", id: "qa-room" },
         text: "plain group message",
       },
     });
@@ -391,6 +340,10 @@ describe("handleQaInbound", () => {
     expect(runtime.channel.inbound.dispatch).not.toHaveBeenCalled();
   });
 });
+
+function attachment(overrides: Partial<Attachment>): Attachment {
+  return { id: "attachment-1", kind: "image" as const, mimeType: "image/png", ...overrides };
+}
 
 function expectSend(nth: number, payload: Record<string, unknown>) {
   expect(sendQaBusMessage).toHaveBeenNthCalledWith(nth, expect.objectContaining(payload));
@@ -455,14 +408,7 @@ describe("QA preview terminal ownership", () => {
     vi.mocked(editQaBusMessage).mockImplementationOnce(async () => {
       entered.resolve();
       await release.promise;
-      return {
-        message: {
-          ...createQaInboundParams().message,
-          id: "preview-1",
-          direction: "outbound",
-          text: "answer",
-        },
-      };
+      return { message: { ...createQaInboundParams().message, direction: "outbound" } };
     });
     const final = turn.delivery.deliver({ text: "answer" }, { kind: "final" });
     await entered.promise;

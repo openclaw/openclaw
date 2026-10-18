@@ -1,5 +1,6 @@
-import http, { createServer, type Server } from "node:http";
+import http, { createServer, type RequestListener } from "node:http";
 import type { Socket } from "node:net";
+import { Readable } from "node:stream";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import * as fetchRuntime from "openclaw/plugin-sdk/fetch-runtime";
@@ -52,23 +53,17 @@ function poll(baseUrl: string, overrides: Partial<Parameters<typeof pollQaBus>[0
 async function startJsonServer(
   handler: (req: { url?: string | undefined }) => { statusCode?: number; body: string },
 ) {
-  const server = createServer((req, res) => {
+  return startServer((req, res) => {
     const response = handler({ url: req.url });
     res.writeHead(response.statusCode ?? 200, {
       "content-type": "application/json; charset=utf-8",
     });
     res.end(response.body);
   });
-
-  const { port, stop } = await listenLoopbackServer(server);
-
-  return {
-    baseUrl: `http://127.0.0.1:${port}`,
-    stop,
-  };
 }
 
-async function listenLoopbackServer(server: Server) {
+async function startServer(handler: RequestListener) {
+  const server = createServer(handler);
   const sockets = new Set<Socket>();
   server.on("connection", (socket) => {
     sockets.add(socket);
@@ -93,81 +88,50 @@ async function listenLoopbackServer(server: Server) {
       }
     });
   stops.push(stop);
-  return { port: address.port, stop };
+  return `http://127.0.0.1:${address.port}`;
 }
 
-function createOversizedJsonServer(pathname: string): { server: Server; closed: Promise<number> } {
+async function startOversizedServer(pathname: string) {
   const closed = createDeferred<number>();
-  const server = createServer((req, res) => {
+  const baseUrl = await startServer((req, res) => {
     if (req.url !== pathname) {
       res.writeHead(404, { "content-type": "application/json; charset=utf-8" });
       res.end(JSON.stringify({ error: `unexpected path: ${req.url}` }));
       return;
     }
     let sentBytes = 0;
-    let stopped = false;
-    let prefixSent = false;
-    const prefixChunk = Buffer.from('{"payload":"');
-    const bodyChunk = Buffer.alloc(64 * 1024, 0x61);
-    const suffixChunk = Buffer.from('"}');
-    const writeBuffer = (buffer: Buffer) => {
-      sentBytes += buffer.length;
-      if (!res.write(buffer)) {
-        res.once("drain", writeChunks);
-        return false;
+    function* responseChunks() {
+      const body = Buffer.alloc(64 * 1024, 0x61);
+      yield Buffer.from('{"payload":"');
+      for (let size = 0; size < OVERSIZED_RESPONSE_BYTES; size += body.length) {
+        yield body;
       }
-      return true;
-    };
-    const writeChunks = () => {
-      if (!prefixSent) {
-        prefixSent = true;
-        if (!writeBuffer(prefixChunk)) {
-          return;
-        }
-      }
-      while (true) {
-        if (stopped) {
-          return;
-        }
-        if (sentBytes + bodyChunk.length + suffixChunk.length >= OVERSIZED_RESPONSE_BYTES) {
-          break;
-        }
-        if (!writeBuffer(bodyChunk)) {
-          return;
-        }
-      }
-      if (!stopped) {
-        sentBytes += suffixChunk.length;
-        res.end(suffixChunk);
-      }
-    };
+      yield Buffer.from('"}');
+    }
+    const chunks = Readable.from(responseChunks());
+    chunks.on("data", (chunk: Buffer) => {
+      sentBytes += chunk.length;
+    });
     res.writeHead(200, { "content-type": "application/json; charset=utf-8", connection: "close" });
     res.on("close", () => {
-      stopped = true;
+      chunks.destroy();
       closed.resolve(sentBytes);
     });
     req.on("aborted", () => {
-      stopped = true;
       res.destroy();
     });
-    writeChunks();
+    chunks.pipe(res);
   });
-  return { server, closed: closed.promise };
+  return { baseUrl, closed: closed.promise };
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
-  let timer: NodeJS.Timeout | undefined;
+  const timeout = createDeferred<never>();
+  const timer = setTimeout(() => timeout.reject(new Error(message)), timeoutMs);
   try {
-    return await Promise.race([
-      promise,
-      new Promise<never>((_, reject) => {
-        timer = setTimeout(() => reject(new Error(message)), timeoutMs);
-      }),
-    ]);
+    return await Promise.race([promise, timeout.promise]);
   } finally {
-    if (timer) {
-      clearTimeout(timer);
-    }
+    clearTimeout(timer);
   }
 }
 
@@ -185,7 +149,7 @@ describe("qa-bus client", () => {
     "fences the native request after dispatch bookkeeping: %s",
     async (state, { signal }) => {
       let accepted = 0;
-      const server = await startJsonServer(() => {
+      const baseUrl = await startJsonServer(() => {
         accepted++;
         return { body: JSON.stringify({ message: { id: "current-message" } }) };
       });
@@ -207,8 +171,7 @@ describe("qa-bus client", () => {
           throw refusal;
         }
       });
-      const sending = send(server.baseUrl, {
-        text: "handoff",
+      const sending = send(baseUrl, {
         signal: abort.signal,
         assertDirectAdapterHandoff,
         onPlatformSendDispatch,
@@ -272,19 +235,15 @@ describe("qa-bus client", () => {
 
   it("does not classify a lost response after request acceptance as not dispatched", async () => {
     let accepted = 0;
-    const server = createServer((req) => {
+    const baseUrl = await startServer((req) => {
       accepted++;
       req.destroy();
     });
-    const { port } = await listenLoopbackServer(server);
     const request = vi.spyOn(http, "request");
     const onPlatformSendDispatch = vi.fn(async () => {});
-    await expect(
-      send(`http://127.0.0.1:${port}`, {
-        text: "accepted request",
-        onPlatformSendDispatch,
-      }),
-    ).rejects.not.toBeInstanceOf(PlatformMessageNotDispatchedError);
+    await expect(send(baseUrl, { onPlatformSendDispatch })).rejects.not.toBeInstanceOf(
+      PlatformMessageNotDispatchedError,
+    );
     expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
     expect(request).toHaveBeenCalledOnce();
     expect(accepted).toBe(1);
@@ -310,17 +269,14 @@ describe("qa-bus client", () => {
           return authority.initiate(effect);
         },
       });
-      const server = createServer((_req, res) => {
+      const baseUrl = await startServer((_req, res) => {
         arrived.resolve();
         void response.promise.then(() => {
           res.end(JSON.stringify({ message: { id: "prepared-message" } }));
         });
       });
-      const { port } = await listenLoopbackServer(server);
       const request = vi.spyOn(http, "request");
-      const sending = send(`http://127.0.0.1:${port}`, {
-        text: "prepared",
-      }).then(
+      const sending = send(baseUrl).then(
         (value) => ({ value }),
         (error: unknown) => ({ error }),
       );
@@ -364,88 +320,53 @@ describe("qa-bus client", () => {
   });
 
   it("rejects malformed JSON responses instead of throwing from the stream callback", async () => {
-    const server = await startJsonServer(() => ({
-      body: '{"cursor":1,"events":[',
-    }));
-
-    await expect(poll(server.baseUrl)).rejects.toThrow("qa-bus /v1/poll: malformed JSON response");
+    const baseUrl = await startJsonServer(() => ({ body: '{"cursor":1,"events":[' }));
+    await expect(poll(baseUrl)).rejects.toThrow("qa-bus /v1/poll: malformed JSON response");
   });
 
-  it("bounds oversized poll responses and closes the stream early", async () => {
-    const oversized = createOversizedJsonServer("/v1/poll");
-    const { port } = await listenLoopbackServer(oversized.server);
-
-    await expect(poll(`http://127.0.0.1:${port}`)).rejects.toThrow(
-      "qa-bus /v1/poll: JSON response exceeds 16777216 bytes",
-    );
-    const sentBytes = await oversized.closed;
-    expect(sentBytes).toBeLessThan(OVERSIZED_RESPONSE_BYTES);
+  it.each([
+    ["/v1/poll", poll, "qa-bus /v1/poll"],
+    ["/v1/state", getQaBusState, "qa-channel.bus-state"],
+  ] as const)("bounds oversized %s responses", async (path, read, label) => {
+    const { baseUrl, closed } = await startOversizedServer(path);
+    await expect(read(baseUrl)).rejects.toThrow(`${label}: JSON response exceeds 16777216 bytes`);
+    if (read === poll) {
+      expect(await closed).toBeLessThan(OVERSIZED_RESPONSE_BYTES);
+    }
   });
 
   it("rejects immediately when a poll request is aborted", async () => {
-    const server = createServer((_req, _res) => {
-      // Keep the request open so the client abort path owns the outcome.
-    });
-
-    const { port } = await listenLoopbackServer(server);
-
+    const baseUrl = await startServer(() => {});
     const abort = new AbortController();
-    const request = poll(`http://127.0.0.1:${port}`, {
+    const request = poll(baseUrl, {
       timeoutMs: 30_000,
       signal: abort.signal,
     });
     abort.abort();
 
-    try {
-      await withTimeout(request, 500, "poll abort did not settle");
-      throw new Error("expected poll abort to reject");
-    } catch (error) {
-      expect(error).toBeInstanceOf(Error);
-      expect((error as Error).name).toBe("AbortError");
-    }
+    const rejection = expect(withTimeout(request, 500, "poll abort did not settle")).rejects;
+    await rejection.toBeInstanceOf(Error);
+    await rejection.toMatchObject({ name: "AbortError" });
   });
 
-  it("bounds stalled message requests with a total deadline", async () => {
-    const server = createServer((_req, _res) => {
-      // Accept the request without returning headers so the client deadline owns the outcome.
+  it.each([false, true])("bounds stalled messages after headers=%s", async (headers) => {
+    const stalled = createDeferred<void>();
+    const baseUrl = await startServer((_req, res) => {
+      if (headers) {
+        res.writeHead(200, { "content-type": "application/json", "content-length": "128" });
+        res.write('{"message":', () => stalled.resolve());
+      } else {
+        stalled.resolve();
+      }
     });
-    const { port } = await listenLoopbackServer(server);
-
-    const realAbortSignalTimeout = AbortSignal.timeout.bind(AbortSignal);
-    const timeoutSpy = vi
-      .spyOn(AbortSignal, "timeout")
-      .mockImplementationOnce(() => realAbortSignalTimeout(25));
-
-    await expect(
-      send(`http://127.0.0.1:${port}`, {
-        text: "hello",
-      }),
-    ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
-    expect(timeoutSpy).toHaveBeenCalledTimes(1);
-    expect(timeoutSpy).toHaveBeenCalledWith(30_000);
-  });
-
-  it("bounds message responses that stall after headers", async () => {
-    const bodyStarted = createDeferred<void>();
-    const server = createServer((_req, res) => {
-      res.writeHead(200, {
-        "content-type": "application/json; charset=utf-8",
-        "content-length": "128",
-      });
-      res.write('{"message":', () => bodyStarted.resolve());
-    });
-    const { port } = await listenLoopbackServer(server);
-
     const timeout = new AbortController();
     const timeoutSpy = vi.spyOn(AbortSignal, "timeout").mockReturnValueOnce(timeout.signal);
-    const request = send(`http://127.0.0.1:${port}`, {
-      text: "hello",
-    });
+    const request = send(baseUrl);
     const rejection = expect(
       withTimeout(request, 1_000, "stalled response body did not settle"),
     ).rejects.toMatchObject({ name: "AbortError", cause: { name: "TimeoutError" } });
 
-    await withTimeout(bodyStarted.promise, 500, "server did not start the response body");
+    await withTimeout(stalled.promise, 500, "server did not reach the stalled phase");
     timeout.abort(new DOMException("qa-bus request timed out", "TimeoutError"));
     await rejection;
     expect(timeoutSpy).toHaveBeenCalledTimes(1);
@@ -472,39 +393,19 @@ describe("qa-bus client", () => {
   });
 
   it("preserves baseUrl path prefixes when composing bus URLs", async () => {
-    const server = await startJsonServer((req) => ({
+    const state = { cursor: 1, conversations: [], threads: [], messages: [], events: [] };
+    const baseUrl = await startJsonServer((req) => ({
       statusCode: req.url === "/qa-bus/v1/state" ? 200 : 404,
       body:
         req.url === "/qa-bus/v1/state"
-          ? JSON.stringify({
-              cursor: 1,
-              conversations: [],
-              threads: [],
-              messages: [],
-              events: [],
-            })
+          ? JSON.stringify(state)
           : JSON.stringify({ error: `unexpected path: ${req.url}` }),
     }));
 
-    await expect(getQaBusState(`${server.baseUrl}/qa-bus`)).resolves.toEqual({
-      cursor: 1,
-      conversations: [],
-      threads: [],
-      messages: [],
-      events: [],
-    });
+    await expect(getQaBusState(`${baseUrl}/qa-bus`)).resolves.toEqual(state);
     expect(guardedFetchCalls.at(-1)).toMatchObject({
       auditContext: "qa-channel.bus-state",
       timeoutMs: 10_000,
     });
-  });
-
-  it("bounds oversized qa-bus state responses", async () => {
-    const oversized = createOversizedJsonServer("/v1/state");
-    const { port } = await listenLoopbackServer(oversized.server);
-
-    await expect(getQaBusState(`http://127.0.0.1:${port}`)).rejects.toThrow(
-      "qa-channel.bus-state: JSON response exceeds 16777216 bytes",
-    );
   });
 });
