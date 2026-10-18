@@ -329,7 +329,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the same boot-selected family lookup.
       // +1: the same shared auth-patch application.
       // +1: maintainer-requested context-engine transcript watermark reader.
-      2206,
+      // +1: the shared message-tool source-reply finality resolver, so harnesses apply a run's default.
+      2207,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(
