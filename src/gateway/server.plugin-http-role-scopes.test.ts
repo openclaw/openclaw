@@ -41,58 +41,44 @@ const proxyAuth = {
   allowTailscale: false,
   trustedProxy: { userHeader: "x-forwarded-user" },
 } as const;
-const roleCases: Array<{
-  surface: "write-default" | "trusted-operator";
-  role: string;
-  scopes: GatewayOperatorRoleDefinition["scopes"];
-  defaultScopes: string[];
-  declaredRead: string[];
-}> = [
-  { surface: "write-default", role: "empty", scopes: [], defaultScopes: [], declaredRead: [] },
-  { surface: "trusted-operator", role: "empty", scopes: [], defaultScopes: [], declaredRead: [] },
-  {
-    surface: "trusted-operator",
-    role: "reader",
-    scopes: ["operator.read"],
-    defaultScopes: ["operator.read"],
-    declaredRead: ["operator.read"],
-  },
-  {
-    surface: "write-default",
-    role: "reader",
-    scopes: ["operator.read"],
-    defaultScopes: ["operator.read"],
-    declaredRead: ["operator.read"],
-  },
-  {
-    surface: "write-default",
-    role: "writer",
-    scopes: ["operator.write"],
-    defaultScopes: ["operator.write"],
-    declaredRead: ["operator.read"],
-  },
-  {
-    surface: "trusted-operator",
-    role: "writer",
-    scopes: ["operator.write"],
-    defaultScopes: ["operator.read", "operator.write"],
-    declaredRead: ["operator.read"],
-  },
-  {
-    surface: "write-default",
-    role: "admin",
-    scopes: ["operator.admin"],
-    defaultScopes: ["operator.write"],
-    declaredRead: ["operator.read"],
-  },
-  {
-    surface: "trusted-operator",
-    role: "admin",
-    scopes: ["operator.admin"],
-    defaultScopes: [...CLI_DEFAULT_OPERATOR_SCOPES],
-    declaredRead: ["operator.read"],
-  },
+const read = ["operator.read"];
+const write = ["operator.write"];
+function makeRoleCase(
+  surface: "write-default" | "trusted-operator",
+  role: string,
+  scopes: GatewayOperatorRoleDefinition["scopes"],
+  defaultScopes: string[],
+  declaredRead = read,
+) {
+  return { surface, role, scopes, defaultScopes, declaredRead };
+}
+const roleCases = [
+  makeRoleCase("write-default", "empty", [], [], []),
+  makeRoleCase("trusted-operator", "empty", [], [], []),
+  makeRoleCase("trusted-operator", "reader", read, read),
+  makeRoleCase("write-default", "reader", read, read),
+  makeRoleCase("write-default", "writer", write, write),
+  makeRoleCase("trusted-operator", "writer", write, [...read, ...write]),
+  makeRoleCase("write-default", "admin", ["operator.admin"], write),
+  makeRoleCase("trusted-operator", "admin", ["operator.admin"], [...CLI_DEFAULT_OPERATOR_SCOPES]),
 ];
+const roleDefinition = (
+  scopes: GatewayOperatorRoleDefinition["scopes"],
+): GatewayOperatorRoleDefinition => ({
+  sessions: { others: "view" },
+  agents: "*",
+  scopes,
+});
+const route = {
+  pluginId: "role-scoped-plugin",
+  path: routePath,
+  auth: "gateway",
+  match: "exact",
+} as const;
+const proxyHeaders = (email: string) => ({
+  "x-forwarded-user": email,
+  "x-forwarded-for": "198.51.100.20",
+});
 
 function observeRuntimeScope() {
   const client = getPluginRuntimeGatewayRequestScope()?.client;
@@ -140,11 +126,7 @@ describe("plugin named-role ceiling", () => {
             default: "denied",
             definitions: {
               denied: { sessions: { others: "none" }, agents: [], scopes: [] },
-              [roleCase.role]: {
-                sessions: { others: "view" },
-                agents: "*",
-                scopes: roleCase.scopes,
-              },
+              [roleCase.role]: roleDefinition(roleCase.scopes),
             },
           },
         },
@@ -152,11 +134,8 @@ describe("plugin named-role ceiling", () => {
       const registry = createGatewayTestRegistry({
         httpRoutes: [
           {
-            pluginId: "role-scoped-plugin",
+            ...route,
             source: "role-scoped-plugin",
-            path: routePath,
-            auth: "gateway",
-            match: "exact",
             gatewayRuntimeScopeSurface: roleCase.surface,
             handler: async (_req: IncomingMessage, res: ServerResponse) => {
               res.end(JSON.stringify(observeRuntimeScope()));
@@ -203,8 +182,7 @@ describe("plugin named-role ceiling", () => {
                 path: routePath,
                 remoteAddress: proxyAddress,
                 headers: {
-                  "x-forwarded-user": email,
-                  "x-forwarded-for": "198.51.100.20",
+                  ...proxyHeaders(email),
                   ...(header === undefined ? {} : { "x-openclaw-scopes": header }),
                 },
               };
@@ -254,8 +232,8 @@ it("retires prepared plugin effects when role or proxy policy changes", async ()
         roles: {
           default: "writer",
           definitions: {
-            writer: { sessions: { others: "view" }, agents: "*", scopes: ["operator.write"] },
-            reader: { sessions: { others: "view" }, agents: "*", scopes: ["operator.read"] },
+            writer: roleDefinition(write),
+            reader: roleDefinition(read),
           },
         },
       },
@@ -267,11 +245,8 @@ it("retires prepared plugin effects when role or proxy policy changes", async ()
     const registry = createGatewayTestRegistry({
       httpRoutes: [
         {
-          pluginId: "role-scoped-plugin",
+          ...route,
           source: "fixture",
-          path: routePath,
-          auth: "gateway",
-          match: "exact",
           gatewayRuntimeScopeSurface: "trusted-operator",
           handler: async (_req, res) => {
             const scope = getPluginRuntimeGatewayRequestScope();
@@ -308,7 +283,7 @@ it("retires prepared plugin effects when role or proxy policy changes", async ()
           path: routePath,
           method: "POST",
           remoteAddress: proxyAddress,
-          headers: { "x-forwarded-user": email, "x-forwarded-for": "198.51.100.20" },
+          headers: proxyHeaders(email),
         };
         for (const change of [
           "unrelated",

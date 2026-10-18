@@ -1,5 +1,4 @@
-// Gateway agent integration tests cover channel routing, session context,
-// WebSocket requests, agent event delivery, and provider/runtime error handling.
+import { once } from "node:events";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { WebSocket } from "ws";
@@ -38,10 +37,7 @@ let ws: Awaited<ReturnType<typeof startServerWithClient>>["ws"];
 let port: number;
 
 beforeAll(async () => {
-  const started = await startConnectedServerWithClient();
-  server = started.server;
-  ws = started.ws;
-  port = started.port;
+  ({ server, ws, port } = await startConnectedServerWithClient());
 });
 
 afterAll(async () => {
@@ -49,48 +45,25 @@ afterAll(async () => {
   await server.close();
 });
 
-async function writeMainSessionEntry(params: { sessionId: string }) {
+async function writeMainSessionEntry(sessionId: string) {
   await useTempSessionStorePath();
-  await writeSessionStore({
-    entries: {
-      main: {
-        sessionId: params.sessionId,
-        updatedAt: Date.now(),
-      },
-    },
-  });
+  await writeSessionStore({ entries: { main: { sessionId, updatedAt: Date.now() } } });
 }
 
 async function sendAgentWsRequest(
   socket: WebSocket,
-  params: { reqId: string; message: string; idempotencyKey: string; sessionKey?: string },
+  reqId: string,
+  params: { message: string; idempotencyKey: string; sessionKey?: string },
 ) {
   await prepareGatewayReplyRuntimeForTest();
   socket.send(
     JSON.stringify({
       type: "req",
-      id: params.reqId,
+      id: reqId,
       method: "agent",
-      params: {
-        message: params.message,
-        idempotencyKey: params.idempotencyKey,
-        ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
-      },
+      params,
     }),
   );
-}
-
-async function sendAgentWsRequestAndWaitFinal(
-  socket: WebSocket,
-  params: { reqId: string; message: string; idempotencyKey: string; timeoutMs?: number },
-) {
-  const finalP = onceMessage(
-    socket,
-    (o) => o.type === "res" && o.id === params.reqId && o.payload?.status !== "accepted",
-    params.timeoutMs,
-  );
-  await sendAgentWsRequest(socket, params);
-  return await finalP;
 }
 
 const gwSessionTempDirs: string[] = [];
@@ -121,26 +94,16 @@ describe("gateway server agent", () => {
   });
 
   test("write-scoped callers cannot reset conversations via agent", async () => {
+    await writeMainSessionEntry("sess-main-before-write-reset");
     const storePath = testState.sessionStorePath;
     if (!storePath) {
       throw new Error("missing session store path");
     }
 
-    await writeSessionStore({
-      entries: {
-        main: {
-          sessionId: "sess-main-before-write-reset",
-          updatedAt: Date.now(),
-        },
-      },
-    });
-
     const writeWs = new WebSocket(`ws://127.0.0.1:${port}`);
     trackConnectChallengeNonce(writeWs);
     try {
-      await new Promise<void>((resolve) => {
-        writeWs.once("open", resolve);
-      });
+      await once(writeWs, "open");
       await connectOk(writeWs, { scopes: ["operator.write"] });
 
       const directReset = await rpcReq(writeWs, "sessions.reset", { key: "main" });
@@ -175,8 +138,9 @@ describe("gateway server agent", () => {
   test.each(["completion", "abort"] as const)(
     "a hanging agent dispatch durably admits its turn before ACK and %s",
     async (outcome) => {
-      await writeMainSessionEntry({ sessionId: "sess-durable-agent-abort" });
+      await writeMainSessionEntry("sess-durable-agent-abort");
       const runId = `idem-agent-durable-${outcome}`;
+      const content = "keep this aborted agent turn queryable";
       const dispatch = createDeferred<unknown>();
       vi.mocked(agentCommandMock).mockImplementationOnce(async (...args: unknown[]) => {
         const options = args[0] as { abortSignal?: AbortSignal };
@@ -203,9 +167,8 @@ describe("gateway server agent", () => {
       );
 
       try {
-        await sendAgentWsRequest(ws, {
-          reqId: runId,
-          message: "keep this aborted agent turn queryable",
+        await sendAgentWsRequest(ws, runId, {
+          message: content,
           sessionKey: "main",
           idempotencyKey: runId,
         });
@@ -221,20 +184,23 @@ describe("gateway server agent", () => {
           storePath,
         };
         expect(loadTranscriptEventsSync(scope)).toEqual([]);
-        expect(await listSessionPendingInputs(scope)).toMatchObject({
-          total: 1,
-          items: [
-            {
-              runId,
-              state: "queued",
-              message: {
-                role: "user",
-                content: "keep this aborted agent turn queryable",
-                idempotencyKey: `${runId}:user`,
+        const expectPending = async (state: "queued" | "cancelled") => {
+          expect(await listSessionPendingInputs(scope)).toMatchObject({
+            total: 1,
+            items: [
+              {
+                runId,
+                state,
+                message: {
+                  role: "user",
+                  content,
+                  ...(state === "queued" ? { idempotencyKey: `${runId}:user` } : {}),
+                },
               },
-            },
-          ],
-        });
+            ],
+          });
+        };
+        await expectPending("queued");
 
         await readAgentCommandCall({ runId });
         if (outcome === "abort") {
@@ -247,19 +213,7 @@ describe("gateway server agent", () => {
         if (outcome === "abort") {
           expect(final.payload).toMatchObject({ runId, status: "timeout", stopReason: "rpc" });
           expect(loadTranscriptEventsSync(scope)).toEqual([]);
-          expect(await listSessionPendingInputs(scope)).toMatchObject({
-            total: 1,
-            items: [
-              {
-                runId,
-                state: "cancelled",
-                message: {
-                  role: "user",
-                  content: "keep this aborted agent turn queryable",
-                },
-              },
-            ],
-          });
+          await expectPending("cancelled");
         } else {
           expect(final.payload).toMatchObject({ runId, status: "ok" });
         }
@@ -271,7 +225,7 @@ describe("gateway server agent", () => {
   );
 
   test("agent returns a wire error when durable user-turn admission fails", async () => {
-    await writeMainSessionEntry({ sessionId: "sess-durable-agent-failure" });
+    await writeMainSessionEntry("sess-durable-agent-failure");
     const refusal = refusePendingInputCommit({
       operation: "stage",
       message: "injected agent transcript admission failure",
@@ -304,14 +258,16 @@ describe("gateway server agent", () => {
       }),
     );
 
-    const final = await sendAgentWsRequestAndWaitFinal(ws, {
-      reqId: "ag-acp-error-detail",
+    const finalP = onceMessage(
+      ws,
+      (o) => o.type === "res" && o.id === "ag-acp-error-detail" && o.payload?.status !== "accepted",
+    );
+    await sendAgentWsRequest(ws, "ag-acp-error-detail", {
       message: "hi",
       idempotencyKey: "idem-agent-acp-error-detail",
     });
-
-    const finalError = final.error as { message?: string } | undefined;
-    const errorMessage = finalError?.message ?? "";
+    const final = await finalP;
+    const errorMessage = (final.error as { message?: string } | undefined)?.message ?? "";
     expect(final.ok).toBe(false);
     expect(final.payload?.status).toBe("error");
     expect(errorMessage).toMatch(/ACP_TURN_FAILED/);
@@ -322,19 +278,17 @@ describe("gateway server agent", () => {
   });
 
   test("agent events stream to webchat clients when run context is registered", async () => {
-    await writeMainSessionEntry({ sessionId: "sess-main" });
+    await writeMainSessionEntry("sess-main");
     const webchatWs = await connectWebchatClient({ port });
     try {
       registerAgentRunContext("run-auto-1", { sessionKey: "main" });
       const finalChatP = onceMessage(
         webchatWs,
-        (o) => {
-          if (o.type !== "event" || o.event !== "chat") {
-            return false;
-          }
-          const payload = o.payload as { state?: unknown; runId?: unknown } | undefined;
-          return payload?.state === "final" && payload.runId === "run-auto-1";
-        },
+        (o) =>
+          o.type === "event" &&
+          o.event === "chat" &&
+          o.payload?.state === "final" &&
+          o.payload.runId === "run-auto-1",
         8000,
       );
       emitAgentEvent({
@@ -348,9 +302,7 @@ describe("gateway server agent", () => {
         data: { phase: "end" },
       });
       const evt = await finalChatP;
-      const payload = evt.payload && typeof evt.payload === "object" ? evt.payload : {};
-      expect(payload.sessionKey).toBe("main");
-      expect(payload.runId).toBe("run-auto-1");
+      expect(evt.payload).toMatchObject({ sessionKey: "main", runId: "run-auto-1" });
     } finally {
       webchatWs.close();
     }

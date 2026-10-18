@@ -11,7 +11,6 @@ import {
   getRuntimeConfig,
 } from "../config/config.js";
 import { resolveStateDir } from "../config/state-dir.js";
-import type { GatewayAgentRuntime } from "../shared/session-types.js";
 import { closeSkillsWatchers, refreshSkillsDiscovery } from "../skills/runtime/refresh.js";
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { publishConfiguredModelRuntimeSnapshots } from "./server-startup-model-runtime.js";
@@ -48,36 +47,22 @@ beforeAll(async () => {
   stateDir = resolveStateDir();
 });
 
-type ModelCatalogRpcEntry = {
-  id: string;
-  name: string;
-  provider: string;
-  alias?: string;
-  available?: boolean;
-  contextWindow?: number;
-  input?: string[];
-  reasoning?: boolean;
-  supportsTools?: boolean;
-  tags?: string[];
-  agentRuntime?: GatewayAgentRuntime;
-};
+type ModelCatalogRpcEntry = { id: string; provider: string };
 
-const NODE_CLIENT = {
-  id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-  version: "1.0.0",
-  platform: "ios",
-  mode: GATEWAY_CLIENT_MODES.NODE,
-};
+function configPath() {
+  const value = process.env.OPENCLAW_CONFIG_PATH;
+  if (!value) {
+    throw new Error("Missing OPENCLAW_CONFIG_PATH");
+  }
+  return value;
+}
 
 describe("gateway server models + voicewake", () => {
   const withModelsConfig = async <T>(config: unknown, run: () => Promise<T>): Promise<T> => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) {
-      throw new Error("Missing OPENCLAW_CONFIG_PATH");
-    }
+    const file = configPath();
     let previousConfig: string | undefined;
     try {
-      previousConfig = await fs.readFile(configPath, "utf-8");
+      previousConfig = await fs.readFile(file, "utf-8");
     } catch (err) {
       const code = (err as NodeJS.ErrnoException | undefined)?.code;
       if (code !== "ENOENT") {
@@ -86,16 +71,16 @@ describe("gateway server models + voicewake", () => {
     }
 
     try {
-      await fs.mkdir(path.dirname(configPath), { recursive: true });
-      await fs.writeFile(configPath, JSON.stringify(config, null, 2), "utf-8");
+      await fs.mkdir(path.dirname(file), { recursive: true });
+      await fs.writeFile(file, JSON.stringify(config, null, 2), "utf-8");
       clearRuntimeConfigSnapshot();
       clearConfigCache();
       return await run();
     } finally {
       if (previousConfig === undefined) {
-        await fs.rm(configPath, { force: true });
+        await fs.rm(file, { force: true });
       } else {
-        await fs.writeFile(configPath, previousConfig, "utf-8");
+        await fs.writeFile(file, previousConfig, "utf-8");
       }
       clearRuntimeConfigSnapshot();
       clearConfigCache();
@@ -124,7 +109,12 @@ describe("gateway server models + voicewake", () => {
       );
       await connectOk(nodeWs, {
         role: "node",
-        client: NODE_CLIENT,
+        client: {
+          id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+          version: "1.0.0",
+          platform: "ios",
+          mode: GATEWAY_CLIENT_MODES.NODE,
+        },
       });
       return await run(nodeWs, await firstEventP);
     } finally {
@@ -163,11 +153,12 @@ describe("gateway server models + voicewake", () => {
   });
 
   test("prepared agent read RPCs preserve explicit and system owners without live fallback", async () => {
-    const configPath = process.env.OPENCLAW_CONFIG_PATH;
-    if (!configPath) {
-      throw new Error("Missing OPENCLAW_CONFIG_PATH");
-    }
-    const workspaceRoot = path.dirname(configPath);
+    const workspaceRoot = path.dirname(configPath());
+    const agentEntry = (agentId: string) => ({
+      workspace: path.join(workspaceRoot, `${agentId}-workspace`),
+      model: { primary: `fixture/${agentId}-model` },
+      modelPolicy: { allow: [`fixture/${agentId}-model`] },
+    });
     const startupModels = [
       { id: "ops-model", name: "Ops Model", provider: "fixture" },
       { id: "research-model", name: "Research Model", provider: "fixture" },
@@ -190,16 +181,8 @@ describe("gateway server models + voicewake", () => {
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "ops" } },
         entries: {
-          ops: {
-            workspace: path.join(workspaceRoot, "ops-workspace"),
-            model: { primary: "fixture/ops-model" },
-            modelPolicy: { allow: ["fixture/ops-model"] },
-          },
-          research: {
-            workspace: path.join(workspaceRoot, "research-workspace"),
-            model: { primary: "fixture/research-model" },
-            modelPolicy: { allow: ["fixture/research-model"] },
-          },
+          ops: agentEntry("ops"),
+          research: agentEntry("research"),
         },
       },
     };
@@ -239,34 +222,27 @@ describe("gateway server models + voicewake", () => {
         },
       ];
       try {
-        const [
-          opsModels,
-          researchModels,
-          opsAuth,
-          researchAuth,
-          models,
-          auth,
-          emptyAuth,
-          skills,
-          memory,
-          health,
-        ] = await Promise.all([
-          rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
-            agentId: "ops",
-            view: "configured",
-            preparedOnly: true,
-          }),
-          rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
-            agentId: "research",
-            view: "configured",
-            preparedOnly: true,
-          }),
-          rpcReq<{ providers: Array<{ provider: string }> }>(ws, "models.authStatus", {
-            agentId: "ops",
-          }),
-          rpcReq<{ providers: Array<{ provider: string }> }>(ws, "models.authStatus", {
-            agentId: "research",
-          }),
+        const explicitReads = ["ops", "research"].map(async (agentId) => {
+          const [models, auth] = await Promise.all([
+            rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
+              agentId,
+              view: "configured",
+              preparedOnly: true,
+            }),
+            rpcReq<{ providers: Array<{ provider: string }> }>(ws, "models.authStatus", {
+              agentId,
+            }),
+          ]);
+          expect(models.ok, JSON.stringify(models)).toBe(true);
+          expect(auth.ok, JSON.stringify(auth)).toBe(true);
+          expect(models.payload?.models).toContainEqual(
+            expect.objectContaining({ id: `${agentId}-model`, provider: "fixture" }),
+          );
+          expect(auth.payload?.providers).toContainEqual(
+            expect.objectContaining({ provider: "fixture" }),
+          );
+        });
+        const [models, auth, emptyAuth, skills, memory, health] = await Promise.all([
           rpcReq<{ models: ModelCatalogRpcEntry[] }>(ws, "models.list", {
             view: "configured",
             preparedOnly: true,
@@ -276,24 +252,8 @@ describe("gateway server models + voicewake", () => {
           rpcReq<{ agentId: string; workspaceDir: string }>(ws, "skills.status", {}),
           rpcReq<{ agentId: string }>(ws, "doctor.memory.status", {}),
           rpcReq<Record<string, unknown>>(ws, "health", { probe: true }),
+          Promise.all(explicitReads),
         ]);
-
-        expect(opsModels.ok, JSON.stringify(opsModels)).toBe(true);
-        expect(researchModels.ok, JSON.stringify(researchModels)).toBe(true);
-        expect(opsModels.payload?.models).toContainEqual(
-          expect.objectContaining({ id: "ops-model", provider: "fixture" }),
-        );
-        expect(researchModels.payload?.models).toContainEqual(
-          expect.objectContaining({ id: "research-model", provider: "fixture" }),
-        );
-        expect(opsAuth.ok, JSON.stringify(opsAuth)).toBe(true);
-        expect(researchAuth.ok, JSON.stringify(researchAuth)).toBe(true);
-        expect(opsAuth.payload?.providers).toContainEqual(
-          expect.objectContaining({ provider: "fixture" }),
-        );
-        expect(researchAuth.payload?.providers).toContainEqual(
-          expect.objectContaining({ provider: "fixture" }),
-        );
         expect(models.payload?.models).toEqual([
           expect.objectContaining({ id: "ops-model", provider: "fixture" }),
         ]);
@@ -304,12 +264,10 @@ describe("gateway server models + voicewake", () => {
           workspaceDir: path.join(workspaceRoot, "ops-workspace"),
         });
         const opsWorkspace = path.join(workspaceRoot, "ops-workspace");
-        const skillsRoot = path.join(opsWorkspace, "skills");
-        const hotSkillDir = path.join(skillsRoot, "hot-status");
-        const hotSkillFile = path.join(hotSkillDir, "SKILL.md");
+        const hotSkillDir = path.join(opsWorkspace, "skills", "hot-status");
         await fs.mkdir(hotSkillDir, { recursive: true });
         await fs.writeFile(
-          hotSkillFile,
+          path.join(hotSkillDir, "SKILL.md"),
           "---\nname: hot-status\ndescription: Hot status fixture\n---\n",
           "utf8",
         );
@@ -320,11 +278,9 @@ describe("gateway server models + voicewake", () => {
         const refreshed = await rpcReq<{
           skills?: Array<{ name?: string; eligible?: boolean }>;
         }>(ws, "skills.status", {});
-        expect(
-          refreshed.payload?.skills?.some(
-            (skill) => skill.name === "hot-status" && skill.eligible === true,
-          ),
-        ).toBe(true);
+        expect(refreshed.payload?.skills).toContainEqual(
+          expect.objectContaining({ name: "hot-status", eligible: true }),
+        );
         expect(memory.payload).toMatchObject({ agentId: "ops" });
         expect(health.ok, JSON.stringify(health)).toBe(true);
       } finally {

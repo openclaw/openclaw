@@ -35,6 +35,26 @@ type TestAccount = {
   token?: string;
 };
 
+const gatewayConfig = {
+  mode: "local",
+  bind: "loopback",
+  auth: { mode: "none" },
+  reload: { mode: "off" },
+} as const;
+const secret = (id: string): SecretRef => ({ source: "env", provider: "default", id });
+const waitForAbort = ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
+  new Promise<void>((resolve) => {
+    abortSignal.addEventListener("abort", () => resolve(), { once: true });
+  });
+
+function expectStarted(
+  response: unknown,
+  accountId: string,
+  outcome: { status: string; reason?: string },
+) {
+  expect(response).toMatchObject({ ok: true, payload: { accountId, started: true, outcome } });
+}
+
 async function rpcReqWithActiveRuntime(ws: WebSocket, method: string, params: unknown) {
   const id = randomUUID();
   const response = onceMessage<{
@@ -57,6 +77,15 @@ describe("channels.start account outcomes", () => {
     setActiveDegradedSecretOwners([]);
   });
 
+  async function startSuppressedGateway() {
+    const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
+    server = await startTestGatewayServer(portClaim, {
+      auth: { mode: "none" },
+      channelAutostartSuppression: { reason: "crash-loop-breaker", message: "synthetic safe mode" },
+    });
+    return portClaim.port;
+  }
+
   it("starts config-backed accounts manually while breaker suppression remains active", async () => {
     await withEnvAsync(
       {
@@ -67,12 +96,7 @@ describe("channels.start account outcomes", () => {
         OPENCLAW_SKIP_PROVIDERS: undefined,
       },
       async () => {
-        const startAccount = vi.fn(
-          async ({ abortSignal }: ChannelGatewayContext<TestAccount>) =>
-            await new Promise<void>((resolve) => {
-              abortSignal.addEventListener("abort", () => resolve(), { once: true });
-            }),
-        );
+        const startAccount = vi.fn(waitForAbort);
         const resolveAccount: ChannelPlugin<TestAccount>["config"]["resolveAccount"] = (
           config,
           accountId,
@@ -103,12 +127,7 @@ describe("channels.start account outcomes", () => {
         await writeJsonAtomic(
           (await readConfigFileSnapshot()).path,
           {
-            gateway: {
-              mode: "local",
-              bind: "loopback",
-              auth: { mode: "none" },
-              reload: { mode: "off" },
-            },
+            gateway: gatewayConfig,
             secrets: { providers: { default: { source: "env" } } },
             channels: {
               telegram: {
@@ -116,20 +135,8 @@ describe("channels.start account outcomes", () => {
                 healthMonitor: { enabled: false },
                 accounts: {
                   plaintext: { botToken: "plaintext-channel-token" },
-                  resolved: {
-                    botToken: {
-                      source: "env",
-                      provider: "default",
-                      id: "BREAKER_RESOLVED_CHANNEL_TOKEN",
-                    } satisfies SecretRef,
-                  },
-                  unavailable: {
-                    botToken: {
-                      source: "env",
-                      provider: "default",
-                      id: "BREAKER_MISSING_CHANNEL_TOKEN",
-                    } satisfies SecretRef,
-                  },
+                  resolved: { botToken: secret("BREAKER_RESOLVED_CHANNEL_TOKEN") },
+                  unavailable: { botToken: secret("BREAKER_MISSING_CHANNEL_TOKEN") },
                 },
               },
             },
@@ -137,42 +144,22 @@ describe("channels.start account outcomes", () => {
           { durable: false, trailingNewline: true },
         );
         resetConfigRuntimeState();
-        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-        server = await startTestGatewayServer(portClaim, {
-          auth: { mode: "none" },
-          channelAutostartSuppression: {
-            reason: "crash-loop-breaker",
-            message: "synthetic safe mode",
-          },
-        });
+        const port = await startSuppressedGateway();
         const runtimeConfig = getRuntimeConfigSnapshot();
-        expect(runtimeConfig?.channels?.telegram?.accounts?.plaintext?.botToken).toBe(
-          "plaintext-channel-token",
-        );
-        expect(runtimeConfig?.channels?.telegram?.accounts?.resolved?.botToken).toBe(
-          "resolved-channel-token",
-        );
-        expect(runtimeConfig?.channels?.telegram?.accounts?.unavailable?.botToken).toMatchObject({
-          source: "env",
-          provider: "default",
-          id: "BREAKER_MISSING_CHANNEL_TOKEN",
+        expect(runtimeConfig?.channels?.telegram?.accounts).toMatchObject({
+          plaintext: { botToken: "plaintext-channel-token" },
+          resolved: { botToken: "resolved-channel-token" },
+          unavailable: { botToken: secret("BREAKER_MISSING_CHANNEL_TOKEN") },
         });
         expect(startAccount).not.toHaveBeenCalled();
 
-        const ws = await connectWebchatClient({ port: portClaim.port, scopes: ["operator.admin"] });
+        const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
         try {
           const plaintext = await rpcReqWithActiveRuntime(ws, "channels.start", {
             channel: "telegram",
             accountId: "plaintext",
           });
-          expect(plaintext, JSON.stringify(plaintext)).toMatchObject({
-            ok: true,
-            payload: {
-              accountId: "plaintext",
-              started: true,
-              outcome: { status: "handed-off" },
-            },
-          });
+          expectStarted(plaintext, "plaintext", { status: "handed-off" });
           await vi.waitFor(() => expect(startAccount).toHaveBeenCalledOnce());
           expect(
             startAccount.mock.calls.map(([context]) => ({
@@ -187,14 +174,7 @@ describe("channels.start account outcomes", () => {
             channel: "telegram",
             accountId: "resolved",
           });
-          expect(resolved, JSON.stringify(resolved)).toMatchObject({
-            ok: true,
-            payload: {
-              accountId: "resolved",
-              started: true,
-              outcome: { status: "handed-off" },
-            },
-          });
+          expectStarted(resolved, "resolved", { status: "handed-off" });
 
           const unavailable = await rpcReqWithActiveRuntime(ws, "channels.start", {
             channel: "telegram",
@@ -221,11 +201,9 @@ describe("channels.start account outcomes", () => {
         const firstStart = createDeferred();
         const secondStart = createDeferred();
         const starts = [firstStart, secondStart];
-        const startAccount = vi.fn(async ({ abortSignal }: ChannelGatewayContext<TestAccount>) => {
+        const startAccount = vi.fn(async (context: ChannelGatewayContext<TestAccount>) => {
           starts.shift()?.resolve();
-          await new Promise<void>((resolve) => {
-            abortSignal.addEventListener("abort", () => resolve(), { once: true });
-          });
+          await waitForAbort(context);
         });
         const stopAccount = vi.fn(async () => {
           stopEntered.resolve();
@@ -246,23 +224,11 @@ describe("channels.start account outcomes", () => {
           createTestRegistry([{ pluginId: "telegram", source: "test", plugin }]),
         );
         await writeConfigFile({
-          gateway: {
-            mode: "local",
-            bind: "loopback",
-            auth: { mode: "none" },
-            reload: { mode: "off" },
-          },
+          gateway: gatewayConfig,
           channels: { telegram: { enabled: true, healthMonitor: { enabled: false } } },
         });
-        const portClaim = await acquireTestPortBlock({ offsets: [0, 1, 2, 3, 4] });
-        server = await startTestGatewayServer(portClaim, {
-          auth: { mode: "none" },
-          channelAutostartSuppression: {
-            reason: "crash-loop-breaker",
-            message: "synthetic safe mode",
-          },
-        });
-        const ws = await connectWebchatClient({ port: portClaim.port, scopes: ["operator.admin"] });
+        const port = await startSuppressedGateway();
+        const ws = await connectWebchatClient({ port, scopes: ["operator.admin"] });
         try {
           expect(startAccount).not.toHaveBeenCalled();
           const invalidOverride = await rpcReq(ws, "channels.start", {
@@ -299,20 +265,10 @@ describe("channels.start account outcomes", () => {
           expect(cold).toMatchObject({ ok: false, error: { code: "UNAVAILABLE" } });
           expect(startAccount).not.toHaveBeenCalled();
           const started = await rpcReq(ws, "channels.start", { channel: "telegram" });
-          expect(started).toMatchObject({
-            ok: true,
-            payload: { accountId: "healthy", started: true, outcome: { status: "handed-off" } },
-          });
+          expectStarted(started, "healthy", { status: "handed-off" });
           await firstStart.promise;
           const repeated = await rpcReq(ws, "channels.start", { channel: "telegram" });
-          expect(repeated).toMatchObject({
-            ok: true,
-            payload: {
-              accountId: "healthy",
-              started: true,
-              outcome: { status: "retry", reason: "task-owned" },
-            },
-          });
+          expectStarted(repeated, "healthy", { status: "retry", reason: "task-owned" });
           expect(startAccount).toHaveBeenCalledOnce();
           const stopping = rpcReq(ws, "channels.stop", {
             channel: "telegram",
@@ -323,14 +279,7 @@ describe("channels.start account outcomes", () => {
             channel: "telegram",
             accountId: "healthy",
           });
-          expect(blocked).toMatchObject({
-            ok: true,
-            payload: {
-              accountId: "healthy",
-              started: true,
-              outcome: { status: "retry", reason: "stop-in-flight" },
-            },
-          });
+          expectStarted(blocked, "healthy", { status: "retry", reason: "stop-in-flight" });
           expect(startAccount).toHaveBeenCalledOnce();
           releaseStop.resolve();
           expect(await stopping).toMatchObject({ ok: true, payload: { stopped: true } });
@@ -338,10 +287,7 @@ describe("channels.start account outcomes", () => {
             channel: "telegram",
             accountId: "healthy",
           });
-          expect(restarted).toMatchObject({
-            ok: true,
-            payload: { accountId: "healthy", started: true, outcome: { status: "handed-off" } },
-          });
+          expectStarted(restarted, "healthy", { status: "handed-off" });
           await secondStart.promise;
           expect(startAccount).toHaveBeenCalledTimes(2);
         } finally {
