@@ -480,11 +480,13 @@ function hasExplicitDefaultChildAccount(account: DoctorAccountRecord): boolean {
 function hasGroupsForEveryExplicitChildAccount(account: DoctorAccountRecord): boolean {
   const children = listActiveChildAccounts(account);
   const hasTopLevelCredential =
-    hasConfiguredAccountValue(account.botToken) || hasConfiguredAccountValue(account.tokenFile);
+    hasConfiguredAccountValue(account.botToken) ||
+    hasConfiguredAccountValue(account.tokenFile) ||
+    hasConfiguredAccountValue(process.env.TELEGRAM_BOT_TOKEN);
   const accounts = asObjectRecord(account.accounts);
   const implicitDefault = accounts ? asObjectRecord(accounts.default) : undefined;
   const implicitDefaultHasGroups =
-    implicitDefault !== null &&
+    implicitDefault != null &&
     implicitDefault.enabled !== false &&
     hasConfiguredGroups(implicitDefault, account);
   return (

@@ -712,6 +712,38 @@ describe("telegram doctor empty allowlist extra warnings", () => {
     );
   });
 
+  it("keeps single-account guidance when the accounts block is absent", () => {
+    const warnings = collectExtraWarnings({
+      account: { groupPolicy: "allowlist" },
+    });
+
+    expect(warnings.join("\n")).toContain(
+      "channels.telegram: Telegram is in first-time setup mode.",
+    );
+  });
+
+  it("keeps guidance for an environment-backed implicit default", () => {
+    vi.stubEnv("TELEGRAM_BOT_TOKEN", "123:env-token");
+    try {
+      const warnings = collectExtraWarnings({
+        account: {
+          defaultAccount: "work",
+          groupPolicy: "allowlist",
+          accounts: {
+            work: { groups: { "-1001": { requireMention: true } } },
+            second: { groups: { "-1002": { requireMention: true } } },
+          },
+        },
+      });
+
+      expect(warnings.join("\n")).toContain(
+        "channels.telegram: Telegram is in first-time setup mode.",
+      );
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+
   it("keeps parent first-time guidance for an implicit default beside a named default", () => {
     const warnings = collectExtraWarnings({
       account: {
