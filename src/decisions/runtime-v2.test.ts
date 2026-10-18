@@ -127,7 +127,9 @@ it.each([1, 2] as const)(
     const events: DiagnosticEventPayload[] = [];
     const stop = onTrustedInternalDiagnosticEvent(
       markTrustedOtelDiagnosticListener((event) => {
-        if (event.type === "model.usage") events.push(event);
+        if (event.type === "model.usage") {
+          events.push(event);
+        }
       }),
     );
     onTestFinished(stop);

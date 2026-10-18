@@ -49,7 +49,9 @@ it("returns rich native outcomes through the core tool, registered host and real
   onTestFinished(
     onTrustedInternalDiagnosticEvent(
       markTrustedOtelDiagnosticListener((event) => {
-        if (event.type === "model.usage") events.push(event);
+        if (event.type === "model.usage") {
+          events.push(event);
+        }
       }),
     ),
   );

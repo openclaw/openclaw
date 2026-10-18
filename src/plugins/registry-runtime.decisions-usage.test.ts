@@ -277,16 +277,15 @@ function invoke(
         v1Batch,
         signal,
       );
-    case "prefilter":
-      return evaluateAttemptDecisionToolPrefilter({
-        config: host.config,
-        agentId: "operation-owner",
-        supportsTurnScopedToolRestrictions: true,
-        assertActive,
-        userMessage: "Hello",
-        signal,
-      });
   }
+  return evaluateAttemptDecisionToolPrefilter({
+    config: host.config,
+    agentId: "operation-owner",
+    supportsTurnScopedToolRestrictions: true,
+    assertActive,
+    userMessage: "Hello",
+    signal,
+  });
 }
 function ready(entry: Entry) {
   const evaluate = vi.fn<DecisionProviderV2["evaluate"]>(async (input) => ({
@@ -402,7 +401,9 @@ it("records no prefilter usage after its active call closes at the outer-await h
   });
   await expect(
     invoke("prefilter", host, new AbortController().signal, () => {
-      if (!active) throw new Error("active call closed");
+      if (!active) {
+        throw new Error("active call closed");
+      }
     }),
   ).rejects.toThrow("active call closed");
   expect(host.events).toEqual([]);
@@ -415,8 +416,9 @@ it.each(["plugin-v1", "plugin-v2", "tool", "prefilter"] as const)(
     const controller = new AbortController();
     const stop = onTrustedInternalDiagnosticEvent(
       markTrustedOtelDiagnosticListener((event) => {
-        if (event.type === "model.usage")
+        if (event.type === "model.usage") {
           queueMicrotask(() => controller.abort(new Error("after acceptance")));
+        }
       }),
     );
     try {
@@ -438,10 +440,11 @@ it.each(["plugin-v1", "plugin-v2"] as const)(
       | undefined;
     const stop = onTrustedInternalDiagnosticEvent(
       markTrustedOtelDiagnosticListener((event) => {
-        if (event.type === "model.usage")
+        if (event.type === "model.usage") {
           queueMicrotask(() => {
             disposal = getPluginInstance(host.consumer)!.dispose();
           });
+        }
       }),
     );
     try {
@@ -542,7 +545,9 @@ it("keeps interleaved agent, model and consumer attribution invocation-local", a
       },
     ]);
   } finally {
-    for (const gate of release) gate.resolve();
+    for (const gate of release) {
+      gate.resolve();
+    }
     await Promise.allSettled(pending);
     await getPluginInstance(other)?.dispose();
   }
