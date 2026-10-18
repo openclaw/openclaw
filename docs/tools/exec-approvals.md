@@ -699,6 +699,11 @@ Gateway's live handoff window. Crossing the prompt deadline during dispatch
 does not undo that decision. Closed runs, expired handoff windows, and reused
 **Allow Once** approvals still reject execution.
 
+Recording or consuming an **Allow Once** approval and reading it for notifications
+do not change exec policy. These operations do not block an approved command's
+final policy check. Policy edits and durable MCP tool grants still fence execution
+while pending, and the command must pass the current policy immediately before launch.
+
 The macOS approval panel keeps ordinary commands compact, with the supplied agent
 and host in one summary. It shows the working directory beneath the full,
 wrapping command. Longer commands scroll. Expand **Details** to inspect the
