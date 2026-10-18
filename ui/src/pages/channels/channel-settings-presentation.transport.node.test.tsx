@@ -141,10 +141,10 @@ async function transportFixture(scopes: string[], firstStatus: number, signal: A
       arrivals,
       errors,
       close,
-      request: () =>
+      request: (accountId = "main/account", path = ["profile"]) =>
         context.request({
-          accountId: "main/account",
-          path: ["profile"],
+          accountId,
+          path,
           method: "PUT",
           body: { name: "Example" },
           signal,
@@ -200,6 +200,40 @@ it.for([200, 401])(
     }
   },
 );
+
+it("encodes opaque account and path segments once in real HTTP requests", async ({ signal }) => {
+  const f = await transportFixture(["operator.admin"], 200, signal);
+  try {
+    await expect(f.request("main/account", ["profile", "a?b#c"])).resolves.toMatchObject({
+      ok: true,
+    });
+    await expect(f.request("%2e%2e", ["%2e%2e"])).resolves.toMatchObject({ ok: true });
+    expect(f.arrivals.map((arrival) => arrival.path)).toEqual([
+      "/api/channels/profile-fixture/main%2Faccount/profile/a%3Fb%23c",
+      "/api/channels/profile-fixture/%252e%252e/%252e%252e",
+    ]);
+    expect(f.errors).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
+
+it("rejects traversal segments and missing operation paths before HTTP dispatch", async ({
+  signal,
+}) => {
+  const f = await transportFixture(["operator.admin"], 200, signal);
+  try {
+    for (const segment of [".", "..", ""]) {
+      await expect(f.request(segment, ["profile"])).rejects.toThrow("account-relative");
+      await expect(f.request("default", [segment])).rejects.toThrow("account-relative");
+    }
+    await expect(f.request("default", [])).rejects.toThrow("account-relative");
+    expect(f.arrivals).toHaveLength(0);
+    expect(f.errors).toEqual([]);
+  } finally {
+    await f.close();
+  }
+});
 
 it("rejects a read-only plugin capability before real HTTP dispatch", async ({ signal }) => {
   const f = await transportFixture(["operator.read"], 200, signal);

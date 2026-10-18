@@ -29,7 +29,7 @@ export type ChannelSettingsHooks = {
 };
 
 /** Encode identifiers exactly once; URL normalization must never escape the declared owner. */
-export function channelSettingsPath(channelId: string, accountId: string, path: readonly string[]) {
+function channelSettingsPath(channelId: string, accountId: string, path: readonly string[]) {
   const segments = [channelId, accountId, ...path];
   if (!path.length || segments.some((part) => !part || part === "." || part === "..")) {
     throw new Error("Channel Settings requests require account-relative path segments.");
