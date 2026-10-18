@@ -18,7 +18,7 @@ type CliExecutionAuthProfileSelection = {
   authProfileIdSource?: "auto" | "user";
 };
 
-class CliExecutionAuthProfileError extends Error {
+export class CliExecutionAuthProfileError extends Error {
   override name = "CliExecutionAuthProfileError";
 }
 

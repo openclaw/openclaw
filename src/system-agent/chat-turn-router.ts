@@ -561,6 +561,9 @@ export class ChatTurnRouter {
           : {}),
         deps: this.commandDeps(),
         beforePersistentApply,
+        beforeConfigCommit: async () => {
+          await this.callbacks.requirePersistentApplyInference(capture);
+        },
         onVerifiedInferenceChanged: this.callbacks.rebindVerifiedInference,
       });
     } catch (error) {

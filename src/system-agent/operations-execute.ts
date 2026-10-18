@@ -342,6 +342,7 @@ export async function executeSystemAgentOperation(
             ...(ctx.assertPersistentApply
               ? { beforePersistentApply: ctx.assertPersistentApply }
               : {}),
+            ...(ctx.beforeConfigCommit ? { beforeCommit: ctx.beforeConfigCommit } : {}),
           }),
         );
         return { summary: `Removed config ${operation.path}`, details: { path: operation.path } };

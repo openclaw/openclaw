@@ -361,6 +361,7 @@ describe("Full Access delegated chat", () => {
         path: "gateway.port",
         value: "18789",
         cliOptions: {},
+        beforeCommit: expect.any(Function),
         beforePersistentApply: expect.any(Function),
         runtime: expect.objectContaining({ log: expect.any(Function) }),
         throwOnError: false,
