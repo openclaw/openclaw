@@ -29,7 +29,10 @@ export type ResolvedIrcAccount = {
   passwordSource: "env" | "passwordFile" | "config" | "none";
   tokenStatus?: "available" | "configured_unavailable" | "missing";
   credentialDiagnostics?: CredentialUnavailableDiagnostic[];
-  config: IrcAccountConfig;
+  // The NickServ password leaf is resolved by the time an account is returned.
+  config: IrcAccountConfig & {
+    nickserv?: IrcNickServConfig & { password?: string };
+  };
 };
 
 const {
@@ -120,7 +123,7 @@ function resolveNickServConfig(accountId: string, nickserv?: IrcNickServConfig) 
     }
   }
 
-  const merged: IrcNickServConfig = {
+  const merged: IrcNickServConfig & { password?: string } = {
     ...base,
     service: normalizeOptionalString(base.service),
     passwordFile: passwordFile || undefined,
@@ -180,7 +183,7 @@ export function resolveIrcAccount(params: {
       (diagnostic): diagnostic is CredentialUnavailableDiagnostic => Boolean(diagnostic),
     );
 
-    const config: IrcAccountConfig = {
+    const config = {
       ...merged,
       channels: merged.channels ?? envChannels,
       tls,

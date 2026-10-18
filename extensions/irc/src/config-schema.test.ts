@@ -67,4 +67,49 @@ describe("irc config schema", () => {
       }),
     );
   });
+
+  it.each([
+    {
+      label: "channels.irc.password",
+      config: {
+        host: "irc.example.com",
+        nick: "clawwork",
+        password: { source: "env", provider: "default", id: "NS_PW" },
+      },
+    },
+    {
+      label: "channels.irc.accounts.work.password",
+      config: {
+        accounts: {
+          work: {
+            host: "irc.example.com",
+            nick: "clawwork",
+            password: { source: "env", provider: "default", id: "NS_PW" },
+          },
+        },
+      },
+    },
+    {
+      label: "channels.irc.nickserv.password",
+      config: {
+        host: "irc.example.com",
+        nick: "clawwork",
+        nickserv: { password: { source: "env", provider: "default", id: "NS_PW" } },
+      },
+    },
+    {
+      label: "channels.irc.accounts.work.nickserv.password",
+      config: {
+        accounts: {
+          work: {
+            host: "irc.example.com",
+            nick: "clawwork",
+            nickserv: { service: "NickServ", password: { source: "env", provider: "default", id: "NS_PW" } },
+          },
+        },
+      },
+    },
+  ])("accepts a SecretRef at $label", ({ config }) => {
+    expectValidConfig(parseIrcConfig(config));
+  });
 });
