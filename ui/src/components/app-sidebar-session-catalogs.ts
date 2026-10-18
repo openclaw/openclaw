@@ -154,10 +154,7 @@ export function catalogErrorMessages(catalog: SessionCatalog): string[] {
   for (const host of catalog.hosts) {
     // A disconnected empty host is normal fleet state, not a provider failure.
     // Cached rows still expose the host-level offline badge when the host is visible.
-    if (
-      host.error?.code !== "NODE_OFFLINE" &&
-      !isPendingCatalogError(host.error)
-    ) {
+    if (host.error?.code !== "NODE_OFFLINE" && !isPendingCatalogError(host.error)) {
       add(host.error);
     }
   }
