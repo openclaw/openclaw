@@ -11,6 +11,7 @@ import {
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import { createTestPluginServiceScheduler } from "openclaw/plugin-sdk/plugin-test-api";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
+import { withinTest } from "openclaw/plugin-sdk/test-fixtures";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { BuzzInboundMessage } from "./message-event.js";
 import type { ResolvedBuzzAccount } from "./types.js";
@@ -467,7 +468,9 @@ describe("Buzz gateway cold-start recovery", () => {
     expect(handled).toContain(queuedText);
   });
 
-  it("keeps pre-activation history excluded when the same process reconnects", async () => {
+  it("keeps pre-activation history excluded when the same process reconnects", async ({
+    signal,
+  }) => {
     postRoomMessage("before-activation", START_SECONDS - 60);
     relayMocks.connect.mockImplementationOnce(async () => {});
     relayMocks.connect.mockImplementationOnce(async () => {
@@ -477,7 +480,7 @@ describe("Buzz gateway cold-start recovery", () => {
     const afterReconnectHandled = waitForInboundHandled("after-reconnect");
     const process = startGatewayProcess();
     try {
-      await afterReconnectHandled;
+      await withinTest(afterReconnectHandled, signal);
       expect(handled).toContain("after-reconnect");
       expect(handled).not.toContain("before-activation");
       expect(relayMocks.messageFilters.at(1)?.since).toBe(START_SECONDS);
