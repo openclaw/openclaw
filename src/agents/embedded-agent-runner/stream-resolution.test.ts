@@ -449,6 +449,7 @@ describe("resolveEmbeddedAgentStream", () => {
     });
     const { streamFn } = resolveEmbeddedAgentStream({
       providerStreamFn: inner,
+      currentStreamFn: inner,
       sessionId: "session-1",
       model: {
         api: "openai-responses",
@@ -495,6 +496,7 @@ describe("resolveEmbeddedAgentStream", () => {
     const refreshApiKey = vi.fn(async () => true);
     const { streamFn } = resolveEmbeddedAgentStream({
       providerStreamFn: inner,
+      currentStreamFn: inner,
       sessionId: "session-1",
       model: {
         api: "openai-responses",

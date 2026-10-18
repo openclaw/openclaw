@@ -524,7 +524,7 @@ describe("SQLite auth storage", () => {
 describe("AuthStorage runtime credential resolvers", () => {
   it("prefers a request-scoped resolver over canonical storage and refreshes per request", async () => {
     const storage = AuthStorage.inMemory({
-      openai: { type: "api_key", provider: "openai", key: "stored-key" },
+      openai: { type: "api_key", key: "stored-key" },
     });
     const keys = ["renewed-key-a", "renewed-key-b"];
     let index = 0;
@@ -536,7 +536,7 @@ describe("AuthStorage runtime credential resolvers", () => {
 
   it("gives an explicit runtime override precedence over the resolver", async () => {
     const storage = AuthStorage.inMemory({
-      openai: { type: "api_key", provider: "openai", key: "stored-key" },
+      openai: { type: "api_key", key: "stored-key" },
     });
     const resolve = vi.fn(async () => "renewed-key");
     storage.setRuntimeApiKeyResolver("openai", { resolve });

@@ -404,9 +404,9 @@ function createAuthRecoveryStream(params: {
     } catch (error) {
       const message = buildStreamErrorAssistantMessage({
         model: {
-          api: String(params.model.api),
-          provider: String(params.model.provider),
-          id: String(params.model.id),
+          api: params.model.api,
+          provider: params.model.provider,
+          id: params.model.id,
         },
         errorMessage: formatErrorMessage(error),
       });

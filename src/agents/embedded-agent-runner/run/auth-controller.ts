@@ -560,13 +560,13 @@ export function createEmbeddedRunAuthController(params: {
     }
     if (!runtimeAuthHandled) {
       clearRuntimeAuthRefreshTimer();
-      const renewableRequestCredential =
+      if (
         apiKeyInfo.mode === "oauth" &&
         apiKeyInfo.authFlow === "chatgpt-token-sharing" &&
-        Boolean(profileId) &&
-        Boolean(params.authStorage.setRuntimeApiKeyResolver);
-      if (renewableRequestCredential) {
-        const selectedProfileId = profileId as string;
+        profileId &&
+        typeof params.authStorage.setRuntimeApiKeyResolver === "function"
+      ) {
+        const selectedProfileId = profileId;
         params.authStorage.setRuntimeApiKeyResolver?.(runtimeModel.provider, {
           resolve: async () => {
             if (state.lastProfileId !== selectedProfileId) {
