@@ -394,12 +394,14 @@ describe("irc monitor reconnect", () => {
       const freshDispatch = vi.fn<IrcMonitorMessageHandler>();
       const stored = createDeferred<void>();
       const releaseAdmission = createDeferred<void>();
-      const enqueue = alphaQueue.enqueue.bind(alphaQueue);
-      alphaQueue.enqueue = async (...args) => {
-        const result = await enqueue(...args);
-        stored.resolve();
-        await releaseAdmission.promise;
-        return result;
+      const gatedAlphaQueue: IrcIngressQueue = {
+        ...alphaQueue,
+        enqueue: async (...args) => {
+          const result = await alphaQueue.enqueue(...args);
+          stored.resolve();
+          await releaseAdmission.promise;
+          return result;
+        },
       };
       const monitors: Array<{ stop: () => Promise<void> }> = [];
       const start = async (
@@ -412,7 +414,7 @@ describe("irc monitor reconnect", () => {
         return monitor;
       };
       try {
-        const alpha = await start("alpha", alphaQueue, alphaDispatch);
+        const alpha = await start("alpha", gatedAlphaQueue, alphaDispatch);
         await start("beta", betaQueue, betaDispatch);
         const betaSocket = sockets.get("qa-beta");
         expect(betaSocket).toBeDefined();
@@ -431,7 +433,6 @@ describe("irc monitor reconnect", () => {
 
         releaseAdmission.resolve();
         await stopping;
-        alphaQueue.enqueue = enqueue;
         const pending = await alphaQueue.listPending({ limit: "all" });
         expect(pending).toHaveLength(1);
         const recovered = observeIngressCompletion(alphaQueue);
@@ -448,7 +449,6 @@ describe("irc monitor reconnect", () => {
         expect(connections).toBe(3);
       } finally {
         releaseAdmission.resolve();
-        alphaQueue.enqueue = enqueue;
         await Promise.all(monitors.map((monitor) => monitor.stop()));
         await server.close();
       }
@@ -559,12 +559,12 @@ describe("irc monitor reconnect", () => {
         return await pairingResult.promise;
       });
       const server = await startReconnectingReplyIrcServer();
-      const enqueueSpy = vi.spyOn(ingressQueue, "enqueue");
+      const enqueueSpy = vi.fn(ingressQueue.enqueue.bind(ingressQueue));
       let monitor: { stop: () => Promise<void> } | undefined;
       try {
         monitor = await monitorIrcProvider({
           config: monitorConfig(server.port, "receipt-bot", { dmPolicy: "pairing" }),
-          ingressQueue,
+          ingressQueue: { ...ingressQueue, enqueue: enqueueSpy },
           statusSink,
         });
         server.sendInbound();
@@ -594,7 +594,6 @@ describe("irc monitor reconnect", () => {
         if (monitor) {
           await monitor.stop();
         }
-        enqueueSpy.mockRestore();
         await server.close();
       }
     });
@@ -716,14 +715,14 @@ describe("irc monitor inbound target", () => {
     await withIngressQueue(async (ingressQueue) => {
       const activityRecord = installMonitorRuntime();
       const server = await startInboundIrcServer();
-      const enqueueSpy = vi.spyOn(ingressQueue, "enqueue");
+      const enqueueSpy = vi.fn(ingressQueue.enqueue.bind(ingressQueue));
       const onMessage = vi.fn();
       const completed = observeIngressCompletion(ingressQueue);
       let monitor: { stop: () => Promise<void> } | undefined;
       try {
         monitor = await monitorIrcProvider({
           config: monitorConfig(server.port),
-          ingressQueue,
+          ingressQueue: { ...ingressQueue, enqueue: enqueueSpy },
           onMessage,
         });
         server.sendInbound("#openclaw", false, "bot");
@@ -740,7 +739,6 @@ describe("irc monitor inbound target", () => {
         if (monitor) {
           await monitor.stop();
         }
-        enqueueSpy.mockRestore();
         await server.close();
       }
     });

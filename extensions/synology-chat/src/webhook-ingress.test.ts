@@ -44,7 +44,10 @@ function webhookEvent(params?: {
 }
 
 type Ingress = ReturnType<typeof createSynologyIngressMonitor>;
-type StartIngress = (dispatch: SynologyIngressDispatch) => Ingress;
+type StartIngress = (
+  dispatch: SynologyIngressDispatch,
+  ingressQueue?: SynologyIngressQueue,
+) => Ingress;
 
 async function withQueue(run: (queue: SynologyIngressQueue, start: StartIngress) => Promise<void>) {
   const created = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-synology-ingress-"));
@@ -55,10 +58,10 @@ async function withQueue(run: (queue: SynologyIngressQueue, start: StartIngress)
     stateDir,
   });
   const monitors: Ingress[] = [];
-  const start: StartIngress = (dispatch) => {
+  const start: StartIngress = (dispatch, ingressQueue = queue) => {
     const ingress = createSynologyIngressMonitor({
       accountId: "default",
-      queue,
+      queue: ingressQueue,
       dispatch,
       runtime: { error: vi.fn() },
       pollIntervalMs: 10,
@@ -145,19 +148,21 @@ describe("Synology Chat durable ingress", () => {
   it("preserves same-conversation order across append retry backoff", async () => {
     await withQueue(async (queue, start) => {
       let failFirst = true;
-      const enqueue = queue.enqueue.bind(queue);
-      queue.enqueue = async (...args) => {
-        if (failFirst) {
-          failFirst = false;
-          throw new Error("sqlite busy");
-        }
-        return await enqueue(...args);
+      const flakyQueue: SynologyIngressQueue = {
+        ...queue,
+        enqueue: async (...args) => {
+          if (failFirst) {
+            failFirst = false;
+            throw new Error("sqlite busy");
+          }
+          return await queue.enqueue(...args);
+        },
       };
       const dispatched: string[] = [];
       const ingress = start(async (event, lifecycle) => {
         dispatched.push(String(event.bodyFields.post_id));
         await lifecycle.onAdopted();
-      });
+      }, flakyQueue);
       const first = ingress.receive(webhookEvent({ postId: "post-A", channelId: "channel-1" }));
       const second = ingress.receive(webhookEvent({ postId: "post-B", channelId: "channel-1" }));
       await Promise.all([first, second]);

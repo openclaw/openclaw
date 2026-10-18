@@ -269,15 +269,17 @@ describe("Tlon durable ingress", () => {
     await withQueue(async (queue) => {
       const stored = deferred();
       const release = deferred();
-      const enqueue = queue.enqueue.bind(queue);
-      queue.enqueue = async (...args) => {
-        const result = await enqueue(...args);
-        stored.resolve();
-        await release.promise;
-        return result;
+      const gatedQueue: TlonIngressQueue = {
+        ...queue,
+        enqueue: async (...args) => {
+          const result = await queue.enqueue(...args);
+          stored.resolve();
+          await release.promise;
+          return result;
+        },
       };
       const dispatch = vi.fn();
-      const monitor = startMonitor(queue, dispatch);
+      const monitor = startMonitor(gatedQueue, dispatch);
       const admission = monitor.receive({
         source: "channels",
         event: channelEvent({ id: "message-stop-1" }),

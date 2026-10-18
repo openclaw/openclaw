@@ -58,10 +58,10 @@ and refreshes that claim while the transport acknowledgement runs; dispatch stil
 waits for the acknowledgement callback to settle. A failed acknowledgement stays
 caller-visible and does not discard the durable event. Pending retries and peer
 claims keep their existing order, and uncertain worker outcomes use normal claim
-recovery. Plugin-supplied queues may omit `enqueueAndClaim`. Monitors with custom
-`runPumpTask` wrappers or `waitForDeliveryIdleBeforeRepump` keep their existing
-pump contract. Monitors using `reconcileStoredLaneKey` keep separate append and
-claim operations unless they opt into `reuseAdmissionFactsForFreshClaims`.
+recovery. Monitors with custom `runPumpTask` wrappers or
+`waitForDeliveryIdleBeforeRepump` keep their existing pump contract. Monitors
+using `reconcileStoredLaneKey` keep separate append and claim operations unless
+they opt into `reuseAdmissionFactsForFreshClaims`.
 
 `reuseAdmissionFactsForFreshClaims` keeps the fresh event's admitted identity and
 lane through dispatch instead of inspecting it again. Payload deserialization
@@ -70,6 +70,15 @@ authorizes effects; delivery must retain its own authorization. Telegram opts in
 a forum hint learned during append does not reclassify that already-admitted
 singleton. Previously stored events, duplicates, retries, and recovered claims
 still use claim inspection and persist any reconciled lane before delivery.
+
+Fused singleton admission, and the batch admission used by `admitBatch`, run
+only on the queue object returned by `runtime.state.openChannelIngressQueue`.
+Both write without calling the queue's `enqueue`. Any other queue object admits
+each event through its own `enqueue`, including a plugin implementation or a
+wrapper built as `{ ...queue, enqueue: wrapped }`. A wrapper therefore sees
+every admission and gives up only those fused and batched writes. Build a
+wrapper as a new object: replacing `enqueue` on the returned queue in place
+keeps the fused paths, and they bypass the replacement.
 
 Agent database preparation does not delay durable intake into shared state.
 The monitor bounds active starts to `drain.startLimit` (32 by default),

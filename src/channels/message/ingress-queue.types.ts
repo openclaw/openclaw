@@ -130,7 +130,7 @@ type ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata> =
     };
 
 export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadata = unknown> = {
-  /** One durable admission for a transport batch; optional for external queue implementations. */
+  /** One durable admission for a transport batch. The monitor calls it only on core-created queues. */
   enqueueBatch?(
     events: ReadonlyArray<{
       id: string;
@@ -140,7 +140,10 @@ export type ChannelIngressQueue<TPayload, TMetadata = unknown, TCompletedMetadat
       laneKey?: string;
     }>,
   ): Promise<Array<ChannelIngressQueueEnqueueResult<TPayload, TMetadata, TCompletedMetadata>>>;
-  /** Claim a fresh singleton only when no pending or claimed row precedes it. */
+  /**
+   * Claim a fresh singleton only when no pending or claimed row precedes it. The
+   * monitor calls it only on core-created queues; other queues admit through `enqueue`.
+   */
   enqueueAndClaim?(
     id: string,
     payload: TPayload,
