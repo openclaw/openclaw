@@ -64,7 +64,7 @@ The choice is saved to your authenticated profile on the connected Gateway and h
 
 ## Community invitation
 
-The sidebar’s compact **Community** entry opens Discord, Reddit, and X links on demand. On phones, the links appear in a bottom sheet; larger screens use a centered dialog. The sheet does not open automatically, and closing it returns focus to **Community** without hiding the entry. Links open in a new tab.
+The **Community** icon at the bottom of the left navigation rail opens Discord, Reddit, and X links on demand without taking space from the session list. On phones, the links appear in a bottom sheet; larger screens use a centered dialog. The sheet does not open automatically, and closing it returns focus to **Community** without hiding the entry. Links open in a new tab.
 
 This replaces the promotional invitation card. Existing browser-local card dismissals are left untouched; they do not hide the compact entry. To hide Community for everyone using a Control UI deployment, run this on the Gateway serving that UI:
 

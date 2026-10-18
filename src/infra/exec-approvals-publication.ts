@@ -8,6 +8,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "./sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "./sqlite-worker-operation-settlement.js";
 
 export type ExecApprovalsPublicationValue = {
   file: Omit<ExecApprovalsFile, "socket">;
@@ -61,15 +62,10 @@ export function withExecApprovalsPublication(
     observeSqliteWorkerCommittedFacts(admission, ({ facts }) => {
       publication?.committed(isRecord(facts) ? facts.execFacts : undefined);
     });
-    const finish = admission.finish.bind(admission);
-    admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        const confirmed = admission.settlement?.kind === "completed";
-        publication?.finish(confirmed, confirmed && !admission.committed && !commitAdmitted);
-      }
-    };
+    observeSqliteWorkerAdmissionFinish(admission, () => {
+      const confirmed = admission.settlement?.kind === "completed";
+      publication?.finish(confirmed, confirmed && !admission.committed && !commitAdmitted);
+    });
     return retained;
   };
 }

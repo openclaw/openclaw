@@ -17,6 +17,7 @@ import { createProcessSessionFixture } from "../../bash-process-registry.test-he
 import { buildBootstrapBudgetState } from "../../bootstrap-budget.js";
 import type { AgentTool } from "../../runtime/index.js";
 import { makeProviderModelFixture } from "../../test-helpers/provider-model-fixture.js";
+import type { ToolSearchCatalogRef } from "../../tool-search-types.js";
 import { createAttemptSetupFixture } from "./attempt-setup.test-support.js";
 import { buildAttemptSystemPrompt } from "./attempt-system-prompt.js";
 import { buildTurnDeliveryContextFragments } from "./turn-delivery-context.js";
@@ -78,6 +79,7 @@ async function preparePermissionPrompt(
   skills?: { prompt: string; toolsAllow?: string[]; initialToolNames?: string[] },
   webSearchUnconfigured?: () => boolean,
   attemptOverrides?: Partial<EmbeddedRunAttemptParams>,
+  toolSearchCatalogRef?: ToolSearchCatalogRef,
 ) {
   const tool = (name: string): AgentTool => ({
     name,
@@ -152,6 +154,7 @@ async function preparePermissionPrompt(
     webSearchUnconfigured,
     toolSearchDirectoryEnabled: false,
     toolSearchRuntimeConfig: attempt.config,
+    toolSearchCatalogRef,
   });
   if (!prepared.prepareToolPrompt) {
     throw new Error("Expected a refreshable attempt prompt");
@@ -168,6 +171,56 @@ async function preparePermissionPrompt(
 }
 
 describe("buildAttemptSystemPrompt", () => {
+  it("refreshes deferred reporting only when the prepared catalog is accepted", async () => {
+    const deferred: AgentTool = {
+      name: "deferred",
+      label: "Deferred",
+      description: "Deferred",
+      parameters: Type.Object({}),
+      execute: async () => ({ content: [], details: {} }),
+    };
+    const catalogRef: ToolSearchCatalogRef = {
+      current: {
+        counterScope: "test",
+        searchCount: 0,
+        describeCount: 0,
+        callCount: 0,
+        entries: [
+          {
+            id: "openclaw:core:deferred",
+            name: deferred.name,
+            source: "openclaw",
+            sourceName: "core",
+            description: deferred.description,
+            parameters: deferred.parameters,
+            tool: deferred,
+          },
+        ],
+      },
+    };
+    const { prepared } = await preparePermissionPrompt(
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      catalogRef,
+    );
+    expect(prepared.systemPromptReport?.tools.deferred?.entries.map((entry) => entry.name)).toEqual(
+      ["deferred"],
+    );
+    catalogRef.current!.entries = [];
+    const refresh = await prepared.prepareToolPrompt!();
+    expect(prepared.systemPromptReport?.tools.deferred?.entries).toHaveLength(1);
+    refresh(prepared.systemPromptText);
+    expect(prepared.systemPromptReport?.tools.deferred?.entries).toEqual([]);
+    expect(
+      prepared.systemPromptReport?.tools.entries.some((entry) => entry.name === "deferred"),
+    ).toBe(false);
+  });
+
   it("carries the prepared missing-search fact into the actual initial prompt and tool refresh", async () => {
     let missing = true;
     const { prepared, read, refreshSystemPrompt } = await preparePermissionPrompt(

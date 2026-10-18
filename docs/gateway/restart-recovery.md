@@ -101,7 +101,11 @@ or the user chooses to retry it. Recovery of a turn already in the transcript
 does not depend on the browser returning.
 
 Accepted `sessions_send` agent updates recover from their saved input and original
-delivery ID. Temporary admission, worker capacity, and storage-readiness failures
+delivery ID. Stores still undergoing startup inspection are rediscovered after their
+existing admission owner finishes, without waiting for another Gateway restart.
+Each rescan uses the current configuration and communication permissions.
+Shared stores keep each session’s logical agent identity separate from the physical
+database owner. Temporary admission, worker capacity, and storage-readiness failures
 get up to three attempts, waiting 5 seconds and then 10 seconds between attempts.
 Recovery preserves the accepted identity when older saved delivery metadata omitted
 an unset lifecycle revision during JSON storage. An identical completed input returns
