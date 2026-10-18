@@ -379,7 +379,6 @@ describe("ownerless skip transaction guards", () => {
     const job = commandJob("ownerless-live-receipt");
     const { state, storePath, events, execute } = await setupOwnerlessJob(job, () => owner);
     const prepared = prepareCronRunReceiptClaim({
-      observed: undefined,
       storePath,
       job,
       agentId: "ops",

@@ -1,5 +1,5 @@
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { awaitGateBeforeSettlement } from "../../../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, withinTest } from "../../../../test/helpers/promise.js";
 import { createSessionWorkStartChangedError } from "../../../config/sessions/lifecycle.js";
 import { replaceSessionEntry } from "../../../config/sessions/session-accessor.js";
 import { memorySessionActorOwners } from "../../../config/sessions/session-actor-memory-owner.js";
@@ -10,6 +10,7 @@ import { createRecoveryTypingManager } from "../../../gateway/recovery-typing.js
 import type { dispatchGatewayMethodInProcess } from "../../../gateway/server-plugin-in-process-dispatch.js";
 import { registerGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime-context.js";
 import type { sendMessage } from "../../../infra/outbound/message.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import type { ReplyBackendMessageInjectionV2 } from "../../../sessions/session-controller.contracts.js";
 import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
@@ -20,6 +21,7 @@ import {
 import { createReplyOperation } from "../../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.paths.js";
+import * as embeddedRuns from "../../embedded-agent-runner/runs.js";
 import { deliverSubagentAnnouncement, testing } from "./subagent-announce-delivery.test-support.js";
 import { sendSubagentAnnounceDirectly } from "./subagent-announce-direct-delivery.js";
 
@@ -245,6 +247,134 @@ describe("late exact requester recovery", () => {
       expect(fixture.dispatch).toHaveBeenCalledTimes(requireDirectDelivery ? 1 : 0);
       if (requireDirectDelivery) {
         expect(fixture.dispatch.mock.calls[0]?.[2]?.controllerInput).toBe(input);
+      }
+    },
+  );
+
+  it.for(["current", "revoked"] as const)(
+    "settles a rejected recovery handoff before releasing the parent turn (%s source)",
+    async (source, { signal }) => {
+      const fixture = setup();
+      const target = captureSessionTarget({
+        storeScope: "/synthetic/requester-recovery/sessions.json",
+        sessionKey,
+        agentId: "main",
+        incarnation: fixture.state.entry.sessionId,
+      });
+      const recoveryEntered = createDeferredCore();
+      const releaseRecovery = createDeferredCore();
+      const retirementEntered = createDeferredCore();
+      const releaseRetirement = createDeferredCore();
+      const recovery = withSessionTurn(
+        { target, sessionKey, sessionId: fixture.state.entry.sessionId },
+        async (operation) => {
+          if (!operation) {
+            throw new Error("Timeout recovery requires its retained controller operation");
+          }
+          operation.setPhase("preflight_compacting");
+          recoveryEntered.resolve();
+          await releaseRecovery.promise;
+        },
+      );
+      const abandonment = vi
+        .spyOn(embeddedRuns, "resolveEmbeddedRunAbandonment")
+        .mockReturnValue("recovering_timeout");
+      fixture.state.active = true;
+      fixture.dispatch.mockRejectedValue(
+        new Error("Completion must not dispatch behind held timeout recovery"),
+      );
+      fixture.readDone.resolve();
+      let input: ReturnType<typeof reserveSessionControllerSource> | undefined;
+      let delivery: ReturnType<typeof fixture.startDelivery> | undefined;
+      let handoffSettled = false;
+      try {
+        await withinTest(
+          awaitGateBeforeSettlement(
+            recoveryEntered.promise,
+            recovery,
+            "Recovery exited before retaining its controller turn",
+          ),
+          signal,
+        );
+        input = reserveSessionControllerSource(sessionKey, {
+          target,
+          policy: { mode: "followup" },
+          adapter: {
+            onSettled: async () => {
+              retirementEntered.resolve();
+              await releaseRetirement.promise;
+            },
+          },
+        });
+        const parentClaim = input.mailbox.claim;
+        expect(parentClaim).toBeDefined();
+        expect(parentClaim?.operation?.phase).toBe("preflight_compacting");
+        expect(parentClaim?.operation?.result).toBeNull();
+        fixture.params.sourceTool = "subagent_announce";
+        fixture.params.expectsCompletionMessage = true;
+        fixture.params.controllerInput = input;
+        delivery = fixture.startDelivery().finally(() => {
+          handoffSettled = true;
+        });
+        await withinTest(
+          awaitGateBeforeSettlement(
+            retirementEntered.promise,
+            delivery,
+            "Completion returned before retiring its rejected controller input",
+          ),
+          signal,
+        );
+        expect(handoffSettled).toBe(false);
+        expect(input.mailbox.entries).toContain(input);
+        expect(input.mailbox.claim).toBe(parentClaim);
+        expect(parentClaim?.operation?.result).toBeNull();
+        if (source === "revoked") {
+          fixture.state.allowed = false;
+        }
+        releaseRetirement.resolve();
+        const result = await withinTest(
+          awaitGateBeforeSettlement(
+            delivery,
+            recovery,
+            "Recovery released before the completion handoff settled",
+          ),
+          signal,
+        );
+        await input.settlement.promise;
+        expect(result).toMatchObject(
+          source === "current"
+            ? { delivered: false, reason: "completion_handoff_pending", disposition: "retryable" }
+            : {
+                delivered: false,
+                reason: "source_owner_changed",
+                terminal: true,
+                disposition: "intentional_non_delivery",
+              },
+        );
+        expect(input.phase).toBe("consumed");
+        expect(input.mailbox.entries).not.toContain(input);
+        expect(input.mailbox.claim).toBe(parentClaim);
+        expect(parentClaim?.released).toBe(false);
+        expect(parentClaim?.operation?.phase).toBe("preflight_compacting");
+        expect(parentClaim?.operation?.result).toBeNull();
+        expect(fixture.dispatch).not.toHaveBeenCalled();
+        expect(fixture.send).not.toHaveBeenCalled();
+        releaseRecovery.resolve();
+        await recovery;
+        expect(fixture.dispatch).not.toHaveBeenCalled();
+        expect(fixture.send).not.toHaveBeenCalled();
+      } finally {
+        releaseRetirement.resolve();
+        releaseRecovery.resolve();
+        if (input) {
+          retireSessionControllerInput(input);
+        }
+        await Promise.allSettled([
+          recovery,
+          ...(delivery ? [delivery] : []),
+          ...(input ? [input.settlement.promise] : []),
+        ]);
+        abandonment.mockRestore();
       }
     },
   );

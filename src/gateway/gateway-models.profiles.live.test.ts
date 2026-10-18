@@ -5312,16 +5312,19 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
     throw new Error("OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT requires OPENAI_API_KEY");
   }
   const { detectInferenceBackends } = await import("../commands/onboard-inference.js");
-  const candidates = await detectInferenceBackends({
-    config: {},
-    env: { OPENAI_API_KEY: apiKey },
-    platform: "linux",
-    deps: {
-      probeLocalCommand: async (command) => ({ command, found: false }),
-      hasCodexCliAuthFile: () => false,
-      readGeminiCliCredentials: () => null,
-    },
-  });
+  const probes = await import("../system-agent/probes.js");
+  const cliCredentials = await import("../agents/cli-credentials.js");
+  const probe = vi
+    .spyOn(probes, "probeLocalCommand")
+    .mockImplementation(async (command) => ({ command, found: false }));
+  const login = vi.spyOn(cliCredentials, "hasCodexCliAuthFile").mockReturnValue(false);
+  let candidates: Awaited<ReturnType<typeof detectInferenceBackends>>;
+  try {
+    candidates = await detectInferenceBackends({ config: {} });
+  } finally {
+    probe.mockRestore();
+    login.mockRestore();
+  }
   const selected = candidates.find((candidate) => candidate.kind === "openai-api-key");
   if (!selected) {
     throw new Error("fresh OpenAI API-key inference selection returned no candidate");

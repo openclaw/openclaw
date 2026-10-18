@@ -59,7 +59,6 @@ import { createSidebarSnapshot } from "./sidebar-snapshot.ts";
 import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { PanelRefreshStatus } from "./solid/panel-refresh-status.tsx";
-import { SidebarCommunityInvite } from "./solid/sidebar-community-invite.tsx";
 
 export class AppSidebarOwner extends AppSidebarSessionNavigationElement implements SessionListHost {
   readNarration: () => ReturnType<SidebarNarration["read"]> | undefined = () => undefined;
@@ -522,16 +521,6 @@ export class AppSidebarOwner extends AppSidebarSessionNavigationElement implemen
                   status={this.sessionData.sessionCatalogRefreshStatus}
                   {...{ className: "sidebar-session-error sidebar-session-catalog-error" }}
                 />
-              </Show>
-            </div>
-            <div class="sidebar-shell__invite">
-              <Show
-                when={
-                  this.context.theme.branding.communityLinks &&
-                  this.context.config.current.communityInvite
-                }
-              >
-                <SidebarCommunityInvite />
               </Show>
             </div>
             <Show when={statusVisible() || this.devGitBranch}>
