@@ -1,6 +1,5 @@
 import { execFileSync } from "node:child_process";
 import fs from "node:fs/promises";
-import type { IncomingMessage, ServerResponse } from "node:http";
 import path from "node:path";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
@@ -12,13 +11,8 @@ import {
   type QaGatewayChild,
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
-import {
-  createTelegramUpdateQueue,
-  readTelegramRequest,
-  succeedTelegram as succeed,
-} from "./telegram-gateway.test-support.js";
+import { createTelegramApi, telegramGatewayOptions } from "./telegram-gateway.test-support.js";
 
-type TelegramCall = { method: string; body: Record<string, unknown> };
 const BOT_ID = 424242;
 const BOT_TOKEN = `${BOT_ID}:${"A".repeat(35)}`;
 const CHAT_ID = -1002468135790;
@@ -32,10 +26,16 @@ const repoRoot = path.resolve(import.meta.dirname, "../../../..");
 test.each(["allowlist", "open"] as const)(
   "enforces inherited root %s before Telegram dispatch and delivers admitted messages",
   async (groupPolicy) => {
-    const telegramCalls: TelegramCall[] = [];
-    const updates = createTelegramUpdateQueue();
     const bot = { id: BOT_ID, is_bot: true, first_name: "QA Policy", username: "qa_policy_bot" };
     const chat = { id: CHAT_ID, type: "supergroup", title: "QA Policy Room", is_forum: false };
+    const api = createTelegramApi({
+      token: BOT_TOKEN,
+      bot,
+      chat,
+      messageId: (count) => 9000 + count,
+      now: () => Math.floor(Date.now() / 1000),
+    });
+    const { calls: telegramCalls, updates } = api;
     let updateId = 0;
     const sendInbound = (senderId: number, marker: string) => {
       const update = {
@@ -50,31 +50,7 @@ test.each(["allowlist", "open"] as const)(
       };
       updates.enqueue(update);
     };
-    const handleRequest = async (req: IncomingMessage, res: ServerResponse) => {
-      const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
-      const [, token = "", method = ""] = pathname.match(/^\/bot([^/]+)\/([^/]+)$/) ?? [];
-      const raw = await readTelegramRequest(req);
-      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
-      telegramCalls.push({ method, body });
-      if (token !== BOT_TOKEN) {
-        writeJson(res, 401, { ok: false, error_code: 401, description: "Unexpected bot token" });
-      } else if (method === "getMe") {
-        succeed(res, bot);
-      } else if (method === "getUpdates") {
-        updates.poll(res);
-      } else if (method === "getChat") {
-        succeed(res, chat);
-      } else if (method === "sendMessage") {
-        succeed(res, {
-          message_id: 9000 + telegramCalls.length,
-          date: Math.floor(Date.now() / 1000),
-          chat,
-          text: body.text,
-        });
-      } else {
-        succeed(res);
-      }
-    };
+    const handleRequest = api.handle;
 
     await withServer(
       (req, res) => {
@@ -118,54 +94,43 @@ test.each(["allowlist", "open"] as const)(
           };
           const deliveries = () => telegramCalls.filter((call) => call.method === "sendMessage");
           try {
-            gateway = await gatewayOwner.start({
-              repoRoot,
-              command: {
-                executablePath: process.execPath,
-                argsPrefix: [path.join(repoRoot, "dist", "index.js")],
-                argsSuffix: ["--verbose"],
-              },
-              providerMode: "mock-openai",
-              providerBaseUrl: `${mock.baseUrl}/v1`,
-              transportBaseUrl: apiRoot,
-              transport: {
-                requiredPluginIds: ["telegram"],
-                createGatewayConfig: () => ({
-                  messages: { groupChat: { visibleReplies: "automatic" } },
-                  channels: {
-                    telegram: {
+            gateway = await gatewayOwner.start(
+              telegramGatewayOptions({
+                workspace,
+                apiRoot,
+                command: {
+                  executablePath: process.execPath,
+                  argsPrefix: [path.join(repoRoot, "dist", "index.js")],
+                  argsSuffix: ["--verbose"],
+                },
+                providerMode: "mock-openai",
+                providerBaseUrl: `${mock.baseUrl}/v1`,
+                telegram: {
+                  enabled: true,
+                  defaultAccount: "proof",
+                  groupPolicy,
+                  groupAllowFrom: [String(ALLOWED_SENDER)],
+                  groups: { "*": { requireMention: false } },
+                  accounts: {
+                    proof: {
                       enabled: true,
-                      defaultAccount: "proof",
-                      groupPolicy,
-                      groupAllowFrom: [String(ALLOWED_SENDER)],
-                      groups: { "*": { requireMention: false } },
-                      accounts: {
-                        proof: {
-                          enabled: true,
-                          botToken: BOT_TOKEN,
-                          apiRoot,
-                          commands: { native: false },
-                          streaming: { mode: "off" },
-                        },
-                      },
+                      botToken: BOT_TOKEN,
+                      apiRoot,
+                      commands: { native: false },
+                      streaming: { mode: "off" },
                     },
                   },
-                }),
-              },
-              controlUiEnabled: false,
-              runtimeEnvPatch: {
-                OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-                TELEGRAM_BOT_TOKEN: undefined,
-              },
-              mutateConfig: (cfg) => {
-                cfg.agents!.defaults!.workspace = workspace;
-                cfg.logging = { level: "debug", file: path.join(workspace, "gateway.log") };
-                cfg.bindings = [
-                  { agentId: "qa", match: { channel: "telegram", accountId: "proof" } },
-                ];
-                return cfg;
-              },
-            });
+                },
+                messages: { groupChat: { visibleReplies: "automatic" } },
+                mutateConfig: (cfg) => {
+                  cfg.logging = { level: "debug", file: path.join(workspace, "gateway.log") };
+                  cfg.bindings = [
+                    { agentId: "qa", match: { channel: "telegram", accountId: "proof" } },
+                  ];
+                  return cfg;
+                },
+              }),
+            );
             evidence.gatewayPort = new URL(gateway.baseUrl).port;
             expect(evidence.gatewayPort).not.toBe("18789");
             await expect

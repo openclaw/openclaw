@@ -12,6 +12,7 @@ import {
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
   readTelegramRequest,
+  telegramGatewayOptions,
   settleTelegramCleanup as settleCleanup,
   succeedTelegram as succeed,
 } from "./telegram-gateway.test-support.js";
@@ -21,10 +22,7 @@ const LOCALIZED_PLUGIN_ID = "telegram-menu-localization-e2e";
 const LOCALIZED_PLUGIN_COMMANDS = Array.from({ length: 24 }, (_, index) => ({
   name: `menu_locale_${String(index).padStart(3, "0")}`,
   description: `Menu locale ${index}`,
-  descriptionLocalizations: {
-    fr: `Menu français ${index}`,
-    ko: "한".repeat(250),
-  },
+  descriptionLocalizations: { fr: `Menu français ${index}`, ko: "한".repeat(250) },
 }));
 const TOKENS = ["A", "B", "C", "D", "E"].map(
   (letter, index) => `${100001 + index}:${letter.repeat(35)}`,
@@ -154,56 +152,47 @@ test("registers pressure-prioritized Telegram menus through a real Gateway", asy
             customCommands: commands,
           });
           mock = await startQaMockOpenAiServer();
-          await gatewayOwner.start({
-            repoRoot,
-            providerBaseUrl: `${mock.baseUrl}/v1`,
-            transportBaseUrl: apiRoot,
-            transport: {
-              requiredPluginIds: ["telegram"],
-              createGatewayConfig: () => ({
-                channels: {
-                  telegram: {
-                    ...baseAccount,
-                    defaultAccount: "count",
-                    accounts: {
-                      count: account(COUNT_TOKEN, countCustom),
-                      text: account(TEXT_TOKEN, textCustom),
-                      retry: account(RETRY_TOKEN, retryCustom),
-                      skill: account(SKILL_TOKEN, skillCustom, true),
-                      localized: account(LOCALIZED_TOKEN, localizedCustom),
-                    },
+          await gatewayOwner.start(
+            telegramGatewayOptions({
+              workspace,
+              apiRoot,
+              providerBaseUrl: `${mock.baseUrl}/v1`,
+              telegram: {
+                ...baseAccount,
+                defaultAccount: "count",
+                accounts: {
+                  count: account(COUNT_TOKEN, countCustom),
+                  text: account(TEXT_TOKEN, textCustom),
+                  retry: account(RETRY_TOKEN, retryCustom),
+                  skill: account(SKILL_TOKEN, skillCustom, true),
+                  localized: account(LOCALIZED_TOKEN, localizedCustom),
+                },
+              },
+              runtimeEnvPatch: {
+                OPENCLAW_SKIP_CHANNELS: undefined,
+                OPENCLAW_SKIP_PROVIDERS: undefined,
+              },
+              mutateConfig: (cfg) => {
+                cfg.bindings = [
+                  ...(cfg.bindings ?? []),
+                  { agentId: "qa", match: { channel: "telegram", accountId: "skill" } },
+                ];
+                cfg.plugins = {
+                  ...cfg.plugins,
+                  allow: [...new Set([...(cfg.plugins?.allow ?? []), LOCALIZED_PLUGIN_ID])],
+                  entries: {
+                    ...cfg.plugins?.entries,
+                    [LOCALIZED_PLUGIN_ID]: { enabled: true },
                   },
-                },
-              }),
-            },
-            controlUiEnabled: false,
-            runtimeEnvPatch: {
-              OPENCLAW_SKIP_CHANNELS: undefined,
-              OPENCLAW_SKIP_PROVIDERS: undefined,
-              OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-              TELEGRAM_BOT_TOKEN: undefined,
-            },
-            mutateConfig: (cfg) => {
-              cfg.agents!.defaults!.workspace = workspace;
-              cfg.bindings = [
-                ...(cfg.bindings ?? []),
-                { agentId: "qa", match: { channel: "telegram", accountId: "skill" } },
-              ];
-              cfg.plugins = {
-                ...cfg.plugins,
-                allow: [...new Set([...(cfg.plugins?.allow ?? []), LOCALIZED_PLUGIN_ID])],
-                entries: {
-                  ...cfg.plugins?.entries,
-                  [LOCALIZED_PLUGIN_ID]: { enabled: true },
-                },
-                load: {
-                  ...cfg.plugins?.load,
-                  paths: [...new Set([...(cfg.plugins?.load?.paths ?? []), localizedPluginDir])],
-                },
-              };
-              return cfg;
-            },
-          });
+                  load: {
+                    ...cfg.plugins?.load,
+                    paths: [...new Set([...(cfg.plugins?.load?.paths ?? []), localizedPluginDir])],
+                  },
+                };
+                return cfg;
+              },
+            }),
+          );
           const scoped = (token: string, group = false, languageCode?: string) =>
             calls.filter((call) => {
               const isGroup = call.body.scope?.type === "all_group_chats";

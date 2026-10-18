@@ -1,5 +1,43 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { writeJson } from "../../../../extensions/qa-lab/api.js";
+import path from "node:path";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { createQaGatewayChild, writeJson } from "../../../../extensions/qa-lab/api.js";
+
+type GatewayOptions = Parameters<ReturnType<typeof createQaGatewayChild>["start"]>[0];
+export function telegramGatewayOptions({
+  workspace,
+  apiRoot,
+  telegram,
+  messages,
+  mutateConfig,
+  runtimeEnvPatch,
+  ...options
+}: Omit<GatewayOptions, "repoRoot" | "transport" | "transportBaseUrl" | "controlUiEnabled"> & {
+  workspace: string;
+  apiRoot: string;
+  telegram: NonNullable<OpenClawConfig["channels"]>["telegram"];
+  messages?: OpenClawConfig["messages"];
+}): GatewayOptions {
+  return {
+    ...options,
+    repoRoot: path.resolve(import.meta.dirname, "../../../.."),
+    transportBaseUrl: apiRoot,
+    transport: {
+      requiredPluginIds: ["telegram"],
+      createGatewayConfig: () => ({ channels: { telegram }, ...(messages ? { messages } : {}) }),
+    },
+    controlUiEnabled: false,
+    runtimeEnvPatch: {
+      OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
+      TELEGRAM_BOT_TOKEN: undefined,
+      ...runtimeEnvPatch,
+    },
+    mutateConfig: (cfg) => {
+      cfg.agents!.defaults!.workspace = workspace;
+      return mutateConfig ? mutateConfig(cfg) : cfg;
+    },
+  };
+}
 
 export async function readTelegramRequest(req: IncomingMessage) {
   let text = "";
@@ -35,6 +73,47 @@ export function createTelegramUpdateQueue() {
       } else {
         pendingPolls.add(res);
         res.on("close", () => pendingPolls.delete(res));
+      }
+    },
+  };
+}
+
+export function createTelegramApi(options: {
+  token: string;
+  bot: Record<string, unknown>;
+  chat: Record<string, unknown>;
+  chatDetails?: Record<string, unknown>;
+  messageId?: (callCount: number) => number;
+  now?: () => number;
+}) {
+  const calls: Array<{ method: string; body: Record<string, unknown> }> = [];
+  const updates = createTelegramUpdateQueue();
+  return {
+    calls,
+    updates,
+    async handle(req: IncomingMessage, res: ServerResponse) {
+      const [, token = "", method = ""] =
+        new URL(req.url ?? "/", "http://127.0.0.1").pathname.match(/^\/bot([^/]+)\/([^/]+)$/) ?? [];
+      const raw = await readTelegramRequest(req);
+      const body = raw ? (JSON.parse(raw) as Record<string, unknown>) : {};
+      calls.push({ method, body });
+      if (token !== options.token) {
+        writeJson(res, 401, { ok: false, error_code: 401, description: "Unexpected bot token" });
+      } else if (method === "getMe") {
+        succeedTelegram(res, options.bot);
+      } else if (method === "getUpdates") {
+        updates.poll(res);
+      } else if (method === "getChat") {
+        succeedTelegram(res, { ...options.chat, ...options.chatDetails });
+      } else if (method === "sendMessage") {
+        succeedTelegram(res, {
+          message_id: options.messageId?.(calls.length) ?? 9001,
+          date: options.now?.() ?? 1_754_000_000,
+          chat: options.chat,
+          text: body.text,
+        });
+      } else {
+        succeedTelegram(res);
       }
     },
   };

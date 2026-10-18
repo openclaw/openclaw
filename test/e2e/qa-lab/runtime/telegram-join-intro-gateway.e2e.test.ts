@@ -1,5 +1,4 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
-import path from "node:path";
 import { withServer, withTempDir } from "openclaw/plugin-sdk/test-env";
 import { expect, test } from "vitest";
 import {
@@ -11,14 +10,13 @@ import {
 } from "../../../../extensions/qa-lab/api.js";
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 import {
-  createTelegramUpdateQueue,
+  createTelegramApi,
   readTelegramRequest,
+  telegramGatewayOptions,
   settleTelegramCleanup as settleCleanup,
-  succeedTelegram as succeed,
 } from "./telegram-gateway.test-support.js";
 
 type JsonObject = Record<string, unknown>;
-type TelegramCall = { method: string; body: JsonObject };
 
 const BOT_ID = 424242;
 const BOT_TOKEN = `${BOT_ID}:${"A".repeat(35)}`;
@@ -96,8 +94,13 @@ function groundAssistantResponse(payload: string, text: string) {
 }
 
 test("introduces itself once when Telegram reports joining an allowed supergroup", async () => {
-  const telegramCalls: TelegramCall[] = [];
-  const updates = createTelegramUpdateQueue();
+  const api = createTelegramApi({
+    token: BOT_TOKEN,
+    bot,
+    chat,
+    chatDetails: { description: ROOM_DESCRIPTION },
+  });
+  const { calls: telegramCalls, updates } = api;
   const { pendingUpdates, pendingPolls } = updates;
   let groundedModelResponses = 0;
   let providerRequests = 0;
@@ -153,47 +156,15 @@ test("introduces itself once when Telegram reports joining an allowed supergroup
     const pathname = new URL(req.url ?? "/", "http://127.0.0.1").pathname;
     if (pathname.startsWith("/v1/")) {
       await proxyProviderRequest(req, res, pathname);
-      return;
+    } else {
+      await api.handle(req, res);
     }
-
-    const [, token = "", method = ""] = pathname.match(/^\/bot([^/]+)\/([^/]+)$/) ?? [];
-    const raw = await readTelegramRequest(req);
-    const body = raw ? (JSON.parse(raw) as JsonObject) : {};
-    telegramCalls.push({ method, body });
-    if (token !== BOT_TOKEN) {
-      writeJson(res, 401, { ok: false, error_code: 401, description: "Unexpected bot token" });
-      return;
-    }
-    if (method === "getMe") {
-      succeed(res, bot);
-      return;
-    }
-    if (method === "getUpdates") {
-      updates.poll(res);
-      return;
-    }
-    if (method === "getChat") {
-      succeed(res, { ...chat, description: ROOM_DESCRIPTION });
-      return;
-    }
-    if (method === "sendMessage") {
-      succeed(res, {
-        message_id: 9001,
-        date: 1_754_000_000,
-        chat,
-        text: body.text,
-      });
-      return;
-    }
-    succeed(res);
   };
 
   await withServer(
     (req, res) => {
       void handleRequest(req, res).catch((error: unknown) => {
-        writeJson(res, 500, {
-          error: error instanceof Error ? error.message : String(error),
-        });
+        writeJson(res, 500, { error: error instanceof Error ? error.message : String(error) });
       });
     },
     async (apiRoot) => {
@@ -201,50 +172,40 @@ test("introduces itself once when Telegram reports joining an allowed supergroup
         const gatewayOwner = createQaGatewayChild();
         let gateway: QaGatewayChild | undefined;
         try {
-          const repoRoot = path.resolve(import.meta.dirname, "../../../..");
           mock = await startQaMockOpenAiServer();
-          gateway = await gatewayOwner.start({
-            repoRoot,
-            providerBaseUrl: `${apiRoot}/v1`,
-            mockSessionObserverUrl: mock.sessionObserverUrl,
-            transportBaseUrl: apiRoot,
-            transport: {
-              requiredPluginIds: ["telegram"],
-              createGatewayConfig: () => ({
-                channels: {
-                  telegram: {
+          gateway = await gatewayOwner.start(
+            telegramGatewayOptions({
+              workspace,
+              apiRoot,
+              providerBaseUrl: `${apiRoot}/v1`,
+              mockSessionObserverUrl: mock.sessionObserverUrl,
+              telegram: {
+                enabled: true,
+                defaultAccount: "proof",
+                groupPolicy: "open",
+                accounts: {
+                  proof: {
                     enabled: true,
-                    defaultAccount: "proof",
+                    botToken: BOT_TOKEN,
+                    apiRoot,
                     groupPolicy: "open",
-                    accounts: {
-                      proof: {
-                        enabled: true,
-                        botToken: BOT_TOKEN,
-                        apiRoot,
-                        groupPolicy: "open",
-                        commands: { native: false },
-                      },
-                    },
+                    commands: { native: false },
                   },
                 },
-              }),
-            },
-            controlUiEnabled: false,
-            runtimeEnvPatch: {
-              OPENCLAW_SKIP_CHANNELS: undefined,
-              OPENCLAW_SKIP_PROVIDERS: undefined,
-              OPENCLAW_TEST_MINIMAL_GATEWAY: undefined,
-              TELEGRAM_BOT_TOKEN: undefined,
-            },
-            mutateConfig: (cfg) => {
-              cfg.agents!.defaults!.workspace = workspace;
-              cfg.bindings = [
-                ...(cfg.bindings ?? []),
-                { agentId: "qa", match: { channel: "telegram", accountId: "proof" } },
-              ];
-              return cfg;
-            },
-          });
+              },
+              runtimeEnvPatch: {
+                OPENCLAW_SKIP_CHANNELS: undefined,
+                OPENCLAW_SKIP_PROVIDERS: undefined,
+              },
+              mutateConfig: (cfg) => {
+                cfg.bindings = [
+                  ...(cfg.bindings ?? []),
+                  { agentId: "qa", match: { channel: "telegram", accountId: "proof" } },
+                ];
+                return cfg;
+              },
+            }),
+          );
 
           updates.enqueue(joinUpdate());
           await expect
@@ -252,10 +213,7 @@ test("introduces itself once when Telegram reports joining an allowed supergroup
               () => ({
                 deliveries: telegramCalls
                   .filter((call) => call.method === "sendMessage")
-                  .map((call) => ({
-                    chatId: String(call.body.chat_id),
-                    text: call.body.text,
-                  })),
+                  .map((call) => ({ chatId: String(call.body.chat_id), text: call.body.text })),
                 groundedModelResponses,
                 telegramMethods: telegramCalls.map((call) => call.method),
               }),
