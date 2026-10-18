@@ -1,3 +1,4 @@
+import { hasConfiguredAccountValue } from "openclaw/plugin-sdk/account-core";
 import type {
   ChannelDoctorAdapter,
   ChannelDoctorEmptyAllowlistAccountContext,
@@ -478,10 +479,19 @@ function hasExplicitDefaultChildAccount(account: DoctorAccountRecord): boolean {
 
 function hasGroupsForEveryExplicitChildAccount(account: DoctorAccountRecord): boolean {
   const children = listActiveChildAccounts(account);
+  const hasTopLevelCredential =
+    hasConfiguredAccountValue(account.botToken) || hasConfiguredAccountValue(account.tokenFile);
+  const accounts = asObjectRecord(account.accounts);
+  const implicitDefault = accounts ? asObjectRecord(accounts.default) : undefined;
+  const implicitDefaultHasGroups =
+    implicitDefault !== null &&
+    implicitDefault.enabled !== false &&
+    hasConfiguredGroups(implicitDefault, account);
   return (
     hasExplicitDefaultChildAccount(account) &&
     children.length > 0 &&
-    children.every((child) => hasConfiguredGroups(child, account))
+    children.every((child) => hasConfiguredGroups(child, account)) &&
+    (!hasTopLevelCredential || implicitDefaultHasGroups)
   );
 }
 

@@ -711,4 +711,22 @@ describe("telegram doctor empty allowlist extra warnings", () => {
       "channels.telegram: Telegram is in first-time setup mode.",
     );
   });
+
+  it("keeps parent first-time guidance for an implicit default beside a named default", () => {
+    const warnings = collectExtraWarnings({
+      account: {
+        botToken: "123:top-level",
+        defaultAccount: "work",
+        groupPolicy: "allowlist",
+        accounts: {
+          work: { groups: { "-1001": { requireMention: true } } },
+          second: { groups: { "-1002": { requireMention: true } } },
+        },
+      },
+    });
+
+    expect(warnings.join("\n")).toContain(
+      "channels.telegram: Telegram is in first-time setup mode.",
+    );
+  });
 });
