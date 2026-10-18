@@ -1,4 +1,4 @@
-import { For, Show, createMemo } from "solid-js";
+import { For, Show, createMemo, onSettled } from "solid-js";
 import {
   createRuntimeToolMatcher,
   createToolPolicyMatcher,
@@ -96,42 +96,6 @@ function toToolAnchorId(toolId: string) {
 
 const MAX_RUNTIME_TOOL_CHIPS = 12;
 
-function handleToolGroupToggle(event: Event) {
-  const group = event.currentTarget;
-  if (!(group instanceof HTMLDetailsElement) || group.open) {
-    return;
-  }
-  for (const tool of group.querySelectorAll<HTMLDetailsElement>(".agent-tool-card[open]")) {
-    tool.open = false;
-  }
-}
-
-function handleRuntimeToolJump(event: Event, anchorId: string) {
-  const target = document.getElementById(anchorId);
-  if (!(target instanceof HTMLDetailsElement)) {
-    return;
-  }
-
-  event.preventDefault();
-  const parentGroup = target.closest<HTMLDetailsElement>(".agent-tools-group");
-  if (parentGroup) {
-    parentGroup.open = true;
-  }
-  target.open = true;
-
-  const nextUrl = new URL(window.location.href);
-  nextUrl.hash = anchorId;
-  window.history.replaceState(null, "", nextUrl);
-
-  requestAnimationFrame(() => {
-    target.scrollIntoView?.({
-      block: "center",
-      behavior: resolveScrollBehavior(),
-    });
-    target.querySelector<HTMLElement>("summary")?.focus();
-  });
-}
-
 function renderEffectiveToolBadge(tool: {
   source: "core" | "plugin" | "channel" | "mcp";
   pluginId?: string;
@@ -171,6 +135,28 @@ export function AgentTools(
     onOverridesChange: (agentId: string, alsoAllow: string[], deny: string[]) => void;
   },
 ) {
+  const toolTargets = new Map<
+    string,
+    { details: HTMLDetailsElement; summary: HTMLElement; group: HTMLDetailsElement }
+  >();
+  const jumpToTool = (event: Event, anchorId: string) => {
+    const target = toolTargets.get(anchorId);
+    if (!target) {
+      return;
+    }
+    event.preventDefault();
+    target.group.open = true;
+    target.details.open = true;
+    const nextUrl = new URL(window.location.href);
+    nextUrl.hash = anchorId;
+    window.history.replaceState(null, "", nextUrl);
+    onSettled(() => {
+      if (target.details.isConnected) {
+        target.details.scrollIntoView?.({ block: "center", behavior: resolveScrollBehavior() });
+        target.summary.focus();
+      }
+    });
+  };
   const config = createMemo(() => resolveAgentConfig(params.configForm, params.agentId));
   const agentTools = () => config().entry?.tools ?? {};
   const globalTools = () => config().globalTools ?? {};
@@ -320,7 +306,7 @@ export function AgentTools(
                 <a
                   class="agent-tools-runtime-chip"
                   href={`#${anchorId()}`}
-                  onClick={(event: Event) => handleRuntimeToolJump(event, anchorId())}
+                  onClick={(event: Event) => jumpToTool(event, anchorId())}
                 >
                   <span class="mono" translate="no">
                     {tool().label}
@@ -473,6 +459,15 @@ export function AgentTools(
         <div class="agents-panel-body agent-tools-grid" hidden={catalogLoading()}>
           <For each={toolSections()} keyed={(section) => section.id}>
             {(section) => {
+              let group!: HTMLDetailsElement;
+              const toolDetails = new Set<HTMLDetailsElement>();
+              const groupToggled = () => {
+                if (!group.open) {
+                  for (const details of toolDetails) {
+                    details.open = false;
+                  }
+                }
+              };
               const sortedTools = createMemo(() => {
                 const ranked = section().tools.map((tool) => ({
                   tool,
@@ -500,7 +495,11 @@ export function AgentTools(
               const previewTools = createMemo(() => sortedTools().slice(0, 4));
               const remainingPreviewCount = () => sortedTools().length - previewTools().length;
               return (
-                <details class="agent-tools-group" onToggle={handleToolGroupToggle}>
+                <details
+                  ref={(element) => (group = element)}
+                  class="agent-tools-group"
+                  onToggle={groupToggled}
+                >
                   <summary class="agent-tools-group__summary">
                     <span class="agent-tools-group__summary-main">
                       <span class="agent-tools-group__title">
@@ -558,6 +557,17 @@ export function AgentTools(
                   <div class="agent-tools-list">
                     <For each={sortedTools()} keyed={(tool) => tool.id}>
                       {(tool) => {
+                        let details!: HTMLDetailsElement;
+                        let summary!: HTMLElement;
+                        onSettled(() => {
+                          const key = anchorId();
+                          toolDetails.add(details);
+                          toolTargets.set(key, { details, summary, group });
+                          return () => {
+                            toolDetails.delete(details);
+                            toolTargets.delete(key);
+                          };
+                        });
                         const anchorId = () => toToolAnchorId(tool().id);
                         const resolved = createMemo(() => resolveAllowed(tool().id));
                         const activeEntry = createMemo(
@@ -594,8 +604,15 @@ export function AgentTools(
                               : availability().reason || availability().summary;
                         });
                         return (
-                          <details class="agent-tool-card" id={anchorId()}>
-                            <summary class="agent-tool-summary">
+                          <details
+                            ref={(element) => (details = element)}
+                            class="agent-tool-card"
+                            id={anchorId()}
+                          >
+                            <summary
+                              ref={(element) => (summary = element)}
+                              class="agent-tool-summary"
+                            >
                               <div class="agent-tool-summary__main">
                                 <div class="agent-tool-summary__title-row">
                                   <span class="agent-tool-title mono" translate="no">

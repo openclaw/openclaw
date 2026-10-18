@@ -59,8 +59,6 @@ function createStoredSessionTool(config: OpenClawConfig = {}) {
     loadGatewayModelCatalog: async () => [],
     getSessionEventSubscriberConnIds: () => new Set(),
     broadcastToConnIds: vi.fn(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
   } as unknown as GatewayRequestContext;
   const callGateway: AgentToolGatewayRequestCaller = async <T>(

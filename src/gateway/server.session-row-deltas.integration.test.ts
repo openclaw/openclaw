@@ -1,6 +1,7 @@
 import { JSDOM } from "jsdom";
 import { expect, onTestFinished, test, vi } from "vitest";
 import type { EventFrame } from "../../packages/gateway-protocol/src/index.js";
+import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayChatEvents } from "../../ui/src/api/gateway-chat-events.ts";
 import type { SessionsListResult } from "../../ui/src/api/types.ts";
 import { createTestGatewayClient } from "../../ui/src/test-helpers/gateway-client.ts";
@@ -10,7 +11,10 @@ import {
   replaceSessionEntrySync,
 } from "../config/sessions/session-accessor.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
-import { getActiveGatewayRootWorkCount } from "../process/gateway-work-admission.js";
+import {
+  captureGatewayRootWorkReleaseObserver,
+  getActiveGatewayRootWorkCount,
+} from "../process/gateway-work-admission.js";
 import { createNestedToolActivity } from "../sessions/nested-tool-activity.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { startGatewayServerHarness, type GatewayServerHarness } from "./server.e2e-ws-harness.js";
@@ -65,9 +69,12 @@ function expectFullSessionRowFrame(
 test("capable and legacy sockets produce identical session payloads and consumer state", async () => {
   const readRetention = observeSessionEventRowRetention();
   const capable = await harness.openClient({
-    caps: ["session-scoped-events", "session-row-deltas"],
+    caps: ["session-scoped-events", "session-row-deltas", "roster-message-bodies-optional"],
   });
   const legacy = await harness.openClient({ caps: ["session-scoped-events"] });
+  const roster = await harness.openClient({
+    caps: ["session-scoped-events", "session-row-deltas", "roster-message-bodies-optional"],
+  });
   const keys = Array.from({ length: 5 }, (_, depth) => `agent:main:row-delta-depth-${depth}`);
   const key = keys.at(-1);
   if (!key) {
@@ -87,7 +94,7 @@ test("capable and legacy sockets produce identical session payloads and consumer
   if (!projection) {
     throw new Error("Expected runtime session projection");
   }
-  const drain = async (sockets = [capable.ws, legacy.ws]) => {
+  const drain = async (sockets = [capable.ws, legacy.ws, roster.ws]) => {
     await flushPendingSessionsChangedEvents(kernel.gatewayRequestContext);
     await drainSessionEventPublications(projection);
     // Replies order each socket's already handed-off event frames before comparison.
@@ -102,6 +109,20 @@ test("capable and legacy sockets produce identical session payloads and consumer
     expect((await rpcReq(ws, "sessions.subscribe", {})).ok).toBe(true);
     expect((await rpcReq(ws, "sessions.messages.subscribe", { key })).ok).toBe(true);
   }
+  expect((await rpcReq(roster.ws, "sessions.subscribe", {})).ok).toBe(true);
+  // Every exact kind retains bodies, including independently identified observers.
+  for (const [depth, childKey] of keys.slice(0, -1).entries()) {
+    expect(
+      (
+        await rpcReq(capable.ws, "sessions.messages.subscribe", {
+          key: childKey,
+          subscriptionId: `observer-${depth}`,
+          ...(depth === 1 ? { mode: "narration" } : {}),
+          ...(depth === 2 ? { includeApprovals: true } : {}),
+        })
+      ).ok,
+    ).toBe(true);
+  }
   const initial = await rpcReq<SessionsListResult>(legacy.ws, "sessions.list", {
     agentId: "main",
     rowMode: "sidebar",
@@ -109,16 +130,40 @@ test("capable and legacy sockets produce identical session payloads and consumer
   if (!initial.payload) {
     throw new Error("Expected roster");
   }
-  const streams = [capable, legacy].map(({ ws }) => collectSessionRowFrames(ws));
+  const legacyWire: string[] = [];
+  const streams = [
+    collectSessionRowFrames(capable.ws),
+    collectSessionRowFrames(legacy.ws, legacyWire),
+  ];
+  const rosterWire: string[] = [];
+  const rosterFrames = collectSessionRowFrames(roster.ws, rosterWire);
+  const firstToolBatchesReceived = createDeferred();
+  const observeFirstToolBatches = () => {
+    if (rosterFrames.filter((frame) => frame.event === "session.message").length >= 13) {
+      firstToolBatchesReceived.resolve();
+    }
+  };
+  roster.ws.on("message", observeFirstToolBatches);
+  onTestFinished(() => {
+    roster.ws.off("message", observeFirstToolBatches);
+  });
+  let fullBodiesFrom = Number.POSITIVE_INFINITY;
   let finishSubagents = () => {};
   onTestFinished(() => finishSubagents());
   let finish!: () => void;
   const completed = new Promise<void>((resolve) => {
     finish = resolve;
   });
+  let dispatchFailure: unknown;
+  const rootReleased = createDeferred<"settled" | "reset">();
   dispatchInboundMessageMock.mockImplementationOnce(async (args: unknown) => {
     const { dispatcher, replyOptions } = args as Parameters<typeof dispatchInboundMessage>[0];
     try {
+      const observeRelease = captureGatewayRootWorkReleaseObserver();
+      if (!observeRelease) {
+        throw new Error("Expected chat send root admission");
+      }
+      observeRelease(rootReleased.resolve);
       await replyOptions?.userTurnTranscriptRecorder?.persistApproved();
       await replyOptions?.onAgentRunStart?.(runId);
       finishSubagents = await startSessionRowDeltaSubagents(keys);
@@ -130,6 +175,21 @@ test("capable and legacy sockets produce identical session payloads and consumer
         data: { phase: "start", startedAt: Date.now() },
       });
       for (const [depth, childKey] of keys.entries()) {
+        if (depth === 2) {
+          // Transcript dispatch can still be loading before the row publication drain sees it.
+          await firstToolBatchesReceived.promise;
+          roster.ws.off("message", observeFirstToolBatches);
+          await drain();
+          expect(rosterFrames.filter((frame) => frame.event === "session.message")).toHaveLength(
+            13,
+          );
+          expect(
+            (await rpcReq(roster.ws, "sessions.subscribe", { includeMessageBodies: true })).ok,
+          ).toBe(true);
+          fullBodiesFrom = rosterFrames.length;
+          // A regular roster subscription must not reset the plugin preference.
+          expect((await rpcReq(roster.ws, "sessions.subscribe", {})).ok).toBe(true);
+        }
         const loaded = await loadGatewaySessionEntryReadOnlyAsync(childKey, { agentId: "main" });
         if (!loaded.entry) {
           throw new Error("Expected durable child");
@@ -265,6 +325,9 @@ test("capable and legacy sockets produce identical session payloads and consumer
         data: { phase: "end", endedAt: Date.now() },
       });
       return { queuedFinal, counts: dispatcher.getQueuedCounts() };
+    } catch (error) {
+      dispatchFailure = error;
+      throw error;
     } finally {
       finish();
     }
@@ -278,7 +341,11 @@ test("capable and legacy sockets produce identical session payloads and consumer
   });
   expect(sent.ok).toBe(true);
   await completed;
-  await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
+  if (dispatchFailure !== undefined) {
+    throw new Error("Session row proof dispatch failed", { cause: dispatchFailure });
+  }
+  expect(await rootReleased.promise).toBe("settled");
+  expect(getActiveGatewayRootWorkCount()).toBe(0);
   await drain();
   producerClock.mockRestore();
   const [encoded, baseline] = streams;
@@ -289,6 +356,11 @@ test("capable and legacy sockets produce identical session payloads and consumer
   expect(encoded).toHaveLength(baseline.length);
   const reconnect = vi.fn();
   const decoder = new GatewayChatEvents(reconnect);
+  const rosterDecoder = new GatewayChatEvents(reconnect);
+  const bodyMeasurements: { before: number; after: number; wireAfter: number; role: unknown }[] =
+    [];
+  let completeRosterMessages = 0;
+  expect(rosterFrames).toHaveLength(baseline.length);
   // Retain Node's typed-array realm for SQLite RPC while UI owners register their elements.
   const dom = new JSDOM("<body></body>", { url: "http://localhost", pretendToBeVisual: true });
   let disposeConsumers = () => {};
@@ -348,12 +420,48 @@ test("capable and legacy sockets produce identical session payloads and consumer
     if (!decoded) {
       throw new Error("Decoder discarded a valid stream");
     }
+    const rosterFrame = rosterFrames[index];
+    if (!rosterFrame) {
+      throw new Error("Missing corresponding roster frame");
+    }
+    let rosterDecoded: EventFrame | undefined;
+    rosterDecoder.dispatch(rosterFrame, (event) => {
+      rosterDecoded = event;
+    });
+    const expectedPayload = { ...(decoded.payload as Record<string, unknown>) };
+    if (frame.event === "session.message") {
+      expect(original.payload).toHaveProperty("message");
+      expect(decoded.payload).toHaveProperty("message");
+      if (index < fullBodiesFrom) {
+        delete expectedPayload.message;
+        expect(rosterFrame.payload).not.toHaveProperty("message");
+        const withoutBody = { ...(original.payload as Record<string, unknown>) };
+        const message = withoutBody.message as { role?: unknown };
+        delete withoutBody.message;
+        bodyMeasurements.push({
+          before: Buffer.byteLength(legacyWire[index] ?? ""),
+          after: Buffer.byteLength(JSON.stringify({ ...original, payload: withoutBody })),
+          wireAfter: Buffer.byteLength(rosterWire[index] ?? ""),
+          role: message.role,
+        });
+      } else {
+        completeRosterMessages += 1;
+      }
+      if (bodyMeasurements.length === 1) {
+        // Decoding preserves the full envelope, independent of object property order.
+        expect({ ...decoded, seq: original.seq }).toEqual(original);
+      }
+    }
+    expect(rosterDecoded?.payload, `roster frame ${index} ${frame.event}`).toEqual(expectedPayload);
     consumers[0]?.apply(decoded);
     consumers[1]?.apply(original);
     expect(consumers[0]?.snapshot(), `consumer state after frame ${index}`).toEqual(
       consumers[1]?.snapshot(),
     );
   }
+  expect(bodyMeasurements.length).toBeGreaterThan(0);
+  expect(completeRosterMessages).toBeGreaterThan(0);
+  console.log("ROSTER_MESSAGE_REAL_SOCKET_BYTES", JSON.stringify(bodyMeasurements));
   expect(patches).toBeGreaterThan(10);
   expect(reconnect).not.toHaveBeenCalled();
   expect(consumers[0]?.snapshot().chat.messages.length).toBeGreaterThan(0);
@@ -427,6 +535,7 @@ test("capable and legacy sockets produce identical session payloads and consumer
     decodedAfterUnsubscribe = event;
   });
   expect(decodedAfterUnsubscribe?.payload).toEqual(baseline.at(-1)?.payload);
+  await closeSessionRowSocket(roster.ws);
   await closeSessionRowSocket(capable.ws);
   const reopened = await harness.openClient({
     caps: ["session-scoped-events", "session-row-deltas"],

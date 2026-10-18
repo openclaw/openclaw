@@ -93,6 +93,7 @@ export async function clearPendingFinalDeliveryAfterSuccess(
       now: Date.now(),
     },
     {
+      result: "none",
       skipMaintenance: true,
       takeCacheOwnership: true,
       preserveActivity: options.preserveActivity,

@@ -17,9 +17,9 @@ import {
   normalizeLowercaseStringOrEmpty,
   normalizeOptionalString,
 } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { z } from "zod";
 import { protectCodexAppServerLiveThread } from "./client-runtime.js";
 import type { CodexAppServerClient } from "./client.js";
+import { jsonObjectSchema, jsonValueSchema } from "./json-schema.js";
 import {
   projectCodexMcpServerMetadata,
   projectCodexMcpToolMetadata,
@@ -36,7 +36,6 @@ import {
 import { getCodexAppServerTurnRouter } from "./turn-router.js";
 
 const CODEX_APPS_MCP_SERVER = "codex_apps";
-const toolCallMetadataSchema = z.record(z.string(), z.json());
 
 function readMcpToolResult(item: CodexThreadItem): ToolCallResult | undefined {
   const result = asOptionalRecord(item.result);
@@ -218,7 +217,7 @@ export function createNativeMcpRuntime(params: {
             server: serverName,
             tool: toolName,
             arguments: (asOptionalRecord(input) ?? {}) as JsonObject,
-            ...(options?._meta ? { _meta: toolCallMetadataSchema.parse(options._meta) } : {}),
+            ...(options?._meta ? { _meta: jsonObjectSchema.parse(options._meta) } : {}),
           },
           // The client also checks authority after overload backoff, before
           // each retry write; cancellation alone cannot detect policy changes.
@@ -247,7 +246,7 @@ export function createNativeMcpRuntime(params: {
               signal,
             });
             assertCurrent();
-            return z.json().parse(result);
+            return jsonValueSchema.parse(result);
           },
         },
         call,

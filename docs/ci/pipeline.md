@@ -331,9 +331,11 @@ functions remain valid after the original cache buffer is garbage-collected.
 It also keeps allocator ownership during zero-time event-loop polls, while
 retaining the idle handoff for polls that can block.
 
-The pinned build pairs Bun `b76e4b4e6725dfc84eadc67059753a389e4b1c54` with WebKit
-`01f208ae7a87661e7503f514c946a37bc76ad1d1` in prerelease
-`openclaw-v1.4.3-20261017-b76e4b4e67-webkit-01f208ae7a`.
+The pinned build pairs Bun `7bd4fdff3d4035bcea50718673c663f5474bae89` with WebKit
+`f8521bb45429b3e1df6bc6d9b98b8df4376a89c5` in prerelease
+`openclaw-v1.4.4-20261017-7bd4fdff3d-webkit-f8521bb454`.
+It includes the Bun 1.4.4 upstream sync, honors disabled source maps in the
+transpiler cache, and shares identical `node:vm` source buffers and source-map URIs.
 This build preserves `DONT_CONTEXTIFY` global receiver identity for jsdom, keeps
 `availableParallelism()` independent of `navigator`, and fixes `SourceMap.findOrigin()`
 coordinates. It registers `fs.watch` callbacks on the returned watcher, treats

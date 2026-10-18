@@ -3,10 +3,10 @@ import { setImmediate } from "node:timers/promises";
 import { expect, it, vi, type MockInstance } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import { setRuntimeConfigSnapshot } from "../../config/io.js";
 import {
   loadSessionEntry,
@@ -16,6 +16,8 @@ import {
 import { getAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { acquireGatewayStateOwner } from "../../infra/gateway-state-owner.js";
 import type { SubsystemLogger } from "../../logging/subsystem.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
+import { captureSessionTarget } from "../../sessions/session-controller.target.js";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawAgentDatabasesForTest,
@@ -31,6 +33,7 @@ import {
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { startGatewayEventSubscriptions } from "../server-runtime-subscriptions.js";
 import * as lifecycleState from "../session-lifecycle-state.js";
+import { claimRpcSourceForTest } from "../test-helpers.rpc-source.js";
 import { sessionAbortHandlers } from "./sessions-abort.js";
 import type { RespondFn } from "./types.js";
 
@@ -91,24 +94,61 @@ it.each([
           },
         };
         const embedded = createEmbeddedRunHandle(embeddedState);
+        const controllerTarget = captureSessionTarget({
+          storeScope: target.storePath,
+          sessionKey: target.sessionKey,
+          agentId: target.agentId,
+          incarnation: sessionId,
+        });
         const registration = mode.startsWith("controller")
           ? registerChatAbortController({
-              chatAbortControllers: context.chatAbortControllers,
+              target: controllerTarget,
               sessionKey: target.sessionKey,
               sessionId,
               agentId: target.agentId,
               runId,
               kind: "agent",
               timeoutMs: 60_000,
-              isAbortable: () => embeddedState.isAbortable,
             })
           : undefined;
-        registration?.markExecutionStarted();
-        registration?.controller.signal.addEventListener("abort", () => embeddedState.abort(), {
-          once: true,
+        const releaseController = registration?.entry
+          ? await claimRpcSourceForTest(registration.entry)
+          : undefined;
+        registration?.entry?.input.claim?.operation?.attachBackend({
+          kind: "embedded",
+          cancel: vi.fn(),
+          isAbortable: () => embeddedState.isAbortable,
         });
+        registration?.controller.signal.addEventListener(
+          "abort",
+          () => {
+            embeddedState.abort();
+            releaseController?.();
+          },
+          { once: true },
+        );
+        const nativeOperation = mode.startsWith("controller")
+          ? registration?.entry?.input.claim?.operation
+          : createReplyOperation({
+              target: controllerTarget,
+              sessionKey: target.sessionKey,
+              sessionId,
+              agentId: target.agentId,
+              resetTriggered: false,
+            });
         if (mode !== "controller") {
-          setActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
+          setActiveEmbeddedRun(
+            sessionId,
+            embedded,
+            target.sessionKey,
+            undefined,
+            target.agentId,
+            nativeOperation,
+          );
+          void aborted.promise.then(() => {
+            clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
+            nativeOperation?.complete();
+          });
         }
         const subscriptions = startGatewayEventSubscriptions({
           scheduler: createTestGatewayScheduler(),
@@ -123,8 +163,8 @@ it.each([
           toolEventRecipients: context.chatRunState.toolEventRecipients,
           sessionEventSubscribers: createSessionEventSubscriberRegistry(),
           sessionMessageSubscribers: createSessionMessageSubscriberRegistry(),
-          chatAbortControllers: context.chatAbortControllers,
           restartRecoveryCandidates: new Map(),
+          resolveGatewayContext: context.resolveGatewayContext,
           refreshConnectedUserProfiles: vi.fn(),
         });
         const writerEntered = createDeferred();
@@ -194,6 +234,9 @@ it.each([
           );
           void request.catch(() => {});
           await aborted.promise;
+          if (mode === "embedded-run") {
+            clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
+          }
           await setImmediate();
           expect.soft(respond).not.toHaveBeenCalled();
           expect(loadSessionEntry(target)?.status).toBeUndefined();
@@ -238,6 +281,8 @@ it.each([
           await replacement;
           await request?.catch(() => {});
           clearActiveEmbeddedRun(sessionId, embedded, target.sessionKey);
+          nativeOperation?.complete();
+          releaseController?.();
           registration?.cleanup();
           await subscriptions.agentUnsub();
           subscriptions.heartbeatUnsub();

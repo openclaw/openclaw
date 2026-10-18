@@ -1,5 +1,6 @@
 import path from "node:path";
-import { afterAll, describe, expect, it } from "vitest";
+import { expectDefined } from "@openclaw/normalization-core";
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   appendTranscriptMessage,
   loadTranscriptEvents,
@@ -7,11 +8,32 @@ import {
   upsertSessionEntryCore,
 } from "../../../config/sessions/session-accessor.js";
 import type { UserMessage } from "../../../llm/types.js";
+import type { ReplyOperation } from "../../../sessions/session-controller.js";
+import {
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+  type SessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../../sessions/session-controller.message-injection.js";
+import { findSessionControllerOperationByRunId } from "../../../sessions/session-controller.queries.js";
+import {
+  submitSessionControllerSteer,
+  type SessionControllerSteerResult,
+} from "../../../sessions/session-controller.steer.js";
 import { useSessionStoreTempDirs } from "../../../test-utils/session-state-cleanup.js";
 import type { AgentMessage } from "../../runtime/index.js";
 import { SessionManager } from "../../sessions/session-manager.js";
 import { makeAgentAssistantMessage } from "../../test-helpers/agent-message-fixtures.js";
+import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import { stripSessionsYieldArtifacts } from "./attempt-sessions-yield.js";
+import {
+  cleanupTempPaths,
+  createContextEngineAttemptRunner,
+  createContextEngineBootstrapAndAssemble,
+  getHoisted,
+  preloadRunEmbeddedAttemptForTests,
+  resetEmbeddedAttemptHarness,
+} from "./attempt-spawn-workspace.test-support.js";
 
 const interruptType = "openclaw.sessions_yield_interrupt";
 const tempDirs = useSessionStoreTempDirs(afterAll, "openclaw-sessions-yield-");
@@ -156,5 +178,85 @@ describe("stripSessionsYieldArtifacts", () => {
         expect.objectContaining({ type: "custom_message", customType: interruptType }),
       ]),
     );
+  });
+});
+
+describe("runEmbeddedAttempt sessions_yield", () => {
+  const hoisted = getHoisted();
+  const harnessPaths: string[] = [];
+  beforeAll(preloadRunEmbeddedAttemptForTests);
+  beforeEach(() => resetEmbeddedAttemptHarness());
+  afterEach(async () => {
+    await cleanupTempPaths(harnessPaths.splice(0));
+  });
+
+  it("records the yield and keeps a steer that captured the ending turn queued", async () => {
+    const sessionKey = "agent:main:sessions-yield-steer";
+    const runId = "sessions-yield-steer-run";
+    const sessionSteer = vi.fn(async () => {});
+    const yieldInterrupt = vi.fn();
+    let operation: ReplyOperation | undefined;
+    let input: SessionControllerInput | undefined;
+    let duringYield: { phase?: string; result?: unknown } | undefined;
+    let steerOutcome: Promise<SessionControllerSteerResult> | undefined;
+    let yieldOutcome: Promise<unknown> | undefined;
+    await createContextEngineAttemptRunner({
+      contextEngine: createContextEngineBootstrapAndAssemble(),
+      sessionKey,
+      tempPaths: harnessPaths,
+      attemptOverrides: { disableTools: false, runId },
+      sessionPrompt: async (session) => {
+        session.steer = sessionSteer;
+        // The runtime queues its own interrupt through the agent when the turn yields.
+        Object.assign(session.agent, { steer: yieldInterrupt });
+        operation = findSessionControllerOperationByRunId(runId);
+        // The steer captures the running turn before the yield and reaches it after.
+        const target = expectDefined(
+          captureCurrentReplyMessageInjectionTarget(sessionKey),
+          "running turn injection target",
+        );
+        const steer = reserveSessionControllerSource(sessionKey, { policy: { mode: "steer" } });
+        input = steer;
+        const onYield = expectDefined(
+          hoisted.createOpenClawCodingToolsMock.mock.calls.at(-1)?.[0]?.onYield,
+          "attempt onYield",
+        );
+        const yieldTool = createSessionsYieldTool({
+          sessionId: "embedded-session",
+          claimYield: () => true,
+          onYield: (...args) => {
+            const ended = onYield(...args);
+            // The steer reaches the turn between the yield and the operation's settlement.
+            duringYield = { phase: operation?.phase, result: operation?.result };
+            steerOutcome = submitSessionControllerSteer({
+              input: steer,
+              target,
+              text: "late steer",
+              options: { steeringMode: "all" },
+            });
+            return ended;
+          },
+        });
+        // The aborted prompt can return before this tool result; the test awaits it below.
+        yieldOutcome = yieldTool.execute("yield", {});
+        await yieldOutcome;
+      },
+    });
+
+    // The tool finishes on its own result after yield() closed the turn's tool authority.
+    await expect(yieldOutcome).resolves.toMatchObject({ details: { status: "yielded" } });
+    expect(duringYield).toEqual({ phase: "running", result: null });
+    await expect(steerOutcome).resolves.toMatchObject({
+      status: "rejected",
+      reason: "not_running",
+    });
+    expect(yieldInterrupt).toHaveBeenCalledOnce();
+    expect(sessionSteer).not.toHaveBeenCalled();
+    expect(operation?.result).toEqual({ kind: "completed" });
+    // The rejected steer keeps its mailbox place for the followup after the turn ends.
+    const queued = expectDefined(input, "steer input");
+    expect(queued.phase).toBe("preparing");
+    expect(queued.mailbox.entries).toContain(queued);
+    retireSessionControllerInput(queued);
   });
 });

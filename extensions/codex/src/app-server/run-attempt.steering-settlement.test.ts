@@ -50,7 +50,6 @@ async function createFixture() {
     sessionId: params.sessionId,
     sessionKey: expectDefined(params.sessionKey, "steering session key"),
   };
-  params.toolAuthorityFingerprint = "steering-settlement-authority";
   params.timeoutMs = 60 * 60_000;
   const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
   const message = {

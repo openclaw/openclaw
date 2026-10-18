@@ -1,4 +1,4 @@
-import { createMemo, createSignal, For, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, Show } from "solid-js";
 import type { SessionMoveTarget } from "../../../packages/gateway-protocol/src/index.js";
 import { registerNewSessionSetupEnglish } from "../i18n/locales/en-new-session-setup.ts";
 import { formatUiError } from "../lib/format-error.ts";
@@ -60,7 +60,7 @@ export function showSessionPlacementTargetDialog(
           options
             .loadCatalog()
             .catch((error: unknown) =>
-              untrack(() => formatUiError(error, t("sessionsView.moveSessionCatalogFailed"))),
+              formatUiError(error, t("sessionsView.moveSessionCatalogFailed")),
             ),
         { loadingValue: null },
       );

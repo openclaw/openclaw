@@ -9,10 +9,17 @@ import {
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as sessionEntries from "../../config/sessions/session-accessor.sqlite-entry.js";
 import { memorySessionActorOwners } from "../../config/sessions/session-actor-memory-owner.js";
+import * as registry from "../../sessions/session-controller.js";
 import {
-  runExclusiveSessionLifecycleMutation,
-  startSessionWorkAdmissionInterruption,
-} from "../../sessions/session-lifecycle-admission.js";
+  runSessionMutation,
+  startSessionControllerInterruption,
+} from "../../sessions/session-controller.lifecycle.js";
+import {
+  acquireReplyOperationSessionActor,
+  getReplyOperationSessionTarget,
+} from "../../sessions/session-controller.session-reader.js";
+import { testing } from "../../sessions/session-controller.test-support.js";
+import * as controllerWait from "../../sessions/session-controller.wait.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -21,17 +28,11 @@ import {
   resolveIncognitoOpenClawAgentSqlitePath,
 } from "../../state/openclaw-agent-db.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
-import * as registry from "./reply-run-registry.js";
-import {
-  acquireReplyOperationSessionActor,
-  getReplyOperationSessionTarget,
-} from "./reply-run-registry.state.js";
-import { testing } from "./reply-run-registry.test-support.js";
 import { admitReplyTurn } from "./reply-turn-admission.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   afterEach(async () => {
-    testing.resetReplyRunRegistry();
+    testing.resetSessionControllerForTest();
     await closeOpenClawAgentDatabasesAsync();
     memorySessionActorOwners.reset();
     vi.restoreAllMocks();
@@ -110,7 +111,7 @@ it("keeps incognito admission and its actor with the existing memory owner", asy
       expect(() => acquireReplyOperationSessionActor(operation)).toThrow();
       expect(() => getReplyOperationSessionTarget(operation)).toThrow();
       expect(
-        await withinTest(registry.waitForReplyRunSuccessorAdmission(key, null), signal),
+        await withinTest(controllerWait.waitForReplyRunSuccessorAdmission(key, null), signal),
       ).toMatchObject({ settled: true });
       expect(databaseClaim.isCurrent()).toBe(false);
       expect(sessionEntries.loadSessionEntry(scope)).toMatchObject({ sessionId, updatedAt: 1 });
@@ -119,7 +120,7 @@ it("keeps incognito admission and its actor with the existing memory owner", asy
       expect(fs.existsSync(storePath)).toBe(false);
     } finally {
       complete(result);
-      await registry.waitForReplyRunSuccessorAdmission(key, null);
+      await controllerWait.waitForReplyRunSuccessorAdmission(key, null);
     }
   });
 });
@@ -191,7 +192,7 @@ it.each(["cancelled", "request-changed"] as const)(
         await expect(pending).rejects.toBe(requestFailure);
         expect(reads).toBe(2);
       }
-      expect(registry.replyRunRegistry.get(sessionKey)).toBeUndefined();
+      expect(registry.getSessionControllerOperation(sessionKey)).toBeUndefined();
     } finally {
       release.resolve();
       owner.operation.complete();
@@ -230,14 +231,14 @@ it.for(
     const enteredWait = createDeferred();
     const loaded = vi.spyOn(sessionEntries, "loadSessionEntryForAdmission");
     if (wait === "active") {
-      const waitForIdle = registry.replyRunRegistry.waitForIdle.bind(registry.replyRunRegistry);
-      vi.spyOn(registry.replyRunRegistry, "waitForIdle").mockImplementation((...args) => {
+      const waitForIdle = controllerWait.waitForSessionRunIdle;
+      vi.spyOn(controllerWait, "waitForSessionRunIdle").mockImplementation((...args) => {
         enteredWait.resolve();
         return waitForIdle(...args);
       });
     } else if (wait === "delivery") {
-      const waitForAdmission = registry.waitForReplyRunFollowupAdmission;
-      vi.spyOn(registry, "waitForReplyRunFollowupAdmission").mockImplementation((...args) => {
+      const waitForAdmission = controllerWait.waitForReplyRunFollowupAdmission;
+      vi.spyOn(controllerWait, "waitForReplyRunFollowupAdmission").mockImplementation((...args) => {
         enteredWait.resolve();
         return waitForAdmission(...args);
       });
@@ -328,16 +329,16 @@ it("cancels an in-flight admission read when its lifecycle owner interrupts ingr
   try {
     const signal = await started.promise;
     const reason = new Error("Synthetic lifecycle interruption");
-    const interrupted = startSessionWorkAdmissionInterruption({ ...target, reason });
+    const interrupted = startSessionControllerInterruption({ ...target, reason });
     expect(signal.aborted).toBe(true);
     expect(upstream.signal.aborted).toBe(false);
     await interrupted.released;
-    await runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => {} });
+    await runSessionMutation({ ...target, run: async () => {} });
     expect(await pending).toMatchObject([{ status: "rejected", reason }]);
-    expect(registry.replyRunRegistry.get(interruptedKey)).toBeUndefined();
+    expect(registry.getSessionControllerOperation(interruptedKey)).toBeUndefined();
   } finally {
     upstream.abort();
     await pending;
-    await runExclusiveSessionLifecycleMutation("patch", { ...target, run: async () => {} });
+    await runSessionMutation({ ...target, run: async () => {} });
   }
 });

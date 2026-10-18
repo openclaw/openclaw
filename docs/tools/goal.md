@@ -13,8 +13,8 @@ title: "Goal"
 
 A **goal** is one durable objective attached to the current OpenClaw session.
 It gives the agent and the operator a shared target for long-running work.
-In built-in chat runs, OpenClaw continues pursuing an active goal after a normal
-turn finishes, even when the model ends with a final reply instead of calling
+In built-in chat runs and supported Codex cloud-worker sessions, OpenClaw continues
+pursuing an active goal after a normal turn finishes, even when the model ends with a final reply instead of calling
 another tool. A goal is not a reminder, cron job, or standing order.
 
 Goals are session state: they move with the session key, survive process
@@ -200,8 +200,12 @@ unfinished goal complete. Pause prevents further goal turns. Terminal errors
 and timeouts pause the goal as described above. Resuming a paused or limited
 goal remains an explicit operator action, not something the continuation does.
 
-Automatic nudges apply to built-in chat/auto-reply execution, not native Codex,
-other external runtimes, heartbeat turns, or independent scheduled work. They
+Each settled automatic Goal turn increments `continuationTurns` once, including
+the turn that completes the Goal. Human Start and Resume turns do not increment it.
+
+Automatic nudges apply to built-in chat/auto-reply execution and supported Codex
+cloud-worker sessions, not other external runtimes, heartbeat turns, or independent
+scheduled work. They
 use the existing queue and run lifecycle rather than a periodic background
 scanner. A saved active goal alone does not start a new process or create a
 schedule after shutdown; normal session recovery or another admitted turn
@@ -223,14 +227,22 @@ the objective as a normal chat draft. Complete pasted commands such as
 `/goal start Fix the tests` and explicit management commands such as
 `/goal status` retain their text-command behavior.
 
-Starting a Goal saves the Goal, its user turn, and the run admission together
-before acknowledging Send. A failed admission leaves the draft intact and
+Starting a Goal saves the Goal and its user turn together with the operation
+receipt before acknowledging Send. A failed admission leaves the draft intact and
 does not create a Goal. A failed older chat send stays separate from a newly opened
-Goal draft instead of filling its empty objective. Start and Resume require the built-in OpenClaw runtime
-and an idle local session with recoverable history. They are unavailable for
-native Codex and other external runtimes, and are not queued or steered into
-another run. The UI reports unsupported or busy sessions rather than creating
-an inactive Goal.
+Goal draft instead of filling its empty objective. Start and Resume require an idle
+built-in local session with recoverable history, or an existing Codex session
+assigned to a cloud worker with remote execution. Worker setup must admit the input
+before the runtime commits the Goal and its operation receipt. Other external
+runtimes remain unsupported. Goals are not queued or steered into another run.
+The UI reports unsupported or busy sessions rather than creating an inactive Goal.
+
+Codex worker Goals use the same OpenClaw Goal ID, history, budgets, accounting,
+and continuation queue. Codex's separate autonomous Goal engine stays disabled;
+the core `get_goal`, `create_goal`, and `update_goal` tools remain available when
+native shell tools are enabled, subject to normal tool policy.
+Continuation retains the operator's current authority; it does not replay old
+input or recreate authority after a Gateway restart.
 
 The web Control UI shows the goal as a compact pill above the chat composer:
 a status icon, the status label (for example `Pursuing goal`), the truncated

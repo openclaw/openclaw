@@ -5,7 +5,7 @@ import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js"
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { createLifecycleEventBroadcastHandler } from "./server-session-events.js";
+import { createLifecycleEventBroadcastHandler } from "./server-session-lifecycle-events.js";
 import {
   drainSessionEventPublications,
   sessionEventPublicationRows,
@@ -101,7 +101,6 @@ it.each(["replacement", "reset"])(
     const handler = createLifecycleEventBroadcastHandler({
       broadcastToConnIds,
       sessionEventSubscribers: { getAll: () => new Set(["viewer"]) },
-      chatAbortControllers: new Map(),
       getSessionRowProjection: () => projection,
     });
     setImmediate(() => {
@@ -156,7 +155,6 @@ it("publishes lifecycle rows after their producer drains and before publication 
   const handler = createLifecycleEventBroadcastHandler({
     broadcastToConnIds,
     sessionEventSubscribers: { getAll: () => new Set(["viewer"]) },
-    chatAbortControllers: new Map(),
     getSessionRowProjection: () => projection,
   });
   const producer = new AsyncWorkScope();

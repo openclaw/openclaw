@@ -1,7 +1,7 @@
 import type { SessionRunStatus } from "../../../packages/gateway-protocol/src/schema/sessions-row.js";
 import type { ThemeArtwork, ThemeCritterId } from "../../../packages/gateway-protocol/src/theme.ts";
 import { fnv1aUtf16 } from "../lib/fnv1a.ts";
-import { isSessionRunActive } from "../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../lib/session-run-state.ts";
 import type { LOBSTER_PALETTE_WEIGHTS } from "./lobster-pet-palettes.ts";
 
 export type LobsterPetMode = "idle" | "busy" | "offline";
@@ -142,5 +142,5 @@ export function resolveLobsterPetMode(
   if (!connected) {
     return "offline";
   }
-  return sessions?.some(isSessionRunActive) ? "busy" : "idle";
+  return sessions?.some(isSessionRunStateActive) ? "busy" : "idle";
 }

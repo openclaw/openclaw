@@ -7,7 +7,6 @@ import { build as esbuild } from "esbuild";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
 import { resolveNodeProgramArguments } from "../src/daemon/program-args.js";
 import { buildSystemdUnit, parseSystemdExecStart } from "../src/daemon/systemd-unit.js";
-import { createLauncherCommandBoundaryPlugin } from "./helpers/launcher-esbuild.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
 const temporary = useAutoCleanupTempDirTracker(afterEach);
@@ -24,12 +23,19 @@ beforeAll(async () => {
       format: "esm",
       platform: "node",
       target: "node24",
-      plugins: [createLauncherCommandBoundaryPlugin()],
+      metafile: true,
       banner: {
         js: 'import { createRequire } from "node:module"; const require = createRequire(import.meta.url);',
       },
       write: false,
     });
+    expect(
+      Object.keys(built.metafile!.inputs).filter(
+        (file) =>
+          /(?:^|\/)src\/(?:agents|gateway|tui|cron)\//u.test(file) ||
+          file.endsWith("src/cli/program/subcli-descriptors.ts"),
+      ),
+    ).toEqual([]);
     const output = built.outputFiles[0];
     if (!output) {
       throw new Error(`The ${entry} fixture did not compile.`);

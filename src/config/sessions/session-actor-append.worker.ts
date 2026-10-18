@@ -51,7 +51,7 @@ export function applySessionActorAppend(
         ? readDatabasePathIdentitySync(requestedPath).canonicalPath === database.path
         : requestedPath === database.path;
     if (
-      resolved.agentId !== database.agentId ||
+      (resolved.databaseAgentId ?? resolved.agentId) !== database.agentId ||
       resolved.sessionKey !== state.hot.target.sessionKey ||
       !sameDatabase
     ) {

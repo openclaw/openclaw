@@ -7,10 +7,6 @@ import { resolveModelFallbackOptions } from "../../auto-reply/reply/agent-runner
 import { handleDirectiveOnly } from "../../auto-reply/reply/directive-handling.impl.js";
 import { parseInlineSessionDirectives } from "../../auto-reply/reply/directive-handling.parse.js";
 import {
-  admitFollowupTurn,
-  type AdmittedFollowupTurn,
-} from "../../auto-reply/reply/followup-turn-admission.js";
-import {
   enqueueFollowupRun,
   scheduleFollowupDrain,
   type FollowupRun,
@@ -19,7 +15,10 @@ import {
   clearFollowupQueue,
   getExistingFollowupQueue,
 } from "../../auto-reply/reply/queue/state.js";
-import * as replyAdmission from "../../auto-reply/reply/reply-turn-admission.js";
+import {
+  prepareReplyAgentTurn,
+  type AdmittedFollowupTurn,
+} from "../../auto-reply/reply/reply-agent-turn-preparation.js";
 import { createTypingController } from "../../auto-reply/reply/typing.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import {
@@ -27,6 +26,7 @@ import {
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import * as sessionMailbox from "../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { sessionMutationHandlers } from "./sessions-mutations.js";
@@ -91,7 +91,7 @@ async function admitQueued(
   queued: FollowupRun,
   onQueuedFollowupAdmitted?: () => Promise<void>,
 ) {
-  const result = await admitFollowupTurn({
+  const result = await prepareReplyAgentTurn({
     queued,
     defaults: {
       typing: createTypingController({}),
@@ -140,7 +140,6 @@ async function patchSession(patch: Record<string, unknown>, config = cfg) {
       routeVariants: catalog,
     }),
     getSessionEventSubscriberConnIds: () => new Set(),
-    chatQueuedTurns: new Map(),
     dedupe: new Map(),
   } satisfies GatewayRequestContext;
   await expectDefined(
@@ -185,7 +184,7 @@ function enqueue(
       config: cfg,
       ...selectionX,
       hasSessionModelOverride: true,
-      modelOverrideSource: "user",
+      modelOverrideSource: "user" as const,
       timeoutMs: 30_000,
       blockReplyBreak: "message_end",
       ...overrides,
@@ -444,7 +443,7 @@ it.each([
       const c = enqueue(state, "C still waiting");
       const committed = createDeferredCore();
       const releaseRefresh = createDeferredCore();
-      const enteringAdmission = createDeferredCore();
+      const requestingClaim = createDeferredCore();
       const prepareCatalog = catalogPreparation.createSessionPatchCatalogPreparation;
       let held = false;
       vi.spyOn(catalogPreparation, "createSessionPatchCatalogPreparation").mockImplementation(
@@ -466,10 +465,10 @@ it.each([
           };
         },
       );
-      const admit = replyAdmission.admitReplyTurn;
-      vi.spyOn(replyAdmission, "admitReplyTurn").mockImplementation((params) => {
-        const result = admit(params);
-        enteringAdmission.resolve();
+      const requestClaim = sessionMailbox.claimSessionControllerInput;
+      vi.spyOn(sessionMailbox, "claimSessionControllerInput").mockImplementation((queued) => {
+        const result = requestClaim(queued);
+        requestingClaim.resolve();
         return result;
       });
       const changing = patchSession(patch);
@@ -484,8 +483,10 @@ it.each([
           // must affect C without changing the already admitted B snapshot.
           expect((await patchSession(later))[0]).toBe(true);
         });
-        void starting.catch(enteringAdmission.reject);
-        await enteringAdmission.promise;
+        void starting.catch(requestingClaim.reject);
+        await requestingClaim.promise;
+        // The writer fence holds mailbox selection before reply admission begins.
+        expect(expectDefined(b.controllerInput, "queued input").claim).toBeUndefined();
         releaseRefresh.resolve();
         expect((await changing)[0]).toBe(true);
         turn = await starting;
@@ -497,6 +498,11 @@ it.each([
         await changing;
         turn ??= await starting;
         turn?.operation.complete();
+        const claim = b.controllerInput?.claim;
+        if (claim) {
+          sessionMailbox.releaseSessionControllerClaim(claim);
+          await claim.settlement.promise;
+        }
       }
     }),
 );

@@ -55,7 +55,7 @@ export function broadcastDigest(harness: Harness, index = -1) {
   return harness.broadcastToConnIds.mock.calls.at(index)?.[1] as SessionObserverDigest | undefined;
 }
 
-export function persistedDigest(harness: Harness, index = 0) {
+function persistedDigest(harness: Harness, index = 0) {
   return harness.persistDigest.mock.calls.at(index)?.[0]?.digest as
     | SessionObserverDigest
     | undefined;

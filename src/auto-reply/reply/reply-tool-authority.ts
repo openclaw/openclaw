@@ -32,6 +32,7 @@ import {
 } from "../../agents/tool-policy.js";
 import { captureRuntimeConfig } from "../../config/runtime-source-projection.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import { retainPreparedSessionEntryPredicate } from "../../config/sessions/session-accessor.sqlite-entry-cache-publication-state.js";
 import { withSessionEntriesFromStoresInWorker } from "../../config/sessions/session-entry-read-runtime.js";
 import type { SessionEntryCohortReader } from "../../config/sessions/session-entry-read-runtime.types.js";
@@ -41,12 +42,12 @@ import {
 } from "../../gateway/session-utils-store-worker.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { GATEWAY_OWNER_ONLY_CORE_TOOLS } from "../../security/dangerous-tools.js";
-import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import type {
   ReplyToolAuthorityOverlay,
   ReplyToolAuthorityRoute,
   ReplyToolAuthoritySnapshot,
-} from "./reply-run-registry.contracts.js";
+} from "../../sessions/session-controller.contracts.js";
+import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   captureReplyToolAuthoritySession,
   withReplyToolAuthorityCohort,
@@ -344,8 +345,23 @@ export function prepareReplyToolAuthority(
   };
   const env = { ...process.env };
   const sessionKey = snapshot.run.runtimePolicySessionKey ?? snapshot.run.sessionKey;
-  const memory = captureMemoryReplyToolAuthoritySession(sessionKey, () =>
-    assertCurrentOperatorAuthority(snapshot.operatorAuthority),
+  const agentId = sessionKey
+    ? resolveSessionAgentId({
+        config: snapshot.run.config,
+        sessionKey,
+        fallbackAgentId: sessionKey === snapshot.run.sessionKey ? snapshot.run.agentId : undefined,
+      })
+    : undefined;
+  const configuredStore = snapshot.run.config?.session?.store;
+  const memory = captureMemoryReplyToolAuthoritySession(
+    {
+      sessionKey,
+      agentId,
+      storePath: configuredStore
+        ? resolveSessionStorePathCore(configuredStore, { agentId, env })
+        : undefined,
+    },
+    () => assertCurrentOperatorAuthority(snapshot.operatorAuthority),
   );
   const readMemoryEntry = memory?.readEntry;
   const memoryCapabilities = memory?.capabilities;
@@ -460,12 +476,7 @@ export function prepareReplyToolAuthority(
       const preparedLookup = await prepareGatewaySessionEntryReadOnlyInWorker({
         cfg: snapshot.run.config ?? {},
         key: sessionKey,
-        agentId: resolveSessionAgentId({
-          config: snapshot.run.config,
-          sessionKey,
-          fallbackAgentId:
-            sessionKey === snapshot.run.sessionKey ? snapshot.run.agentId : undefined,
-        }),
+        agentId,
         env,
         assertActive: assertOpen,
       });

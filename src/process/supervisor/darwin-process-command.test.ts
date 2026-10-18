@@ -16,22 +16,13 @@ vi.mock("../../shared/pid-alive.js", async (importOriginal) => ({
 }));
 import { readDarwinProcessCommand } from "./darwin-process-command.js";
 
-const uid = process.getuid?.() ?? 501;
-const foreignUid = uid + 1;
-const getuidDescriptor = Object.getOwnPropertyDescriptor(process, "getuid");
 const platformDescriptor = Object.getOwnPropertyDescriptor(process, "platform")!;
 
 afterEach(() => {
   Object.defineProperty(process, "platform", platformDescriptor);
-  if (getuidDescriptor) {
-    Object.defineProperty(process, "getuid", getuidDescriptor);
-  } else {
-    Reflect.deleteProperty(process, "getuid");
-  }
 });
 
 beforeEach(() => {
-  Object.defineProperty(process, "getuid", { configurable: true, value: () => uid });
   dead.mockReset().mockReturnValue(false);
   readCommand.mockReset().mockImplementation(() => {
     throw new ProcSafeError("access-denied", "Process arguments denied");
@@ -48,7 +39,7 @@ it.each([
     argv: Object.freeze(argv),
     environment: serviceMarker === undefined ? {} : { OPENCLAW_SERVICE_MARKER: serviceMarker },
   });
-  expect(readDarwinProcessCommand(12, uid)).toEqual({
+  expect(readDarwinProcessCommand(12, "same")).toEqual({
     argv,
     executable: "/runtime path/node",
     ...(serviceMarker === undefined ? {} : { serviceMarker }),
@@ -60,33 +51,26 @@ it.each([
 
 it("returns no command for proven absence", () => {
   readCommand.mockReturnValue(null);
-  expect(readDarwinProcessCommand(12, uid)).toBeUndefined();
+  expect(readDarwinProcessCommand(12, "same")).toBeUndefined();
 });
 
 it.each([
-  { observedUid: uid, inspectorUid: uid, exited: false, outcome: "uncertain" },
-  { observedUid: undefined, inspectorUid: uid, exited: false, outcome: "uncertain" },
-  { observedUid: foreignUid, inspectorUid: undefined, exited: false, outcome: "uncertain" },
-  { observedUid: foreignUid, inspectorUid: uid, exited: false, outcome: "foreign" },
-  { observedUid: foreignUid, inspectorUid: uid, exited: true, outcome: "gone" },
-])(
-  "classifies unreadable PID as $outcome ($observedUid/$inspectorUid)",
-  ({ observedUid, inspectorUid, exited, outcome }) => {
-    Object.defineProperty(process, "getuid", {
-      configurable: true,
-      value: inspectorUid === undefined ? undefined : () => inspectorUid,
-    });
-    dead.mockReturnValue(exited);
-    const inspect = () => readDarwinProcessCommand(12, observedUid);
-    if (outcome === "uncertain") {
-      expect(inspect).toThrow("Could not classify PID 12: cannot inspect Darwin arguments");
-    } else {
-      expect(inspect()).toEqual(
-        outcome === "gone" ? undefined : { uid: foreignUid, argvUnavailable: true },
-      );
-    }
-  },
-);
+  { owner: "same", exited: false, outcome: "uncertain" },
+  { owner: "unknown", exited: false, outcome: "uncertain" },
+  { owner: undefined, exited: false, outcome: "uncertain" },
+  { owner: "different", exited: false, outcome: "foreign" },
+  { owner: "different", exited: true, outcome: "gone" },
+] as const)("classifies unreadable PID as $outcome ($owner)", ({ owner, exited, outcome }) => {
+  dead.mockReturnValue(exited);
+  const inspect = () => readDarwinProcessCommand(12, owner);
+  if (outcome === "uncertain") {
+    expect(inspect).toThrow("Could not classify PID 12: cannot inspect Darwin arguments");
+  } else {
+    expect(inspect()).toEqual(
+      outcome === "gone" ? undefined : { owner: "different", argvUnavailable: true },
+    );
+  }
+});
 
 it.each(["layout-mismatch", "incomplete", "helper-unavailable"] as const)(
   "does not turn %s into foreign ownership or absence",
@@ -96,7 +80,7 @@ it.each(["layout-mismatch", "incomplete", "helper-unavailable"] as const)(
       throw error;
     });
     dead.mockReturnValue(true);
-    expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow(error);
+    expect(() => readDarwinProcessCommand(12, "different")).toThrow(error);
   },
 );
 
@@ -105,6 +89,6 @@ it("preserves the native Rosetta refusal", () => {
   readCommand.mockImplementation(() => {
     throw new ProcSafeError("unsupported-platform", "Rosetta is unsupported");
   });
-  expect(() => readDarwinProcessCommand(12, foreignUid)).toThrow(/under Rosetta/);
+  expect(() => readDarwinProcessCommand(12, "different")).toThrow(/under Rosetta/);
   expect(dead).not.toHaveBeenCalled();
 });

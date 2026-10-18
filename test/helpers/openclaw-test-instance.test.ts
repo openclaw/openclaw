@@ -367,7 +367,7 @@ if (kind === "legacy-no-advice") { process.stderr.write("Legacy session store re
 if (kind === "startup-no-advice") { process.stderr.write(legacyRefusal.split("\\n").slice(0, -1).join("\\n") + "\\n"); process.exit(78); }
 if (kind === "startup-warning") { process.stderr.write(legacyRefusal.split("\\n").slice(1).join("\\n") + "\\n"); process.exit(78); }
 if (kind === "config-refuse") { process.stderr.write("unrelated configuration failure\\n"); process.exit(78); }
-if (kind === "refuse") { process.stderr.write(refusal + " fixture\\n"); process.exit(1); }
+if (kind === "refuse") { process.stderr.write("notice\\n" + refusal + " fixture\\n"); process.exit(1); }
 if (kind === "late-refuse") {
   spawnInheritedWriter("stderr", refusal + " delayed fixture\\n");
   process.exit(1);
@@ -380,6 +380,7 @@ if (kind === "terminal-drain" || kind === "refusal-drain") {
   process.stderr.write(kind === "refusal-drain" ? refusal + " held fixture\\n" : "terminal startup failure\\n"); process.exit(kind === "refusal-drain" ? 1 : 7);
 }
 if (kind === "near") { process.stderr.write(refusal.slice(0, -1) + " fixture\\n"); process.exit(1); }
+if (kind === "prefixed") { process.stderr.write("prefix " + refusal + " fixture\\n"); process.exit(1); }
 if (kind === "stdout") { process.stdout.write(refusal + " fixture\\n"); process.exit(1); }
 if (kind === "status2") { process.stderr.write(refusal + " fixture\\n"); process.exit(2); }
 if (kind === "signal") { process.stderr.write(refusal + " fixture\\n"); process.kill(process.pid, "SIGTERM"); }
@@ -1444,19 +1445,6 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it("classifies only exact stderr convergence refusals with status 1", () => {
-    const classify = testing.isGatewayMigrationConvergenceRefusal;
-    expect(classify(1, null, `notice\n${MIGRATION_CONVERGENCE_REFUSAL} retry\n`)).toBe(true);
-    for (const candidate of [
-      [2, null, MIGRATION_CONVERGENCE_REFUSAL],
-      [1, "SIGTERM", MIGRATION_CONVERGENCE_REFUSAL],
-      [1, null, MIGRATION_CONVERGENCE_REFUSAL.slice(0, -1)],
-      [1, null, `prefix ${MIGRATION_CONVERGENCE_REFUSAL}`],
-    ]) {
-      expect(classify(...(candidate as [number, NodeJS.Signals | null, string]))).toBe(false);
-    }
-  });
-
   it.for([
     "legacy-refuse",
     "profile-legacy-refuse",
@@ -1626,7 +1614,7 @@ describe("openclaw test instance", () => {
     },
   );
 
-  it.for(["near", "stdout", "status2", "signal", "unrelated"])(
+  it.for(["near", "prefixed", "stdout", "status2", "signal", "unrelated"])(
     "keeps %s convergence lookalikes terminal",
     async (action, context) => {
       // A Windows self-SIGTERM is status 1/null, already covered by the refusal case.

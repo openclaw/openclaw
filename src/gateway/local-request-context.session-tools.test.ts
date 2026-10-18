@@ -40,7 +40,10 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { ensureGatewayOwnerProfile } from "../state/user-profiles.js";
 import { registerChatAbortController } from "./chat-abort.js";
@@ -198,7 +201,7 @@ describe("built-in session tool role authority", () => {
       turn.revoke(bob.profileId);
       await expect(read(PARTICIPANT_SHARED, bob.profileId)).rejects.toThrow(/Bob's access changed/);
       await expectDraft(alice.profileId);
-      turn.complete();
+      await turn.complete();
       await expect(read(PARTICIPANT_DRAFT, alice.profileId)).rejects.toThrow(/turn has ended/);
     }));
 
@@ -320,7 +323,7 @@ describe("built-in session tool role authority", () => {
           runtime.recovery.dispatchSessionMethod("chat.history", { sessionKey: PARTICIPANT_DRAFT }),
         ).resolves.toMatchObject(draftMessages);
         context.readChatStartupProjection = async () => {
-          turn.complete();
+          await turn.complete();
           return undefined;
         };
         await expect(read(REQUESTER)).rejects.toThrow(/turn has ended|no longer active/);
@@ -380,7 +383,7 @@ describe("built-in session tool role authority", () => {
         },
       ]);
       context.readChatStartupProjection = async () => {
-        turn.complete();
+        await turn.complete();
         return undefined;
       };
       await expectRead(REQUESTER, [
@@ -388,7 +391,7 @@ describe("built-in session tool role authority", () => {
         undefined,
         {
           code: "INVALID_REQUEST",
-          message: expect.stringMatching(/turn has ended|no longer active/),
+          message: expect.stringContaining("embedded tool authority is no longer active"),
         },
       ]);
     }));
@@ -447,7 +450,7 @@ describe("built-in session tool role authority", () => {
             cwd: cfg.agents?.entries?.main?.workspace,
           });
         }
-        const admission = await beginSessionWorkAdmission({
+        const admission = await beginSessionEffect({
           scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
           identities: [REQUESTER, sessionId],
           assertAllowed: () => {},
@@ -574,7 +577,12 @@ describe("built-in session tool role authority", () => {
           }
           if (generation === "reset" || generation === "active") {
             registeredRun = registerChatAbortController({
-              chatAbortControllers: context.chatAbortControllers,
+              target: captureSessionTarget({
+                storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+                sessionKey: childKey,
+                incarnation: successor.sessionId,
+                agentId: "main",
+              }),
               runId: `${generation}-run`,
               sessionId: successor.sessionId,
               sessionKey: childKey,
@@ -691,7 +699,7 @@ describe("built-in session tool role authority", () => {
           }
         };
         const storePath = resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" });
-        const admission = await beginSessionWorkAdmission({
+        const admission = await beginSessionEffect({
           scope: storePath,
           identities: [sessionKey, sessionId],
           assertAllowed: () => {},

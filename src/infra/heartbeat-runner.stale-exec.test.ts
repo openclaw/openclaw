@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { getReplySystemEventContext } from "../auto-reply/reply/system-event-session-key.js";
 import { resetConfigRuntimeState, type OpenClawConfig } from "../config/config.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
+import { createReplyOperation } from "../sessions/session-controller.js";
 import { closeOpenClawStateDatabaseForTest } from "../state/openclaw-state-db.js";
 import { captureEnv, setTestEnvValue } from "../test-utils/env.js";
 import { resetHeartbeatEventsForTest } from "./heartbeat-events.js";
@@ -174,18 +175,23 @@ describe("stale exec heartbeat wakes", () => {
   );
 
   it(
-    "retires a stale exec wake before busy gates without consuming excluded base content",
+    "retires a stale exec wake while busy without consuming excluded base content",
     heartbeatCase(async ({ sessionKey, replySpy, run }) => {
       const notice = "PRIVATE_EXCLUDED_STALE_NOTICE";
       enqueueSystemEvent(notice, { sessionKey, contextKey: "notice:excluded" });
-      expect(
-        await run({
-          heartbeat: { isolatedSession: true },
-          deps: { getReplyFromConfig: replySpy, getQueueSize: () => 1 },
-        }),
-      ).toEqual(stale);
-      expect(replySpy).not.toHaveBeenCalled();
-      expect(peekSystemEvents(sessionKey)).toEqual([notice]);
+      const operation = createReplyOperation({
+        sessionKey,
+        sessionId: "busy-session",
+        resetTriggered: false,
+      });
+      operation.setPhase("running");
+      try {
+        expect(await run({ heartbeat: { isolatedSession: true } })).toEqual(stale);
+        expect(replySpy).not.toHaveBeenCalled();
+        expect(peekSystemEvents(sessionKey)).toEqual([notice]);
+      } finally {
+        operation.complete();
+      }
     }),
   );
 

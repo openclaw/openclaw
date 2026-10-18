@@ -18,11 +18,15 @@ export function ExpandedToolCardContent(props: { card: ToolCard; options: ToolRe
   );
 }
 
-export function RawOutputToggle(props: { text: string }) {
+export function RawOutputToggle(props: {
+  text: string;
+  toggleRef?: (element: HTMLButtonElement) => void;
+}) {
   const [open, setOpen] = createSignal(false);
   return (
     <div class="chat-tool-card__raw">
       <button
+        ref={(element) => props.toggleRef?.(element)}
         class="chat-inline-disclosure chat-tool-card__raw-toggle"
         type="button"
         aria-expanded={open() ? "true" : "false"}
@@ -62,7 +66,7 @@ export function ToolDataBlock(props: { label?: string; text: string }) {
 
 export function ToolOutcome(props: { outcome: ToolCardOutcome; exitCode?: number }) {
   const label = () =>
-    props.outcome === "failed" && props.exitCode !== undefined
+    props.outcome === "failed" && props.exitCode !== undefined && props.exitCode !== 0
       ? t("chat.toolCards.exitCode", { code: String(props.exitCode) })
       : t(
           `chat.toolCards.${props.outcome === "succeeded" ? "completed" : props.outcome === "unknown" ? "outcomeUnknown" : props.outcome}`,
@@ -84,11 +88,16 @@ export function ChatToolContent(
   );
 }
 
-export function ChatToolRawOutput(props: { text: string } & JSX.HTMLAttributes<HTMLElement>) {
-  const attributes = omit(props, "text", "children");
+export function ChatToolRawOutput(
+  props: {
+    text: string;
+    toggleRef?: (element: HTMLButtonElement) => void;
+  } & JSX.HTMLAttributes<HTMLElement>,
+) {
+  const attributes = omit(props, "text", "toggleRef", "children");
   return (
     <openclaw-chat-tool-raw {...attributes}>
-      <RawOutputToggle text={props.text} />
+      <RawOutputToggle text={props.text} toggleRef={props.toggleRef} />
     </openclaw-chat-tool-raw>
   );
 }

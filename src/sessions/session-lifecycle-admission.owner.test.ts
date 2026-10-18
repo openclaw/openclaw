@@ -1,18 +1,16 @@
 import { expect, it } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import {
-  beginSessionWorkAdmission,
-  getSessionWorkAdmissionOwnerRelease,
-} from "./session-lifecycle-admission.js";
+import { getSessionWorkAdmissionOwnerRelease } from "./session-controller.lifecycle-work.js";
+import { beginSessionEffect } from "./session-controller.lifecycle.js";
 
 it("captures acquired owners without waiting for pending successors", async () => {
   const scope = "store-named-owner";
   const identities = ["agent:main:named-owner", "session-named-owner"];
   const owner = Symbol.for("openclaw.test.namedSessionWorkAdmissionOwner");
-  const unrelated = await beginSessionWorkAdmission({ scope, identities, assertAllowed: () => {} });
+  const unrelated = await beginSessionEffect({ scope, identities, assertAllowed: () => {} });
   const started = createDeferred();
   const allowed = createDeferred();
-  const admissionPromise = beginSessionWorkAdmission({
+  const admissionPromise = beginSessionEffect({
     scope,
     identities,
     owner,
@@ -35,7 +33,7 @@ it("captures acquired owners without waiting for pending successors", async () =
     allowed.resolve();
     const admission = await admissionPromise;
     const laterAllowed = createDeferred();
-    const laterAdmission = beginSessionWorkAdmission({
+    const laterAdmission = beginSessionEffect({
       scope,
       identities,
       owner,

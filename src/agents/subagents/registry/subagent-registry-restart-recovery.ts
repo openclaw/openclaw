@@ -5,7 +5,7 @@ import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-ru
 import * as agentEvents from "../../../infra/agent-events.js";
 import { listAgentRunsForSession } from "../../../infra/agent-run-registry.js";
 import { getGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
-import { isSessionWorkAdmissionActive } from "../../../sessions/session-lifecycle-admission.js";
+import { isSessionControllerWorkActive } from "../../../sessions/session-controller.lifecycle.js";
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { resolveSubagentChildAuthority } from "./subagent-child-owner-match.js";
 import { isQuietSubagentRestartContinuation } from "./subagent-recovery-state.js";
@@ -61,6 +61,7 @@ function findRequesterSettleWakeRecoveryBatch(
     const wake = child.requesterSettleWake;
     if (
       !(wake?.status === "dispatching" || (allowPending && wake?.status === "pending")) ||
+      wake.attemptCount < 1 ||
       !(hasRequesterCompletionCohort(child) || isQuietSubagentRestartContinuation(child)) ||
       !isRequesterSettleWakeForRun({
         entry: child,
@@ -128,8 +129,7 @@ export async function captureRequesterSettleWakeRecoverySource(
 > {
   assertSubagentRegistryWriteSourceCurrent(params.context);
   const lifecycleGeneration = agentEvents.getAgentEventLifecycleGeneration();
-  // Observing the admitted recovery can put its wake into backoff. That progress
-  // transition does not revoke the still-executing input's source custody.
+  // A retry can return the wake to pending without revoking its admitted source.
   const batch = findRequesterSettleWakeRecoveryBatch(params, true, true);
   if (!batch) {
     if (findRequesterSettleWakeRecoveryBatch(params, false, true)) {
@@ -348,7 +348,7 @@ export async function recoverInterruptedSubagentRow(
         !storePath ||
         !isGatewayCurrent() ||
         listAgentRunsForSession(target).length !== 0 ||
-        isSessionWorkAdmissionActive(storePath, [childSessionKey, sessionId])
+        isSessionControllerWorkActive(storePath, [childSessionKey, sessionId])
       ) {
         throw new Error("Subagent child session effects owner changed");
       }

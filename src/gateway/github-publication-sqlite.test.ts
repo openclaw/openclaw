@@ -182,6 +182,7 @@ describe("publication SQLite materialization", () => {
           sessionId: row.session_id,
           idempotencyKey: row.idempotency_key,
           body,
+          draft: row.draft === 1,
         }),
         row.request_id,
       );

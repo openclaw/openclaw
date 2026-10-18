@@ -54,7 +54,7 @@ async function setup(
     run: () =>
       runHeartbeatWithFakeIntervals({
         cfg,
-        deps: { getReplyFromConfig: replySpy, getQueueSize: () => 0, nowMs: () => 0 },
+        deps: { getReplyFromConfig: replySpy, nowMs: () => 0 },
       }),
   };
 }

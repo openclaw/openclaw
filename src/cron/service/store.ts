@@ -18,6 +18,7 @@ import {
   CRON_DELIVERY_REPAIR_REQUIRED_MESSAGE,
   hasCanonicalCronDeliveryMode,
 } from "../store/delivery-codec.js";
+import { planCronJobMutation } from "../store/job-mutations.js";
 import type {
   CronJobMutation,
   CronJobMutationPlan,
@@ -366,28 +367,20 @@ export function captureCronJobMutationSource(state: CronServiceState) {
   };
 }
 
-/** Prepare caller checks from a worker-owned job definition before commit admission. */
+/** Prepare from the resident store; the committing worker replans against durable rows. */
 export async function prepareCronJobMutation(
-  _state: CronServiceState,
+  state: CronServiceState,
   source: ReturnType<typeof captureCronJobMutationSource>,
   mutation: CronJobMutation,
   snapshot: CronJobMutationSnapshot,
 ): Promise<CronJobMutationPlan> {
-  let plan: CronJobMutationPlan | undefined;
-  await runCronRuntimeMutation({
-    context: source.context,
-    type: "cron.prepareJobMutation",
-    input: { storeKey: source.storeKey, mutation },
-    snapshot,
-    assertCurrent: () => source.assertCurrent(),
-    publish: (outcome) => {
-      plan = outcome;
-    },
+  // Config validation can await a write publication after the operation's initial load.
+  await ensureLoaded(state, { deferQuarantinePersist: !state.deps.cronEnabled });
+  source.assertCurrent();
+  return planCronJobMutation(state.store!, mutation, {
+    ...snapshot.scheduler?.config,
+    nowMs: snapshot.nowMs,
   });
-  if (!plan) {
-    throw new Error("Cron job preparation returned no result");
-  }
-  return plan;
 }
 
 /** Publish a private CRUD draft only after its job and receipt transaction is known committed. */

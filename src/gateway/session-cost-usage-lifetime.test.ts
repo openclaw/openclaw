@@ -11,7 +11,7 @@ import { resolveSessionStorePathForScope } from "../config/sessions/session-stor
 import * as aggregation from "../infra/session-cost-usage-aggregation.js";
 import * as cacheRuntime from "../infra/session-cost-usage-cache-runtime.js";
 import { onSessionCostUsageUpdated } from "../infra/session-cost-usage-events.js";
-import { closeAgentWorkAdmissions } from "../sessions/session-lifecycle-admission.js";
+import { closeAgentWorkAdmissions } from "../sessions/session-controller.lifecycle.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { SessionCostUsagePublication } from "../shared/usage-types.js";

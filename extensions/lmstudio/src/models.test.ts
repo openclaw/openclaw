@@ -33,6 +33,10 @@ afterAll(() => {
   vi.resetModules();
 });
 
+// Check configured catalog projection through the registered provider
+// (index.test.ts) and discovered metadata at the fetch boundary. Keep direct
+// public helper tests only where those boundaries hide a contract, such as
+// `undefined` versus empty compat metadata.
 describe("lmstudio-models", () => {
   const asFetch = (mock: unknown) => mock as typeof fetch;
   const parseJsonRequestBody = (init: RequestInit | undefined): unknown => {

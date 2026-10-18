@@ -18,10 +18,10 @@ import { createDeferredCore } from "../../shared/deferred.js";
 import type { QueueSettings } from "./queue.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
-  clearFollowupQueueForTest,
   createQueueTestRun as createRun,
   installQueueRuntimeErrorSilencer,
 } from "./queue.test-helpers.js";
+import { clearFollowupQueue } from "./queue/state.js";
 
 installQueueRuntimeErrorSilencer();
 
@@ -80,7 +80,7 @@ it("drained followup turn keeps tracked work accepted after the triggering scope
   } finally {
     scopeClosed.resolve();
     requestRoot.release();
-    clearFollowupQueueForTest(key);
+    clearFollowupQueue(key);
     resetGatewayWorkAdmission();
   }
 });

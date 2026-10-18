@@ -88,6 +88,8 @@ it.each([
   { platform: "win32", owner: "dead", refused: false },
   { platform: "linux", owner: "same", refused: true },
   { platform: "linux", owner: "relative", refused: true },
+  { platform: "linux", owner: "retitled", refused: true },
+  { platform: "linux", owner: "unreadable", refused: true },
   { platform: "linux", owner: "other", refused: false },
   { platform: "linux", owner: "absent", refused: false },
 ] as const)(
@@ -113,7 +115,11 @@ it.each([
     const launcher =
       owner === "relative" ? "./dist/index.js" : path.join(ownerRoot, "dist", "index.js");
     vi.spyOn(processes, "readGatewayLockProcessCmdline").mockReturnValue(
-      owner === "unreadable" ? null : [process.execPath, launcher, "gateway"],
+      owner === "unreadable"
+        ? null
+        : owner === "retitled"
+          ? ["openclaw-gateway"]
+          : [process.execPath, launcher, "gateway"],
     );
     const readlink = fs.readlinkSync;
     vi.spyOn(fs, "readlinkSync").mockImplementation((pathname, options) =>
@@ -136,7 +142,7 @@ it.each([
         expect(failure).toMatchObject({
           reason: "gateway-stop-unverified",
           message: expect.stringMatching(
-            /Task Scheduler.*terminal.*openclaw gateway stop.*openclaw update/,
+            /service manager.*terminal.*openclaw gateway stop.*openclaw update/,
           ),
           failureFacts: [
             expect.objectContaining({ code: "gateway-stop-unverified" }),
@@ -166,36 +172,43 @@ it.each([
 
 describe("package update entry point", () => {
   const { fixture } = installFreshUpdateFixture();
-  it("refuses Windows package replacement before backup with an uninspectable live Gateway", async () => {
-    vi.mocked(databaseContext.inspectUpdateDatabaseContexts).mockRestore();
-    serviceHome(process.env.HOME!);
-    openOpenClawStateDatabase();
-    const candidate = path.join(process.env.HOME!, "candidate");
-    await writePackageRoot(candidate, "2026.9.2");
-    vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue({
-      root: candidate,
-      run: vi.fn(),
-      close: vi.fn().mockResolvedValue(undefined),
-    });
-    const inspect = databaseContext.inspectUpdateDatabaseContexts;
-    // Keep native file admission on the host; only service admission observes Windows.
-    vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation((params) =>
-      withMockedPlatform("win32", () => inspect(params)),
-    );
-    const native = unavailableService("windows-task-inspection-failed");
-    const live = withMockedPlatform("win32", () => gatewayOwner());
-    vi.spyOn(processes, "readGatewayLockProcessCmdline").mockReturnValue(null);
-    const backup = vi.spyOn(packageFilesystem, "backupNpmPackageRoot");
-    try {
-      await expect(updateCommand({ json: true, yes: true })).rejects.toBeInstanceOf(ExitError);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({ status: "error", reason: "gateway-stop-unverified" }),
+  it.each(["win32", "linux"] as const)(
+    "refuses %s package replacement before backup with an uninspectable live Gateway",
+    async (platform) => {
+      vi.mocked(databaseContext.inspectUpdateDatabaseContexts).mockRestore();
+      serviceHome(process.env.HOME!);
+      openOpenClawStateDatabase();
+      const candidate = path.join(process.env.HOME!, "candidate");
+      await writePackageRoot(candidate, "2026.9.2");
+      vi.mocked(packageUpdate.stagePackageInstallUpdate).mockResolvedValue({
+        root: candidate,
+        run: vi.fn(),
+        close: vi.fn().mockResolvedValue(undefined),
+      });
+      const inspect = databaseContext.inspectUpdateDatabaseContexts;
+      // Keep native file admission on the host; only service admission observes the selected platform.
+      vi.spyOn(databaseContext, "inspectUpdateDatabaseContexts").mockImplementation((params) =>
+        withMockedPlatform(platform, () => inspect(params)),
       );
-      expect(backup).not.toHaveBeenCalled();
-      expect(native.stop).not.toHaveBeenCalled();
-      expect(readPackage(fixture.root)).toMatchObject({ version: "2026.9.3" });
-    } finally {
-      live.release();
-    }
-  });
+      const native = unavailableService(
+        platform === "win32" ? "windows-task-inspection-failed" : "service-manager-unavailable",
+      );
+      const live = withMockedPlatform(platform, () => gatewayOwner());
+      vi.spyOn(processes, "readGatewayLockProcessCmdline").mockReturnValue(
+        platform === "win32" ? null : ["openclaw-gateway"],
+      );
+      const backup = vi.spyOn(packageFilesystem, "backupNpmPackageRoot");
+      try {
+        await expect(updateCommand({ json: true, yes: true })).rejects.toBeInstanceOf(ExitError);
+        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+          expect.objectContaining({ status: "error", reason: "gateway-stop-unverified" }),
+        );
+        expect(backup).not.toHaveBeenCalled();
+        expect(native.stop).not.toHaveBeenCalled();
+        expect(readPackage(fixture.root)).toMatchObject({ version: "2026.9.3" });
+      } finally {
+        live.release();
+      }
+    },
+  );
 });

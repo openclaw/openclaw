@@ -96,6 +96,22 @@ export class GenerationCodec {
     return values.map((value) => this.encode(value, seen));
   }
 
+  /** Method replies share their producer's lifetime; returned resources own themselves. */
+  encodeResult(value: unknown, handle: number): GenerationWireValue {
+    const owners = this.owners.get(handle);
+    if (!owners || owners.unowned) {
+      return this.encode(value);
+    }
+    const [first, ...remaining] = owners.resources;
+    const encoded = this.encode(value, undefined, undefined, first);
+    if (value !== null && (typeof value === "object" || typeof value === "function")) {
+      for (const owner of remaining) {
+        this.retainSharedHandles(value, owner);
+      }
+    }
+    return encoded;
+  }
+
   encode(
     value: unknown,
     seen = new Map<object, number>(),

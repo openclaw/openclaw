@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, onCleanup, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -34,6 +34,7 @@ type ReviewPresentation = {
   submitted: boolean;
   refreshing: boolean;
   error: string | null;
+  failedAttemptId: string | null;
 };
 
 export function createChatProviderReview(deps: {
@@ -90,24 +91,48 @@ export function createChatProviderReview(deps: {
       accepted: false,
     };
   });
-  // A new review identity resets local presentation; ordinary pane publications preserve it.
+  const failureMessage = (error?: string) =>
+    [t("chat.providerReview.continuationFailed"), error ? formatUiError(error) : null]
+      .filter(Boolean)
+      .join(" ");
+  // A new review resets local presentation; terminal receipts remain until an explicit retry.
   const [presentation, setPresentation] = createSignal<ReviewPresentation>((previous) => {
     const current = binding();
-    return previous?.binding === current
-      ? previous
-      : {
-          binding: current,
-          open: false,
-          loading: false,
-          pending: false,
+    const source = deps.source();
+    if (previous?.binding !== current) {
+      return {
+        binding: current,
+        open: false,
+        loading: false,
+        pending: false,
+        submitted: false,
+        refreshing: false,
+        error: null,
+        failedAttemptId: null,
+      };
+    }
+    const row = source && chatProviderReviewRow(source.state);
+    return current &&
+      !previous.pending &&
+      !previous.refreshing &&
+      continuationInFlight !== current &&
+      refreshInFlight !== current &&
+      current.attemptedRunId &&
+      previous.failedAttemptId !== current.attemptedRunId &&
+      row?.lastRunId === current.attemptedRunId &&
+      row.hasActiveRun === false &&
+      !row.activeRunIds?.length &&
+      (row.status === "failed" || row.status === "timeout" || row.status === "killed")
+      ? {
+          ...previous,
           submitted: false,
-          refreshing: false,
-          error: null,
-        };
+          error: failureMessage(row.lastRunError),
+          failedAttemptId: current.attemptedRunId,
+        }
+      : previous;
   });
   const isCurrent = (current: ReviewBinding) =>
-    // Admission reads current authority without subscribing the caller to presentation.
-    !disposed && untrack(binding) === current && matches(current);
+    !disposed && binding() === current && matches(current);
   const update = (
     current: ReviewBinding | null,
     patch: Partial<Omit<ReviewPresentation, "binding">>,
@@ -116,46 +141,13 @@ export function createChatProviderReview(deps: {
       setPresentation((previous) => ({ ...previous, ...patch }));
     }
   };
-  const failureMessage = (error?: string) =>
-    [t("chat.providerReview.continuationFailed"), error ? formatUiError(error) : null]
-      .filter(Boolean)
-      .join(" ");
   const recordFailedAttempt = (current: ReviewBinding, error: string) => {
     current.accepted = false;
     current.attemptedRunId = null;
     // A terminal receipt owns the old key; another explicit click gets a fresh one.
     current.idempotencyKey = generateUUID();
-    update(current, { submitted: false, error });
+    update(current, { submitted: false, error, failedAttemptId: null });
   };
-  // Canonical terminal receipts settle transport authority, rather than copying row state.
-  createEffect(
-    () => {
-      const source = deps.source();
-      const current = binding();
-      const activity = presentation();
-      const row = source && chatProviderReviewRow(source.state);
-      return current &&
-        !activity.pending &&
-        !activity.refreshing &&
-        current.attemptedRunId &&
-        row?.lastRunId === current.attemptedRunId &&
-        row.hasActiveRun === false &&
-        !row.activeRunIds?.length &&
-        (row.status === "failed" || row.status === "timeout" || row.status === "killed")
-        ? { current, error: failureMessage(row.lastRunError) }
-        : null;
-    },
-    (terminal) => {
-      if (
-        terminal &&
-        isCurrent(terminal.current) &&
-        continuationInFlight !== terminal.current &&
-        refreshInFlight !== terminal.current
-      ) {
-        recordFailedAttempt(terminal.current, terminal.error);
-      }
-    },
-  );
   const refresh = async (current: ReviewBinding | null) => {
     if (!current || !isCurrent(current) || !current.accepted || refreshInFlight === current) {
       return;
@@ -215,12 +207,21 @@ export function createChatProviderReview(deps: {
         !presentation().open ||
         !deps.source()?.canWrite ||
         continuationInFlight === current ||
-        current.accepted ||
         !current.review.canContinue ||
         !current.review.explanation?.trim() ||
         !current.review.continuationMessage?.trim()
       ) {
         return;
+      }
+      const activity = presentation();
+      const failedAttempt =
+        current.attemptedRunId !== null && activity.failedAttemptId === current.attemptedRunId;
+      if (current.accepted && !failedAttempt) {
+        return;
+      }
+      if (failedAttempt) {
+        // Retire a failed attempt only when another explicit acknowledgment starts.
+        recordFailedAttempt(current, activity.error ?? failureMessage());
       }
       if (!holdProviderReviewQueuedInputs(current.state, current.sessionKey, current.agentId)) {
         update(current, { error: t("chat.providerReview.queueHoldFailed") });

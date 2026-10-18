@@ -45,6 +45,10 @@ export function registerSerializedJsonArray<T>(
   return values;
 }
 
+export function serializedJsonArrayBytes(values: readonly unknown[]): number {
+  return serializedArrays.get(values)?.byteLength ?? 0;
+}
+
 function arrayBytes(value: unknown): Uint8Array | undefined {
   return value instanceof SerializedJsonArray
     ? value.bytes

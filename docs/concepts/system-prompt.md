@@ -248,7 +248,7 @@ The runtime excerpt budget covers `memory_get`, live tool results, and post-comp
 
 ## Documentation
 
-The **Documentation** section points to local docs when available (`docs/` in a Git checkout or the bundled npm package docs), falling back to [https://docs.openclaw.ai](https://docs.openclaw.ai) otherwise. It also lists the OpenClaw source location: Git checkouts expose the local source root, package installs get the GitHub source URL with instructions to review source there when docs are incomplete or stale.
+The **Documentation** section points to local docs when available (`docs/` in a Git checkout or the bundled npm package docs), falling back to [https://docs.openclaw.ai](https://docs.openclaw.ai) otherwise. It also lists the OpenClaw source location: Git checkouts expose the local source root, package installs get the GitHub source URL with instructions to review source there when docs are incomplete or stale. It also tells the agent that a missing tool or failed call reflects the current session, not OpenClaw, and to check [`session_status`](/concepts/session-tool#status-and-orchestration-helpers) with `capabilities: true` and the docs index (`https://docs.openclaw.ai/llms.txt`) before saying OpenClaw cannot do something. Each check is named only when the session can use it.
 
 Sandboxed runs receive local references only through their existing mounts, using paths inside the sandbox (such as `/workspace/docs` or `/agent/docs`). Host-only paths fall back to the public URLs; OpenClaw does not add mounts for documentation. When neither local docs nor a web tool is available, the prompt tells the model to acknowledge that it could not check the docs and mark recalled behavior as unverified.
 

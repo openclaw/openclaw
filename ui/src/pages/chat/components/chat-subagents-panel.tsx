@@ -4,7 +4,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { formatDurationCompact } from "../../../lib/format-duration.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { resolveSessionDisplayName } from "../../../lib/session-display.ts";
-import { isSessionRunActive } from "../../../lib/session-run-state.ts";
+import { isSessionRunStateActive } from "../../../lib/session-run-state.ts";
 import { parseAgentSessionKey } from "../../../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type { PaneSessionChangeOptions } from "../chat-pane-shared.ts";
@@ -32,10 +32,23 @@ let panelSequence = 0;
 export const ChatSubagentsPanel = defineSolidBridge<Props>(
   "openclaw-chat-subagents-panel",
   (props) => {
-    const [selected, setSelected] = createSignal<{ key: string; agentId: string } | null>(null);
     const [finishedOpen, setFinishedOpen] = createSignal(true);
     const finishedId = `chat-subagents-finished-${++panelSequence}`;
     const data = useSessionPanel(props, SubagentsPanelData, () => setSelected(null));
+    // Keep a local choice until the authoritative roster removes it or denies access.
+    const [selected, setSelected] = createSignal<{ key: string; agentId: string } | null>(
+      (previous) => {
+        const owner = data();
+        return previous &&
+          !owner.loading &&
+          ((owner.error && !owner.rows.length) ||
+            (owner.hasResult &&
+              !owner.error &&
+              !owner.rows.some((row) => row.session.key === previous.key)))
+          ? null
+          : (previous ?? null);
+      },
+    );
     const subagentAgentId = (key: string) =>
       data().rows.find((row) => row.session.key === key)?.session.agentId ??
       parseAgentSessionKey(key)?.agentId ??
@@ -49,25 +62,6 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
         }
       },
     );
-    createEffect(
-      () => {
-        const value = selected();
-        const owner = data();
-        return (
-          value &&
-          !owner.loading &&
-          ((owner.error && !owner.rows.length) ||
-            (owner.hasResult &&
-              !owner.error &&
-              !owner.rows.some((row) => row.session.key === value.key)))
-        );
-      },
-      (removed) => {
-        if (removed) {
-          setSelected(null);
-        }
-      },
-    );
     const unfinished = (row: SubagentsPanelRow) =>
       row.session.status === "queued" || isUnfinishedSubagent(row.session);
     const running = createMemo(() => data().rows.filter(unfinished));
@@ -77,7 +71,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
     );
     const renderElapsed = (row: SubagentsPanelRow) => {
       const session = row.session;
-      const active = isSessionRunActive(session);
+      const active = isSessionRunStateActive(session);
       if (session.runtimeMs != null) {
         return active && session.runtimeSampledAt != null ? (
           <openclaw-elapsed-time prop:startMs={session.runtimeSampledAt - session.runtimeMs} />
@@ -130,7 +124,7 @@ export const ChatSubagentsPanel = defineSolidBridge<Props>(
               >
                 {(row) => {
                   const title = () => resolveSessionDisplayName(row().session.key, row().session);
-                  const active = () => isSessionRunActive(row().session);
+                  const active = () => isSessionRunStateActive(row().session);
                   const activity = () =>
                     row().session.status === "queued"
                       ? t("common.queued")

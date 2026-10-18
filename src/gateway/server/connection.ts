@@ -296,22 +296,19 @@ export function attachGatewayConnection(params: AttachGatewayConnectionParams) {
       closeWithGrace(1008, connectionKind === "worker" ? "slow-consumer" : "slow consumer");
       return { kind: "unavailable" } as const;
     }
-    let encoded: string | Buffer;
+    let encoded: Buffer;
     try {
-      encoded = serializeGatewayFrame(obj);
+      const serialized = serializeGatewayFrame(obj);
+      encoded = typeof serialized === "string" ? Buffer.from(serialized) : serialized;
     } catch (error) {
       return { kind: "serialization", error } as const;
     }
     try {
-      if (typeof encoded === "string") {
-        socket.send(encoded);
-      } else {
-        socket.send(encoded, { binary: false });
-      }
-      const bytes = typeof encoded === "string" ? Buffer.byteLength(encoded) : encoded.byteLength;
+      socket.send(encoded, { binary: false });
+      const bytes = encoded.byteLength;
       const frame = asOptionalRecord(obj);
       if (frame?.type === "event" && typeof frame.event === "string") {
-        socket.recordEventSent?.(frame.event, bytes);
+        socket.recordEventSent?.(frame.event, encoded);
       }
       return { kind: "sent", bytes } as const;
     } catch {

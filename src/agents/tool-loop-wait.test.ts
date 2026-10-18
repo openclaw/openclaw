@@ -101,7 +101,7 @@ describe("wait-loop lane recovery", () => {
       });
       setInternalBeforeToolBatch(agent, createToolLoopBatchAdmission(ctx));
       installToolLoopRecoveryCleanup({ agent, runId: ctx.runId });
-      const lane = `session:${ctx.sessionKey}`;
+      const lane = `test:tool-loop:${ctx.sessionKey}`;
       const first = enqueueCommandInLane(lane, () => agent.prompt("finish the task"));
       const onWait = vi.fn();
       const next = enqueueCommandInLane(lane, async () => "queued message ran", {

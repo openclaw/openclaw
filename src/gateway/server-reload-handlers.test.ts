@@ -440,10 +440,11 @@ vi.mock(import("../infra/agent-run-registry.js"), async (importOriginal) => ({
   getActiveAgentRunContextCount: () => hoisted.activeAgentRunCount.value,
 }));
 
-vi.mock("../agents/embedded-agent-runner/active-run-projections.js", () => ({
-  getActiveEmbeddedRunCount: () => hoisted.activeEmbeddedRunCount.value,
-  listActiveEmbeddedRunSessionIds: () => hoisted.activeEmbeddedRunSessionIds,
-  listActiveEmbeddedRunSessionKeys: () => hoisted.activeEmbeddedRunSessionKeys,
+vi.mock("../sessions/session-controller.queries.js", async (importOriginal) => ({
+  ...(await importOriginal()),
+  getActiveSessionRunCount: () => hoisted.activeEmbeddedRunCount.value,
+  listActiveSessionRunIds: () => hoisted.activeEmbeddedRunSessionIds,
+  listActiveSessionRunKeys: () => hoisted.activeEmbeddedRunSessionKeys,
 }));
 
 vi.mock("../agents/main-session-recovery/main-session-restart-recovery.js", () => ({
@@ -879,8 +880,7 @@ afterEach(async () => {
   hoisted.stopGmailWatcher.mockClear();
   hoisted.activeAgentRunCount.value = 0;
   hoisted.activeEmbeddedRunCount.value = 0;
-  hoisted.activeEmbeddedRunSessionIds.length = 0;
-  hoisted.activeEmbeddedRunSessionKeys.length = 0;
+  hoisted.activeEmbeddedRunSessionIds.length = hoisted.activeEmbeddedRunSessionKeys.length = 0;
   hoisted.markRestartAbortedMainSessions.mockClear();
   hoisted.runtimeConfig.value = { session: { store: "/tmp/active-sessions.json" } };
   hoisted.assertOpenClawDatabasesReady.mockClear();

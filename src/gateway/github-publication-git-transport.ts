@@ -23,7 +23,7 @@ import {
 type GitCommandOptions = {
   cwd?: string;
   env?: NodeJS.ProcessEnv;
-  input?: string | Buffer;
+  input?: string | Buffer | (() => string | Buffer);
   maxOutputBytes?: number;
   beforeRun?: () => void;
   operation?: GitProcessOperation;
@@ -65,7 +65,10 @@ export async function runPublicationCommand(argv: string[], options: GitCommandO
             GIT_CONFIG_KEY_0: "core.hooksPath",
             GIT_CONFIG_VALUE_0: os.devNull,
           },
-          ...(options.input !== undefined ? { input: options.input } : {}),
+          // Resolve optional disclosure after beforeRun, directly at the transport boundary.
+          ...(options.input !== undefined
+            ? { input: typeof options.input === "function" ? options.input() : options.input }
+            : {}),
           timeoutMs,
           maxOutputBytes: options.maxOutputBytes ?? 256 * 1024,
         }),
