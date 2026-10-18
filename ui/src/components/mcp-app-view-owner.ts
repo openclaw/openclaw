@@ -10,6 +10,7 @@ import { t as translate } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { parseMcpAppLink } from "../lib/mcp-app-route.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { OpenClawAppBridge, bindMcpAppResourceHandlers } from "./mcp-app-bridge.ts";
 import { createMcpAppConfirm } from "./mcp-app-confirm.ts";
@@ -405,9 +406,10 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
       resources = createdResources;
       activeResources = createdResources;
       addResourceCleanup(createdResources, () => confirmation.cancel());
-      signal.addEventListener("abort", () => void teardownResources(createdResources), {
-        once: true,
-      });
+      addResourceCleanup(
+        createdResources,
+        listen(signal, "abort", () => void teardownResources(createdResources), { once: true }),
+      );
 
       const addCleanup = (cleanup: () => void) => addResourceCleanup(createdResources, cleanup);
       await loadMcpAppSandbox(

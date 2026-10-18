@@ -120,6 +120,62 @@ describe("diagnostic support export", () => {
     },
   );
 
+  it("replaces identifier map keys throughout an archive without losing structure or cross-references", async () => {
+    const identifiers = [
+      "+15555550101",
+      "+15555550102",
+      "alice@example.invalid",
+      "123456789012345678",
+      "@alice:matrix.example.invalid",
+      "!room:matrix.example.invalid",
+      "ghp_abcdefghij",
+      "ghp_klmnopqrst",
+      "<identifier#1>",
+    ];
+    const numbers = Object.fromEntries(
+      identifiers.map((identifier, index) => [identifier, { port: 19000 + index }]),
+    );
+    writeJson(path.join(tempDir, "openclaw.json"), {
+      channels: { slack: { dms: { U1: { historyLimit: 5 }, U2: { historyLimit: 10 } } } },
+      plugins: { entries: { "voice-call": { config: { numbers } } } },
+    });
+    const outputPath = path.join(tempDir, "identifier-keys.zip");
+    await writeDiagnosticSupportExport({
+      ...exportOptions(outputPath),
+      readStatusSnapshot: async () => ({ routes: [{ destinations: numbers }] }),
+      readHealthSnapshot: async () => ({ connected: true, destinations: numbers }),
+    });
+
+    const entries = await readZipTextEntries(outputPath);
+    const combined = Object.values(entries).join("\n");
+    for (const identifier of identifiers.slice(0, -1)) {
+      expect(combined).not.toContain(identifier);
+    }
+    expect(combined).not.toContain('"U1"');
+    expect(combined).not.toContain('"U2"');
+    const sanitizedConfig = JSON.parse(entries["config/sanitized.json"] ?? "{}");
+    expect(sanitizedConfig).toHaveProperty("channels.slack.dms", {
+      "<identifier#1>": { historyLimit: 5 },
+      "<identifier#2>": { historyLimit: 10 },
+    });
+    const sanitizedNumbers = sanitizedConfig.plugins.entries["voice-call"].config.numbers;
+    expect(Object.keys(sanitizedNumbers)).toHaveLength(identifiers.length);
+    for (const key of Object.keys(sanitizedNumbers)) {
+      expect(key).toMatch(/^<identifier#\d+>$/u);
+    }
+    // Distinct identifiers and a literal placeholder must retain separate entries.
+    expect(Object.values(sanitizedNumbers)).toEqual(
+      expect.arrayContaining(identifiers.map((_, index) => ({ port: 19000 + index }))),
+    );
+    expect(readJsonEntry(entries, "status/gateway-status.json")).toHaveProperty("data.routes", [
+      { destinations: sanitizedNumbers },
+    ]);
+    expect(readJsonEntry(entries, "health/gateway-health.json")).toHaveProperty("data", {
+      connected: true,
+      destinations: sanitizedNumbers,
+    });
+  });
+
   it("writeDiagnosticSupportExport writes a shareable zip without raw chats, webhook bodies, or secrets", async () => {
     const fakeToken = "sk-test-support-export-secret-token-1234567890";
     const fakeAwsKey = ["AKIA", "IOSFODNN7EXAMPLE"].join("");
@@ -477,7 +533,7 @@ describe("diagnostic support export", () => {
       "<redacted>",
     );
     expect(sanitizedConfig).toHaveProperty("channels.telegram.accounts", {
-      "<redacted-account-1>": {
+      "<identifier#1>": {
         botToken: "<redacted>",
         allowFrom: { redacted: true, count: 1 },
         ownerId: "<redacted>",

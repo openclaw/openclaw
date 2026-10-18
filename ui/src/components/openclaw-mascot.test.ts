@@ -55,21 +55,21 @@ it("pauses for reduced motion and hidden documents, and cancels playback on remo
 
   motionQuery.matches = true;
   motionQuery.dispatchEvent(Object.assign(new Event("change"), { matches: true }));
-  expect(cancelFrame).toHaveBeenCalledOnce();
+  await waitForSolid(() => expect(cancelFrame).toHaveBeenCalledOnce());
   expect(requestFrame).toHaveBeenCalledOnce();
 
   motionQuery.matches = false;
   motionQuery.dispatchEvent(Object.assign(new Event("change"), { matches: false }));
-  expect(requestFrame).toHaveBeenCalledTimes(2);
+  await waitForSolid(() => expect(requestFrame).toHaveBeenCalledTimes(2));
 
   visibility.mockReturnValue("hidden");
   document.dispatchEvent(new Event("visibilitychange"));
-  expect(cancelFrame).toHaveBeenCalledTimes(2);
+  await waitForSolid(() => expect(cancelFrame).toHaveBeenCalledTimes(2));
   expect(requestFrame).toHaveBeenCalledTimes(2);
 
   visibility.mockReturnValue("visible");
   document.dispatchEvent(new Event("visibilitychange"));
-  expect(requestFrame).toHaveBeenCalledTimes(3);
+  await waitForSolid(() => expect(requestFrame).toHaveBeenCalledTimes(3));
 
   mascot.remove();
   await waitForSolid(() => expect(cancelFrame).toHaveBeenCalledTimes(3));
