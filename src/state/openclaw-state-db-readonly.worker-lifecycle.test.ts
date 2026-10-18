@@ -178,7 +178,9 @@ it("prepares one lazy snapshot without blocking and retains its identity through
       const second = getSnapshotAsync(options);
       await started.promise;
       // Completion needs an event-loop turn, which a synchronous first read would block.
-      await new Promise<void>((resolve) => setImmediate(resolve));
+      await new Promise<void>((resolve) => {
+        setImmediate(resolve);
+      });
       expect(mock.cleanup).not.toHaveBeenCalled();
       finishProducer!();
       const [left, right] = await Promise.all([first, second]);

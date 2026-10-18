@@ -33,7 +33,7 @@ function readBundledDiscoveryFact<T>(read: () => T): T {
   try {
     return read();
   } catch (error) {
-    throwBundledDiscoveryReadError(error);
+    return throwBundledDiscoveryReadError(error);
   }
 }
 
