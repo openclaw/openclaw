@@ -466,6 +466,7 @@ export class ChatPaneRuntime extends ChatPaneLayoutRender {
         active: !catalogKey && this.active && this.presented,
         gateway: this.context.gateway,
       },
+      registerHumanMentionAccess: this.registerHumanMentionAccess,
       mentions: state.chatMentions,
       getMentions: () => state.chatMentions ?? [],
       mentionsUnsupported,

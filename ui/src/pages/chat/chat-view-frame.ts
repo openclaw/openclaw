@@ -66,7 +66,15 @@ export type ChatProps = Omit<
   | "onOpenSession"
   | "onSend"
 > &
-  Omit<ChatComposerProps, "notices" | "footerContent" | "disabled" | "onOpenImage"> &
+  Omit<
+    ChatComposerProps,
+    | "notices"
+    | "footerContent"
+    | "disabled"
+    | "onOpenImage"
+    | "mobileActivityPills"
+    | "mobileApprovalContent"
+  > &
   ChatDetailsProps &
   ChatTaskSuggestionTrayProps &
   ChatPlacementStartupNoticeProps & {

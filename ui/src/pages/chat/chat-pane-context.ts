@@ -56,6 +56,7 @@ import {
   retireChatMetadataRequests,
 } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
+import type { HumanMentionAccess } from "./components/chat-composer-mention-menu.tsx";
 import { releaseChatMediaResourceOwner } from "./components/chat-message-media.ts";
 import { retireSessionWorkspaceCheckout } from "./components/chat-session-workspace.ts";
 import { retireChatPairingQr } from "./history-merge.ts";
@@ -77,6 +78,18 @@ import { resetToolStream } from "./tool-stream-state.ts";
 import { reconcileWaitingApprovalsFromSnapshot } from "./tool-stream-status.ts";
 
 export abstract class ChatPaneContext extends ChatPaneLifecycle {
+  private registeredHumanMentionAccess?: HumanMentionAccess;
+  protected readonly getHumanMentionAccess = () => this.registeredHumanMentionAccess;
+  protected readonly registerHumanMentionAccess = (access: HumanMentionAccess) => {
+    this.registeredHumanMentionAccess = access;
+    return () => {
+      if (this.registeredHumanMentionAccess !== access) {
+        return;
+      }
+      this.registeredHumanMentionAccess = undefined;
+    };
+  };
+
   protected transcriptSessionProps(selectedSession: GatewaySessionRow | undefined) {
     const state = this.state;
     if (!state || parseCatalogSessionKey(state.sessionKey)) {
@@ -141,6 +154,7 @@ export abstract class ChatPaneContext extends ChatPaneLifecycle {
   }
 
   override dispose() {
+    this.registeredHumanMentionAccess = undefined;
     if (this.state) {
       retireChatPairingQr(this.state);
       retireCachedPairingQr(this.state.chatMessagesBySession);
