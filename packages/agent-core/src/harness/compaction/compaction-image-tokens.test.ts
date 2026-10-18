@@ -1,4 +1,4 @@
-import { describe, expect, it } from "vitest";
+import { assert, describe, expect, it } from "vitest";
 import type { AssistantMessage, ImageContent, Model } from "../../llm.js";
 import type { AgentCoreCompletionRuntimeDeps } from "../../runtime-deps.js";
 import type { AgentMessage } from "../../types.js";
@@ -58,6 +58,24 @@ function assistantText(text: string, timestamp: number): AssistantMessage {
 
 function summaryModel(contextWindow = 100_000): Model {
   return createCompactionModel({ contextWindow, maxTokens: 2048 });
+}
+
+function captureSummary(reply: (conversation: string | undefined) => string, timestamp: number) {
+  const prompts: string[] = [];
+  const runtime: AgentCoreCompletionRuntimeDeps = {
+    completeSimple: async (_model, context) => {
+      const content = context.messages[0]?.content;
+      if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== "text") {
+        throw new Error("expected one text-only summarization input");
+      }
+      prompts.push(content[0].text);
+      const conversation = content[0].text
+        .split("<conversation>\n")[1]
+        ?.split("\n</conversation>")[0];
+      return assistantText(reply(conversation), timestamp);
+    },
+  };
+  return { prompts, runtime };
 }
 
 function buildTranscript(recentUserTurns: AgentMessage[]): SessionTreeEntry[] {
@@ -143,14 +161,19 @@ describe.each([
           reserveTokens: 1_000,
           keepRecentTokens: 1,
         });
-        if (!preparation.ok || !preparation.value || !lastEntry) {
-          throw new Error("expected image history to be compactable");
-        }
+        assert(
+          preparation.ok && preparation.value && lastEntry,
+          "expected compactable image history",
+        );
         expect(preparation.value.isSplitTurn).toBe(splitTurn);
         expect(preparation.value.firstKeptEntryId).toBe(lastEntry.id);
 
         const model = summaryModel();
-        const prompts: string[] = [];
+        // Echo only supplied conversation text: the callback cannot invent omission facts.
+        const { prompts, runtime } = captureSummary(
+          (conversation) => conversation || "No conversation content",
+          6,
+        );
         const result = await compact(
           preparation.value,
           model,
@@ -160,24 +183,9 @@ describe.each([
           undefined,
           undefined,
           undefined,
-          {
-            completeSimple: async (_model, context) => {
-              const content = context.messages[0]?.content;
-              if (!Array.isArray(content) || content.length !== 1 || content[0]?.type !== "text") {
-                throw new Error("expected one text-only summarization input");
-              }
-              prompts.push(content[0].text);
-              // Echo only the supplied conversation: the callback cannot invent an omission fact.
-              const conversation = content[0].text
-                .split("<conversation>\n")[1]
-                ?.split("\n</conversation>")[0];
-              return assistantText(conversation || "No conversation content", 6);
-            },
-          },
+          runtime,
         );
-        if (!result.ok) {
-          throw result.error;
-        }
+        assert(result.ok);
         const marker = "[image data omitted from summary input]";
         expect(prompts).toHaveLength(1);
         expect
@@ -233,22 +241,13 @@ it.each([
     ];
     const entries = messages.map(messageEntry);
     const conversations: string[] = [];
-    const runtime: AgentCoreCompletionRuntimeDeps = {
-      completeSimple: async (_model, context) => {
-        const content = context.messages[0]?.content;
-        if (!Array.isArray(content) || content[0]?.type !== "text") {
-          throw new Error("expected summary prompt");
-        }
-        const conversation = content[0].text
-          .split("<conversation>\n")[1]
-          ?.split("\n</conversation>")[0];
-        if (!conversation) {
-          throw new Error("expected conversation");
-        }
-        conversations.push(conversation);
-        return assistantText("Summary", 202);
-      },
-    };
+    const { runtime } = captureSummary((conversation) => {
+      if (!conversation) {
+        throw new Error("expected conversation");
+      }
+      conversations.push(conversation);
+      return "Summary";
+    }, 202);
     let result;
     if (mode === "branch") {
       result = await generateBranchSummary(entries, {
@@ -269,9 +268,7 @@ it.each([
         reserveTokens: 1000,
         keepRecentTokens: 1,
       });
-      if (!preparation.ok || !preparation.value) {
-        throw new Error("expected compactable history");
-      }
+      assert(preparation.ok && preparation.value, "expected compactable history");
       expect(preparation.value.isSplitTurn).toBe(mode === "split");
       result = await compact(
         preparation.value,
