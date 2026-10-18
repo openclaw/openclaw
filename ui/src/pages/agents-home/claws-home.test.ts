@@ -44,7 +44,6 @@ describe("Claws on Agents Home", () => {
     const view = getQueriesForElement(page.querySelector(container)!);
     const add = await view.findByRole<HTMLButtonElement>("button", {
       name: "Add Workflow Operator",
-      exact: true,
     });
     expect(add.textContent?.trim()).toBe("Add");
     add.click();
