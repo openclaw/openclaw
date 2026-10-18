@@ -1,5 +1,6 @@
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { acquireWithWait } from "../../infra/acquire-with-wait.js";
+import { formatErrorMessage } from "../../infra/errors.js";
 import { isStateDatabaseMaintenanceContention } from "../../infra/gateway-state-owner-record.js";
 import { resolveUpdateInstallRoot } from "../../infra/update-install-root.js";
 import { UpdatePreMutationError } from "../../infra/update-pre-mutation-error.js";
@@ -105,7 +106,7 @@ export function createUpdateCommandExecutionGuards(
       }
       throw new UpdatePreMutationError(
         "state-maintenance-busy",
-        `Update deferred while waiting for state maintenance. ${String(maintenance)} Let the maintenance owner finish, then retry openclaw update.`,
+        `Update deferred while waiting for state maintenance. ${formatErrorMessage(maintenance)} Let the maintenance owner finish, then retry openclaw update.`,
         { cause },
       );
     }
