@@ -3,7 +3,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { insertRegistryWorktree } from "../../agents/worktrees/registry.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -294,19 +294,91 @@ describe("loadSessionDiff", () => {
     expect(trackedDiffCommands).toBeLessThanOrEqual(1);
   });
 
-  it("reports a failed tracked inventory instead of an empty diff", async () => {
+  it.each([
+    { kind: "tracked", flag: "--numstat" },
+    { kind: "untracked", flag: "ls-files" },
+  ])("reports a failed $kind inventory instead of an empty diff", async ({ kind, flag }) => {
     seedRepo({ "tracked.txt": "before\n" }, "init");
     write("tracked.txt", "after\n");
     const runCommand = execRunner.runCommandBuffersWithTimeout;
     vi.spyOn(execRunner, "runCommandBuffersWithTimeout").mockImplementation(
       async (argv, options) => {
         const result = await runCommand(argv, options);
-        return argv[argv.indexOf("-C") + 1] === repoRoot && argv.includes("--numstat")
+        return argv[argv.indexOf("-C") + 1] === repoRoot && argv.includes(flag)
           ? { ...result, code: 1, stdout: Buffer.alloc(0) }
           : result;
       },
     );
-    await expect(readDiff()).rejects.toThrow("Unable to read tracked Git changes");
+    await expect(readDiff()).rejects.toThrow("Unable to read " + kind + " Git changes");
+  });
+
+  it("returns session-filtered summary counts without patches or branch history", async () => {
+    initRepo(repoRoot);
+    for (const [name, content] of [
+      ["changed.txt", "before\n"],
+      ["deleted.txt", "remove\nthese\n"],
+      ["renamed.txt", "keep\nthese\nlines\n"],
+      ["preexisting.txt", "existing\n"],
+    ] as const) {
+      fs.writeFileSync(path.join(repoRoot, name), content);
+    }
+    git(repoRoot, "add", ".");
+    git(repoRoot, "commit", "-qm", "base");
+    git(repoRoot, "checkout", "-qb", "feature");
+    fs.appendFileSync(path.join(repoRoot, "preexisting.txt"), "before session\n");
+    const summaryBaseline = await captureSessionDiffBaseline({ cwd: repoRoot, sessionId: "s1" });
+    fs.writeFileSync(path.join(repoRoot, "committed.txt"), "branch\n");
+    git(repoRoot, "add", "committed.txt");
+    git(repoRoot, "commit", "-qm", "branch work");
+    fs.writeFileSync(path.join(repoRoot, "changed.txt"), "after\nmore\n");
+    git(repoRoot, "add", "changed.txt");
+    git(repoRoot, "mv", "renamed.txt", "renamed-next.txt");
+    fs.rmSync(path.join(repoRoot, "deleted.txt"));
+    fs.writeFileSync(path.join(repoRoot, "loose file.txt"), "new\nlines\n");
+    fs.writeFileSync(path.join(repoRoot, "binary.bin"), Buffer.from([0, 1, 2]));
+    mockSession(repoRoot, { sessionDiffBaseline: summaryBaseline });
+    const commands: string[][] = [];
+    const runCommand = execRunner.runCommandBuffersWithTimeout;
+    const observer = vi
+      .spyOn(execRunner, "runCommandBuffersWithTimeout")
+      .mockImplementation((argv, options) => {
+        if (argv[argv.indexOf("-C") + 1] === repoRoot) {
+          commands.push([...argv]);
+        }
+        return runCommand(argv, options);
+      });
+    onTestFinished(() => observer.mockRestore());
+
+    const result = await loadSessionDiff({ sessionKey: "agent:main:s1", summaryOnly: true });
+
+    expect(result.files).toEqual([
+      {
+        path: "binary.bin",
+        status: "added",
+        additions: 0,
+        deletions: 0,
+        untracked: true,
+        binary: true,
+      },
+      { path: "changed.txt", status: "modified", additions: 2, deletions: 1 },
+      { path: "committed.txt", status: "added", additions: 1, deletions: 0 },
+      { path: "deleted.txt", status: "deleted", additions: 0, deletions: 2 },
+      { path: "loose file.txt", status: "added", additions: 2, deletions: 0, untracked: true },
+      {
+        path: "renamed-next.txt",
+        oldPath: "renamed.txt",
+        status: "renamed",
+        additions: 0,
+        deletions: 0,
+      },
+    ]);
+    expect(result.additions).toBe(5);
+    expect(result.deletions).toBe(3);
+    expect(result.commits).toBeUndefined();
+    expect(result.mergeBase).toBeUndefined();
+    expect(result.truncated).toBeUndefined();
+    expect(commands.some((argv) => argv.includes("--numstat"))).toBe(true);
+    expect(commands.some((argv) => argv.includes("--patch") || argv.includes("log"))).toBe(false);
   });
 
   it("shows an unrelated root commit merged into the feature branch in a sha256 repository", async () => {
@@ -434,6 +506,12 @@ describe("loadSessionDiff", () => {
         deletions: 0,
         baseRef: acceptedBase,
       });
+      const summary = await loadSessionDiff({ sessionKey, summaryOnly: true });
+      expect(summary.files).toEqual([
+        { path: "task.txt", status: "added", additions: 1, deletions: 0, untracked: true },
+      ]);
+      expect(summary).toMatchObject({ additions: 1, deletions: 0, baseRef: acceptedBase });
+      expect(summary.commits).toBeUndefined();
       expect(
         (await loadSessionDiff({ sessionKey, scope: "uncommitted" })).files.map(
           (file) => file.path,
