@@ -58,14 +58,26 @@ export class AcpTranslatorSessionLifecycle {
 
   async newSession(params: NewSessionRequest): Promise<NewSessionResponse> {
     this.assertSupportedSessionSetup(params.mcpServers);
+    assertAbsoluteCwd(params.cwd, "session/new");
     this.enforceSessionCreateRateLimit("newSession");
 
     const sessionId = randomUUID();
     const meta = parseSessionMeta(params["_meta"]);
-    const sessionKey = await this.resolveSessionKeyFromMeta({
-      meta,
-      fallbackKey: `acp-bridge:${sessionId}`,
-    });
+    const fallbackKey = `acp-bridge:${sessionId}`;
+    const hasExplicitRouting = Boolean(
+      meta.sessionKey ||
+      meta.sessionLabel ||
+      this.opts.defaultSessionKey ||
+      this.opts.defaultSessionLabel,
+    );
+    const sessionKey = hasExplicitRouting
+      ? await this.resolveSessionKeyFromMeta({ meta, fallbackKey })
+      : fallbackKey;
+    if (!hasExplicitRouting) {
+      // Gateway owns execution cwd and its authorization. Adopted sessions keep
+      // their existing directory; a fresh key needs no reset before creation.
+      await this.gateway.request("sessions.create", { key: sessionKey, cwd: params.cwd });
+    }
 
     const session = this.sessionStore.createSession({
       sessionId,
