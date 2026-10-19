@@ -1,3 +1,4 @@
+import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import {
   inspectMatrixDirectRooms,
@@ -29,18 +30,15 @@ function createClient(overrides: Partial<MatrixClient> = {}): MatrixClient {
   } as unknown as MatrixClient;
 }
 
-function expectDirectMappingWrite(
-  setAccountData: ReturnType<typeof vi.fn>,
-  remoteUserId: string,
-  roomIds: string[],
-) {
-  expect(setAccountData).toHaveBeenCalledTimes(1);
-  const [eventType, content] = setAccountData.mock.calls.at(0) ?? [];
-  expect(eventType).toBe(EventType.Direct);
-  expect((content as Record<string, string[]> | undefined)?.[remoteUserId]).toEqual(roomIds);
+function expectDirectMappingWrite(client: MatrixClient, roomIds: string[]) {
+  expect(client.setAccountData).toHaveBeenCalledTimes(1);
+  expect(client.setAccountData).toHaveBeenCalledWith(
+    EventType.Direct,
+    expect.objectContaining({ [alice]: roomIds }),
+  );
 }
 
-describe("inspectMatrixDirectRooms", () => {
+describe("Matrix direct rooms", () => {
   it("ignores remote member-state direct flags when ranking discovered rooms", async () => {
     const client = strictClient({
       getJoinedRooms: vi.fn(async () => ["!fallback:example.org", "!remote-marked:example.org"]),
@@ -69,12 +67,8 @@ describe("inspectMatrixDirectRooms", () => {
     expect(result.activeRoomId).toBeNull();
     expect(result.discoveredStrictRoomIds).toStrictEqual([]);
   });
-});
-
-describe("repairMatrixDirectRooms", () => {
   it("creates a fresh direct room when no healthy DM exists", async () => {
     const createDirectRoom = vi.fn(async () => "!created:example.org");
-    const setAccountData = vi.fn(async () => undefined);
     const client = createClient({
       getJoinedRooms: vi.fn(async () => ["!shared:example.org"]),
       getJoinedRoomMembers: vi.fn(async () => [
@@ -83,7 +77,6 @@ describe("repairMatrixDirectRooms", () => {
         "@mallory:example.org",
       ]),
       createDirectRoom,
-      setAccountData,
     });
 
     const result = await repairMatrixDirectRooms({
@@ -93,17 +86,15 @@ describe("repairMatrixDirectRooms", () => {
 
     expect(createDirectRoom).toHaveBeenCalledWith("@alice:example.org", { encrypted: true });
     expect(result.createdRoomId).toBe("!created:example.org");
-    expectDirectMappingWrite(setAccountData, "@alice:example.org", ["!created:example.org"]);
+    expectDirectMappingWrite(client, ["!created:example.org"]);
   });
 
   it("persists discovered strict rooms alongside an older strict mapped room", async () => {
-    const setAccountData = vi.fn(async () => undefined);
     const client = strictClient({
       getAccountData: vi.fn(async () => ({
         "@alice:example.org": ["!older:example.org"],
       })),
       getJoinedRooms: vi.fn(async () => ["!older:example.org", "!fresh:example.org"]),
-      setAccountData,
     });
 
     const result = await repairMatrixDirectRooms(target(client));
@@ -115,10 +106,7 @@ describe("repairMatrixDirectRooms", () => {
       "!older:example.org",
       "!fresh:example.org",
     ]);
-    expectDirectMappingWrite(setAccountData, "@alice:example.org", [
-      "!older:example.org",
-      "!fresh:example.org",
-    ]);
+    expectDirectMappingWrite(client, ["!older:example.org", "!fresh:example.org"]);
   });
 
   it("rejects unqualified Matrix user ids", async () => {
@@ -131,32 +119,14 @@ describe("repairMatrixDirectRooms", () => {
       }),
     ).rejects.toThrow('Matrix user IDs must be fully qualified (got "alice")');
   });
-});
-
-describe("promoteMatrixDirectRoomCandidate", () => {
   it.each([
-    { reason: "promoted", roomId: "!fresh:example.org", classifyAsDirect: true, repaired: true },
-    {
-      reason: "local-explicit-false",
-      roomId: "!blocked:example.org",
-      classifyAsDirect: false,
-      repaired: false,
-    },
-    {
-      reason: "already-mapped",
-      roomId: "!mapped:example.org",
-      classifyAsDirect: true,
-      repaired: false,
-    },
-    {
-      reason: "repair-failed",
-      roomId: "!fresh:example.org",
-      classifyAsDirect: true,
-      repaired: false,
-    },
-  ])(
-    "preserves $reason promotion behavior",
-    async ({ reason, roomId, classifyAsDirect, repaired }) => {
+    ["promoted", "!fresh:example.org", true, true],
+    ["local-explicit-false", "!blocked:example.org", false, false],
+    ["already-mapped", "!mapped:example.org", true, false],
+    ["repair-failed", "!fresh:example.org", true, false],
+  ] as const)(
+    "preserves %s promotion behavior",
+    async (reason, roomId, classifyAsDirect, repaired) => {
       const setAccountData = vi.fn(async () => {
         if (reason === "repair-failed") {
           throw new Error("account data unavailable");
@@ -185,7 +155,7 @@ describe("promoteMatrixDirectRoomCandidate", () => {
         ...(classifyAsDirect ? { roomId } : {}),
       });
       if (repaired) {
-        expectDirectMappingWrite(setAccountData, alice, [roomId]);
+        expectDirectMappingWrite(client, [roomId]);
       } else if (reason !== "repair-failed") {
         expect(setAccountData).not.toHaveBeenCalled();
       }
@@ -216,20 +186,12 @@ describe("promoteMatrixDirectRoomCandidate", () => {
 
   it("serializes concurrent m.direct writes so distinct mappings are not lost", async () => {
     let directContent: Record<string, string[]> = {};
-    let releaseFirstWrite: (() => void) | undefined;
-    const firstWriteStarted = new Promise<void>((resolve) => {
-      releaseFirstWrite = () => {
-        resolve();
-      };
-    });
-    if (!releaseFirstWrite) {
-      throw new Error("Expected first m.direct write release callback to be initialized");
-    }
+    const firstWriteStarted = createDeferred<void>();
     let writeCount = 0;
     const setAccountData = vi.fn(async (_eventType: string, content: Record<string, string[]>) => {
       writeCount += 1;
       if (writeCount === 1) {
-        await firstWriteStarted;
+        await firstWriteStarted.promise;
       }
       directContent = { ...content };
     });
@@ -252,7 +214,7 @@ describe("promoteMatrixDirectRoomCandidate", () => {
       roomId: "!bob:example.org",
     });
 
-    releaseFirstWrite();
+    firstWriteStarted.resolve();
     await expect(Promise.all([firstWrite, secondWrite])).resolves.toEqual([true, true]);
 
     expect(directContent).toEqual({

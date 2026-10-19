@@ -79,25 +79,13 @@ describe("resolveMatrixAccount", () => {
     vi.unstubAllEnvs();
   });
 
-  it("requires userId + password when no access token is set", () => {
+  it.each([undefined, "secret"])("requires a password for userId auth (%s)", (password) => {
     const cfg = configWithMatrix({
       homeserver: "https://matrix.example.org",
       userId: "@bot:example.org",
+      password,
     });
-
-    const account = resolveMatrixAccount({ cfg });
-    expect(account.configured).toBe(false);
-  });
-
-  it("marks password auth as configured when userId is present", () => {
-    const cfg = configWithMatrix({
-      homeserver: "https://matrix.example.org",
-      userId: "@bot:example.org",
-      password: "secret",
-    });
-
-    const account = resolveMatrixAccount({ cfg });
-    expect(account.configured).toBe(true);
+    expect(resolveMatrixAccount({ cfg }).configured).toBe(password !== undefined);
   });
 
   it("uses configured defaultAccount when accountId is omitted", () => {
@@ -114,9 +102,11 @@ describe("resolveMatrixAccount", () => {
     });
 
     const account = resolveMatrixAccount({ cfg });
-    expect(account.accountId).toBe("ops");
-    expect(account.homeserver).toBe("https://ops.example.org");
-    expect(account.configured).toBe(true);
+    expect(account).toMatchObject({
+      accountId: "ops",
+      homeserver: "https://ops.example.org",
+      configured: true,
+    });
   });
 
   it("includes default accounts backed only by global env vars in plugin account enumeration", () => {
