@@ -39,6 +39,11 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-chat-sent-comments": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-sources": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-summary-automations": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-details-progress": HTMLAttributes<HTMLElement>;
+      "openclaw-microphone-activity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-content": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-raw": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-outcome": HTMLAttributes<HTMLElement>;
