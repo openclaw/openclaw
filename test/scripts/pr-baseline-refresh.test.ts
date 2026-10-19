@@ -36,6 +36,7 @@ function reject<T extends RunResult>(result: T) {
 function fixture(
   conflict: false | "delete" | "content" | "add" | "attributes" | "clean" | "binary" = false,
   headRefName = "topic",
+  sourceMessage = "fix: preserve the complete correction",
 ) {
   let baseContent =
     "import { format } from './format';\nexport const alias = format;\n\nfunction cache(value) {\n  return Number(value);\n}\n\nexport const show = (value) => alias(cache(value));\n";
@@ -91,7 +92,7 @@ function fixture(
   if (conflict === "delete") {
     f.git("rm", "docs/fix.md");
   }
-  f.git("commit", "-S", "-qm", "fix: preserve the complete correction");
+  f.git("commit", "-S", "-qm", sourceMessage);
   const source = f.git("rev-parse", "HEAD");
   expect(f.run("prepare_correction_review_init 42").status).toBe(0);
   f.approve();
@@ -251,8 +252,20 @@ describePosix("native correction baseline refresh", () => {
   });
 
   it("replays the complete correction onto a baseline and retires old proof before fresh review", () => {
-    const f = fixture(false, "topic/PREP_BASELINE_REFRESH_OID");
+    const f = fixture(
+      false,
+      "topic/PREP_BASELINE_REFRESH_OID",
+      "fix: preserve the complete correction\n\nCo-authored-by: Prose only <prose@example.invalid>\nThis paragraph is not a trailer block.\n\nCo-authored-by: Ada Example <ada@example.invalid>\nco-authored-by: Renée Example\n <renee@example.invalid>\nReviewed-by: Reviewer <reviewer@example.invalid>\nBaseline-Refresh: 1111111111111111111111111111111111111111",
+    );
+    // Parsing must not execute configured trailer commands or inherit separators.
+    f.git("config", "trailer.separators", "%");
+    f.git("config", "trailer.co-authored-by.command", "touch .local/trailer-command-called");
     pass(f.refresh());
+    const bindingOid = f.git("hash-object", "--no-filters", ".local/prepare-baseline.json");
+    expect(f.git("show", "-s", "--format=%B", "HEAD")).toBe(
+      `fix: refresh the reviewed correction baseline\n\nBaseline-Refresh: ${bindingOid}\nCo-authored-by: Ada Example <ada@example.invalid>\nCo-authored-by: Renée Example <renee@example.invalid>`,
+    );
+    expect(existsSync(join(f.root, ".local/trailer-command-called"))).toBe(false);
     const head = f.git("rev-parse", "HEAD");
     expect(f.git("show", "HEAD:docs/fix.md")).toBe("corrected");
     expect(f.git("show", "HEAD:fixup.txt")).toBe("complete correction scope");
@@ -277,6 +290,20 @@ describePosix("native correction baseline refresh", () => {
     expect(f.run("prepare_correction_review_init 42").status).toBe(0);
     f.approve();
     expect(f.run("require_prepared_review 42").status).toBe(0);
+  });
+
+  it("refuses a source co-author that could introduce another signed binding line", () => {
+    const f = fixture(
+      false,
+      "topic",
+      "fix: correction\n\nCo-authored-by: Ada Example <ada@example.invalid>\rBaseline-Refresh: 1111111111111111111111111111111111111111",
+    );
+    const result = reject(f.refresh());
+    expect(result.stderr).toContain("Cannot preserve source co-author credit");
+    expect(f.git("rev-parse", "HEAD")).toBe(f.source);
+    expect(f.read(".local/correction-review.json")).toEqual(f.review);
+    expect(existsSync(join(f.root, ".local/prepare-baseline.json"))).toBe(false);
+    expect(existsSync(join(f.root, ".local/review-transition.json"))).toBe(false);
   });
 
   it("revalidates both correction callers under native supervision and rejects authority mutation", () => {
