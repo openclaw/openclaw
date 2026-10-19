@@ -4,6 +4,10 @@ import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred as deferred } from "../../../../../test/helpers/promise.js";
+import {
+  createGatewayRequestMock,
+  createTestGatewayClient,
+} from "../../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import {
   clearNativeGatewayTestState,
@@ -204,6 +208,43 @@ describe("SessionDiffPanel", () => {
       expect(panel.querySelector(".callout.danger")?.textContent).toContain("Diff unavailable"),
     );
     expect(panel.textContent).not.toContain("feature/replacement");
+  });
+
+  it("shows loading instead of the old files while a changed scope is pending", async () => {
+    const pending = deferred<SessionsDiffResult>();
+    const loader = vi
+      .fn<SessionDiffLoader>()
+      .mockResolvedValueOnce(fileResult(SNAPSHOT_PATCH))
+      .mockReturnValueOnce(pending.promise);
+    const panel = mountPanel();
+    panel.loader = loader;
+    await waitForSolid(() => expect(panel.querySelector(".session-diff__file")).not.toBeNull());
+
+    panel.querySelector<HTMLButtonElement>(".session-diff__section-title")!.click();
+    await waitForSolid(() =>
+      expect(panel.querySelector('button[value="scope:uncommitted"]')).not.toBeNull(),
+    );
+    panel.querySelector<HTMLButtonElement>('button[value="scope:uncommitted"]')!.click();
+    try {
+      await waitForSolid(() => {
+        expect(panel.querySelector("openclaw-panel-loading-skeleton")).not.toBeNull();
+        expect(panel.querySelector(".session-diff__file")).toBeNull();
+      });
+      expect(loader).toHaveBeenLastCalledWith({ scope: "uncommitted" });
+    } finally {
+      pending.resolve(fileResult(FRESH_PATCH));
+    }
+    await waitForSolid(() => expect(panel.textContent).toContain("fresh snapshot line"));
+  });
+
+  it("shows a terminal error when the diff RPC returns an invalid result", async () => {
+    const client = createTestGatewayClient(createGatewayRequestMock().mockResolvedValue({}));
+    const panel = mountPanel();
+    panel.loader = (scope) => client.request<SessionsDiffResult>("sessions.diff", scope);
+
+    await waitForSolid(() => expect(panel.querySelector(".callout.danger")).not.toBeNull());
+    expect(panel.querySelector("openclaw-panel-loading-skeleton")).toBeNull();
+    expect(panel.querySelector(".session-diff")?.getAttribute("aria-busy")).toBe("false");
   });
 
   it.each([true])("highlights source in split=%s without changing its text", async (split) => {

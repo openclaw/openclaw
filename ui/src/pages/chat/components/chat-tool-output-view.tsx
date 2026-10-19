@@ -1,4 +1,4 @@
-import { createMemo, createSignal, isPending, latest, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, Show } from "solid-js";
 import { CHAT_MESSAGE_MAX_CHARS } from "../../../../../packages/gateway-protocol/src/schema/chat-history-constants.js";
 import { CopyButton } from "../../../components/solid/copy-button.tsx";
 import type { ToolCard } from "../../../lib/chat/chat-types.ts";
@@ -32,21 +32,27 @@ function ToolOutput(props: Props) {
     loader: props.loadFullMessage,
     retry: retry(),
   }));
-  const output = createMemo<OutputResult>(
-    () => {
-      const { content, loader } = target();
+  const [output, setOutput] = createSignal<OutputResult>({ state: "idle", card: null });
+  function RequestLifetime(resource: { target: ReturnType<typeof target> }) {
+    onSettled(() => {
+      const { content, loader } = resource.target;
       if (!content) {
-        return { state: "idle", card: null };
+        setOutput({ state: "idle", card: null });
+        return undefined;
       }
       const { card, sessionKey, agentId } = content;
       if (isLegacyToolOutputUnavailable(card)) {
-        return { state: "unavailable", card: null };
+        setOutput({ state: "unavailable", card: null });
+        return undefined;
       }
       const messageId = card.resultMessageId;
       if (!sessionKey || !messageId || !card.callId || !loader) {
-        return { state: card.outputTruncated ? "unavailable" : "idle", card: null };
+        setOutput({ state: card.outputTruncated ? "unavailable" : "idle", card: null });
+        return undefined;
       }
-      return (async (): Promise<OutputResult> => {
+      let active = true;
+      setOutput({ state: "loading", card: null });
+      void (async () => {
         try {
           const result = await loader({
             sessionKey,
@@ -54,6 +60,9 @@ function ToolOutput(props: Props) {
             messageId,
             maxChars: card.outputTruncated ? CHAT_MESSAGE_MAX_CHARS : 2_000_000,
           });
+          if (!active) {
+            return;
+          }
           const matches =
             result?.ok && result.message
               ? extractToolCardsCached(result.message).filter(
@@ -62,23 +71,29 @@ function ToolOutput(props: Props) {
               : [];
           const loadedCard = matches.length === 1 ? matches[0] : undefined;
           if (!loadedCard || loadedCard.outputText === undefined) {
-            return { state: "unavailable", card: null };
+            setOutput({ state: "unavailable", card: null });
+            return;
           }
-          return {
+          setOutput({
             card: { ...card, ...loadedCard },
             state:
               loadedCard.outputTruncated || isLegacyToolOutputUnavailable(loadedCard)
                 ? "unavailable"
                 : "loaded",
-          };
+          });
         } catch {
-          return { state: "error", card: null };
+          if (active) {
+            setOutput({ state: "error", card: null });
+          }
         }
       })();
-    },
-    { loadingValue: { state: "loading", card: null } },
-  );
-  const loadState = () => (isPending(output) ? "loading" : latest(output).state);
+      return () => {
+        active = false;
+      };
+    });
+    return null;
+  }
+  const loadState = () => output().state;
   const [downloadFailed, setDownloadFailed] = createSignal(() => {
     target();
     return false;
@@ -103,54 +118,59 @@ function ToolOutput(props: Props) {
       }
     }
   }
-  const card = () => (isPending(output) ? null : latest(output).card) ?? props.content?.card;
+  const card = () => output().card ?? props.content?.card;
   const text = () => card()?.outputText ?? "";
   const displayText = () => (card() ? (formatToolOutput(card()!) ?? "") : "");
   return (
-    <Show when={card()}>
-      <section class="chat-tool-output" aria-busy={loadState() === "loading" ? "true" : "false"}>
-        <div class="sidebar-header">
-          <div class="sidebar-title">{toolOutputSourceLabel(card()!)}</div>
-        </div>
-        <Show when={loadState() === "loading"}>
-          <p role="status">{t("common.loading")}</p>
-        </Show>
-        <Show when={loadState() === "unavailable"}>
-          <p role="status">{t("chat.toolCards.fullOutputUnavailable")}</p>
-        </Show>
-        <Show when={loadState() === "error"}>
-          <p role="alert">
-            {t("chat.toolCards.outputLoadFailed")}{" "}
-            <button class="btn btn--sm" onClick={() => setRetry((value) => value + 1)}>
-              {t("common.retry")}
-            </button>
-          </p>
-        </Show>
-        <Show when={card()!.inputText !== undefined}>
-          <details>
-            <summary>{t("chat.toolCards.toolInput")}</summary>
-            <pre>{card()!.inputText}</pre>
-          </details>
-        </Show>
-        <Show when={loadState() !== "loading"}>
-          <div class="chat-tool-output__actions">
-            <CopyButton text={text()} idleLabel={t("chat.toolCards.copyOutput")} />
-            <button class="btn btn--sm" type="button" onClick={() => downloadOutput(card()!)}>
-              {t("chat.toolCards.downloadOutput")}
-            </button>
+    <>
+      <Show when={target()} keyed>
+        {(current) => <RequestLifetime target={current} />}
+      </Show>
+      <Show when={card()}>
+        <section class="chat-tool-output" aria-busy={loadState() === "loading" ? "true" : "false"}>
+          <div class="sidebar-header">
+            <div class="sidebar-title">{toolOutputSourceLabel(card()!)}</div>
           </div>
-        </Show>
-        <Show when={downloadFailed()}>
-          <p role="alert">{t("chat.toolCards.outputDownloadFailed")}</p>
-        </Show>
-        <pre class="chat-tool-output__text">
-          <code>{displayText()}</code>
-        </pre>
-        <Show when={displayText() !== text()}>
-          <RawOutputToggle text={text()} />
-        </Show>
-      </section>
-    </Show>
+          <Show when={loadState() === "loading"}>
+            <p role="status">{t("common.loading")}</p>
+          </Show>
+          <Show when={loadState() === "unavailable"}>
+            <p role="status">{t("chat.toolCards.fullOutputUnavailable")}</p>
+          </Show>
+          <Show when={loadState() === "error"}>
+            <p role="alert">
+              {t("chat.toolCards.outputLoadFailed")}{" "}
+              <button class="btn btn--sm" onClick={() => setRetry((value) => value + 1)}>
+                {t("common.retry")}
+              </button>
+            </p>
+          </Show>
+          <Show when={card()!.inputText !== undefined}>
+            <details>
+              <summary>{t("chat.toolCards.toolInput")}</summary>
+              <pre>{card()!.inputText}</pre>
+            </details>
+          </Show>
+          <Show when={loadState() !== "loading"}>
+            <div class="chat-tool-output__actions">
+              <CopyButton text={text()} idleLabel={t("chat.toolCards.copyOutput")} />
+              <button class="btn btn--sm" type="button" onClick={() => downloadOutput(card()!)}>
+                {t("chat.toolCards.downloadOutput")}
+              </button>
+            </div>
+          </Show>
+          <Show when={downloadFailed()}>
+            <p role="alert">{t("chat.toolCards.outputDownloadFailed")}</p>
+          </Show>
+          <pre class="chat-tool-output__text">
+            <code>{displayText()}</code>
+          </pre>
+          <Show when={displayText() !== text()}>
+            <RawOutputToggle text={text()} />
+          </Show>
+        </section>
+      </Show>
+    </>
   );
 }
 

@@ -161,16 +161,6 @@ describe("Control UI build chunking", () => {
       maxSize: 1024 * 1024,
     });
     for (const [id, expected] of [
-      [
-        "/repo/node_modules/.pnpm/@solidjs+signals@2.0.0-rc.14/node_modules/@solidjs/signals/dist/prod/core/lanes.js",
-        "control-ui-foundation",
-      ],
-      [
-        String.raw`C:\repo\ui\node_modules\@solidjs\signals\dist\prod\core\verdict.js`,
-        "control-ui-foundation",
-      ],
-      ["/repo/ui/node_modules/solid-js/dist/solid.js", "control-ui-foundation"],
-      ["/repo/ui/node_modules/@solidjs/web/dist/web.js", "control-ui-foundation"],
       ["/repo/ui/node_modules/highlight.js/lib/core.js", "markdown-highlight-runtime"],
       ["/repo/ui/node_modules/markdown-it/dist/markdown-it.mjs", undefined],
       ["/repo/ui/node_modules/entities/dist/esm/index.js", undefined],

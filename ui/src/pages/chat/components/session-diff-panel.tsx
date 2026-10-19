@@ -1,14 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import {
-  createMemo,
-  createSignal,
-  For,
-  onCleanup,
-  isPending,
-  latest,
-  Show,
-  untrack,
-} from "solid-js";
+import { createMemo, createSignal, For, onCleanup, onSettled, Show, untrack } from "solid-js";
 import type {
   SessionDiffFile,
   SessionsDiffResult,
@@ -118,62 +109,71 @@ function SessionDiffContent(props: SessionDiffProps) {
     result?: SessionsDiffResult;
   } | null>(null);
   const request = createMemo(() => ({ target: requestTarget(), reload: reload() }));
-  const loaded = createMemo<{
-    target: ReturnType<typeof requestTarget>;
-    result: SessionsDiffResult | null;
-    failure: { error: unknown } | null;
-  } | null>(
-    () => {
-      const { target, reload: requestedReload } = request();
-      if (!target.loader) {
-        return { target, result: null, failure: null };
+  const [value, setValue] = createSignal<DiffValue | null>(null);
+  const [pending, setPending] = createSignal(false);
+  const [failure, setFailure] = createSignal<{ error: unknown } | null>(null);
+  function RequestLifetime(requestProps: { request: ReturnType<typeof request> }) {
+    onSettled(() => {
+      const { target, reload: requestedReload } = requestProps.request;
+      const { loader, owner, scope: requestedScope } = target;
+      setFailure(null);
+      if (!loader) {
+        setValue(null);
+        setPending(false);
+        return undefined;
       }
-      return (async () => {
+      let active = true;
+      setPending(true);
+      void (async () => {
         try {
-          const result = await ((requestedReload?.target === target
-            ? requestedReload.result
-            : undefined) ?? target.loader!(target.scope));
-          return { target, result, failure: null };
+          const result =
+            (requestedReload?.target === target ? requestedReload.result : undefined) ??
+            (await loader(target.scope));
+          if (!active) {
+            return;
+          }
+          const previous = value();
+          const reusable =
+            previous?.owner === owner &&
+            JSON.stringify(previous.scope) === JSON.stringify(requestedScope)
+              ? previous.views
+              : [];
+          const views = result.files.map((file) => ({
+            file,
+            // Retain source/presentation identity, never an old metadata snapshot.
+            source: reusable.find(
+              (view) =>
+                view.file.path === file.path &&
+                view.file.oldPath === file.oldPath &&
+                view.file.patch === file.patch &&
+                view.file.binary === file.binary &&
+                view.file.truncated === file.truncated,
+            )?.source ?? {
+              parsed: file.patch
+                ? parseSessionDiffPatch(file.patch, (count) =>
+                    t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
+                  )
+                : null,
+            },
+          }));
+          setValue({ owner, scope: requestedScope, result, views });
         } catch (error) {
-          return { target, result: null, failure: { error } };
+          if (active) {
+            setFailure({ error });
+          }
+        } finally {
+          if (active) {
+            setPending(false);
+          }
         }
       })();
-    },
-    { loadingValue: null },
-  );
-  const value = createMemo<DiffValue | null>((previous) => {
-    const response = loaded();
-    if (!response?.result) {
-      return response?.failure ? (previous ?? null) : null;
-    }
-    const { result, target } = response;
-    const { owner, scope: requestedScope } = target;
-    const reusable =
-      previous?.owner === owner && JSON.stringify(previous.scope) === JSON.stringify(requestedScope)
-        ? previous.views
-        : [];
-    const views = result.files.map((file) => ({
-      file,
-      // Retain source/presentation identity, never an old metadata snapshot.
-      source: reusable.find(
-        (view) =>
-          view.file.path === file.path &&
-          view.file.oldPath === file.oldPath &&
-          view.file.patch === file.patch &&
-          view.file.binary === file.binary &&
-          view.file.truncated === file.truncated,
-      )?.source ?? {
-        parsed: file.patch
-          ? parseSessionDiffPatch(file.patch, (count) =>
-              t("chat.sessionDiff.unmodifiedLines", { count: String(count) }),
-            )
-          : null,
-      },
-    }));
-    return { owner, scope: requestedScope, result, views };
-  });
-  const loading = () => props.loader !== null && (latest(loaded) === null || isPending(loaded));
-  const failure = () => (loading() ? null : loaded()?.failure);
+      return () => {
+        active = false;
+      };
+    });
+    return null;
+  }
+  const loading = () => props.loader !== null && pending();
   const [collapsedPaths, setCollapsedPaths] = createSignal<Set<string>>((previous) => {
     const current = value();
     if (!current) {
@@ -484,6 +484,7 @@ function SessionDiffContent(props: SessionDiffProps) {
     const statusLabel = () => FILE_STATUS_LABELS[file().status] ?? FILE_STATUS_LABELS.modified;
     return (
       <section class="session-diff__file" data-status={file().status}>
+        <presentation.SyntaxLifetime />
         <div class="session-diff__file-header">
           <button
             class="session-diff__file-toggle"
@@ -656,16 +657,14 @@ function SessionDiffContent(props: SessionDiffProps) {
       class={["session-diff", { "session-diff--wrap": wrap() }]}
       aria-busy={loading() ? "true" : "false"}
     >
+      <Show when={request()} keyed>
+        {(current) => <RequestLifetime request={current} />}
+      </Show>
       <Show
         when={failure()}
         fallback={
           <Show
-            when={
-              loading() &&
-              (!latest(value) ||
-                latest(value)!.owner !== props.owner ||
-                latest(value)!.scope !== scope())
-            }
+            when={loading() && (value()?.owner !== props.owner || value()?.scope !== scope())}
             fallback={<Show when={value()}>{(current) => <ResultBody value={current()} />}</Show>}
           >
             <PanelLoadingSkeleton variant="review" label={t("chat.sessionDiff.loading")} />
