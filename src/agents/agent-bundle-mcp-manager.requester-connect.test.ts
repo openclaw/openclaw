@@ -167,9 +167,13 @@ describe("requester MCP connect runtime", () => {
     await connected.dispose();
   });
 
-  it.each(["embedded", "requester"])(
-    "preserves the current sign-in surface beside refused live tools (%s)",
-    async (consumer) => {
+  it.each(
+    ["embedded", "requester"].flatMap((consumer) =>
+      ["none", "removal", "origin", "retirement"].map((change) => ({ consumer, change })),
+    ),
+  )(
+    "keeps refused sign-in schemas unavailable after $change ($consumer)",
+    async ({ consumer, change }) => {
       vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
       const held: SessionMcpRuntimeLease[] = [];
       try {
@@ -225,8 +229,28 @@ describe("requester MCP connect runtime", () => {
         ]);
         expect(created).toHaveLength(count);
         expect(startAuthorization).not.toHaveBeenCalled();
-        await expect(refused.tools[1]!.execute("connect", {})).resolves.toMatchObject({
-          details: { mcpConnect: { serverName: "mail", authorizationUrl } },
+        const connect = refused.tools[1]!.execute;
+        if (change === "removal") {
+          await manager.reloadConfig({
+            cfg: { ...input.cfg, mcp: { servers: { calendar: input.cfg.mcp.servers.calendar } } },
+          });
+        } else if (change === "origin") {
+          await manager.reloadConfig({
+            cfg: { ...input.cfg, gateway: { publicOrigin: "https://replacement.example" } },
+          });
+        } else if (change === "retirement") {
+          await manager.disposeSession(input.sessionId);
+        }
+        const result = await connect("connect", {});
+        expect(startAuthorization).not.toHaveBeenCalled();
+        expect(result).toMatchObject({
+          details: { status: "error", mcpServer: "mail", mcpTool: "connect" },
+          content: [
+            {
+              type: "text",
+              text: expect.stringContaining("This turn will continue without MCP tools"),
+            },
+          ],
         });
         await refused.dispose();
       } finally {

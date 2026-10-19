@@ -273,7 +273,11 @@ export function createSessionMcpRuntimeManager(opts: SessionMcpRuntimeManagerOpt
       onCapacityRefusal(error, requesterConnect) {
         return Object.assign(createUnavailableRuntime(params, error, params.runtimeKey), {
           requesterScope,
-          requesterConnect,
+          // This facade has no revocation owner; retain sign-in schemas, never callbacks.
+          requesterConnect: requesterConnect && {
+            ...requesterConnect,
+            createExecute: () => undefined,
+          },
         });
       },
     });
