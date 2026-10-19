@@ -65,7 +65,7 @@ git() {
       printf '%s\n' 'fatal: unable to access https://user:synthetic-password@example.invalid/repo?token=synthetic-query: Could not resolve host: example.invalid' >&2
       return 128
     elif [[ "$scenario" == authentication ]]; then
-      printf '%s\n' 'fatal: Authentication failed for https://user:synthetic-password@example.invalid/repo' 'Authorization: Bearer synthetic-header' >&2
+      printf '%s\n' 'fatal: Authentication failed for https://user:synthetic-password@example.invalid/repo' 'aUtHoRiZaTiOn: Bearer synthetic-header' 'COOKIE: synthetic-cookie' >&2
       return 128
     fi
   fi
@@ -79,7 +79,7 @@ requested="$ref"
 result=0
 (set -e; checkout_git_openclaw_ref "$repo" "$requested") > "$work/output" 2>&1 || result=$?
 cat "$work/output"
-if grep -Eq 'synthetic-password|synthetic-query|synthetic-header' "$work/output"; then
+if grep -Eq 'synthetic-password|synthetic-query|synthetic-header|synthetic-cookie' "$work/output"; then
   echo 'FAIL: credentials leaked in Git diagnostics' >&2
   exit 1
 fi

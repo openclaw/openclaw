@@ -352,7 +352,7 @@ probe_git_remote_ref() {
         # Git errors can include credential-bearing URLs or HTTP trace headers.
         printf '%s\n' "$diagnostic" | sed -E \
             -e 's#[[:alpha:]][[:alnum:]+.-]*://[^[:space:]]+#[redacted-url]#g' \
-            -e 's/([Aa]uthorization|[Pp]roxy-[Aa]uthorization|[Cc]ookie|[Ss]et-[Cc]ookie):.*/\1: [redacted]/g' \
+            -e 's/([Aa][Uu][Tt][Hh][Oo][Rr][Ii][Zz][Aa][Tt][Ii][Oo][Nn]|[Cc][Oo][Oo][Kk][Ii][Ee]):.*/\1: [redacted]/g' \
             -e 's/(gh[pousr]_[[:alnum:]_]+|github_pat_[[:alnum:]_]+)/[redacted]/g' >&2
         if (( attempt == 3 )) || ! printf '%s\n' "$diagnostic" | grep -Eqi \
             'Could not resolve (host|proxy)|Failed to connect|Connection (timed out|reset)|timed out|TLS connection was non-properly terminated|RPC failed; curl (5|6|7|18|28|35|52|55|56|92)( |$)|requested URL returned error: (408|429|5[0-9][0-9])'; then
