@@ -160,13 +160,13 @@ attempt, and generation. Live permission checks run again at the final effect.
 Queue settings retain the existing debounce, cap, drop, and route-isolation
 contracts in [Command queue](/concepts/queue#queue-options).
 
-| Policy      | Contract                                                                                                                                                   |
-| ----------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Policy      | Contract                                                                                                                                                                                                                          |
+| ----------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `steer`     | Attempt injection into the captured active owner. A definite capability rejection leaves the input queued. Disabled cross-human collaboration refuses the input without queueing. An uncertain commitment does not permit replay. |
-| `followup`  | Keep FIFO order among waiting inputs and start a later turn after admission barriers permit it.                                                            |
-| `collect`   | Combine compatible waiting inputs after the quiet window; preserve individual custody and routing.                                                         |
-| `interrupt` | Cancel the captured active turn, prioritize the interrupting input next, and preserve older waiting inputs in relative order after it.                     |
-| heartbeat   | Drop a heartbeat while competing session work owns admission; do not create a duplicate turn.                                                              |
+| `followup`  | Keep FIFO order among waiting inputs and start a later turn after admission barriers permit it.                                                                                                                                   |
+| `collect`   | Combine compatible waiting inputs after the quiet window; preserve individual custody and routing.                                                                                                                                |
+| `interrupt` | Cancel the captured active turn, prioritize the interrupting input next, and preserve older waiting inputs in relative order after it.                                                                                            |
+| heartbeat   | Drop a heartbeat while competing session work owns admission; do not create a duplicate turn.                                                                                                                                     |
 
 An interrupt reserves its priority synchronously before cancellation or any
 settlement wait can wake an older drain. Priority belongs to that exact input;
