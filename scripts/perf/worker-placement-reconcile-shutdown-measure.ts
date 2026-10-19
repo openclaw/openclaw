@@ -374,6 +374,7 @@ for (let index = 0; index < 2; index++) {
             runId: claim.runId,
             turnId: `synthetic-turn-${index}`,
             prompt: "Hold this synthetic worker turn until shutdown.",
+            suppressPromptTranscript: true,
             workspaceDir: path.join(stateDir, `workspace-${index}`),
             modelRef: { provider: "synthetic", model: "synthetic" },
             inferenceOptions: {},
