@@ -17,6 +17,7 @@ import { withPluginRuntimeRegistryScope } from "../plugins/runtime/gateway-reque
 import { captureAsyncWorkTracker, trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withEnvAsync } from "../test-utils/env.js";
+import type { GenerateMusicRuntimeResult } from "./runtime-types.js";
 import { generateMusic } from "./runtime.js";
 
 function createNativeMusicFixture(
@@ -130,6 +131,41 @@ module.exports = {
   };
 }
 
+type NativeFixture = ReturnType<typeof createNativeMusicFixture>;
+
+async function withFixture(fixture: NativeFixture, operation: () => Promise<void>) {
+  try {
+    await fixture.withEnvironment(async () => {
+      useNoBundledPlugins();
+      await operation();
+    });
+  } finally {
+    fixture.cleanup();
+  }
+}
+
+function settle<T>(operation: Promise<T>) {
+  return operation.then(
+    (value) => ({ value, error: undefined }),
+    (error: unknown) => ({ value: undefined, error }),
+  );
+}
+
+function expectConnection(fixture: NativeFixture, open: boolean, reads?: number[]) {
+  expect(fixture.connections).toHaveLength(1);
+  const { database, disposals, reads: actualReads } = fixture.connections[0]!;
+  expect({ open: database.isOpen, disposals }).toEqual({ open, disposals: open ? 0 : 1 });
+  if (reads) {
+    expect(actualReads).toEqual(reads);
+  }
+}
+
+function expectMusic(outcome: { value?: GenerateMusicRuntimeResult; error?: unknown }) {
+  expect(outcome.error).toBeUndefined();
+  expect(outcome.value?.tracks[0]?.buffer.toString()).toBe("native music 42");
+  expect(outcome.value?.provider).toBe("native-music-alias");
+}
+
 async function waitForProviderStart(
   started: Promise<void>,
   operation: Promise<unknown>,
@@ -155,40 +191,25 @@ describe("music generation registration resources", () => {
     "releases a cold native registration after generation settles (reject=%s)",
     async (rejectGeneration) => {
       const fixture = createNativeMusicFixture(rejectGeneration);
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const result = fixture.run();
-          const settled = result.then(
-            (value) => ({ value, error: undefined }),
-            (error: unknown) => ({ value: undefined, error }),
-          );
-          try {
-            await waitForProviderStart(fixture.started.promise, settled);
-            expect(fixture.connections).toHaveLength(1);
-            expect(fixture.connections[0]!.database.isOpen).toBe(true);
-            expect(fixture.connections[0]!.disposals).toBe(0);
-            fixture.resume.resolve();
-            const outcome = await settled;
-            if (rejectGeneration) {
-              expect(outcome.error).toBeInstanceOf(Error);
-              expect(String(outcome.error)).toContain("native music generation failed");
-            } else {
-              expect(outcome.error).toBeUndefined();
-              expect(outcome.value?.tracks[0]?.buffer.toString()).toBe("native music 42");
-              expect(outcome.value?.provider).toBe("native-music-alias");
-            }
-            expect(fixture.connections[0]!.database.isOpen).toBe(false);
-            expect(fixture.connections[0]!.disposals).toBe(1);
-            expect(fixture.connections[0]!.reads).toEqual([42, 42, 42]);
-          } finally {
-            fixture.resume.resolve();
-            await settled;
+      await withFixture(fixture, async () => {
+        const settled = settle(fixture.run());
+        try {
+          await waitForProviderStart(fixture.started.promise, settled);
+          expectConnection(fixture, true);
+          fixture.resume.resolve();
+          const outcome = await settled;
+          if (rejectGeneration) {
+            expect(outcome.error).toBeInstanceOf(Error);
+            expect(String(outcome.error)).toContain("native music generation failed");
+          } else {
+            expectMusic(outcome);
           }
-        });
-      } finally {
-        fixture.cleanup();
-      }
+          expectConnection(fixture, false, [42, 42, 42]);
+        } finally {
+          fixture.resume.resolve();
+          await settled;
+        }
+      });
     },
   );
 
@@ -197,27 +218,24 @@ describe("music generation registration resources", () => {
     const override = createNativeMusicFixture();
     configured.resume.resolve();
     try {
-      await override.withEnvironment(async () => {
-        useNoBundledPlugins();
-        const result = generateMusic({
-          cfg: {
-            agents: {
-              defaults: {
-                mediaModels: { music: { primary: "configured-music-owner/fixture-model" } },
+      await withFixture(override, async () => {
+        const settled = settle(
+          generateMusic({
+            cfg: {
+              agents: {
+                defaults: {
+                  mediaModels: { music: { primary: "configured-music-owner/fixture-model" } },
+                },
+              },
+              plugins: {
+                allow: [configured.plugin.id, override.plugin.id],
+                load: { paths: [configured.plugin.file, override.plugin.file] },
+                slots: { memory: "none" },
               },
             },
-            plugins: {
-              allow: [configured.plugin.id, override.plugin.id],
-              load: { paths: [configured.plugin.file, override.plugin.file] },
-              slots: { memory: "none" },
-            },
-          },
-          prompt: "synthetic override selection proof",
-          modelOverride: "native-music-alias/fixture-model",
-        });
-        const settled = result.then(
-          (value) => ({ value, error: undefined }),
-          (error: unknown) => ({ value: undefined, error }),
+            prompt: "synthetic override selection proof",
+            modelOverride: "native-music-alias/fixture-model",
+          }),
         );
         try {
           await waitForProviderStart(override.started.promise, settled);
@@ -227,16 +245,9 @@ describe("music generation registration resources", () => {
           expect(override.connections[0]!.database.isOpen).toBe(true);
           override.resume.resolve();
           const outcome = await settled;
-          expect(outcome.error).toBeUndefined();
-          expect(outcome.value?.provider).toBe("native-music-alias");
-          expect(outcome.value?.tracks[0]?.buffer.toString()).toBe("native music 42");
-          for (const { database, disposals } of [
-            ...configured.connections,
-            ...override.connections,
-          ]) {
-            expect(database.isOpen).toBe(false);
-            expect(disposals).toBe(1);
-          }
+          expectMusic(outcome);
+          expectConnection(configured, false);
+          expectConnection(override, false);
         } finally {
           override.resume.resolve();
           await settled;
@@ -244,7 +255,6 @@ describe("music generation registration resources", () => {
       });
     } finally {
       configured.cleanup();
-      override.cleanup();
     }
   });
 
@@ -252,29 +262,20 @@ describe("music generation registration resources", () => {
     "supports later managed-host disposal with %s cleanup context",
     async (disposalContext) => {
       const fixture = createNativeMusicFixture(false, "native-music-owner", disposalContext);
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
-          try {
-            fixture.resume.resolve();
-            const result = await withPluginRuntimeRegistryScope(inspection.registry, fixture.run);
-            expect(result.tracks[0]?.buffer.toString()).toBe("native music 42");
-            expect(fixture.connections).toHaveLength(1);
-            expect(fixture.connections[0]!.database.isOpen).toBe(true);
-            expect(fixture.connections[0]!.disposals).toBe(0);
-            await inspection.release();
-            expect(fixture.connections[0]!.database.isOpen).toBe(false);
-            expect(fixture.connections[0]!.reads).toEqual([42, 42, 42]);
-            expect(fixture.connections[0]!.disposals).toBe(1);
-          } finally {
-            fixture.resume.resolve();
-            await inspection.release();
-          }
-        });
-      } finally {
-        fixture.cleanup();
-      }
+      await withFixture(fixture, async () => {
+        const inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+        try {
+          fixture.resume.resolve();
+          const result = await withPluginRuntimeRegistryScope(inspection.registry, fixture.run);
+          expect(result.tracks[0]?.buffer.toString()).toBe("native music 42");
+          expectConnection(fixture, true);
+          await inspection.release();
+          expectConnection(fixture, false, [42, 42, 42]);
+        } finally {
+          fixture.resume.resolve();
+          await inspection.release();
+        }
+      });
     },
   );
 
@@ -286,120 +287,97 @@ describe("music generation registration resources", () => {
     let projectionWork: Promise<void> | undefined;
     let parentRelease: Promise<void> | undefined;
     let read: unknown;
-    try {
-      await fixture.withEnvironment(async () => {
-        useNoBundledPlugins();
-        const inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
-        const connection = fixture.connections[0]!;
-        const provider = inspection.registry.musicGenerationProviders[0]!.provider;
-        Object.defineProperty(provider, "id", {
-          get() {
-            projectionWork ??= trackAsyncWork(async () => {
-              await readGate.promise;
-              read = connection.database.prepare("SELECT 42 AS value").get();
-            });
-            void projectionWork.catch(() => undefined);
-            parentRelease ??= inspection.release();
-            entered.resolve();
-            throw projectionError;
-          },
-        });
-        const settled = withPluginRuntimeRegistryScope(inspection.registry, fixture.run).then(
-          (value) => ({ value, error: undefined }),
-          (error: unknown) => ({ value: undefined, error }),
-        );
-        try {
-          await waitForProviderStart(entered.promise, settled);
-          await new Promise<void>((resolve) => {
-            setImmediate(resolve);
+    await withFixture(fixture, async () => {
+      const inspection = await acquirePluginRegistryForInspection({ config: fixture.config });
+      const connection = fixture.connections[0]!;
+      const provider = inspection.registry.musicGenerationProviders[0]!.provider;
+      Object.defineProperty(provider, "id", {
+        get() {
+          projectionWork ??= trackAsyncWork(async () => {
+            await readGate.promise;
+            read = connection.database.prepare("SELECT 42 AS value").get();
           });
-          expect(connection.database.isOpen).toBe(true);
-          expect(connection.disposals).toBe(0);
-          readGate.resolve();
-          const outcome = await settled;
-          expect(outcome.error).toBe(projectionError);
-          await projectionWork;
-          expect(read).toEqual({ value: 42 });
-          expect(connection.database.isOpen).toBe(false);
-          expect(connection.disposals).toBe(1);
-        } finally {
-          readGate.resolve();
-          fixture.resume.resolve();
-          await Promise.allSettled([settled, projectionWork, parentRelease]);
-          await inspection.release();
-        }
+          void projectionWork.catch(() => undefined);
+          parentRelease ??= inspection.release();
+          entered.resolve();
+          throw projectionError;
+        },
       });
-    } finally {
-      fixture.cleanup();
-    }
+      const settled = settle(withPluginRuntimeRegistryScope(inspection.registry, fixture.run));
+      try {
+        await waitForProviderStart(entered.promise, settled);
+        await new Promise<void>((resolve) => {
+          setImmediate(resolve);
+        });
+        expectConnection(fixture, true);
+        readGate.resolve();
+        const outcome = await settled;
+        expect(outcome.error).toBe(projectionError);
+        await projectionWork;
+        expect(read).toEqual({ value: 42 });
+        expectConnection(fixture, false);
+      } finally {
+        readGate.resolve();
+        fixture.resume.resolve();
+        await Promise.allSettled([settled, projectionWork, parentRelease]);
+        await inspection.release();
+      }
+    });
   });
 
   it.each(["managed", "managed-getter", "raw"] as const)(
     "keeps %s registration resources until the operation settles",
     async (ownership) => {
       const fixture = createNativeMusicFixture();
-      try {
-        await fixture.withEnvironment(async () => {
-          useNoBundledPlugins();
-          const inspection =
-            ownership !== "raw"
-              ? await acquirePluginRegistryForInspection({ config: fixture.config })
-              : undefined;
-          const registry =
-            inspection?.registry ?? loadPluginRegistryHandle({ config: fixture.config });
-          let projectionRelease: Promise<void> | undefined;
+      await withFixture(fixture, async () => {
+        const inspection =
+          ownership !== "raw"
+            ? await acquirePluginRegistryForInspection({ config: fixture.config })
+            : undefined;
+        const registry =
+          inspection?.registry ?? loadPluginRegistryHandle({ config: fixture.config });
+        let projectionRelease: Promise<void> | undefined;
+        if (ownership === "managed-getter") {
+          expect(inspection).toBeDefined();
+          const managed = inspection!;
+          const provider = managed.registry.musicGenerationProviders[0]!.provider;
+          const id = provider.id;
+          Object.defineProperty(provider, "id", {
+            get() {
+              projectionRelease ??= managed.release();
+              return id;
+            },
+          });
+        }
+        const settled = settle(withPluginRuntimeRegistryScope(registry, fixture.run));
+        try {
+          await waitForProviderStart(fixture.started.promise, settled);
+          expect(fixture.connections).toHaveLength(1);
           if (ownership === "managed-getter") {
-            expect(inspection).toBeDefined();
-            const managed = inspection!;
-            const provider = managed.registry.musicGenerationProviders[0]!.provider;
-            const id = provider.id;
-            Object.defineProperty(provider, "id", {
-              get() {
-                projectionRelease ??= managed.release();
-                return id;
-              },
-            });
+            expect(projectionRelease).toBeDefined();
+            await projectionRelease;
           }
-          const result = withPluginRuntimeRegistryScope(registry, fixture.run);
-          const settled = result.then(
-            (value) => ({ value, error: undefined }),
-            (error: unknown) => ({ value: undefined, error }),
+          await inspection?.release();
+          expectConnection(fixture, true, [42]);
+          fixture.resume.resolve();
+          const outcome = await settled;
+          expectMusic(outcome);
+          expectConnection(
+            fixture,
+            ownership === "raw",
+            ownership === "raw" ? [42, 42] : [42, 42, 42],
           );
-          try {
-            await waitForProviderStart(fixture.started.promise, settled);
-            expect(fixture.connections).toHaveLength(1);
-            if (ownership === "managed-getter") {
-              expect(projectionRelease).toBeDefined();
-              await projectionRelease;
-            }
-            await inspection?.release();
-            expect(fixture.connections[0]!.database.isOpen).toBe(true);
-            expect(fixture.connections[0]!.disposals).toBe(0);
-            expect(fixture.connections[0]!.reads).toEqual([42]);
-            fixture.resume.resolve();
-            const outcome = await settled;
-            expect(outcome.error).toBeUndefined();
-            expect(outcome.value?.tracks[0]?.buffer.toString()).toBe("native music 42");
-            expect(outcome.value?.provider).toBe("native-music-alias");
-            expect(fixture.connections[0]!.database.isOpen).toBe(ownership === "raw");
-            expect(fixture.connections[0]!.disposals).toBe(ownership === "raw" ? 0 : 1);
-            expect(fixture.connections[0]!.reads).toEqual(
-              ownership === "raw" ? [42, 42] : [42, 42, 42],
-            );
-          } finally {
-            fixture.resume.resolve();
-            await settled;
-            await inspection?.release();
-            if (ownership === "raw") {
-              clearPluginMetadataLifecycleCaches();
-              const cleanup = await waitForPluginCacheRetirement();
-              expect(cleanup.failures).toEqual([]);
-            }
+        } finally {
+          fixture.resume.resolve();
+          await settled;
+          await inspection?.release();
+          if (ownership === "raw") {
+            clearPluginMetadataLifecycleCaches();
+            const cleanup = await waitForPluginCacheRetirement();
+            expect(cleanup.failures).toEqual([]);
           }
-        });
-      } finally {
-        fixture.cleanup();
-      }
+        }
+      });
     },
   );
 });
