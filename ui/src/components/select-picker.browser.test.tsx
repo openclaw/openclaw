@@ -71,6 +71,24 @@ describe.runIf("__vitest_browser__" in globalThis)("searchable model menu layout
       expect(last.getBoundingClientRect().bottom).toBeLessThanOrEqual(
         list.getBoundingClientRect().bottom + 1,
       );
+      const end = list.scrollHeight - list.clientHeight;
+      for (const [top, fadeStart, fadeEnd] of [
+        [0, false, true],
+        [1, true, true],
+        [end - 2, true, true],
+        [end - 1, true, false],
+      ] as const) {
+        list.scrollTop = top;
+        list.dispatchEvent(new Event("scroll"));
+        await new Promise<void>((resolve) => {
+          requestAnimationFrame(() => requestAnimationFrame(() => resolve()));
+        });
+        expect(list.scrollTop).toBe(top);
+        expect(last.hasAttribute("data-active")).toBe(true);
+        expect(list.hasAttribute("data-fade-start")).toBe(fadeStart);
+        expect(list.hasAttribute("data-fade-end")).toBe(fadeEnd);
+        expect(onChange).not.toHaveBeenCalled();
+      }
       await userEvent.keyboard("{ArrowDown}{Enter}");
       expect(onChange).toHaveBeenCalledExactlyOnceWith("fixture/model-0");
       expect(warning.mock.calls.flat().join(" ")).not.toContain("STRICT_READ_UNTRACKED");
