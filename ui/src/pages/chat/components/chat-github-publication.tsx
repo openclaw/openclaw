@@ -1,5 +1,6 @@
 import { createMemo, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
+import type { MenuControls } from "../../../components/solid/menu.tsx";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
 import { shouldHandleNavigationClick } from "../../../lib/navigation-click.ts";
@@ -38,6 +39,7 @@ export function GitHubPublicationAccountSelector(props: {
   mobile?: boolean;
   /** Opt embedded controls into the containing Menu’s traversal. */
   menuControls?: boolean;
+  controls?: MenuControls;
 }) {
   const choices = createMemo(() => {
     const publication = props.publication;
@@ -95,6 +97,7 @@ export function GitHubPublicationAccountSelector(props: {
           presented={props.presented ?? true}
           mobile={props.mobile}
           menuControls={props.menuControls}
+          controls={props.controls}
           trigger={props.mobile ? accountRow() : undefined}
           onSelect={(source) => props.publication.onSelect?.(source)}
         />
@@ -110,10 +113,13 @@ export function GitHubPublicationAction(props: {
   mobile?: boolean;
   /** Opt embedded controls into the containing Menu’s traversal. */
   menuControls?: boolean;
+  controls?: MenuControls;
   onOpenPublished?: (
     result: Extract<NonNullable<GitHubPublicationView["result"]>, { status: "published" }>,
   ) => void;
 }) {
+  const publishedLinkRef = props.controls?.ref();
+  const dismissRef = props.controls?.ref();
   const published = () => {
     const result = props.publication.result;
     return result?.status === "published" ? result : undefined;
@@ -126,12 +132,13 @@ export function GitHubPublicationAction(props: {
           when={props.publication.optionsUnavailable}
           fallback={
             <>
-              <PublicationButton publication={props.publication} />
+              <PublicationButton publication={props.publication} controls={props.controls} />
               <Show when={!props.mobile}>
                 <GitHubPublicationAccountSelector
                   publication={props.publication}
                   presented={props.presented}
                   menuControls={props.menuControls}
+                  controls={props.controls}
                 />
               </Show>
             </>
@@ -142,6 +149,7 @@ export function GitHubPublicationAction(props: {
             tooltip={`${t("githubPublication.statusUnavailable")}: ${props.publication.error}`}
             labelled={props.mobile}
             hideTooltip={props.mobile}
+            controls={props.controls}
           />
         </Show>
       }
@@ -149,6 +157,7 @@ export function GitHubPublicationAction(props: {
       {(result) => (
         <>
           <a
+            ref={(element) => publishedLinkRef?.(element)}
             class="chat-pr__create"
             href={result().url}
             target="_blank"
@@ -164,6 +173,7 @@ export function GitHubPublicationAction(props: {
           </a>
           <Show when={props.publication.onNewAction}>
             <button
+              ref={(element) => dismissRef?.(element)}
               class="chat-pr__dismiss"
               type="button"
               aria-label={t("common.dismiss")}
@@ -179,7 +189,8 @@ export function GitHubPublicationAction(props: {
   );
 }
 
-function PublicationButton(props: { publication: GitHubPublicationView }) {
+function PublicationButton(props: { publication: GitHubPublicationView; controls?: MenuControls }) {
+  const controlRef = props.controls?.ref();
   const action = createMemo(() => {
     const publication = props.publication;
     const { result, activity } = publication;
@@ -234,6 +245,7 @@ function PublicationButton(props: { publication: GitHubPublicationView }) {
       }
     >
       <button
+        ref={(element) => controlRef?.(element)}
         class="chat-pr__create"
         type="button"
         disabled={action().disabled}
@@ -267,13 +279,16 @@ function PublicationRefresh(props: {
   tooltip?: string;
   labelled?: boolean;
   hideTooltip?: boolean;
+  controls?: MenuControls;
 }) {
+  const controlRef = props.controls?.ref();
   return (
     <openclaw-tooltip
       content={props.tooltip ?? t("githubPublication.refresh")}
       prop:disabled={props.hideTooltip}
     >
       <button
+        ref={(element) => controlRef?.(element)}
         class={
           props.labelled
             ? "chat-pr__create"
@@ -292,7 +307,9 @@ function PublicationRefresh(props: {
 
 function PublicationEffect(props: {
   effect: NonNullable<GitHubPublicationView["result"]>["effect"];
+  controls?: MenuControls;
 }) {
+  const linkRef = props.controls?.ref();
   return (
     <Show when={props.effect}>
       {(effect) => (
@@ -312,7 +329,12 @@ function PublicationEffect(props: {
           <Show when={effect().headCommit}>{(commit) => <code>{commit()}</code>}</Show>
           <Show when={effect().url}>
             {(url) => (
-              <a href={url()} target="_blank" rel="noopener noreferrer">
+              <a
+                ref={(element) => linkRef?.(element)}
+                href={url()}
+                target="_blank"
+                rel="noopener noreferrer"
+              >
                 {t("githubPublication.effectLink")}
               </a>
             )}
@@ -383,7 +405,10 @@ export function GitHubPublicationDetails(props: {
   inline?: boolean;
   mobile?: boolean;
   menuControls?: boolean;
+  controls?: MenuControls;
 }) {
+  const statusRef = props.controls?.ref();
+  const snapshotRef = props.controls?.ref();
   const busy = () => props.publication.activity !== null;
   const personalUnavailable = () =>
     publicationButtonSelection(props.publication)?.source === "personal" &&
@@ -416,7 +441,10 @@ export function GitHubPublicationDetails(props: {
             <Show when={headline()}>
               {(value) => (
                 <details class="chat-pr__publication-status">
-                  <summary data-form-control={props.menuControls ? "" : undefined}>
+                  <summary
+                    ref={(element) => statusRef?.(element)}
+                    data-form-control={props.menuControls ? "" : undefined}
+                  >
                     <span
                       class="chat-pr__publication-headline"
                       role={value().alert ? "alert" : "status"}
@@ -427,16 +455,28 @@ export function GitHubPublicationDetails(props: {
                       <Icon name="chevronDown" />
                     </span>
                   </summary>
-                  <PublicationMore publication={props.publication} busy={busy()} />
+                  <PublicationMore
+                    publication={props.publication}
+                    busy={busy()}
+                    controls={props.controls}
+                  />
                 </details>
               )}
             </Show>
           }
         >
-          <PublicationMore publication={props.publication} busy={busy()} />
+          <PublicationMore
+            publication={props.publication}
+            busy={busy()}
+            controls={props.controls}
+          />
         </Show>
         <Show when={!props.mobile && refresh()}>
-          <PublicationRefresh publication={props.publication} hideTooltip={props.mobile} />
+          <PublicationRefresh
+            publication={props.publication}
+            hideTooltip={props.mobile}
+            controls={props.controls}
+          />
         </Show>
         <Show when={noAccount()}>
           <span class="chat-pr__publication-note">
@@ -464,7 +504,10 @@ export function GitHubPublicationDetails(props: {
                 })}
               </div>
               <details>
-                <summary data-form-control={props.menuControls ? "" : undefined}>
+                <summary
+                  ref={(element) => snapshotRef?.(element)}
+                  data-form-control={props.menuControls ? "" : undefined}
+                >
                   {t("githubPublication.snapshot")}
                 </summary>
                 <div>
@@ -488,7 +531,11 @@ export function GitHubPublicationDetails(props: {
   );
 }
 
-function PublicationMore(props: { publication: GitHubPublicationView; busy: boolean }) {
+function PublicationMore(props: {
+  publication: GitHubPublicationView;
+  busy: boolean;
+  controls?: MenuControls;
+}) {
   const message = () => {
     const result = props.publication.result;
     return result && result.status !== "published"
@@ -506,7 +553,7 @@ function PublicationMore(props: { publication: GitHubPublicationView; busy: bool
         <Show when={props.publication.locked && !props.publication.result && !props.busy}>
           <span>{t("githubPublication.unknown")}</span>
         </Show>
-        <PublicationEffect effect={props.publication.result?.effect} />
+        <PublicationEffect effect={props.publication.result?.effect} controls={props.controls} />
       </div>
     </Show>
   );

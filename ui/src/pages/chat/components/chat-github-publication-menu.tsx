@@ -1,7 +1,7 @@
 import type { JSX } from "@solidjs/web";
 import { createMemo, createUniqueId, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu } from "../../../components/solid/menu.tsx";
+import { Menu, type MenuControls } from "../../../components/solid/menu.tsx";
 import { resolveAvatarInitials } from "../../../lib/identity-avatar.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
@@ -24,10 +24,12 @@ export function GitHubPublicationMenu(props: {
   presented: PresentationValue;
   mobile?: boolean;
   menuControls?: boolean;
+  controls?: MenuControls;
   trigger?: JSX.Element;
   onSelect: (source: "shared" | "personal") => void;
 }) {
   const id = createUniqueId();
+  const triggerRef = props.controls?.ref();
   const presentation = createMemo(() => projectPresentation(props.presented));
   const selectedChoice = () => props.choices.find((choice) => choice.source === props.selected);
   const label = () => {
@@ -67,6 +69,11 @@ export function GitHubPublicationMenu(props: {
   );
   return (
     <Menu
+      ref={(handle) => {
+        if (handle.overlay.trigger) {
+          triggerRef?.(handle.overlay.trigger);
+        }
+      }}
       id={`github-publication-${id}`}
       class={props.mobile ? "github-publication-mobile__accounts" : "chat-pr__accounts"}
       panelClass={

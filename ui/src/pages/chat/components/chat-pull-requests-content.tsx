@@ -8,7 +8,7 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { formatGitHubItemReference } from "../../../components/github-link-target.ts";
 import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
-import { Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
+import { createMenuControls, Menu, type MenuHandle } from "../../../components/solid/menu.tsx";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
@@ -256,6 +256,9 @@ function BranchActions(props: {
   onDismiss?: (branch: ControlUiSessionBranch) => void;
 }) {
   const id = createUniqueId();
+  const controls = createMenuControls();
+  const createLinkRef = controls.ref();
+  const dismissRef = controls.ref();
   let menu: MenuHandle | undefined;
   const parentPresented = useContext(ContentPresentation);
   const presentation = createMemo(() => projectPresentation(props.presented ?? true));
@@ -263,6 +266,7 @@ function BranchActions(props: {
 
   return (
     <Menu
+      controls={controls}
       id={"chat-pr-branch-actions-" + id}
       class="chat-pr__actions"
       label={t("chat.pullRequests.actions", { reference: props.branch.branch })}
@@ -288,6 +292,7 @@ function BranchActions(props: {
             <Show when={props.branch.createUrl}>
               {(url) => (
                 <a
+                  ref={createLinkRef}
                   class="oc-menu-item"
                   href={url()}
                   target="_blank"
@@ -309,8 +314,13 @@ function BranchActions(props: {
                 publication={publication()}
                 presented={presented()}
                 menuControls
+                controls={controls}
               />
-              <GitHubPublicationDetails publication={publication()} menuControls />
+              <GitHubPublicationDetails
+                publication={publication()}
+                menuControls
+                controls={controls}
+              />
             </div>
           )}
         </Show>
@@ -318,6 +328,7 @@ function BranchActions(props: {
         <Show when={props.onDismiss}>
           <div class="chat-pr-menu__group">
             <button
+              ref={dismissRef}
               class="oc-menu-item"
               data-variant="danger"
               type="button"

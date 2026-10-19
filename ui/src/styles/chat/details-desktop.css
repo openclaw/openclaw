@@ -112,7 +112,7 @@
   color: var(--muted);
   font-size: 13px;
   line-height: 24px;
-  cursor: pointer;
+  cursor: var(--cursor-action);
 }
 
 .chat-details-desktop-section__heading::-webkit-details-marker {

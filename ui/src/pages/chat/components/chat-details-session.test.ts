@@ -151,14 +151,26 @@ it("uses the current PR renderer and preserves CI session identity and branch di
       },
     ],
   });
-  expect(element.querySelector(".chat-pr__title")?.textContent).toBe("A compact PR title");
+  await waitForSolid(() =>
+    expect(element.querySelector(".chat-pr__title")?.textContent).toBe("A compact PR title"),
+  );
   const link = element.querySelector(".chat-pr__link")!;
-  for (const fact of ["example/project", "feature", "Open", "+84", "−41"]) {
-    expect(link.getAttribute("title")).toContain(fact);
-    expect(link.getAttribute("aria-description")).toContain(fact);
-  }
+  expect(link.getAttribute("href")).toBe("https://github.com/example/project/pull/7");
   const automation = element.querySelector("openclaw-chat-ci-automation");
   expect(automation).toHaveProperty("sessionId", "incarnation-7");
+  expect(automation).toHaveProperty("presented", false);
+  element.querySelector<HTMLButtonElement>(".chat-pr__actions button")!.click();
+  flush();
+  const menu = element.querySelector(".chat-pr__actions")!;
+  for (const fact of ["example/project", "#7", "Open", "+84", "−41"]) {
+    expect(menu.textContent).toContain(fact);
+  }
+  await waitForSolid(() =>
+    expect(menu.querySelector("button")?.getAttribute("aria-expanded")).toBe("true"),
+  );
+  menu.querySelector<HTMLButtonElement>('[data-value="monitoring"]')!.click();
+  flush();
+  expect(element.querySelector("openclaw-chat-ci-automation")).toBe(automation);
   expect(automation).toHaveProperty("presented", true);
   const branch = {
     owner: "example",

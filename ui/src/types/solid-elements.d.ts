@@ -22,6 +22,11 @@ type ChatCiProperties = {
   sessionKey: string;
   presented: boolean;
   inline?: boolean;
+  // Match the native menu registry without pulling renderer modules into SDK declarations.
+  controls?: {
+    readonly elements: ReadonlySet<HTMLElement>;
+    ref(this: void): (element: HTMLElement) => void;
+  };
 };
 type PluginViewProperties = {
   [Surface in keyof ControlUiSurfaceProps]: {

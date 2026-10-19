@@ -8,6 +8,7 @@ import {
   closeChatDetails,
   openChatDetails,
   openDetailsPullRequests,
+  openDesktopPullRequestPage,
 } from "./chat-details.test-support.ts";
 import {
   chatMessage,
@@ -225,11 +226,10 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
   await expectInputReachable(page);
 
   await openDetailsPullRequests(page);
-  await activate(pullRequest.locator(".chat-pr__checks-pill"), touch);
+  const input = touch ? "touch" : "keyboard";
+  const menu = await openDesktopPullRequestPage(pullRequest, "checks", input);
   await gateway.waitForRequest(checksMethod);
-  const menu = page.locator(".chat-pr__checks-menu");
   await menu.waitFor({ state: "visible" });
-  await menu.locator('input[name="autoFix"]:enabled').waitFor({ state: "visible" });
   const menuBounds = (await menu.boundingBox())!;
   const contextBounds = (await page.locator(".chat-footer__context").boundingBox())!;
   if (touch) {
@@ -239,8 +239,14 @@ async function verifyFooter(page: Page, width: number, height: number, touch: bo
   }
   expect(menuBounds.y).toBeGreaterThanOrEqual(0);
   expect(menuBounds.y + menuBounds.height).toBeLessThanOrEqual(height);
-  await menu.getByRole("link", { name: "Open checks on GitHub" }).click({ trial: true });
-
+  await menu
+    .locator('a[href="https://github.com/example/demo/pull/42/checks"]')
+    .click({ trial: true });
+  await openDesktopPullRequestPage(pullRequest, "monitoring", input);
+  const autoFix = menu.getByRole("switch", { name: "Auto-fix CI & address comments", exact: true });
+  await expect.poll(() => autoFix.isEnabled()).toBe(true);
+  await page.keyboard.press("Escape");
+  expect(await menu.isVisible()).toBe(true);
   await page.keyboard.press("Escape");
   await expect.poll(() => menu.isVisible()).toBe(false);
 

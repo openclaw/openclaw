@@ -1,4 +1,5 @@
-import type { Page } from "playwright";
+import path from "node:path";
+import type { Locator, Page } from "playwright";
 import { expect, it } from "vitest";
 import {
   CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT,
@@ -11,7 +12,7 @@ import { ciAutomationJobSpec, type CiAutomationOption } from "../lib/session-pr-
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../lib/session-pull-requests.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { cronListResponseFixture } from "../test-helpers/cron.ts";
-import { openChatDetails } from "./chat-details.test-support.ts";
+import { openChatDetails, openDesktopPullRequestPage } from "./chat-details.test-support.ts";
 import { waitForWatchedSessionKey } from "./chat-github-publication.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
@@ -218,7 +219,7 @@ async function setup(
     await gateway.emitGatewayEvent(CONTROL_UI_SESSION_PULL_REQUESTS_CHANGED_EVENT, {
       sessions: { [sessionKey]: { pullRequests: [next], rateLimited: false, status: "ready" } },
     });
-    await page.locator(".chat-pr__checks-pill").waitFor();
+    await page.locator(".chat-pr__actions-trigger").first().waitFor();
   }
   await publish(
     options.mode === "failed"
@@ -234,7 +235,8 @@ async function setup(
 
 async function expandLinuxJob(page: Page) {
   const job = page
-    .locator(".chat-pr__checks-menu details")
+    .locator("openclaw-chat-ci-details details")
+    .filter({ visible: true })
     .filter({ has: page.locator("summary", { hasText: "Tests — Linux" }) })
     .first();
   await job.waitFor();
@@ -250,10 +252,10 @@ suite.define(() => {
     const fix = automationJob("autoFix");
     const merge = automationJob("autoMerge", false);
     const { page, gateway, publish } = await setup({ automationJobs: [fix, merge] });
-    await page.locator(".chat-pr__checks-pill").click();
-    const autoFix = page.getByRole("checkbox", { name: "Auto-fix CI & address comments" });
-    const autoMerge = page.getByRole("checkbox", { name: "Auto-merge when ready" });
-    const autoArchive = page.getByRole("checkbox", { name: "Auto-archive on merge or close" });
+    await openDesktopPullRequestPage(page.locator(".chat-pr").first(), "monitoring");
+    const autoFix = page.getByRole("switch", { name: "Auto-fix CI & address comments" });
+    const autoMerge = page.getByRole("switch", { name: "Auto-merge when ready" });
+    const autoArchive = page.getByRole("switch", { name: "Auto-archive session" });
     await expect.poll(() => autoFix.isChecked()).toBe(true);
     await expect.poll(() => autoMerge.isEnabled()).toBe(true);
     expect(await autoMerge.isChecked()).toBe(false);
@@ -305,9 +307,10 @@ suite.define(() => {
     expect(await autoArchive.isChecked()).toBe(true);
     expect(await gateway.getRequests("cron.add")).toHaveLength(1);
 
-    await page.locator(".chat-pr__checks-pill").click();
+    await page.keyboard.press("Escape");
+    await page.keyboard.press("Escape");
     await publish({ ...pullRequest, headSha: "c".repeat(40) });
-    await page.locator(".chat-pr__checks-pill").click();
+    await openDesktopPullRequestPage(page.locator(".chat-pr").first(), "monitoring");
     await expect.poll(() => autoArchive.isEnabled()).toBe(true);
     expect(await autoArchive.isChecked()).toBe(true);
     expect(await autoFix.isChecked()).toBe(false);
@@ -328,8 +331,8 @@ suite.define(() => {
     const selected = page
       .locator(".chat-pr")
       .filter({ has: page.locator(`a.chat-pr__link[href="${pullRequest.url}"]`) });
-    await selected.locator(".chat-pr__checks-pill").click();
-    const toggle = selected.getByRole("checkbox", { name: "Auto-merge when ready" });
+    await openDesktopPullRequestPage(selected, "monitoring");
+    const toggle = selected.getByRole("switch", { name: "Auto-merge when ready" });
     await expect.poll(() => toggle.isEnabled()).toBe(true);
     await gateway.deferNext("cron.add");
     await toggle.click();
@@ -346,8 +349,8 @@ suite.define(() => {
     const unselected = page
       .locator(".chat-pr")
       .filter({ has: page.locator(`a.chat-pr__link[href="${other.url}"]`) });
-    await unselected.locator(".chat-pr__checks-pill").click();
-    const otherToggle = unselected.getByRole("checkbox", { name: "Auto-merge when ready" });
+    await openDesktopPullRequestPage(unselected, "monitoring");
+    const otherToggle = unselected.getByRole("switch", { name: "Auto-merge when ready" });
     await expect.poll(() => otherToggle.isEnabled()).toBe(true);
     expect(await otherToggle.isChecked()).toBe(false);
     expect(await gateway.getRequests("cron.add")).toHaveLength(1);
@@ -359,8 +362,8 @@ suite.define(() => {
       automationJobs: [automationJob("autoMerge")],
     });
     await publish({ ...pullRequest, checks: undefined });
-    await page.locator(".chat-pr__checks-pill").click();
-    const autoMerge = page.getByRole("checkbox", { name: "Auto-merge when ready" });
+    await openDesktopPullRequestPage(page.locator(".chat-pr").first(), "monitoring");
+    const autoMerge = page.getByRole("switch", { name: "Auto-merge when ready" });
     await expect.poll(() => autoMerge.isChecked()).toBe(true);
     expect(await autoMerge.isDisabled()).toBe(true);
     expect(await gateway.getRequests("cron.add")).toHaveLength(0);
@@ -370,7 +373,7 @@ suite.define(() => {
 
   it("does not display a pending response for the previous commit", async () => {
     const { page, gateway, publish } = await setup({ defer: true });
-    await page.locator(".chat-pr__checks-pill").click();
+    await openDesktopPullRequestPage(page.locator(".chat-pr").first(), "checks");
     await gateway.waitForRequest(DETAILS_METHOD);
     const replacement = {
       ...detailFixture(),
@@ -398,20 +401,16 @@ suite.define(() => {
     { label: "mobile", width: 393, height: 960, mode: "failed" as const },
     { label: "landscape", width: 844, height: 390, mode: "failed" as const },
   ])("keeps expanded steps usable on $label", async ({ width, height, mode }) => {
-    const { page } = await setup({
-      width,
-      height,
-      mode,
-      automationJobs: [automationJob("autoFix"), automationJob("autoMerge")],
-    });
-    await page.locator(".chat-pr__checks-pill").click();
+    const { page } = await setup({ width, height, mode });
+    const menu: Locator = await openDesktopPullRequestPage(
+      page.locator(".chat-pr").first(),
+      "checks",
+    );
     await expandLinuxJob(page);
-    const menu = page.locator(".chat-pr__checks-menu");
-    const surface = page.locator(".chat-pr__checks-overlay");
     // Step text can appear before Floating UI finishes positioning the expanded popup.
     await expect
       .poll(() =>
-        surface.evaluate((element) => {
+        menu.evaluate((element) => {
           const bounds = element.getBoundingClientRect();
           return (
             bounds.width > 0 &&
@@ -426,15 +425,23 @@ suite.define(() => {
     expect(await menu.evaluate((element) => element.scrollWidth <= element.clientWidth + 1)).toBe(
       true,
     );
-    await menu.getByRole("link", { name: "Open checks on GitHub" }).click({ trial: true });
+    await menu.locator(`a[href="${pullRequest.checksUrl}"]`).click({ trial: true });
     const linuxJob = menu.locator('.chat-ci__job[data-check-id="11"]');
     const jobLink = linuxJob.locator(".chat-ci__job-link");
     await jobLink.click({ trial: true });
-    // Trial clicks leave focus on the CI pill, whose title hint can own the first Escape.
+    if (process.env.OPENCLAW_CAPTURE_UI_PROOF === "1") {
+      await page.screenshot({
+        path: path.join(suite.artifactDir, `${width}-expanded-checks.png`),
+        animations: "disabled",
+      });
+    }
+    // Focus inside the active page so Escape exercises the nested menu owner.
     await jobLink.focus();
     await expect.poll(() => page.locator("openclaw-tooltip[open]").count()).toBe(0);
     await page.keyboard.press("Escape");
-    await expect.poll(() => page.locator(".chat-pr__checks[open]").count()).toBe(0);
+    await expect.poll(() => menu.locator(".chat-pr-menu__page:visible").count()).toBe(0);
+    expect(await menu.isVisible()).toBe(true);
+    await page.keyboard.press("Escape");
     await expect.poll(() => menu.isVisible()).toBe(false);
     expect(await page.locator('.chat-details[role="dialog"]').isVisible()).toBe(true);
   });

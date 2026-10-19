@@ -67,25 +67,55 @@ export async function openDetailsPullRequests(page: Page | Locator): Promise<Loc
   return pullRequests;
 }
 
-/** Open the saved plan through the current desktop disclosure or mobile Details page. */
+/** Open the current compact branch menu or retained publication history. */
+export async function openChatPublication(page: Page | Locator): Promise<Locator> {
+  const group = await openDetailsPullRequests(page);
+  await group.locator(".chat-pr, .chat-pr__publication-history").first().waitFor();
+  const actions = group.locator('.chat-pr[data-state="branch"] .chat-pr__actions-trigger');
+  if (await actions.count()) {
+    if ((await actions.getAttribute("aria-expanded")) !== "true") {
+      await actions.click();
+    }
+    await group.locator(".chat-pr-branch-menu").waitFor();
+  } else {
+    const history = group.locator(".chat-pr__publication-history");
+    if ((await history.count()) > 0 && (await history.getAttribute("open")) === null) {
+      await history.locator(":scope > summary").click();
+    }
+  }
+  return group;
+}
+
+/** Preserve the caller's input mode through the compact menu pages. */
+export async function openDesktopPullRequestPage(
+  row: Locator,
+  destination: "checks" | "monitoring",
+  input: "pointer" | "keyboard" | "touch" = "pointer",
+): Promise<Locator> {
+  const activate = (control: Locator) =>
+    input === "keyboard"
+      ? control.press("Enter")
+      : input === "touch"
+        ? control.tap()
+        : control.click();
+  const trigger = row.locator(".chat-pr__actions-trigger");
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await activate(trigger);
+  }
+  const menu = row.locator(".chat-pr-menu");
+  const back = menu.locator('[data-value="back"]');
+  if (await back.isVisible()) {
+    await activate(back);
+  }
+  await activate(menu.locator(`[data-value="${destination}"]`));
+  await menu.locator(".chat-pr-menu__page:visible").waitFor();
+  return menu;
+}
+
+/** The lower prefix retains the inline Details progress disclosure. */
 export async function openChatTaskProgress(page: Page | Locator): Promise<Locator> {
   const details = await openChatDetails(page);
-  const root = details.locator(".chat-details-mobile-root").filter({ visible: true });
-  const mobilePage = details
-    .locator('.chat-mobile-details-page[data-details-page="task-progress"]')
-    .filter({ visible: true });
-  if (await details.locator(".chat-mobile-host__details").count()) {
-    await expect
-      .poll(async () => (await root.isVisible()) || (await mobilePage.isVisible()))
-      .toBe(true);
-  }
-  if (await root.isVisible()) {
-    await root.locator('[data-details-destination="task-progress"]').click();
-  }
-  const progress = details
-    .locator('[data-progress-card-placement="details"]')
-    .or(details.locator('.chat-mobile-details-page[data-details-page="task-progress"]'))
-    .filter({ visible: true });
+  const progress = details.locator('[data-progress-card-placement="details"]');
   await progress.waitFor();
   return progress;
 }
