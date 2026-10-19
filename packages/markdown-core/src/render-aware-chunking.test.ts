@@ -6,6 +6,14 @@ import { renderMarkdownWithAttributedRanges } from "./render-attributed.js";
 import { renderMarkdownIRChunksWithinLimit } from "./render-aware-chunking.js";
 import { renderMarkdownWithMarkers } from "./render.js";
 
+const htmlLink = ({ start, end, href }: MarkdownIR["links"][number]) => ({
+  start,
+  end,
+  open: `<a href="${href}">`,
+  close: "</a>",
+});
+const boldMarker = { bold: { open: "*", close: "*" } };
+
 function renderEscapedHtml(ir: MarkdownIR): string {
   return renderMarkdownWithMarkers(ir, {
     styleMarkers: {
@@ -239,26 +247,17 @@ it("preserves semantic whitespace from styles, links, and transcript annotations
   ];
   for (const [ir, expectedSource, expectedRendered] of cases) {
     expect(ir).toEqual(expectedSource);
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir,
-      limit: 64,
-      renderChunk: (chunk) =>
-        renderMarkdownWithMarkers(chunk, {
-          styleMarkers: {
-            bold: { open: "<b>", close: "</b>" },
-            code_block: { open: "<pre><code>", close: "</code></pre>" },
-          },
-          annotationMarkers: { assistant_transcript_role: { open: "<code>", close: "</code>" } },
-          escapeText: (text) => text,
-          buildLink: (link) => ({
-            start: link.start,
-            end: link.end,
-            open: `<a href="${link.href}">`,
-            close: "</a>",
-          }),
-        }),
-      measureRendered: (rendered) => rendered.length,
-    });
+    const chunks = renderStringChunks(ir, 64, (chunk) =>
+      renderMarkdownWithMarkers(chunk, {
+        styleMarkers: {
+          bold: { open: "<b>", close: "</b>" },
+          code_block: { open: "<pre><code>", close: "</code></pre>" },
+        },
+        annotationMarkers: { assistant_transcript_role: { open: "<code>", close: "</code>" } },
+        escapeText: (text) => text,
+        buildLink: htmlLink,
+      }),
+    );
     expect(chunks.map((chunk) => chunk.rendered)).toEqual(expectedRendered);
     expect(chunks.map((chunk) => chunk.source)).toEqual(
       expectedRendered.length ? [expectedSource] : [],
@@ -300,20 +299,19 @@ it("preserves task-list fallback while coalescing semantic whitespace", () => {
     constructs: { taskList: "fallback" },
     chunk: { limit: 20, unit: "chars" },
   });
-  const chunks = renderMarkdownIRChunksWithinLimit({
-    ir: markdownToIR(`**${paragraph}**\n\n- [x] done`, { enableTaskLists: true }),
-    limit: profile.chunk.limit,
-    renderChunk: (chunk) =>
+  const chunks = renderStringChunks(
+    markdownToIR(`**${paragraph}**\n\n- [x] done`, { enableTaskLists: true }),
+    profile.chunk.limit,
+    (chunk) =>
       renderMarkdownWithMarkers(
         chunk,
         {
-          styleMarkers: { bold: { open: "*", close: "*" } },
+          styleMarkers: boldMarker,
           escapeText: (text) => text,
         },
         profile,
       ),
-    measureRendered: (rendered) => rendered.length,
-  });
+  );
 
   expect(chunks.map((chunk) => chunk.rendered)).toEqual([`*${paragraph}*`, "\n\n[x] done"]);
   expect(chunks.every((chunk) => chunk.rendered.length <= profile.chunk.limit)).toBe(true);
@@ -374,28 +372,19 @@ describe("authored links across coalesced whitespace", () => {
       linkCounts: [1, 1],
     },
   ])("preserves $name", ({ markdown, attributed, expected, linkCounts }) => {
-    const chunks = renderMarkdownIRChunksWithinLimit({
-      ir: markdownToIR(markdown),
-      limit: 80,
-      renderChunk: (chunk) =>
-        attributed
-          ? renderMarkdownWithAttributedRanges(
-              chunk,
-              { styleMap: {}, trimEnd: true },
-              attributedProfile,
-            ).text
-          : renderMarkdownWithMarkers(chunk, {
-              styleMarkers: { bold: { open: "*", close: "*" } },
-              escapeText: (text) => text,
-              buildLink: (link) => ({
-                start: link.start,
-                end: link.end,
-                open: `<a href="${link.href}">`,
-                close: "</a>",
-              }),
-            }),
-      measureRendered: (rendered) => rendered.length,
-    });
+    const chunks = renderStringChunks(markdownToIR(markdown), 80, (chunk) =>
+      attributed
+        ? renderMarkdownWithAttributedRanges(
+            chunk,
+            { styleMap: {}, trimEnd: true },
+            attributedProfile,
+          ).text
+        : renderMarkdownWithMarkers(chunk, {
+            styleMarkers: boldMarker,
+            escapeText: (text) => text,
+            buildLink: htmlLink,
+          }),
+    );
 
     expect(chunks.map((chunk) => chunk.rendered)).toEqual(expected);
     expect(chunks.map((chunk) => chunk.source.links.length)).toEqual(linkCounts);

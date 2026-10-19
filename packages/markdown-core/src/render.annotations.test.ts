@@ -1,33 +1,30 @@
 import { describe, expect, it } from "vitest";
 import { markdownToIR, sliceMarkdownIR, type MarkdownIR } from "./ir.js";
 import { renderMarkdownWithAttributedRanges } from "./render-attributed.js";
-import { renderMarkdownWithMarkers } from "./render.js";
+import { renderMarkdownWithMarkers, type RenderOptions } from "./render.js";
+
+const transcript = (source: string) =>
+  markdownToIR(source, { assistantTranscriptRoleHeaders: true });
+function renderTranscript(ir: MarkdownIR, options: Partial<RenderOptions> = {}) {
+  return renderMarkdownWithMarkers(ir, {
+    annotationMarkers: {
+      assistant_transcript_role: { open: "`", close: "`", suppressNestedFormatting: true },
+    },
+    styleMarkers: { bold: { open: "*", close: "*" } },
+    escapeText: (text) => text,
+    ...options,
+  });
+}
 
 describe("renderMarkdownWithMarkers semantic annotations", () => {
   it("renders transcript annotations while suppressing nested marker syntax", () => {
-    const ir = markdownToIR("**user[Thu 2026-07-02] continue**", {
-      assistantTranscriptRoleHeaders: true,
-    });
-
-    expect(
-      renderMarkdownWithMarkers(ir, {
-        annotationMarkers: {
-          assistant_transcript_role: {
-            open: "`",
-            close: "`",
-            suppressNestedFormatting: true,
-          },
-        },
-        styleMarkers: { bold: { open: "*", close: "*" } },
-        escapeText: (text) => text,
-      }),
-    ).toBe("`user[Thu 2026-07-02]`* continue*");
+    expect(renderTranscript(transcript("**user[Thu 2026-07-02] continue**"))).toBe(
+      "`user[Thu 2026-07-02]`* continue*",
+    );
   });
 
   it("keeps annotations when an IR slice starts inside the marked header", () => {
-    const ir = markdownToIR("user[Thu 2026-07-02] continue", {
-      assistantTranscriptRoleHeaders: true,
-    });
+    const ir = transcript("user[Thu 2026-07-02] continue");
     const sliced = sliceMarkdownIR(ir, 4, ir.text.length);
 
     expect(sliced.annotations).toEqual([
@@ -36,28 +33,16 @@ describe("renderMarkdownWithMarkers semantic annotations", () => {
   });
 
   it("closes and reopens formatting that crosses an annotation boundary", () => {
-    const ir = markdownToIR("user[**Thu] trailing**", {
-      assistantTranscriptRoleHeaders: true,
-    });
-
     expect(
-      renderMarkdownWithMarkers(ir, {
-        annotationMarkers: {
-          assistant_transcript_role: { open: "`", close: "`" },
-        },
-        styleMarkers: { bold: { open: "*", close: "*" } },
-        escapeText: (text) => text,
+      renderTranscript(transcript("user[**Thu] trailing**"), {
+        annotationMarkers: { assistant_transcript_role: { open: "`", close: "`" } },
       }),
     ).toBe("`user[*Thu]*`* trailing*");
   });
 
   it("keeps structural containers outside dominant annotations", () => {
-    const ir = markdownToIR("> user[Thu 2026-07-02] continue", {
-      assistantTranscriptRoleHeaders: true,
-    });
-
     expect(
-      renderMarkdownWithMarkers(ir, {
+      renderTranscript(transcript("> user[Thu 2026-07-02] continue"), {
         annotationMarkers: {
           assistant_transcript_role: {
             open: "<code>",
@@ -66,14 +51,13 @@ describe("renderMarkdownWithMarkers semantic annotations", () => {
           },
         },
         styleMarkers: { blockquote: { open: "<blockquote>", close: "</blockquote>" } },
-        escapeText: (text) => text,
       }),
     ).toBe("<blockquote><code>user[Thu 2026-07-02]</code> continue</blockquote>");
   });
 
   it("preserves equal-bound annotation and link order", () => {
     const opened: string[] = [];
-    const rendered = renderMarkdownWithMarkers(
+    const rendered = renderTranscript(
       {
         text: "x",
         styles: [],
@@ -97,7 +81,6 @@ describe("renderMarkdownWithMarkers semantic annotations", () => {
             close: "</role>",
           },
         },
-        escapeText: (text) => text,
         buildLink: (link) => {
           opened.push(link.href);
           return {
@@ -121,18 +104,7 @@ describe("renderMarkdownWithMarkers semantic annotations", () => {
       { length: 256 },
       (_, index) => `**user[t${index}]** line ${index}`,
     ).join("\n");
-    const ir = markdownToIR(markdown, { assistantTranscriptRoleHeaders: true });
-    const rendered = renderMarkdownWithMarkers(ir, {
-      annotationMarkers: {
-        assistant_transcript_role: {
-          open: "`",
-          close: "`",
-          suppressNestedFormatting: true,
-        },
-      },
-      styleMarkers: { bold: { open: "*", close: "*" } },
-      escapeText: (text) => text,
-    });
+    const rendered = renderTranscript(transcript(markdown));
 
     expect(rendered.match(/`user\[t\d+\]`/gu)).toHaveLength(256);
   });
@@ -177,9 +149,7 @@ describe("renderMarkdownWithAttributedRanges", () => {
   });
 
   it("projects annotations and splits styles around link suffixes", () => {
-    const ir = markdownToIR("user[Thu] **[docs](https://example.com) tail**", {
-      assistantTranscriptRoleHeaders: true,
-    });
+    const ir = transcript("user[Thu] **[docs](https://example.com) tail**");
     expect(
       renderMarkdownWithAttributedRanges(ir, {
         styleMap: { bold: "strong" },

@@ -23,6 +23,14 @@ const sliceMarkdownIR: (...args: Parameters<typeof sliceParsedMarkdownIR>) => IR
   sliceParsedMarkdownIR;
 
 const href = "https://example.com";
+const htmlTag = (start: number, end: number, raw: string, name: string, closing = false) => ({
+  start,
+  end,
+  raw,
+  name,
+  closing,
+  selfClosing: false,
+});
 
 function expectWellFormedUtf16(text: string): void {
   expect(new TextDecoder().decode(new TextEncoder().encode(text))).toBe(text);
@@ -233,35 +241,31 @@ describe("markdownToIR block metadata", () => {
   });
 });
 
-const DUNDER_OPTIONS = {
-  autolink: false,
-  linkify: false,
-  preserveDunderIdentifiers: true,
-} as const;
-
-describe("markdownToIR preserveDunderIdentifiers", () => {
-  it.each([
+it.each<[string, MarkdownIR]>([
+  [
+    "(__warning__)",
     {
-      name: "ordinary parenthesized bold",
-      source: "(__warning__)",
-      expected: {
-        text: "(warning)",
-        styles: [{ start: 1, end: 8, style: "bold" }],
-        links: [],
-      },
+      text: "(warning)",
+      styles: [{ start: 1, end: 8, style: "bold" }],
+      links: [],
     },
+  ],
+  [
+    "[obj.__class__]\n\n[obj.__class__]: https://example.org/python",
     {
-      name: "shortcut reference links",
-      source: "[obj.__class__]\n\n[obj.__class__]: https://example.org/python",
-      expected: {
-        text: "obj.__class__",
-        styles: [],
-        links: [{ start: 0, end: 13, href: "https://example.org/python" }],
-      },
+      text: "obj.__class__",
+      styles: [],
+      links: [{ start: 0, end: 13, href: "https://example.org/python" }],
     },
-  ])("preserves $name", ({ source, expected }) => {
-    expect(markdownToIR(source, DUNDER_OPTIONS)).toEqual(expected);
-  });
+  ],
+])("preserves dunder identifiers in %s", (source, expected) => {
+  expect(
+    markdownToIR(source, {
+      autolink: false,
+      linkify: false,
+      preserveDunderIdentifiers: true,
+    }),
+  ).toEqual(expected);
 });
 
 function styledText(markdown: string): string[] {
@@ -271,25 +275,17 @@ function styledText(markdown: string): string[] {
     .map((span) => ir.text.slice(span.start, span.end));
 }
 
-describe("markdownToIR CJK emphasis flanking", () => {
-  it("handles supplementary CJK and variation selectors at emphasis boundaries", () => {
-    expect(styledText("𰻞𰻞**（ビャンビャン）**麺")).toEqual(["（ビャンビャン）"]);
-    expect(styledText("葛󠄀**(こちらが正式表記)**城市")).toEqual(["(こちらが正式表記)"]);
-  });
+it("handles supplementary CJK and variation selectors at emphasis boundaries", () => {
+  expect(styledText("𰻞𰻞**（ビャンビャン）**麺")).toEqual(["（ビャンビャン）"]);
+  expect(styledText("葛󠄀**(こちらが正式表記)**城市")).toEqual(["(こちらが正式表記)"]);
 });
 
-describe("fenced code content length", () => {
-  it.each([
-    {
-      name: "ordinary inline code and strikethrough",
-      text: "Use `one` and ``two`` ticks with ~~old~~ prose.",
-      count: 0,
-    },
-    { name: "unterminated empty fence", text: "```ts", count: 0 },
-    { name: "tilde fence", text: "~~~ts\nconst answer = 42;\n~~~", count: 18 },
-  ])("preserves body characters: $name", ({ text, count }) => {
-    expect(countMarkdownFencedCodeChars(text)).toBe(count);
-  });
+it.each<[string, number]>([
+  ["Use `one` and ``two`` ticks with ~~old~~ prose.", 0],
+  ["```ts", 0],
+  ["~~~ts\nconst answer = 42;\n~~~", 18],
+])("counts fenced body characters in %j", (text, count) => {
+  expect(countMarkdownFencedCodeChars(text)).toBe(count);
 });
 
 function collectRenderedLinks(ir: MarkdownIR) {
@@ -309,19 +305,17 @@ function collectRenderedLinks(ir: MarkdownIR) {
   return links;
 }
 
-describe("markdownToIR link provenance", () => {
-  it("keeps provenance out of the public link span while exposing it to renderers", () => {
-    const ir = markdownToIR("README.md [main.ts](https://main.ts)");
+it("keeps provenance out of the public link span while exposing it to renderers", () => {
+  const ir = markdownToIR("README.md [main.ts](https://main.ts)");
 
-    expect(ir.links).toEqual([
-      { start: 0, end: 9, href: "http://README.md" },
-      { start: 10, end: 17, href: "https://main.ts" },
-    ]);
-    expect(collectRenderedLinks(ir)).toEqual([
-      { href: "http://README.md", label: "README.md", origin: "linkify" },
-      { href: "https://main.ts", label: "main.ts", origin: "authored" },
-    ]);
-  });
+  expect(ir.links).toEqual([
+    { start: 0, end: 9, href: "http://README.md" },
+    { start: 10, end: 17, href: "https://main.ts" },
+  ]);
+  expect(collectRenderedLinks(ir)).toEqual([
+    { href: "http://README.md", label: "README.md", origin: "linkify" },
+    { href: "https://main.ts", label: "main.ts", origin: "authored" },
+  ]);
 });
 
 const metadataKeys = ["styles", "links", "annotations", "listItems", "blocks", "htmlTags"] as const;
@@ -452,64 +446,34 @@ it("keeps unsorted and duplicated metadata independent across chunks", () => {
   expect(projectMetadata(input)).toEqual(before);
 });
 
-describe("nested lists", () => {
-  it("handles empty parent with nested items", () => {
-    expect(markdownToIR("-\n  - Nested only\n- Normal").text).toContain("  • Nested only");
-  });
+it("handles empty parent with nested items", () => {
+  expect(markdownToIR("-\n  - Nested only\n- Normal").text).toContain("  • Nested only");
 });
 
-describe("block and list paragraph spacing", () => {
-  it.each<[string, string, string, Parameters<typeof markdownToIR>[1]?]>([
-    [
-      "a configured blockquote prefix",
-      "> quote\n\nparagraph",
-      "> quote\n\nparagraph",
-      { blockquotePrefix: "> " },
-    ],
-    [
-      "thematic breaks between list items",
-      "- Item 1\n- ---\n- Item 2",
-      "• Item 1\n\n───\n\n• Item 2",
-    ],
-    [
-      "prose before a fence in a tight item",
-      "- Run this:\n  ```sh\n  echo hello\n  ```\n- Done",
-      "• Run this:\necho hello\n• Done",
-    ],
-    [
-      "headings and paragraphs in a tight ordered item",
-      "1. Intro\n   # Heading\n   Details\n2. Done",
-      "1. Intro\nHeading\n\nDetails\n2. Done",
-    ],
-    [
-      "paragraphs inside a list-owned quote",
-      "- > First paragraph\n  >\n  > Second paragraph\n- Next",
-      "• First paragraph\n\nSecond paragraph\n• Next",
-    ],
-    [
-      "loose bullet paragraphs",
-      "- first paragraph\n\n  second paragraph\n- next",
-      "• first paragraph\n\nsecond paragraph\n\n• next",
-    ],
-    [
-      "loose nested bullet lists",
-      "- parent\n\n  - child\n\n- next",
-      "• parent\n\n  • child\n• next",
-    ],
-  ])("separates %s", (_name, markdown, expected, options) => {
-    expect(markdownToIR(markdown, options).text).toBe(expected);
-  });
+it.each<[string, string, Parameters<typeof markdownToIR>[1]?]>([
+  ["> quote\n\nparagraph", "> quote\n\nparagraph", { blockquotePrefix: "> " }],
+  ["- Item 1\n- ---\n- Item 2", "• Item 1\n\n───\n\n• Item 2"],
+  ["- Run this:\n  ```sh\n  echo hello\n  ```\n- Done", "• Run this:\necho hello\n• Done"],
+  ["1. Intro\n   # Heading\n   Details\n2. Done", "1. Intro\nHeading\n\nDetails\n2. Done"],
+  [
+    "- > First paragraph\n  >\n  > Second paragraph\n- Next",
+    "• First paragraph\n\nSecond paragraph\n• Next",
+  ],
+  [
+    "- first paragraph\n\n  second paragraph\n- next",
+    "• first paragraph\n\nsecond paragraph\n\n• next",
+  ],
+  ["- parent\n\n  - child\n\n- next", "• parent\n\n  • child\n• next"],
+])("preserves block/list paragraph spacing in %j", (markdown, expected, options) => {
+  expect(markdownToIR(markdown, options).text).toBe(expected);
 });
 
 describe("markdownToIR raw HTML", () => {
   it("does not linkify URLs inside raw HTML tag attributes", () => {
-    const ir = markdownToIR(
-      '<img src="https://example.com/diagram.png" alt="Diagram"> https://example.com/page',
-    );
-
-    expect(ir.text).toBe(
-      '<img src="https://example.com/diagram.png" alt="Diagram"> https://example.com/page',
-    );
+    const source =
+      '<img src="https://example.com/diagram.png" alt="Diagram"> https://example.com/page';
+    const ir = markdownToIR(source);
+    expect(ir.text).toBe(source);
     expect(ir.links.map((link) => ir.text.slice(link.start, link.end))).toEqual([
       "https://example.com/page",
     ]);
@@ -526,22 +490,8 @@ describe("markdownToIR raw HTML", () => {
     expect(ir.text).toBe(`${opening}body</b>`);
     expect(ir.styles).toEqual([{ start: opening.length, end: opening.length + 4, style: "bold" }]);
     expect(ir.htmlTags).toEqual([
-      {
-        start: 0,
-        end: opening.length,
-        raw: opening,
-        name: "b",
-        closing: false,
-        selfClosing: false,
-      },
-      {
-        start: opening.length + 4,
-        end: opening.length + 8,
-        raw: "</b>",
-        name: "b",
-        closing: true,
-        selfClosing: false,
-      },
+      htmlTag(0, opening.length, opening, "b"),
+      htmlTag(opening.length + 4, opening.length + 8, "</b>", "b", true),
     ]);
   });
 
@@ -569,10 +519,10 @@ describe("markdownToIR raw HTML", () => {
     expect(ir.text).toBe("before <b>x</b> <i>y</i> after");
     expect(ir.styles).toEqual([{ start: 16, end: 24, style: "spoiler" }]);
     expect(ir.htmlTags).toEqual([
-      { start: 7, end: 10, raw: "<b>", name: "b", closing: false, selfClosing: false },
-      { start: 11, end: 15, raw: "</b>", name: "b", closing: true, selfClosing: false },
-      { start: 16, end: 19, raw: "<i>", name: "i", closing: false, selfClosing: false },
-      { start: 20, end: 24, raw: "</i>", name: "i", closing: true, selfClosing: false },
+      htmlTag(7, 10, "<b>", "b"),
+      htmlTag(11, 15, "</b>", "b", true),
+      htmlTag(16, 19, "<i>", "i"),
+      htmlTag(20, 24, "</i>", "i", true),
     ]);
   });
 
@@ -584,9 +534,7 @@ describe("markdownToIR raw HTML", () => {
 
     expect(sliced.text).toBe("🐱<b>");
     expect(target.text).toBe("prefix🐱<b>");
-    expect(target.htmlTags).toEqual([
-      { start: 8, end: 11, raw: "<b>", name: "b", closing: false, selfClosing: false },
-    ]);
+    expect(target.htmlTags).toEqual([htmlTag(8, 11, "<b>", "b")]);
     expect(source.htmlTags?.[0]?.start).toBe(3);
     expect(sliceMarkdownIR(source, 4, 6).htmlTags).toBeUndefined();
     expect(Object.keys(target)).not.toContain("htmlTags");
@@ -604,7 +552,7 @@ describe("markdownToIR raw HTML", () => {
     expect(chunks.map(({ rendered, source }) => ({ rendered, tags: source.htmlTags }))).toEqual([
       {
         rendered: "a<b>",
-        tags: [{ start: 1, end: 4, raw: "<b>", name: "b", closing: false, selfClosing: false }],
+        tags: [htmlTag(1, 4, "<b>", "b")],
       },
       { rendered: "x</b", tags: undefined },
       { rendered: ">", tags: undefined },
@@ -616,31 +564,26 @@ describe("markdownToIR raw HTML", () => {
     const { tables } = markdownToIRWithMeta(source, { tableMode: "block" });
     const cell = tables[0]?.rowCells[0]?.[0];
     expect(cell?.text).toBe("<b>x</b>");
-    expect(cell?.htmlTags).toEqual([
-      { start: 0, end: 3, raw: "<b>", name: "b", closing: false, selfClosing: false },
-      { start: 4, end: 8, raw: "</b>", name: "b", closing: true, selfClosing: false },
-    ]);
+    expect(cell?.htmlTags).toEqual([htmlTag(0, 3, "<b>", "b"), htmlTag(4, 8, "</b>", "b", true)]);
     expect(Object.keys(cell ?? {})).not.toContain("htmlTags");
     const bullets = markdownToIR(source, { tableMode: "bullets" });
     expect(bullets.text).toBe("• Value: <b>x</b>");
     expect(bullets.htmlTags).toEqual([
-      { start: 9, end: 12, raw: "<b>", name: "b", closing: false, selfClosing: false },
-      { start: 13, end: 17, raw: "</b>", name: "b", closing: true, selfClosing: false },
+      htmlTag(9, 12, "<b>", "b"),
+      htmlTag(13, 17, "</b>", "b", true),
     ]);
   });
 });
 
-describe("markdownToIRWithMeta tableMode block", () => {
-  it("preserves code-owned cell edges surrounded by ordinary whitespace", () => {
-    const { tables } = markdownToIRWithMeta("| V |\n| --- |\n| &nbsp;` `&nbsp; |", {
-      tableMode: "block",
-    });
+it("preserves code-owned table cell edges surrounded by ordinary whitespace", () => {
+  const { tables } = markdownToIRWithMeta("| V |\n| --- |\n| &nbsp;` `&nbsp; |", {
+    tableMode: "block",
+  });
 
-    expect(tables[0]?.rowCells[0]?.[0]).toEqual({
-      text: " ",
-      styles: [{ start: 0, end: 1, style: "code" }],
-      links: [],
-    });
+  expect(tables[0]?.rowCells[0]?.[0]).toEqual({
+    text: " ",
+    styles: [{ start: 0, end: 1, style: "code" }],
+    links: [],
   });
 });
 
