@@ -52,7 +52,6 @@ it.each([
   const publicationEntered = createDeferred();
   const publish = createDeferred();
   let updating: Promise<unknown> | undefined;
-  const publications: Array<{ mockRestore(): void }> = [];
   let deliverPublication: (() => void) | undefined;
   const settlePublication = () => {
     const deliver = deliverPublication;
@@ -71,6 +70,7 @@ it.each([
       await resume.promise;
       return snapshot;
     });
+  const publications: Array<{ mockRestore(): void }> = [metadata];
   const respond = vi.fn();
   const stopping = handleGatewayRequest({
     req: {
@@ -252,7 +252,6 @@ it.each([
       for (const publication of publications.toReversed()) {
         publication.mockRestore();
       }
-      metadata.mockRestore();
     }
   }
 });

@@ -67,21 +67,11 @@ import { createSessionRowProjectionFixture } from "../session-row-projection.tes
 import { flushPendingSessionsChangedEvents } from "./session-change-event.js";
 import { sessionMessagingHandlers } from "./sessions-messaging.js";
 
-function createRequestContext(overrides: Record<string, unknown> = {}): GatewayRequestContext {
-  return {
-    chatRunState: { runs: new Map() },
-    dedupe: new Map(),
-    broadcastToConnIds: vi.fn(),
-    getSessionEventSubscriberConnIds: () => new Set<string>(),
-    getRuntimeConfig: () => ({}),
-    ...overrides,
-  } as unknown as GatewayRequestContext;
-}
+let context: GatewayRequestContext;
 
 async function send(
   params: Record<string, unknown>,
   method: "sessions.send" | "sessions.steer" = "sessions.send",
-  context = createRequestContext(),
 ) {
   const respond = vi.fn<RespondFn>();
   await expectDefined(
@@ -131,6 +121,13 @@ function completedRun(childSessionKey: string) {
 describe("sessions.send completed subagent follow-up status", () => {
   afterEach(() => flushPendingSessionsChangedEvents());
   beforeEach(() => {
+    context = {
+      chatRunState: { runs: new Map() },
+      dedupe: new Map(),
+      broadcastToConnIds: vi.fn(),
+      getSessionEventSubscriberConnIds: () => new Set<string>(),
+      getRuntimeConfig: () => ({}),
+    } as unknown as GatewayRequestContext;
     for (const mock of Object.values(mocks)) {
       mock.mockReset();
     }
@@ -188,16 +185,16 @@ describe("sessions.send completed subagent follow-up status", () => {
       },
     });
     onTestFinished(() => projection.dispose());
-    const context = createRequestContext({
+    Object.assign(context, {
       broadcastToConnIds,
       getSessionEventSubscriberConnIds: () => new Set(["conn-1"]),
       ...bindSessionRowProjection({}, () => projection),
     });
-    const respond = await send(
-      { key: childSessionKey, message: "follow-up", idempotencyKey: "run-new" },
-      "sessions.send",
-      context,
-    );
+    const respond = await send({
+      key: childSessionKey,
+      message: "follow-up",
+      idempotencyKey: "run-new",
+    });
     await flushPendingSessionsChangedEvents(context);
     expect(respond).toHaveBeenCalledWith(true, started, undefined, undefined);
     expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("messageSeq");
@@ -234,14 +231,14 @@ describe("sessions.send completed subagent follow-up status", () => {
     mocks.send.mockImplementation(async ({ respond }: { respond: RespondFn }) => {
       respond(true, { runId: "steer-retry", status: "completed" }, undefined, { cached: true });
     });
+    context.dedupe.set("chat:steer-retry", {
+      ts: 1,
+      ok: true,
+      payload: { runId: "steer-retry" },
+    });
     const respond = await send(
       { key: sessionKey, message: "replacement turn", idempotencyKey: "steer-retry" },
       "sessions.steer",
-      createRequestContext({
-        dedupe: new Map([
-          ["chat:steer-retry", { ts: 1, ok: true, payload: { runId: "steer-retry" } }],
-        ]),
-      }),
     );
     expect(respond.mock.calls[0]?.[1]).not.toHaveProperty("interruptedActiveRun");
     expect(respond.mock.calls[0]?.[3]).toMatchObject({ cached: true });
@@ -249,6 +246,7 @@ describe("sessions.send completed subagent follow-up status", () => {
 
   it("steers the selected global agent with committed receipt and interrupt facts", async () => {
     const cfg = { agents: { entries: { main: {}, work: {} } } };
+    context.getRuntimeConfig = () => cfg;
     loadSession("global", "sess-work-global", "/tmp/work/sessions.json", cfg);
     const payload = {
       runId: "run-work",
@@ -265,11 +263,7 @@ describe("sessions.send completed subagent follow-up status", () => {
       mentions: [{ profileId: "bob", start: 0, end: 4 }],
       idempotencyKey: "run-work",
     };
-    const respond = await send(
-      { key: "global", ...structuredClone(params) },
-      "sessions.steer",
-      createRequestContext({ getRuntimeConfig: () => cfg }),
-    );
+    const respond = await send({ key: "global", ...structuredClone(params) }, "sessions.steer");
     expect(mocks.load).toHaveBeenCalledWith("global", { agentId: "work" });
     expect(mocks.send).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({

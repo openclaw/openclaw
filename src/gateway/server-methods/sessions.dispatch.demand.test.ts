@@ -107,8 +107,6 @@ async function withDemandFixture(
     const environmentService = {
       get: (id: string) => environments.get(id),
       readMachineShape: () => undefined,
-      machineShapeVersion: () => 0,
-      inventoryVersion: () => 0,
       supportsExecutionMode: () => true,
     };
     bindDeviceWorkerAvailability(environmentService, async (deviceId) => ({
@@ -143,13 +141,9 @@ async function withDemandFixture(
     const context = makeDispatchTestContext({
       chatRunState: createChatRunState(),
       dedupe: new Map(),
-      agentRunSeq: new Map(),
       getRuntimeConfig,
       addChatRun: vi.fn(),
-      removeChatRun: vi.fn(),
-      broadcast: vi.fn(),
       broadcastToConnIds: vi.fn(),
-      nodeSendToSession: vi.fn(),
       logGateway: { info: vi.fn(), warn: vi.fn(), debug: vi.fn(), error: vi.fn() } as never,
       nodeRegistry: { get: (id: string) => nodes.find((node) => node.nodeId === id) } as never,
       workerEnvironmentService: environmentService as never,

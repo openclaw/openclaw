@@ -17,8 +17,8 @@ vi.mock("../session-utils.js", async () => {
   const actual = await vi.importActual<typeof import("../session-utils.js")>("../session-utils.js");
   return {
     ...actual,
-    loadGatewaySessionEntryReadOnlyAsync: (...args: unknown[]) =>
-      loadSessionEntryMock(...(args as [string, { agentId?: string }?])),
+    loadGatewaySessionEntryReadOnlyAsync: (...args: Parameters<typeof loadSessionEntryMock>) =>
+      loadSessionEntryMock(...args),
   };
 });
 
@@ -69,40 +69,31 @@ function createContext(
     read,
     rollback,
     register,
-    request: (body: Record<string, unknown>, method?: string) =>
-      subscribe(context, body, client, method),
+    request: async (body: Record<string, unknown>, method = "sessions.messages.subscribe") => {
+      const respond = vi.fn();
+      await expectDefined(
+        sessionSubscriptionHandlers[method],
+        `session subscription handler ${method}`,
+      )({
+        req: { id: "req-subscribe-approvals" } as never,
+        params: body,
+        respond,
+        context,
+        client,
+        isWebchatConnect: () => false,
+      } satisfies GatewayRequestHandlerOptions);
+      return respond;
+    },
   };
 }
 
-async function subscribe(
-  context: GatewayRequestContext,
-  body: Record<string, unknown>,
-  client = createClient(),
-  method = "sessions.messages.subscribe",
-) {
-  const respond = vi.fn();
-  await expectDefined(
-    sessionSubscriptionHandlers[method],
-    `session subscription handler ${method}`,
-  )({
-    req: { id: "req-subscribe-approvals" } as never,
-    params: body,
-    respond,
-    context,
-    client,
-    isWebchatConnect: () => false,
-  } satisfies GatewayRequestHandlerOptions);
-  return respond;
-}
+type Response = Awaited<ReturnType<ReturnType<typeof createContext>["request"]>>;
 
-function expectSuccess(respond: Awaited<ReturnType<typeof subscribe>>, payload: unknown) {
+function expectSuccess(respond: Response, payload: unknown) {
   expect(respond).toHaveBeenCalledWith(true, payload, undefined);
 }
 
-function expectError(
-  respond: Awaited<ReturnType<typeof subscribe>>,
-  error: Record<string, unknown> = { code: "UNAVAILABLE" },
-) {
+function expectError(respond: Response, error: Record<string, unknown> = { code: "UNAVAILABLE" }) {
   expect(respond).toHaveBeenCalledWith(false, undefined, expect.objectContaining(error));
 }
 
