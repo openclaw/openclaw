@@ -8,15 +8,51 @@ import { showToast, type ToastOptions } from "./toast.ts";
 import "./toast-host.ts";
 
 const hasBrowserLayout = !navigator.userAgent.toLowerCase().includes("jsdom");
+const part = (host: HTMLElement, name = "") =>
+  host.querySelector<HTMLElement>(`.app-toast${name ? `__${name}` : ""}`)!;
+const rect = (host: HTMLElement, name = "") => part(host, name).getBoundingClientRect();
+const finishAnimations = (element: HTMLElement) =>
+  Promise.all(element.getAnimations().map((animation) => animation.finished));
+
+function makeAnchor(width: number, left = 0) {
+  const anchor = document.createElement("div");
+  anchor.style.cssText = `position: fixed; top: 100px; left: ${left}px; width: ${width}px; height: 100px`;
+  document.body.append(anchor);
+  return anchor;
+}
+
+function linkedMessage(href: string, label: string, before: string, after = "") {
+  const message = document.createDocumentFragment();
+  const link = document.createElement("a");
+  link.href = href;
+  link.textContent = label;
+  message.append(before, link, after);
+  return { message, link };
+}
+
+async function expectFocusPreserved(
+  host: HTMLElementTagNameMap["openclaw-toast-host"],
+  link: HTMLAnchorElement,
+) {
+  link.focus();
+  expect(document.activeElement).toBe(link);
+  host.toast = { ...host.toast! };
+  await waitForSolid(() => expect(part(host, "message").querySelector("a")).toBe(link));
+  expect(document.activeElement).toBe(link);
+}
 
 async function useViewport(width: number, height = 800) {
   const { page } = await import("vitest/browser");
   await page.viewport(width, height);
 }
 
-async function showArchiveToast(options: Partial<ToastOptions> = {}) {
-  const host = document.createElement("openclaw-toast-host");
-  document.body.append(host);
+async function showArchiveToast(
+  options: Partial<ToastOptions> = {},
+  host = document.createElement("openclaw-toast-host"),
+) {
+  if (!host.isConnected) {
+    document.body.append(host);
+  }
   await host.updateComplete;
   showToast({
     message: "Session archived",
@@ -32,51 +68,35 @@ async function showArchiveToast(options: Partial<ToastOptions> = {}) {
 
 describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
   it("shows the selected agent avatar at notification size without crowding the action", async () => {
-    const { page } = await import("vitest/browser");
     await useViewport(390, 844);
-    const options = {
-      message: "Garden plan: Done",
-      actionLabel: "Open session",
-      onAction: vi.fn(),
-      durationMs: 60_000,
-    };
+    const onAction = vi.fn();
+    const options = { message: "Garden plan: Done", actionLabel: "Open session", onAction };
     const host = await showArchiveToast(options);
-    const notice = host.querySelector<HTMLElement>(".app-toast")!;
-    await page
-      .elementLocator(notice)
-      .screenshot({ path: "../../../.vitest/attachments/background-toast-before.png" });
     const avatar =
       "data:image/svg+xml," +
       encodeURIComponent(
         '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><circle cx="50" cy="50" r="45" fill="#ff9138"/><circle cx="38" cy="40" r="5"/><circle cx="62" cy="40" r="5"/><path d="M40 62 Q50 72 60 62" fill="none" stroke="#000" stroke-width="4"/></svg>',
       );
-    showToast({ ...options, avatar: { id: "gardener", name: "Garden keeper", avatar } });
-    await waitForSolid(() =>
-      expect(
-        host.querySelector<HTMLImageElement>(".app-toast__avatar img")?.naturalWidth,
-      ).toBeGreaterThan(0),
-    );
-    const image = host.querySelector<HTMLImageElement>(".app-toast__avatar img")!;
+    showToast({
+      ...options,
+      durationMs: 60_000,
+      avatar: { id: "gardener", name: "Garden keeper", avatar },
+    });
+    const avatarImage = () => part(host, "avatar").querySelector("img")!;
+    await waitForSolid(() => expect(avatarImage().naturalWidth).toBeGreaterThan(0));
+    const image = avatarImage();
     expect(image.getAttribute("src")).toBe(avatar);
-    const avatarBounds = image.getBoundingClientRect();
-    expect(avatarBounds.width).toBe(28);
-    expect(avatarBounds.height).toBe(28);
-    const action = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
+    expect(image.getBoundingClientRect()).toMatchObject({ width: 28, height: 28 });
+    const action = part(host, "action");
     expect(action.getBoundingClientRect().right).toBeLessThanOrEqual(390);
-    await page
-      .elementLocator(notice)
-      .screenshot({ path: "../../../.vitest/attachments/background-toast-after.png" });
     action.click();
-    expect(options.onAction).toHaveBeenCalledOnce();
+    expect(onAction).toHaveBeenCalledOnce();
   });
 
   beforeEach(async () => {
     await i18n.setLocale("en");
   });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-  });
+  afterEach(() => document.body.replaceChildren());
 
   it("keeps a toast usable inside a native modal and returns it to the shell on dismissal", async () => {
     const shell = document.createElement("div");
@@ -92,30 +112,21 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
     try {
       const { modal, dialog } = await waitForRenderedModalDialog(document.body);
       const action = vi.fn();
-      showToast({
-        message: "Synthetic change saved",
-        actionLabel: "Undo",
-        onAction: action,
-        durationMs: 60_000,
-      });
-      await vi.dynamicImportSettled();
-      await waitForSolid(() => expect(host.querySelector(".app-toast")).not.toBeNull());
+      await showArchiveToast({ message: "Synthetic change saved", onAction: action }, host);
       expect(host.parentElement).toBe(modal.getOverlayContainer());
-      const undo = host.querySelector<HTMLButtonElement>(".app-toast__action")!;
+      const undo = part(host, "action");
       undo.focus();
       expect(document.activeElement).toBe(undo);
       expect(dialog.open).toBe(true);
       // Hit testing proves the notice is above the modal rather than behind its backdrop.
-      const bounds = undo.getBoundingClientRect();
-      expect(
-        document.elementFromPoint(bounds.left + bounds.width / 2, bounds.top + bounds.height / 2),
-      ).toBe(undo);
+      const { left, top, width, height } = undo.getBoundingClientRect();
+      expect(document.elementFromPoint(left + width / 2, top + height / 2)).toBe(undo);
       modal.dispatchEvent(new CustomEvent("modal-cancel", { cancelable: true }));
       await confirmation;
       await host.updateComplete;
       expect(host.parentElement).toBe(shell);
       expect(host.textContent).toContain("Synthetic change saved");
-      host.querySelector<HTMLButtonElement>(".app-toast__action")!.click();
+      part(host, "action").click();
       expect(action).toHaveBeenCalledOnce();
     } finally {
       controller.abort();
@@ -126,55 +137,43 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
   it("keeps mobile actions trailing while the desktop toast stays compact", async () => {
     await useViewport(390, 844);
     const mobileHost = await showArchiveToast();
-    const mobileToast = mobileHost.querySelector<HTMLElement>(".app-toast")!;
-    const mobileAction = mobileHost.querySelector<HTMLElement>(".app-toast__action")!;
-    const mobileDismiss = mobileHost.querySelector<HTMLElement>(".app-toast__dismiss")!;
-    const mobileToastBounds = mobileToast.getBoundingClientRect();
+    const mobileAction = rect(mobileHost, "action");
+    const mobileDismiss = rect(mobileHost, "dismiss");
+    const mobile = rect(mobileHost);
 
-    expect(mobileToastBounds.top).toBeCloseTo(20, 0);
-    expect(mobileToastBounds.left).toBeCloseTo(12, 0);
-    expect(mobileToastBounds.right).toBeCloseTo(378, 0);
-    expect(mobileAction.getBoundingClientRect().left).toBeGreaterThan(
-      mobileToastBounds.left + mobileToastBounds.width * 0.6,
-    );
-    expect(mobileDismiss.getBoundingClientRect().right).toBeLessThanOrEqual(
-      mobileToastBounds.right - 7,
-    );
-
-    expect(mobileAction.getBoundingClientRect().height).toBeGreaterThanOrEqual(44);
-    expect(mobileDismiss.getBoundingClientRect().height).toBe(44);
+    expect(mobile.top).toBeCloseTo(20, 0);
+    expect(mobile.left).toBeCloseTo(12, 0);
+    expect(mobile.right).toBeCloseTo(378, 0);
+    expect(mobileAction.left).toBeGreaterThan(mobile.left + mobile.width * 0.6);
+    expect(mobileDismiss.right).toBeLessThanOrEqual(mobile.right - 7);
+    expect(mobileAction.height).toBeGreaterThanOrEqual(44);
+    expect(mobileDismiss.height).toBe(44);
 
     mobileHost.remove();
     await useViewport(1280, 800);
     const desktopHost = await showArchiveToast();
-    const desktopToast = desktopHost.querySelector<HTMLElement>(".app-toast")!;
-    expect(desktopToast.getBoundingClientRect().top).toBeCloseTo(20, 0);
-    expect(desktopToast.getBoundingClientRect().width).toBeLessThan(320);
-    expect(desktopToast.getBoundingClientRect().height).toBeLessThan(60);
-    expect(desktopHost.querySelector(".app-toast__dismiss")!.getBoundingClientRect().height).toBe(
-      32,
-    );
+    const desktopToast = rect(desktopHost);
+    expect(desktopToast.top).toBeCloseTo(20, 0);
+    expect(desktopToast.width).toBeLessThan(320);
+    expect(desktopToast.height).toBeLessThan(60);
+    expect(rect(desktopHost, "dismiss").height).toBe(32);
   });
   it("keeps settings feedback at the safe lower edge without moving anchored notices", async () => {
     const root = document.documentElement;
     const previousStyle = root.getAttribute("style");
-    // Physical insets belong to the app root; a toast-local override cannot
-    // change the shared canvas facts inherited from that owner.
+    // Physical insets belong to the app root, not the toast.
     root.style.setProperty("--safe-area-bottom", "24px");
     try {
       for (const width of [1280, 390]) {
         await useViewport(width, 844);
         const host = await showArchiveToast({ placement: "bottom" });
-        const toast = host.querySelector<HTMLElement>(".app-toast")!;
-        await Promise.all(toast.getAnimations().map((animation) => animation.finished));
+        const toast = part(host);
+        await finishAnimations(toast);
         const bounds = toast.getBoundingClientRect();
         expect(bounds.bottom).toBeCloseTo(800, 0);
         expect(bounds.right).toBeCloseTo(width - (width === 390 ? 12 : 20), 0);
-        expect(host.querySelector(".app-toast__dismiss")!.getBoundingClientRect().height).toBe(
-          width === 390 ? 44 : 32,
-        );
-        // The viewport owner publishes a shorter canvas and no extra home-bar
-        // inset while the keyboard occupies the bottom of the viewport.
+        expect(rect(host, "dismiss").height).toBe(width === 390 ? 44 : 32);
+        // The keyboard shortens the canvas and removes the home-bar inset.
         root.style.setProperty("--shell-viewport-height", "600px");
         root.style.setProperty("--shell-safe-area-bottom", "0px");
         expect(toast.getBoundingClientRect().bottom).toBeCloseTo(580, 0);
@@ -184,11 +183,9 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
         host.remove();
       }
 
-      const anchor = document.createElement("div");
-      anchor.style.cssText = "position: fixed; top: 100px; left: 20px; width: 350px; height: 100px";
-      document.body.append(anchor);
+      const anchor = makeAnchor(350, 20);
       const host = await showArchiveToast({ anchor, placement: "bottom" });
-      const toast = host.querySelector<HTMLElement>(".app-toast")!;
+      const toast = part(host);
       expect(toast.classList.contains("app-toast--bottom")).toBe(false);
       expect(getComputedStyle(toast).top).toBe("100px");
     } finally {
@@ -207,9 +204,9 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
         placement,
         message: "The connection was interrupted. Please check your settings. ".repeat(100),
       });
-      const toast = host.querySelector<HTMLElement>(".app-toast")!;
-      await Promise.all(toast.getAnimations().map((animation) => animation.finished));
-      const message = host.querySelector<HTMLElement>(".app-toast__message")!;
+      const toast = part(host);
+      await finishAnimations(toast);
+      const message = part(host, "message");
       expect(message.scrollHeight).toBeGreaterThan(message.clientHeight);
       message.scrollTop = message.scrollHeight;
       expect(message.scrollTop).toBeGreaterThan(0);
@@ -226,30 +223,23 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
     for (const width of [1280, 390, 320]) {
       await useViewport(width, 844);
       for (const placement of ["top", "bottom", "anchored"] as const) {
-        const anchor = document.createElement("div");
-        anchor.style.cssText =
-          `position: fixed; top: 100px; left: 0; width: ` + width + "px; height: 100px";
-        document.body.append(anchor);
-        const recovery = document.createDocumentFragment();
-        const recoveryLink = document.createElement("a");
-        recoveryLink.href = "#settings";
-        recoveryLink.textContent = "Gateway settings";
-        recovery.append(
+        const anchor = makeAnchor(width);
+        const recovery = linkedMessage(
+          "#settings",
+          "Gateway settings",
           "Your changes could not be saved because the connection was interrupted. Keep this tab open, check ",
-          recoveryLink,
           ", and try again when the connection is restored.",
         );
         const host = await showArchiveToast({
-          message: recovery,
+          message: recovery.message,
           actionLabel: "Discard unsaved changes and reload",
           ...(placement === "anchored" ? { anchor } : { placement }),
         });
         host.style.setProperty("--control-ui-text-scale", "1.3");
-        const toast = host.querySelector<HTMLElement>(".app-toast")!;
-        await Promise.all(toast.getAnimations().map((animation) => animation.finished));
-        const message = host.querySelector<HTMLElement>(".app-toast__message")!;
-        const action = host.querySelector<HTMLElement>(".app-toast__action")!;
-        const dismiss = host.querySelector<HTMLElement>(".app-toast__dismiss")!;
+        const toast = part(host);
+        await finishAnimations(toast);
+        const message = part(host, "message");
+        const action = part(host, "action");
         const bounds = toast.getBoundingClientRect();
         expect(bounds.left).toBeGreaterThanOrEqual(0);
         expect(bounds.right).toBeLessThanOrEqual(width);
@@ -263,38 +253,27 @@ describe.skipIf(!hasBrowserLayout)("toast browser layout", () => {
           expect(element.clientWidth).toBeGreaterThanOrEqual(element.scrollWidth);
           expect(element.getBoundingClientRect().width).toBeGreaterThan(0);
         }
-        expect(action.getBoundingClientRect().right).toBeLessThanOrEqual(
-          dismiss.getBoundingClientRect().left,
-        );
         const messageBounds = message.getBoundingClientRect();
         const actionBounds = action.getBoundingClientRect();
+        expect(actionBounds.right).toBeLessThanOrEqual(rect(host, "dismiss").left);
         expect(
           messageBounds.right <= actionBounds.left || messageBounds.bottom <= actionBounds.top,
         ).toBe(true);
-        const link = recoveryLink;
+        const link = recovery.link;
         expect(message.querySelector("a")).toBe(link);
-        link.focus();
-        expect(document.activeElement).toBe(link);
-        host.toast = { ...host.toast! };
-        await waitForSolid(() => expect(host.querySelector(".app-toast__message a")).toBe(link));
-        expect(document.activeElement).toBe(link);
-        expect(action.getBoundingClientRect().height).toBeGreaterThanOrEqual(width < 768 ? 44 : 32);
-        const replacement = document.createDocumentFragment();
-        const replacementLink = document.createElement("a");
-        replacementLink.href = "#sidebar";
-        replacementLink.textContent = "Sidebar settings";
-        replacement.append("Another section hidden. ", replacementLink);
-        showToast({ ...host.toast!, message: replacement });
-        await waitForSolid(() => expect(replacementLink.isConnected).toBe(true));
+        await expectFocusPreserved(host, link);
+        expect(actionBounds.height).toBeGreaterThanOrEqual(width < 768 ? 44 : 32);
+        const replacement = linkedMessage(
+          "#sidebar",
+          "Sidebar settings",
+          "Another section hidden. ",
+        );
+        showToast({ ...host.toast!, message: replacement.message });
+        await waitForSolid(() => expect(replacement.link.isConnected).toBe(true));
         expect(link.isConnected).toBe(false);
         expect(message.textContent).toBe("Another section hidden. Sidebar settings");
-        expect(message.querySelector("a")).toBe(replacementLink);
-        replacementLink.focus();
-        host.toast = { ...host.toast! };
-        await waitForSolid(() =>
-          expect(host.querySelector(".app-toast__message a")).toBe(replacementLink),
-        );
-        expect(document.activeElement).toBe(replacementLink);
+        expect(message.querySelector("a")).toBe(replacement.link);
+        await expectFocusPreserved(host, replacement.link);
         host.remove();
         anchor.remove();
       }
