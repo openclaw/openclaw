@@ -118,6 +118,8 @@ export type AgentCommandOpts = {
   execApprovalContinuationTranscriptPromptRange?: ExecApprovalContinuationPromptRange;
   /** Trusted sender identity bit for command/channel-action auth; defaults true for local CLI calls. */
   senderIsOwner?: boolean;
+  /** Host-verified current requester for Git credit only; never accepted from public ingress. */
+  gitContributorProfileId?: string;
   /** Whether this caller is authorized to use provider/model per-run overrides. */
   allowModelOverride?: boolean;
   /** Optional runtime tool allow-list; when set, only these tools are exposed for this run. */
@@ -269,6 +271,7 @@ export const AGENT_COMMAND_PUBLIC_INGRESS_DEFAULTS = {
   taskSuggestionDeliveryMode: undefined,
   runtimeContextFragments: undefined,
   senderIsOwner: false,
+  gitContributorProfileId: undefined,
   mainRestartRecoveryOwnerLease: undefined,
   mainRestartRecoveryAdmitted: undefined,
   mainRestartRecoveryAttempt: undefined,
