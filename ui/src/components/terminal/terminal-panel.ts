@@ -130,6 +130,7 @@ export function createTerminalPanel(
       void terminalSessions.restoreSessions();
     }
     terminalSessions.scheduleLifecycleSync();
+    sessionPicker?.syncPresentation();
     if (changed.has("gatewayConnected") && element.gatewayConnected && sessionPicker?.open()) {
       sessionPicker.onRefresh();
     }
@@ -249,6 +250,9 @@ export function createTerminalPanel(
       initialOpen: () =>
         element.embedded && !element.mobile && !(element.page && element.routeTarget),
       connected: () => element.gatewayConnected,
+      standalone: () => !element.embedded && !element.mobile && !element.fullscreen,
+      presented: () => owner.terminalPanelOpen,
+      tabCount: () => terminalSessions.state.tabs.length,
       currentSessionIds: () =>
         new Set(terminalSessions.state.tabs.map((tab) => tab.gatewaySessionId).filter(Boolean)),
       list: (options) => terminalSessions.listSessions(options),

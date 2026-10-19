@@ -9,6 +9,9 @@ type PickerDependencies = {
   hosted: () => boolean;
   connected: () => boolean;
   initialOpen: () => boolean;
+  standalone: () => boolean;
+  presented: () => boolean;
+  tabCount: () => number;
   currentSessionIds: () => ReadonlySet<string>;
   list: (options?: TerminalSessionListOptions) => Promise<TerminalSessionInfo[] | null>;
   showError: (error: unknown) => void;
@@ -20,6 +23,7 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
   const [loading, setLoading] = createSignal(false);
   const [sessions, setSessions] = createSignal<TerminalSessionInfo[]>([]);
   let generation = 0;
+  let discoveredTabCount: number | undefined;
   let inlineTrigger: HTMLButtonElement | undefined;
   let hostedTrigger: HTMLButtonElement | undefined;
   const trigger = () => (deps.hosted() ? hostedTrigger : inlineTrigger);
@@ -39,6 +43,7 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
       const result = await deps.list(options);
       if (isCurrent() && result !== null) {
         setSessions(result);
+        reconcileVisibility(result);
       }
     } catch (error) {
       if (isCurrent()) {
@@ -59,6 +64,24 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
     setOpen(false);
     if (restoreFocus) {
       onSettled(() => trigger()?.focus());
+    }
+  }
+
+  function hiddenFor(current: readonly TerminalSessionInfo[]) {
+    const session = current[0];
+    return (
+      deps.standalone() &&
+      deps.tabCount() <= 1 &&
+      current.length === 1 &&
+      session !== undefined &&
+      deps.currentSessionIds().has(session.sessionId)
+    );
+  }
+
+  function reconcileVisibility(current = sessions()) {
+    if (hiddenFor(current)) {
+      // The trigger is being removed; focus must remain in the terminal.
+      dismiss(false);
     }
   }
 
@@ -100,6 +123,16 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
     open,
     loading,
     sessions,
+    hidden: () => hiddenFor(sessions()),
+    syncPresentation() {
+      const count = deps.presented() && deps.standalone() ? deps.tabCount() : 0;
+      const changed = count !== discoveredTabCount;
+      discoveredTabCount = count;
+      if (changed && count > 0) {
+        void load({ preserveError: true });
+      }
+      reconcileVisibility();
+    },
     triggerRef: (element: HTMLButtonElement) => {
       inlineTrigger = element;
     },
@@ -152,6 +185,7 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
     },
     reset() {
       generation += 1;
+      discoveredTabCount = undefined;
       setOpen(false);
       setLoading(false);
       setSessions([]);

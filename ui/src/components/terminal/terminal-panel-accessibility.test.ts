@@ -30,7 +30,7 @@ function createPanel(client: TerminalGatewayClient, embedded = false) {
   return panel;
 }
 
-function createPickerClient(listCurrent = false) {
+function createPickerClient(listCurrent: boolean | (() => boolean) = false) {
   return {
     forceReconnect: () => {},
     request: async <T>(method: string) =>
@@ -40,7 +40,7 @@ function createPickerClient(listCurrent = false) {
           ? { ...terminalOpenResult("current-1"), buffer: "", seq: 0 }
           : method === "terminal.list"
             ? {
-                sessions: listCurrent
+                sessions: (typeof listCurrent === "function" ? listCurrent() : listCurrent)
                   ? [{ ...terminalOpenResult("current-1"), attached: true, createdAtMs: 1 }]
                   : [],
               }
@@ -184,6 +184,42 @@ describe("OpenClawTerminalPanel accessibility", () => {
     await Promise.resolve();
     await panel.updateComplete;
     expect(panel.querySelector(".tp-session-menu")).toBeNull();
+  });
+
+  it("discovers dock sessions and retires an open picker when only its current session remains", async () => {
+    let onlyCurrent = true;
+    const client = createPickerClient(() => onlyCurrent);
+    const request = vi.spyOn(client, "request");
+    const panel = createPanel(client);
+    const trigger = () =>
+      panel.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]');
+    await waitForFast(() => expect(panel.hostedTabs[0]?.className).toBe("is-live"));
+    await waitForFast(() => expect(trigger()).toBeNull());
+    expect(request.mock.calls.some(([method]) => method === "terminal.list")).toBe(true);
+
+    onlyCurrent = false;
+    window.dispatchEvent(new Event("focus"));
+    await waitForFast(() => expect(trigger()).not.toBeNull());
+    const removedTrigger = trigger()!;
+    const restoreFocus = vi.spyOn(removedTrigger, "focus");
+    removedTrigger.click();
+    await waitForFast(() => expect(panel.querySelector(".tp-session-menu")).not.toBeNull());
+    onlyCurrent = true;
+    panel.querySelector<HTMLButtonElement>(".tp-session-refresh")!.click();
+    await waitForFast(() => expect(trigger()).toBeNull());
+    expect(panel.querySelector(".tp-session-menu")).toBeNull();
+    expect(restoreFocus).not.toHaveBeenCalled();
+
+    onlyCurrent = false;
+    window.dispatchEvent(new Event("focus"));
+    await waitForFast(() => expect(trigger()).not.toBeNull());
+    expect(trigger()?.getAttribute("aria-expanded")).toBe("false");
+    const listReads = request.mock.calls.filter(([method]) => method === "terminal.list").length;
+    panel.themeMode = "light";
+    await panel.updateComplete;
+    expect(request.mock.calls.filter(([method]) => method === "terminal.list")).toHaveLength(
+      listReads,
+    );
   });
 
   it("keeps pointer actions inside the terminal session picker", async () => {

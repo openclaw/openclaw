@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { Icon } from "../solid/icon.tsx";
@@ -253,50 +253,6 @@ function DockButton(props: {
 }
 
 export function Actions(props: { state: TerminalPanelViewState; dialogId: string }) {
-  // Refresh catalog visibility when the dock gains/loses a tab, using the
-  // existing picker owner. Unrelated terminal output does not list sessions.
-  const dockTabCount = createMemo(() =>
-    !props.state.embedded && !props.state.mobile && !props.state.fullscreen
-      ? props.state.tabs.length
-      : 0,
-  );
-  const refreshSessions = createMemo(() => props.state.picker.onRefresh);
-  createEffect(
-    () => [dockTabCount(), refreshSessions()],
-    ([count, refresh]) => {
-      if (count > 0) {
-        refresh({ preserveError: true });
-      }
-    },
-  );
-  const hideSingleSessionPicker = createMemo(() => {
-    if (
-      props.state.embedded ||
-      props.state.fullscreen ||
-      props.state.mobile ||
-      props.state.tabs.length > 1
-    ) {
-      return false;
-    }
-    const sessions = props.state.picker.sessions();
-    const session = sessions[0];
-    return (
-      sessions.length === 1 &&
-      session !== undefined &&
-      props.state.picker.currentSessionIds.has(session.sessionId)
-    );
-  });
-  const dismissPicker = createMemo(() => props.state.picker.onDismiss);
-  createEffect(
-    () => [hideSingleSessionPicker(), dismissPicker()],
-    ([hidden, dismiss]) => {
-      if (hidden) {
-        // Removing the focused menu need not emit focusout. Close its owner
-        // without returning focus to the trigger being removed.
-        dismiss(false);
-      }
-    },
-  );
   const bottomDesktop = () => !props.state.mobile && props.state.dockLayout.dock === "bottom";
   const destinations = () =>
     [
@@ -328,7 +284,7 @@ export function Actions(props: { state: TerminalPanelViewState; dialogId: string
         />
       </Show>
       <Show when={!props.state.fullscreen}>
-        <Show when={!props.state.embedded && !hideSingleSessionPicker()}>
+        <Show when={!props.state.embedded && !props.state.picker.hidden()}>
           <div class="tp-session-picker">
             <button
               ref={(element) => props.state.picker.triggerRef(element)}
