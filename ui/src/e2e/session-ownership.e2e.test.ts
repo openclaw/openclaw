@@ -734,9 +734,10 @@ suite.define(() => {
     expect(await draftToggle.isChecked()).toBe(false);
   });
 
-  it("aligns the Share trigger with the neighboring Layout trigger", async () => {
+  it("keeps the icon-only Sharing control centered and both toolbar controls actionable", async () => {
     const { page } = await openSession(ownerSessions("shared"), {
       featureMethods: visibilityMethods,
+
       operatorScopes: ["operator.write"],
     });
     await page.getByText("Ready.", { exact: true }).waitFor();
@@ -748,21 +749,15 @@ suite.define(() => {
       trigger.evaluate((button) => {
         const bounds = button.getBoundingClientRect();
         const icon = button.querySelector("svg")!.getBoundingClientRect();
-        const range = document.createRange();
-        const label = document.createTreeWalker(button, NodeFilter.SHOW_TEXT, (node) =>
-          node.textContent?.trim() ? NodeFilter.FILTER_ACCEPT : NodeFilter.FILTER_SKIP,
-        );
-        range.selectNodeContents(label.nextNode()!);
-        const text = range.getBoundingClientRect();
         return {
           height: bounds.height,
-          gap: text.left - icon.right,
           iconOffset: icon.top + icon.height / 2 - (bounds.top + bounds.height / 2),
         };
       });
-    const [shareMetrics, layoutMetrics] = await Promise.all([measure(share), measure(layout)]);
-    expect(shareMetrics.height).toBeCloseTo(layoutMetrics.height, 1);
-    expect(shareMetrics.gap).toBeCloseTo(layoutMetrics.gap, 1);
-    expect(shareMetrics.iconOffset).toBeCloseTo(layoutMetrics.iconOffset, 1);
+    const shareMetrics = await measure(share);
+    expect(shareMetrics.height).toBe(28);
+    expect(shareMetrics.iconOffset).toBeCloseTo(0, 1);
+    await share.click({ trial: true });
+    await layout.click({ trial: true });
   });
 });
