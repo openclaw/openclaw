@@ -109,7 +109,7 @@ it("keeps version, commit, branch, and localized UTC build date in one facts gri
   expect(values?.[2]?.textContent).toContain("feature/build-chip*");
   const time = values?.[3]?.querySelector("time");
   expect(time).toMatchObject({ dateTime: BUILT_AT, title: BUILT_AT, dir: "auto" });
-  for (const locale of ["en", "de"]) {
+  for (const locale of ["en", "de"] as const) {
     await i18n.setLocale(locale);
     flush();
     const day = new Intl.DateTimeFormat(locale, { dateStyle: "medium", timeZone: "UTC" });
