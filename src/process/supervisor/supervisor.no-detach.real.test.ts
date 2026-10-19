@@ -3,26 +3,16 @@ import { readFileSync, statSync } from "node:fs";
 import { writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
+import { expect, it, onTestFinished } from "vitest";
 import {
   fixtureReceiptClientSource,
   openFixtureReceiptChannel,
-  type FixtureReceiptChannel,
 } from "../../../test/helpers/fixture-receipts.js";
 import { withinTest } from "../../../test/helpers/promise.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
 
 type Identity = { pid: number; starttime: string };
-const identityFiles = new Set<string>();
-const tempDirs = createTempDirTracker();
 const signalProcess = process.kill.bind(process);
-let receipts: FixtureReceiptChannel;
-beforeAll(async () => {
-  receipts = await openFixtureReceiptChannel();
-});
-afterAll(async () => {
-  await receipts.close();
-});
 
 function readInstance(pid: number) {
   try {
@@ -50,18 +40,39 @@ function readIdentity(file: string): Identity | undefined {
       /^\d+$/u.test(identity.starttime)
       ? identity
       : undefined;
-  } catch {
-    // The fixture has not published its identity yet.
-  }
+  } catch {}
   return undefined;
 }
 
-async function createFixture(cwd: string) {
+async function createFixture(signal: AbortSignal) {
+  const receipts = await openFixtureReceiptChannel();
+  const tempDirs = createTempDirTracker();
+  const cwd = tempDirs.make("openclaw-idle-cancellation-proof-");
   const leafPath = path.join(cwd, "leaf.mjs");
   const leafIdentityPath = path.join(cwd, "leaf.json");
   const leafTicksPath = path.join(cwd, "leaf.ticks");
-  const rootPath = path.join(cwd, "root.cjs");
-  identityFiles.add(leafIdentityPath);
+  const rootIdentityPath = path.join(cwd, "root.json");
+  onTestFinished(async () => {
+    const identities = [leafIdentityPath, rootIdentityPath]
+      .map(readIdentity)
+      .filter((identity) => identity !== undefined);
+    try {
+      await Promise.all(
+        identities.map(async (identity) => {
+          if (stillRunning(identity)) {
+            try {
+              signalProcess(identity.pid, "SIGKILL");
+            } catch {
+              // The exact fixture instance exited after the identity check.
+            }
+          }
+          await waitForFixtureExit(identity, signal);
+        }),
+      );
+    } finally {
+      await receipts.close().finally(tempDirs.cleanup);
+    }
+  });
   await writeFile(
     leafPath,
     `
@@ -79,9 +90,7 @@ async function createFixture(cwd: string) {
       }, 25);
     `,
   );
-  await writeFile(
-    rootPath,
-    `
+  const rootSource = `
       const { spawn } = require("node:child_process");
       const fs = require("node:fs");
       process.on("SIGTERM", () => process.exit(0));
@@ -95,64 +104,36 @@ async function createFixture(cwd: string) {
         process.send?.("ready");
       });
       setInterval(() => {}, 1000);
-    `,
-  );
-  return { leafIdentityPath, leafTicksPath, rootPath };
+    `;
+  return { leafIdentityPath, rootIdentityPath, rootSource, tickBeforeSettlement };
+
+  function tickBeforeSettlement(operation: Promise<unknown>) {
+    const requireTick = (error: unknown) => {
+      if (!statSync(leafTicksPath, { throwIfNoEntry: false })?.size) {
+        throw error;
+      }
+    };
+    return Promise.race([
+      receipts.waitFor(leafTicksPath, "tick"),
+      operation.then(
+        () => requireTick(new Error(`Fixture exited before its first tick: ${leafTicksPath}`)),
+        requireTick,
+      ),
+    ]);
+  }
 }
 
 async function waitForFixtureExit(identity: Identity, signal: AbortSignal) {
-  // Attached-tree escalation retains identities but exposes no descendant exit join.
   while (stillRunning(identity)) {
-    await delay(10, undefined, { signal }).catch((error: unknown) => {
-      throw new Error(`Fixture process ${identity.pid} did not exit`, { cause: error });
-    });
+    await delay(10, undefined, { signal });
   }
 }
 
-function tickBeforeSettlement(file: string, operation: Promise<unknown>) {
-  const requireTick = (error: unknown) => {
-    if (!statSync(file, { throwIfNoEntry: false })?.size) {
-      throw error;
-    }
-  };
-  return Promise.race([
-    receipts.waitFor(file, "tick"),
-    operation.then(
-      () => requireTick(new Error(`Fixture exited before its first tick: ${file}`)),
-      requireTick,
-    ),
-  ]);
-}
-
-afterEach(async ({ signal }) => {
-  const identities = [...identityFiles]
-    .map(readIdentity)
-    .filter((identity) => identity !== undefined);
-  for (const identity of identities) {
-    if (stillRunning(identity)) {
-      try {
-        signalProcess(identity.pid, "SIGKILL");
-      } catch {
-        // The exact fixture instance exited after the identity check.
-      }
-    }
-  }
-  try {
-    await Promise.all(identities.map((identity) => waitForFixtureExit(identity, signal)));
-  } finally {
-    identityFiles.clear();
-    tempDirs.cleanup();
-  }
-});
-
-describe.skipIf(process.platform !== "linux")("Linux no-detach cancellation", () => {
-  it("finishes retained escalation before an otherwise idle cancellation host exits", async ({
-    signal,
-  }) => {
-    const cwd = tempDirs.make("openclaw-idle-cancellation-proof-");
-    const { rootPath, leafIdentityPath, leafTicksPath } = await createFixture(cwd);
-    const rootIdentityPath = path.join(cwd, "root.json");
-    identityFiles.add(rootIdentityPath);
+it.skipIf(process.platform !== "linux")(
+  "finishes retained escalation before an otherwise idle cancellation host exits",
+  async ({ signal }) => {
+    const { rootSource, leafIdentityPath, rootIdentityPath, tickBeforeSettlement } =
+      await createFixture(signal);
     const helperUrl = new URL(
       "../../../packages/agent-core/src/harness/env/kill-tree.ts",
       import.meta.url,
@@ -167,7 +148,7 @@ describe.skipIf(process.platform !== "linux")("Linux no-detach cancellation", ()
       import { spawn } from "node:child_process";
       import fs from "node:fs";
       import { killProcessTree } from ${JSON.stringify(helperUrl)};
-      const root = spawn(process.execPath, [${JSON.stringify(rootPath)}], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
+      const root = spawn(process.execPath, ["--input-type=commonjs", "-e", ${JSON.stringify(rootSource)}], { stdio: ["ignore", "ignore", "ignore", "ipc"] });
       const ready = new Promise(resolve => root.once("message", resolve));
       const stat = fs.readFileSync("/proc/" + root.pid + "/stat", "utf8");
       const fields = stat.slice(stat.lastIndexOf(")") + 2).trim().split(/\\s+/);
@@ -186,7 +167,7 @@ describe.skipIf(process.platform !== "linux")("Linux no-detach cancellation", ()
     });
     try {
       expect(readInstance(host.pid!)?.starttime).toBeDefined();
-      await withinTest(tickBeforeSettlement(leafTicksPath, exit), signal);
+      await withinTest(tickBeforeSettlement(exit), signal);
       const leaf = readIdentity(leafIdentityPath)!;
       expect(leaf).toBeDefined();
       expect(await withinTest(exit, signal)).toBe(0);
@@ -195,5 +176,6 @@ describe.skipIf(process.platform !== "linux")("Linux no-detach cancellation", ()
       host.kill("SIGKILL");
       await exit;
     }
-  }, 20_000);
-});
+  },
+  20_000,
+);
