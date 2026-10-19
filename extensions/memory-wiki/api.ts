@@ -1,7 +1,3 @@
-import type { MemoryWikiCompiledCacheSnapshot } from "./src/compiled-cache.js";
-
-export type MemoryWikiDashboards = MemoryWikiCompiledCacheSnapshot["dashboards"];
-
 export {
   buildPluginConfigSchema,
   definePluginEntry,
