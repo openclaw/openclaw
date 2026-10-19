@@ -574,6 +574,7 @@ export function failSqliteWorkerSlot(
   const error = toErrorObject(reason, "SQLite worker failed");
   slot.custody.retire();
   slot.failed = new SqliteWorkerError(error.message, "unavailable");
+  slot.failed.cause = error;
   for (const actor of slot.actors) {
     if (!actor.backendClosed) {
       notifyListeners(actor.nativeLostObservers ?? [], slot.failed);

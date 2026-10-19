@@ -226,6 +226,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/server/skill-library-read.test.ts",
   "src/gateway/server/ws-connection.startup.test.ts",
   "src/gateway/server/ws-connection/authenticated-request-dispatch.policy-close.test.ts",
+  "src/gateway/server/ws-connection/authenticated-request-dispatch.storage.test.ts",
   "src/gateway/server/ws-connection/connect-device-pairing.test.ts",
   "src/gateway/server/ws-connection/connect-hello.setup-completion.test.ts",
   "src/gateway/server/ws-connection/message-handler.control-ui-build-admission.test.ts",
