@@ -1,9 +1,5 @@
 import { definePluginEntry } from "openclaw/plugin-sdk/plugin-entry";
 import { buildMinimaxImageGenerationProvider } from "./image-generation-provider.js";
-import {
-  minimaxMediaUnderstandingProvider,
-  minimaxPortalMediaUnderstandingProvider,
-} from "./media-understanding-provider.js";
 import { buildMinimaxMusicGenerationProvider } from "./music-generation-provider.js";
 import { registerMinimaxProviders } from "./provider-registration.js";
 import { buildMinimaxSpeechProvider } from "./speech-provider-factory.js";
@@ -16,8 +12,24 @@ export default definePluginEntry({
   description: "Bundled MiniMax API-key and OAuth provider plugin",
   register(api) {
     registerMinimaxProviders(api);
-    api.registerMediaUnderstandingProvider(minimaxMediaUnderstandingProvider);
-    api.registerMediaUnderstandingProvider(minimaxPortalMediaUnderstandingProvider);
+    api.registerMediaUnderstandingProvider({
+      id: "minimax",
+      capabilities: ["image"],
+      defaultModels: { image: "MiniMax-VL-01" },
+      documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      autoPriority: { image: 40 },
+      describeImage: undefined,
+      describeImages: undefined,
+    });
+    api.registerMediaUnderstandingProvider({
+      id: "minimax-portal",
+      capabilities: ["image"],
+      defaultModels: { image: "MiniMax-VL-01" },
+      documentModels: { pdf: { textExtraction: "MiniMax-M2.7", image: false } },
+      autoPriority: { image: 50 },
+      describeImage: undefined,
+      describeImages: undefined,
+    });
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider());
     api.registerImageGenerationProvider(buildMinimaxImageGenerationProvider("minimax-portal"));
     api.registerMusicGenerationProvider(buildMinimaxMusicGenerationProvider());

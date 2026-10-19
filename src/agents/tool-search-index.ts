@@ -25,16 +25,14 @@ export function getTextLexicalIndex(documents: readonly string[]) {
     return cached;
   }
   let bytes = 0;
-  const index = Object.freeze(
-    buildLexicalIndex(
-      documents.map((text, value) => {
-        const terms = tokenizeDocument(text);
-        // Token slices can retain the full source; count repeated postings conservatively.
-        bytes += text.length * 2 + 64;
-        bytes += terms.reduce((size, term) => size + 64 + term.length * 2, 0);
-        return { value, terms };
-      }),
-    ),
+  const index = buildLexicalIndex(
+    documents.map((text, value) => {
+      const terms = tokenizeDocument(text);
+      // Token slices can retain the full source; count repeated postings conservatively.
+      bytes += text.length * 2 + 64;
+      bytes += terms.reduce((size, term) => size + 64 + term.length * 2, 0);
+      return { value, terms };
+    }),
   );
   indexes.set(revision, { index, bytes });
   active.set(revision, new WeakRef(index));

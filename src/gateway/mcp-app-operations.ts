@@ -6,8 +6,7 @@ import {
   ListResourceTemplatesRequestSchema,
   ListToolsRequestSchema,
   ReadResourceRequestSchema,
-  type Tool,
-} from "@modelcontextprotocol/sdk/types.js";
+} from "@modelcontextprotocol/core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { z } from "zod";
 import { peekSessionMcpRuntime } from "../agents/agent-bundle-mcp-manager-api.js";
@@ -77,7 +76,7 @@ function isAppCallableTool(
   );
 }
 
-function isAppCallableListedTool(tool: Tool): boolean {
+function isAppCallableListedTool(tool: { _meta?: Record<string, unknown> }): boolean {
   const visibility = asOptionalRecord(tool._meta?.ui)?.visibility;
   return !Array.isArray(visibility) || visibility.includes("app");
 }

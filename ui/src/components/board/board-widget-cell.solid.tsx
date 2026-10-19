@@ -64,7 +64,20 @@ function BoardWidgetCellContent(
     get: () => boardWidgetPresentationReady(host),
   });
   onCleanup(() => cells.delete(host));
-  const [actionError, setActionError] = createSignal("");
+  const actionBinding = createMemo(
+    () =>
+      [
+        props.boardRevision,
+        props.widget?.name,
+        props.widget?.instanceId,
+        props.widget?.revision,
+      ] as const,
+    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
+  );
+  const [actionError, setActionError] = createSignal(() => {
+    actionBinding();
+    return "";
+  });
   const [actionPending, setActionPending] = createSignal(false);
   const [widgetRoot, setWidgetRoot] = createSignal<HTMLElement>();
   let mcpElement: HTMLElementTagNameMap["mcp-app-view"] | undefined;
@@ -225,19 +238,9 @@ function BoardWidgetCellContent(
   createEffect(
     () => [props.widget, props.boardRevision, active(), contribution(), gatewayBinding()] as const,
     // Owner callbacks intentionally read the current binding captured above.
-    ([widget, boardRevision, isActive, coreWidget], previous) => {
-      if (previous && previous[1] !== boardRevision) {
-        setActionError("");
-      }
+    ([widget, , isActive, coreWidget], previous) => {
       const previousWidget = previous?.[0];
       if (previousWidget && previousWidget !== widget) {
-        if (
-          previousWidget.name !== widget?.name ||
-          previousWidget.instanceId !== widget?.instanceId ||
-          previousWidget.revision !== widget?.revision
-        ) {
-          setActionError("");
-        }
         frame.widgetChanged(previousWidget, widget);
       }
       frame.activityChanged();

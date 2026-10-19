@@ -111,6 +111,11 @@ describe("nested tool terminal acceptance", () => {
             { stream: "tool", committed: true },
           ]);
         }
+        expect(subscription.getItemLifecycle()).toEqual({
+          startedCount: 1,
+          completedCount: 1,
+          activeCount: 0,
+        });
         expect(execute).toHaveBeenCalledTimes(1);
       } finally {
         releaseAppend.resolve();

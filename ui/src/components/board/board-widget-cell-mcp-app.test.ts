@@ -155,6 +155,36 @@ describe("board MCP App cell lifecycle", () => {
     expect(allow.disabled).toBe(false);
   });
 
+  it.each([
+    ["board revision", 1, {}],
+    ["widget name", 0, { name: "beta" }],
+    ["widget instance", 0, { instanceId: "replacement-instance" }],
+    ["widget revision", 0, { revision: 2 }],
+  ] as const)(
+    "retains action errors across unrelated updates and clears them on a new %s",
+    async (_change, boardRevision, replacement) => {
+      const current = widget({ contentKind: "html", grantState: "pending" });
+      const cell = await mount(
+        {
+          remove: async () => {
+            throw new Error("Removal failed");
+          },
+        },
+        { widget: current },
+      );
+      const error = () => cell.querySelector('[data-test-id="board-widget-action-error"]');
+      cell.selectMenuItem("remove");
+      await settle(cell);
+      expect(error()?.textContent).toContain("Removal failed");
+
+      await update(cell, { widget: { ...current, title: "Updated title" }, active: false });
+      expect(error()?.textContent).toContain("Removal failed");
+
+      await update(cell, { boardRevision, widget: { ...current, ...replacement } });
+      expect(error()).toBeNull();
+    },
+  );
+
   it.each(["resolver replacement", "in-place revision"] as const)(
     "keeps failed frame retries visible and clears their presentation after %s",
     async (recovery) => {

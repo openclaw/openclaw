@@ -3016,13 +3016,7 @@ describe("ci workflow guards", () => {
             })
           : value;
       const rows: string[] = [];
-      const hostedLabels = new Set([
-        "ubuntu-24.04",
-        "windows-2025",
-        "macos-15",
-        "xcode-27",
-        "xcode-27-xlarge",
-      ]);
+      const hostedLabels = new Set(["ubuntu-24.04", "windows-2025", "xcode-27", "xcode-27-xlarge"]);
       for (const [name, job] of Object.entries(readCiWorkflow().jobs)) {
         const definition = job as {
           if?: string;

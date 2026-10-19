@@ -64,16 +64,20 @@ it("records admission on its held claim and refuses to resurrect a released clai
   const { params, state } = createLeaseOwner();
   const leaseId = claimOpenClawAgentDatabaseLease(params);
   vi.spyOn(Date, "now").mockReturnValue(123_456);
+  const controls = vi.spyOn(state.db, "exec");
 
   recordOpenClawAgentDatabaseAdmission(leaseId, params);
 
+  expect(controls).not.toHaveBeenCalled();
   expect(
     state.db.prepare("SELECT opened_at FROM agent_database_leases WHERE lease_id = ?").get(leaseId),
   ).toEqual({ opened_at: 123_456 });
   releaseOpenClawAgentDatabaseLease(leaseId, { env: params.env }, "read-only");
+  controls.mockClear();
 
   expect(() => recordOpenClawAgentDatabaseAdmission(leaseId, params)).toThrow(
-    "Agent database open lost its runtime lease",
+    `Agent database open lost its runtime lease: ${params.path}`,
   );
+  expect(controls).not.toHaveBeenCalled();
   expect(state.db.prepare("SELECT lease_id FROM agent_database_leases").all()).toEqual([]);
 });

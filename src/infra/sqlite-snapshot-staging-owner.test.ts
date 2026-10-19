@@ -446,6 +446,35 @@ it("preserves allocation launch facts while waiting behind another token command
   expectEntries(root, "changed-cwd");
 });
 
+it("retains independent snapshot owners across scoped Doctor state environments", async () => {
+  const { root } = fixture();
+  const owned: Awaited<ReturnType<typeof allocateWorkerOwnedSqliteSnapshotDirectory>>[] = [];
+  try {
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "report-state"));
+    const report = await allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
+    owned.push(report);
+    const reportBytes = path.join(report.directory, "retained.txt");
+    fs.writeFileSync(reportBytes, "report snapshot");
+
+    vi.stubEnv("OPENCLAW_STATE_DIR", path.join(root, "inspection-state"));
+    const inspection = await allocateWorkerOwnedSqliteSnapshotDirectory(root, false);
+    owned.push(inspection);
+    const inspectionBytes = path.join(inspection.directory, "retained.txt");
+    fs.writeFileSync(inspectionBytes, "inspection snapshot");
+    expect(fs.readFileSync(reportBytes, "utf8")).toBe("report snapshot");
+
+    await report.startRetire().result;
+    expect(fs.existsSync(report.directory)).toBe(false);
+    expect(fs.readFileSync(inspectionBytes, "utf8")).toBe("inspection snapshot");
+    await inspection.startRetire().result;
+    expectEntries(root);
+  } finally {
+    for (const snapshot of owned) {
+      await snapshot.startRetire().result;
+    }
+  }
+});
+
 it("services a queued snapshot while the earlier caller's Promise reactions are blocked", async () => {
   const { root } = fixture(true);
   const sqlite = requireNodeSqlite();

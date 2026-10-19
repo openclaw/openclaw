@@ -13,6 +13,7 @@ import {
 import { formatErrorMessage } from "./errors.js";
 import { registerNodeSqliteDisposeCallback } from "./kysely-sync-cache-state.js";
 import { compareValidSemver } from "./semver.js";
+import { rememberSqliteBusyTimeout } from "./sqlite-busy-timeout.js";
 import {
   bindSqliteDatabaseAdmission,
   prepareSqliteDatabaseAdmission,
@@ -291,6 +292,9 @@ export function openNodeSqliteDatabase(
     },
     options?.readOnly !== true,
   );
+  if (database.isOpen && options?.timeout !== undefined) {
+    rememberSqliteBusyTimeout(database, Math.max(0, options.timeout));
+  }
   if (!getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources) {
     registerNodeSqliteDisposeCallback(database, () => {
       bunSqliteNativeCleanupPending = true;

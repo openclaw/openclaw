@@ -260,6 +260,9 @@ importers:
       '@lydell/node-pty':
         specifier: 1.2.0-beta.15
         version: 1.2.0-beta.15
+      '@modelcontextprotocol/client':
+        specifier: 2.3.1
+        version: 2.3.1
       '@modelcontextprotocol/core':
         specifier: 2.3.1
         version: 2.3.1
@@ -335,6 +338,9 @@ importers:
       express:
         specifier: 5.3.0
         version: 5.3.0(supports-color@10.2.2)
+      fast-uri:
+        specifier: 4.2.1
+        version: 4.2.1
       file-type:
         specifier: 22.1.1
         version: 22.1.1(supports-color@10.2.2)
@@ -462,9 +468,6 @@ importers:
       '@mistralai/mistralai':
         specifier: 2.7.0
         version: 2.7.0(@opentelemetry/api@1.9.1)(@opentelemetry/exporter-trace-otlp-http@0.220.0(@opentelemetry/api@1.9.1))(@opentelemetry/resources@2.12.0(@opentelemetry/api@1.9.1))(@opentelemetry/sdk-trace-base@2.12.0(@opentelemetry/api@1.9.1))
-      '@modelcontextprotocol/client':
-        specifier: 2.3.1
-        version: 2.3.1
       '@openclaw/crabline':
         specifier: 0.1.29
         version: 0.1.29
