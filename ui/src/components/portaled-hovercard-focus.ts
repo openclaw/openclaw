@@ -1,7 +1,6 @@
 import { createContext, onCleanup, useContext } from "solid-js";
 
 export type HovercardControls = {
-  register: (element: HTMLElement) => () => void;
   registerSource: (read: () => readonly HTMLElement[]) => () => void;
   read: () => HTMLElement[];
 };
@@ -14,24 +13,14 @@ export function controlsForHovercard(card: HTMLElement): HovercardControls {
   if (existing) {
     return existing;
   }
-  const controls = new Set<HTMLElement>();
   const sources = new Set<() => readonly HTMLElement[]>();
   const registry: HovercardControls = {
-    register(element) {
-      controls.add(element);
-      return () => controls.delete(element);
-    },
     registerSource(read) {
       sources.add(read);
       return () => sources.delete(read);
     },
     read() {
-      const current = new Set(controls);
-      for (const read of sources) {
-        for (const element of read()) {
-          current.add(element);
-        }
-      }
+      const current = new Set([...sources].flatMap((read) => read()));
       return [...current]
         .filter((element) => {
           if (
@@ -46,7 +35,7 @@ export function controlsForHovercard(card: HTMLElement): HovercardControls {
           const content = element.closest('[slot="content"]');
           return !content?.parentElement?.matches("openclaw-tooltip:not([open])");
         })
-        .sort((left, right) =>
+        .toSorted((left, right) =>
           left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
         );
     },
@@ -60,13 +49,10 @@ export const HovercardControlsContext = createContext<HovercardControls | null>(
 /** Create under the control's owner; the ref itself runs without a Solid owner. */
 export function createHovercardControlRef(): (element: HTMLElement) => void {
   const controls = useContext(HovercardControlsContext);
-  if (!controls) {
-    return () => {};
-  }
   let release: (() => void) | undefined;
   onCleanup(() => release?.());
   return (element) => {
     release?.();
-    release = controls.register(element);
+    release = controls?.registerSource(() => [element]);
   };
 }

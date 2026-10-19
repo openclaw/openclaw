@@ -35,8 +35,8 @@ describe("portaled hovercard presentation ownership", () => {
     const last = document.createElement("button");
     card.append(unrelated, first, last);
     const controls = controlsForHovercard(card);
-    const releaseFirst = controls.register(first);
-    const releaseLast = controls.register(last);
+    const releaseFirst = controls.registerSource(() => [first]);
+    const releaseLast = controls.registerSource(() => [last]);
     view.controller.mount(view.trigger, card, "vertical", true, () => {
       releaseFirst();
       releaseLast();
@@ -77,8 +77,8 @@ describe("portaled hovercard presentation ownership", () => {
     second.href = "#second";
     content.append(first, second);
     const controls = controlsForHovercard(card);
-    onTestFinished(controls.register(first));
-    onTestFinished(controls.register(second));
+    onTestFinished(controls.registerSource(() => [first]));
+    onTestFinished(controls.registerSource(() => [second]));
     // The application delegates these events before the portal installs native listeners.
     delegateEvents(["focusin", "focusout"]);
     mountSolid(() => content, { container: card });

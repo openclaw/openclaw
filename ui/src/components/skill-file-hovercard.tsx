@@ -68,7 +68,12 @@ function SkillSource(props: {
         <strong>{props.file.path.replaceAll("\\", "/").split("/").at(-1)}</strong>
         <span class="skill-file-hovercard__name">{props.file.name}</span>
         <div class="skill-file-hovercard__actions">
-          <CopyButton text={props.file.content} idleLabel={t("filePreview.copyFile")} bare />
+          <CopyButton
+            ref={createHovercardControlRef()}
+            text={props.file.content}
+            idleLabel={t("filePreview.copyFile")}
+            bare
+          />
           <button
             ref={createHovercardControlRef()}
             type="button"

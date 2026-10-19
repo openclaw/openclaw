@@ -1,7 +1,6 @@
 /* @vitest-environment jsdom */
 import { createSignal, flush, For } from "solid-js";
 import { describe, expect, it, onTestFinished, vi } from "vitest";
-import { MarkdownDomReconciler } from "../lib/markdown-dom-reconciler.ts";
 import { mountSolid } from "../test-helpers/mount-solid.ts";
 import {
   controlsForHovercard,
@@ -57,6 +56,8 @@ describe("hovercard controls", () => {
     ]);
     const first = view.getByRole("button", { name: "first" });
     const second = view.getByRole("button", { name: "second" });
+    // A native control can also appear in an island source; keep one tab stop.
+    onTestFinished(controls.registerSource(() => [first]));
     setItems(["second", "first"]);
     flush();
     expect(controls.read().slice(0, 2)).toEqual([second, first]);
@@ -89,6 +90,7 @@ describe("hovercard controls", () => {
             row={{
               label: "Review session",
               hasActiveRun: false,
+              hasAutomation: false,
               participants: [
                 { identity: { type: "profile", id: "alice" }, label: "Alice" },
                 { identity: { type: "profile", id: "mira" }, label: "Mira" },
@@ -153,7 +155,7 @@ describe("hovercard controls", () => {
     const view = mountSolid(
       () => (
         <HovercardControlsContext value={controls}>
-          <CopyButton text={text()} idleLabel="Copy value" />
+          <CopyButton ref={createHovercardControlRef()} text={text()} idleLabel="Copy value" />
         </HovercardControlsContext>
       ),
       { container },
@@ -175,27 +177,47 @@ describe("hovercard controls", () => {
     expect(controls.read()).toEqual([]);
   });
 
-  it("reads only the current Markdown island and releases retired sources independently per card", () => {
+  it("reads current session Markdown and retires removed islands independently per card", () => {
     const container = card();
-    const before = container.appendChild(document.createElement("button"));
-    before.textContent = "Outside island";
-    const markdown = new MarkdownDomReconciler(container);
-    onTestFinished(() => markdown.dispose());
     const controls = controlsForHovercard(container);
-    const read = vi.fn(() => markdown.focusableControls());
-    const release = controls.registerSource(read);
     const other = controlsForHovercard(card());
+    const [markdown, setMarkdown] = createSignal("[Old](#old)");
+    const view = mountSolid(
+      () => (
+        <HovercardControlsContext value={controls}>
+          <button>Outside island</button>
+          <SessionHovercard
+            progressCard={{
+              sessionKey: "agent:main:hovercard-test",
+              revision: 1,
+              updatedAt: 1,
+              markdown: markdown(),
+            }}
+          />
+        </HovercardControlsContext>
+      ),
+      { container },
+    );
+    onTestFinished(view.unmount);
     expect(controlsForHovercard(container)).toBe(controls);
-
-    markdown.updateHtml('<p><a href="#old">Old</a></p>');
     expect(controls.read().map((element) => element.textContent)).toEqual(["Old"]);
-    markdown.updateHtml('<details><summary>More</summary><a href="#new">New</a></details>');
-    expect(controls.read().map((element) => element.textContent)).toEqual(["More", "New"]);
-    expect(other.read()).toEqual([]);
 
-    release();
-    read.mockClear();
+    setMarkdown("[New](#new)");
+    flush();
+    expect(controls.read().map((element) => element.textContent)).toEqual(["New"]);
+    expect(other.read()).toEqual([]);
+    const retired = controls.read()[0]!;
+    setMarkdown("");
+    flush();
+    container.append(retired);
     expect(controls.read()).toEqual([]);
-    expect(read).not.toHaveBeenCalled();
+
+    setMarkdown("[Current](#current)");
+    flush();
+    const current = view.getByRole("link", { name: "Current" });
+    expect(controls.read()).toEqual([current]);
+    view.unmount();
+    container.append(current);
+    expect(controls.read()).toEqual([]);
   });
 });

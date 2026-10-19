@@ -70,7 +70,7 @@ describe.runIf("__vitest_browser__" in globalThis)("native modal transient surfa
       const activate = vi.fn((event: MouseEvent) => event.preventDefault());
       link.addEventListener("click", activate);
       card.append(link);
-      const releaseControl = controlsForHovercard(card).register(link);
+      const releaseControl = controlsForHovercard(card).registerSource(() => [link]);
       controller.markTrigger(trigger);
       controller.mount(trigger, card, "vertical", true, releaseControl);
       await page.elementLocator(link).click();

@@ -3,7 +3,6 @@ import { For } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { handleCopyButton } from "../copy-button-state.ts";
-import { createHovercardControlRef } from "../portaled-hovercard-focus.ts";
 import { Icon } from "./icon.tsx";
 import "../tooltip.ts";
 import "../../styles/copy-button.css";
@@ -24,7 +23,6 @@ export function CopyButton(props: CopyButtonProps): SolidJSX.Element {
     <For each={[props.text]}>
       {(text) => {
         let feedback!: HTMLSpanElement;
-        const hovercardControl = createHovercardControlRef();
         return (
           <openclaw-tooltip prop:content={label()}>
             <button
@@ -33,7 +31,6 @@ export function CopyButton(props: CopyButtonProps): SolidJSX.Element {
               type="button"
               aria-label={label()}
               ref={[
-                hovercardControl,
                 (element) => props.ref?.(element),
                 nativeListener(
                   "click",

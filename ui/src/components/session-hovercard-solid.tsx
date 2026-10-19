@@ -1,5 +1,5 @@
 import type { ProgressCard } from "@openclaw/gateway-protocol";
-import { createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show, useContext } from "solid-js";
 import type { SessionParticipant } from "../../../packages/gateway-protocol/src/schema/session-participant.js";
 import { normalizeSessionColorValue } from "../../../packages/gateway-protocol/src/session-agent-status.js";
 import type {
@@ -17,7 +17,7 @@ import type { SidebarSessionHovercardRow } from "./app-sidebar-session-types.ts"
 import { formatGitHubItemReference } from "./github-link-target.ts";
 import { PersonAvatarLink, PersonName } from "./person-activity-link-solid.tsx";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
-import { createHovercardControlRef } from "./portaled-hovercard-focus.ts";
+import { createHovercardControlRef, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { sessionAttentionSubtitle } from "./session-attention-presentation.ts";
 import { SessionGitDiff } from "./session-git-diff.tsx";
 import {
@@ -86,6 +86,7 @@ function ParticipantLink(props: {
   return (
     <div role="listitem">
       <PersonName
+        ref={createHovercardControlRef()}
         label={label()}
         link={activity()}
         class="session-menu__item learn-more-link session-hovercard__participant-link"
@@ -190,6 +191,7 @@ function AttributionContent(props: {
     <div class="session-hovercard__attribution" aria-label={attributionLabel()}>
       <span class="session-hovercard__attribution-copy">
         <PersonName
+          ref={createHovercardControlRef()}
           label={props.attribution?.primaryLabel ?? ""}
           link={primaryActivity()}
           class="session-hovercard__attribution-name"
@@ -264,6 +266,7 @@ function AttributionContent(props: {
         </PersonAvatarLink>
         <Show when={remaining().length > 0}>
           <ViewerFacepile
+            createLinkRef={createHovercardControlRef}
             staticParticipants={remaining()}
             totalCount={otherCount()}
             maxVisible={Math.min(remaining().length, MAX_VISIBLE_ATTRIBUTION_PARTICIPANTS)}
@@ -500,6 +503,7 @@ function SessionColorDot(props: { color: string | null | undefined }) {
 }
 
 export function SessionHovercard(props: SessionHovercardInput) {
+  const controls = useContext(HovercardControlsContext);
   const headsUp = createMemo(() =>
     progressCardHeadsUp(
       props.progressCard,
@@ -583,7 +587,11 @@ export function SessionHovercard(props: SessionHovercardInput) {
             aria-label={t("sessionHovercard.agentNotepad")}
           >
             <div class="session-hovercard__notepad-title">{t("sessionHovercard.agentNotepad")}</div>
-            <ProgressCardMarkdown markdown={props.progressCard?.markdown} promoteProgress />
+            <ProgressCardMarkdown
+              markdown={props.progressCard?.markdown}
+              promoteProgress
+              registerControls={controls?.registerSource}
+            />
           </section>
         </Show>
         <Show

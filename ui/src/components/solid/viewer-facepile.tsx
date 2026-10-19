@@ -18,7 +18,6 @@ import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-c
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
-import { createHovercardControlRef } from "../portaled-hovercard-focus.ts";
 import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
@@ -90,6 +89,7 @@ export type ViewerFacepileProps = {
   maxVisible?: number;
   totalCount?: number;
   personActivity?: PersonActivityRouting;
+  createLinkRef?: () => (element: HTMLAnchorElement) => void;
 };
 
 export function ViewerFacepileContent(props: ViewerFacepileProps) {
@@ -139,6 +139,7 @@ export function ViewerFacepileContent(props: ViewerFacepileProps) {
                   user={user()}
                   markAsViewer={!props.staticParticipants}
                   routing={props.personActivity}
+                  createLinkRef={props.createLinkRef}
                 />
               </span>
             </openclaw-tooltip>
@@ -160,6 +161,7 @@ function FacepilePerson(props: {
   user: FacepileUser;
   markAsViewer: boolean;
   routing?: PersonActivityRouting;
+  createLinkRef?: ViewerFacepileProps["createLinkRef"];
 }) {
   const link = createMemo(() =>
     props.user.identity?.type === "profile"
@@ -171,7 +173,7 @@ function FacepilePerson(props: {
     <Show when={link()} fallback={avatar}>
       {(target) => (
         <a
-          ref={createHovercardControlRef()}
+          ref={props.createLinkRef?.()}
           class="person-activity-avatar-link"
           href={target().href}
           onClick={(event) => target().open(event)}
@@ -299,6 +301,7 @@ export const ViewerFacepile = defineSolidBridge<ViewerFacepileProps>(
       maxVisible: { default: 3, attribute: "max-visible", type: Number },
       totalCount: { default: undefined, attribute: false },
       personActivity: { default: undefined, attribute: false },
+      createLinkRef: { default: undefined, attribute: false },
     },
   },
 );

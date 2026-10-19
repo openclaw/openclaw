@@ -1,6 +1,5 @@
-import { createEffect, createSignal, onCleanup, useContext } from "solid-js";
+import { createEffect, createSignal, onCleanup } from "solid-js";
 import { MarkdownDomReconciler, type MarkdownDomMedia } from "../lib/markdown-dom-reconciler.ts";
-import { HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 export type MarkdownContentValue =
@@ -22,9 +21,6 @@ export function createMarkdownRef(
     ownedWrite: true,
   });
   let current: MarkdownDomReconciler | undefined;
-  const releaseControls = useContext(HovercardControlsContext)?.registerSource(
-    () => current?.focusableControls() ?? [],
-  );
   createEffect(
     () => [owner(), read()] as const,
     ([reconciler, value]) => {
@@ -41,10 +37,7 @@ export function createMarkdownRef(
       value.onUpdate?.();
     },
   );
-  onCleanup(() => {
-    releaseControls?.();
-    current?.dispose();
-  });
+  onCleanup(() => current?.dispose());
   return (element) => {
     current?.dispose();
     // Create the boundary synchronously so a fragment caller can return its markers.
