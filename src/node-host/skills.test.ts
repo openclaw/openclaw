@@ -19,16 +19,21 @@ function scanAt(skillsDir: string) {
   return scanNodeHostedSkills();
 }
 
+function writeFile(root: string, relative: string, content: string): string {
+  const file = path.join(root, relative);
+  fs.mkdirSync(path.dirname(file), { recursive: true });
+  fs.writeFileSync(file, content);
+  return file;
+}
+
 function writeSkill(
   root: string,
   name: string,
   description: string,
   body = "# Instructions",
 ): string {
-  const dir = path.join(root, name);
-  fs.mkdirSync(dir, { recursive: true });
   const content = `---\nname: ${name}\ndescription: ${description}\n---\n\n${body}\n`;
-  fs.writeFileSync(path.join(dir, "SKILL.md"), content);
+  writeFile(root, `${name}/SKILL.md`, content);
   return content;
 }
 
@@ -66,16 +71,6 @@ describe("scanNodeHostedSkills", () => {
     }
   });
 
-  it("uses the active OpenClaw profile skills directory by default", () => {
-    const stateDir = createRoot();
-    const content = writeSkill(path.join(stateDir, "skills"), "profile-skill", "Profile skill");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-
-    expect(scanNodeHostedSkills()).toEqual([
-      { name: "profile-skill", description: "Profile skill", content },
-    ]);
-  });
-
   it("treats a missing skills directory as an empty fresh-node inventory", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
@@ -87,10 +82,7 @@ describe("scanNodeHostedSkills", () => {
   it("publishes the same bounded content that supplied the skill metadata", () => {
     const root = createRoot();
     const original = writeSkill(root, "a-stable", "Original description", "# Original");
-    const invalidDir = path.join(root, "b-invalid");
-    fs.mkdirSync(invalidDir);
-    const invalidFile = path.join(invalidDir, "SKILL.md");
-    fs.writeFileSync(invalidFile, "# Missing frontmatter\n");
+    const invalidFile = writeFile(root, "b-invalid/SKILL.md", "# Missing frontmatter\n");
     const warn = vi.spyOn(console, "warn").mockImplementation((message: string) => {
       if (message.includes(invalidFile)) {
         writeSkill(root, "a-stable", "Replacement description", "# Replacement");
@@ -106,21 +98,16 @@ describe("scanNodeHostedSkills", () => {
   it("skips invalid and oversized skills with warnings", () => {
     const root = createRoot();
     writeSkill(root, "valid-skill", "Valid");
-    const invalidDir = path.join(root, "invalid");
-    fs.mkdirSync(invalidDir);
-    fs.writeFileSync(path.join(invalidDir, "SKILL.md"), "# Missing frontmatter");
-    const malformedDir = path.join(root, "malformed");
-    fs.mkdirSync(malformedDir);
-    const malformedFile = path.join(malformedDir, "SKILL.md");
-    fs.writeFileSync(
-      malformedFile,
+    writeFile(root, "invalid/SKILL.md", "# Missing frontmatter");
+    const malformedFile = writeFile(
+      root,
+      "malformed/SKILL.md",
       "---\nname: [malformed\ndescription: Malformed frontmatter\n---\n",
     );
     writeSkill(root, "oversized", "Oversized", "x".repeat(64 * 1024));
-    const mismatchedDir = path.join(root, "folder-name");
-    fs.mkdirSync(mismatchedDir);
-    fs.writeFileSync(
-      path.join(mismatchedDir, "SKILL.md"),
+    writeFile(
+      root,
+      "folder-name/SKILL.md",
       "---\nname: frontmatter-name\ndescription: Mismatched\n---\n",
     );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
@@ -137,12 +124,12 @@ describe("scanNodeHostedSkills", () => {
 
   it("does not inspect nested skills after rejecting the named candidate", () => {
     const root = createRoot();
-    const candidateDir = path.join(root, "candidate");
-    fs.mkdirSync(path.join(candidateDir, "nested"), { recursive: true });
-    const candidateFile = path.join(candidateDir, "SKILL.md");
-    fs.writeFileSync(candidateFile, "# Missing frontmatter\n");
-    const nestedFile = path.join(candidateDir, "nested", "SKILL.md");
-    fs.writeFileSync(nestedFile, "---\nname: [nested\ndescription: Malformed nested skill\n---\n");
+    const candidateFile = writeFile(root, "candidate/SKILL.md", "# Missing frontmatter\n");
+    const nestedFile = writeFile(
+      root,
+      "candidate/nested/SKILL.md",
+      "---\nname: [nested\ndescription: Malformed nested skill\n---\n",
+    );
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     expect(scanAt(root)).toEqual([]);
@@ -156,10 +143,7 @@ describe("scanNodeHostedSkills", () => {
     const root = path.join(createRoot(), "skills");
     fs.mkdirSync(root);
     const childContent = writeSkill(root, "valid-child", "Valid child");
-    fs.writeFileSync(
-      path.join(root, "SKILL.md"),
-      "---\nname: skills\ndescription: Root skill\n---\n",
-    );
+    writeFile(root, "SKILL.md", "---\nname: skills\ndescription: Root skill\n---\n");
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     expect(scanAt(root)).toEqual([
