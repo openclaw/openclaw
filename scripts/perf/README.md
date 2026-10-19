@@ -1,5 +1,37 @@
 # Team-shaped synthetic state
 
+## Usage metadata bursts
+
+`chat-metadata-burst-measure.ts` requests `sessions.usage` on a cold 5,000-session
+fixture while ten signed synthetic clients observe the real Gateway. Prepare a
+fresh fixture for every sample; the read populates the usage cache:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/team-shape-fixture.ts \
+  --state-dir /path/to/new-fixture --sessions 5000 --runs 0 --approvals 0 \
+  --cron 0 --projects 0 --transcript-mib 1 --port 41483
+node --import ./scripts/tsx.mjs scripts/perf/chat-metadata-burst-measure.ts \
+  --root /path/to/new-fixture --port 41483 --clients 10 \
+  --duration 60000 --output /path/to/result.json
+```
+
+Results classify metadata frames, count usage publications and their event-loop
+ticks, and record main-thread CPU plus synchronous WebSocket send CPU. Send CPU
+excludes Gateway JSON encoding and asynchronous socket work. Final assertions
+require all 5,000 usage entries to be cached and every socket to have received the
+latest committed usage receipt. The fixture uses synthetic model configuration
+and makes no model calls.
+
+For concurrent A/B pairs, use identical separate fixtures and `--start-at` with
+the same future epoch milliseconds to synchronize Gateway launch. The measurement
+starts once each Gateway's sockets connect; waiting for idle would let startup
+warm the usage cache and erase the cold workload. The script rejects fixtures with
+existing usage rollups and rejects any run where startup publishes usage before
+all clients connect, including partially warmed samples.
+`--metadata-owner /path/to/server-chat-metadata-lifecycle.baseline.ts` replaces
+only that module; place the baseline beside the original so relative imports
+remain valid. Swap the CPU halves for the next pair and compare paired differences.
+
 ## Startup with one checking agent
 
 The startup benchmark has an opt-in `slowAgentDatabase` case. Prepare each side
