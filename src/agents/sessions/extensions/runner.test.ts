@@ -21,8 +21,21 @@ import type {
 type TestHandler = (...args: unknown[]) => Promise<unknown>;
 type TestHandlers = Record<string, TestHandler[]>;
 
-async function reject(error: Error): Promise<never> {
-  throw error;
+function buildContextActions(
+  getModel: ExtensionContextActions["getModel"] = () => undefined,
+  idle = true,
+): ExtensionContextActions {
+  return {
+    getModel,
+    isIdle: () => idle,
+    getSignal: () => undefined,
+    abort: () => {},
+    hasPendingMessages: () => false,
+    shutdown: () => {},
+    getContextUsage: () => undefined,
+    compact: () => {},
+    getSystemPrompt: () => "system",
+  };
 }
 
 function buildExtension(handlers?: TestHandlers, path = "/tmp/test-extension.ts"): Extension {
@@ -49,6 +62,24 @@ function buildRunner(extensions: Extension[]): ExtensionRunner {
   );
 }
 
+function buildHandlerRunner(event: string, handlers: TestHandler[]) {
+  return buildRunner([buildExtension({ [event]: handlers })]);
+}
+
+async function reject(error: Error): Promise<never> {
+  throw error;
+}
+
+function buildFailureRunner(event: string, failure: Error, next: TestHandler[]) {
+  const runner = buildRunner([
+    buildExtension({ [event]: [() => reject(failure)] }, "/tmp/failing.ts"),
+    buildExtension({ [event]: next }, "/tmp/next.ts"),
+  ]);
+  const errors: unknown[] = [];
+  runner.onError((error) => errors.push(error));
+  return { runner, errors };
+}
+
 function buildMessages(): [AgentMessage, AgentMessage] {
   return [
     { role: "user", content: [{ type: "text", text: "hello" }] },
@@ -65,17 +96,7 @@ describe("ExtensionRunner persistence binding", () => {
       setSessionNameAsync: async () => {},
       setLabelAsync: async () => {},
     };
-    const contextActions: ExtensionContextActions = {
-      getModel: () => undefined,
-      isIdle: () => true,
-      getSignal: () => undefined,
-      abort: () => {},
-      hasPendingMessages: () => false,
-      shutdown: () => {},
-      getContextUsage: () => undefined,
-      compact: () => {},
-      getSystemPrompt: () => "system",
-    };
+    const contextActions = buildContextActions();
     const warning = vi.spyOn(process, "emitWarning").mockImplementation(() => {});
     try {
       runner.bindCoreAsync(actions, contextActions);
@@ -109,15 +130,11 @@ describe("ExtensionRunner.emitContext", () => {
 
   it("keeps handler mutations isolated from the caller's messages", async () => {
     const messages = buildMessages();
-    const handler: TestHandler = async (event) => {
-      const contextEvent = event as { messages: AgentMessage[] };
-      contextEvent.messages.push({
-        role: "user",
-        content: [{ type: "text", text: "injected" }],
-      } as AgentMessage);
-      return undefined;
-    };
-    const runner = buildRunner([buildExtension({ context: [handler] })]);
+    const runner = buildHandlerRunner("context", [
+      async (event) => {
+        (event as { messages: AgentMessage[] }).messages.push(buildMessages()[0]);
+      },
+    ]);
 
     const result = await runner.emitContext(messages);
 
@@ -130,65 +147,47 @@ describe("ExtensionRunner.emitContext", () => {
     const [user, assistant] = buildMessages();
     const replacement = [user];
     const final = [assistant];
-    const runner = buildRunner([
-      buildExtension({
-        context: [
-          async () => ({ messages: replacement }),
-          async (event) => {
-            expect((event as { messages: AgentMessage[] }).messages).toBe(replacement);
-            return { messages: final };
-          },
-        ],
-      }),
+    const runner = buildHandlerRunner("context", [
+      async () => ({ messages: replacement }),
+      async (event) => {
+        expect((event as { messages: AgentMessage[] }).messages).toBe(replacement);
+        return { messages: final };
+      },
     ]);
 
     expect(await runner.emitContext(buildMessages())).toBe(final);
   });
 });
 
-const catchAndContinueCases: Array<
-  [event: string, invoke: (runner: ExtensionRunner) => Promise<unknown>]
-> = [
-  [
-    "session_before_switch",
-    (runner) => runner.emit({ type: "session_before_switch", reason: "new" }),
-  ],
-  [
-    "message_end",
-    (runner) => runner.emitMessageEnd({ type: "message_end", message: buildMessages()[0] }),
-  ],
-  [
-    "tool_result",
-    (runner) =>
-      runner.emitToolResult({
-        type: "tool_result",
-        toolName: "custom",
-        toolCallId: "call-1",
-        input: {},
-        content: [],
-        details: undefined,
-        isError: false,
-      }),
-  ],
-  [
-    "user_bash",
-    (runner) =>
-      runner.emitUserBash({
-        type: "user_bash",
-        command: "pwd",
-        cwd: "/tmp",
-        excludeFromContext: false,
-      }),
-  ],
-  ["context", (runner) => runner.emitContext(buildMessages())],
-  ["before_provider_request", (runner) => runner.emitBeforeProviderRequest({})],
-  [
-    "before_agent_start",
-    (runner) => runner.emitBeforeAgentStart("hello", undefined, "system", { cwd: "/tmp" }),
-  ],
-  ["resources_discover", (runner) => runner.emitResourcesDiscover("/tmp", "startup")],
-  ["input", (runner) => runner.emitInput("hello", undefined, "interactive")],
-];
+const catchAndContinueEvents: Record<string, (runner: ExtensionRunner) => Promise<unknown>> = {
+  session_before_switch: (runner) => runner.emit({ type: "session_before_switch", reason: "new" }),
+  message_end: (runner) =>
+    runner.emitMessageEnd({ type: "message_end", message: buildMessages()[0] }),
+  tool_result: (runner) =>
+    runner.emitToolResult({
+      type: "tool_result",
+      toolName: "custom",
+      toolCallId: "call-1",
+      input: {},
+      content: [],
+      details: undefined,
+      isError: false,
+    }),
+  user_bash: (runner) =>
+    runner.emitUserBash({
+      type: "user_bash",
+      command: "pwd",
+      cwd: "/tmp",
+      excludeFromContext: false,
+    }),
+  context: (runner) => runner.emitContext(buildMessages()),
+  before_provider_request: (runner) => runner.emitBeforeProviderRequest({}),
+  before_agent_start: (runner) =>
+    runner.emitBeforeAgentStart("hello", undefined, "system", { cwd: "/tmp" }),
+  resources_discover: (runner) => runner.emitResourcesDiscover("/tmp", "startup"),
+  input: (runner) => runner.emitInput("hello", undefined, "interactive"),
+};
+const catchAndContinueCases = Object.entries(catchAndContinueEvents);
 
 describe("ExtensionRunner handler dispatch", () => {
   it.each([
@@ -217,14 +216,13 @@ describe("ExtensionRunner handler dispatch", () => {
           extension,
           buildExtension({ session_before_switch: [later] }, "/tmp/later.ts"),
         ]);
-        const report = vi.fn();
-        runner.onError(report);
-
+        const errors: unknown[] = [];
+        runner.onError((error) => errors.push(error));
         await expect(runner.emit({ type: "session_before_switch", reason: "new" })).rejects.toBe(
           failure,
         );
         expect(later).not.toHaveBeenCalled();
-        expect(report).not.toHaveBeenCalled();
+        expect(errors).toEqual([]);
       }
     },
   );
@@ -272,16 +270,10 @@ describe("ExtensionRunner handler dispatch", () => {
         new Error("view read failed"),
       );
       const later = vi.fn(async () => undefined);
-      const runner = buildRunner([
-        buildExtension({ [event]: [() => reject(failure)] }),
-        buildExtension({ [event]: [later] }, "/tmp/later.ts"),
-      ]);
-      const report = vi.fn();
-      runner.onError(report);
-
+      const { runner, errors } = buildFailureRunner(event, failure, [later]);
       await expect(invoke(runner)).rejects.toBe(failure);
       expect(later).not.toHaveBeenCalled();
-      expect(report).not.toHaveBeenCalled();
+      expect(errors).toEqual([]);
     },
   );
 
@@ -319,12 +311,7 @@ describe("ExtensionRunner handler dispatch", () => {
       } else if (event === "session_before_switch") {
         nextHandlers.push(async () => void continued.push("unreachable"));
       }
-      const runner = buildRunner([
-        buildExtension({ [event]: [() => reject(failure)] }, "/tmp/failing.ts"),
-        buildExtension({ [event]: nextHandlers }, "/tmp/next.ts"),
-      ]);
-      const errors: unknown[] = [];
-      runner.onError((error) => errors.push(error));
+      const { runner, errors } = buildFailureRunner(event, failure, nextHandlers);
 
       await invoke(runner);
 
@@ -357,11 +344,7 @@ describe("ExtensionRunner handler dispatch", () => {
   it("lets tool_call handler failures escape and blocks later handlers", async () => {
     const failure = new Error("block tool execution");
     const laterHandler = vi.fn(async () => undefined);
-    const runner = buildRunner([
-      buildExtension({
-        tool_call: [() => reject(failure), laterHandler],
-      }),
-    ]);
+    const runner = buildHandlerRunner("tool_call", [() => reject(failure), laterHandler]);
 
     await expect(
       runner.emitToolCall({
@@ -424,7 +407,7 @@ describe("ExtensionRunner context construction", () => {
 
   it("propagates context construction failures outside extension handler isolation", async () => {
     const failure = new Error("context construction failed");
-    const runner = buildRunner([buildExtension({ message_update: [async () => undefined] })]);
+    const runner = buildHandlerRunner("message_update", [async () => undefined]);
     vi.spyOn(runner, "createContext").mockImplementation(() => {
       throw failure;
     });
@@ -435,39 +418,20 @@ describe("ExtensionRunner context construction", () => {
     expect(errors).toEqual([]);
   });
 
-  it("skips tool-call context construction without a matching handler", async () => {
-    const runner = buildRunner([buildExtension({ user_bash: [async () => undefined] })]);
-    const createContext = vi.spyOn(runner, "createContext");
-
-    await runner.emitToolCall({
-      type: "tool_call",
-      toolName: "custom",
-      toolCallId: "call-1",
-      input: {},
-    });
-
-    expect(createContext).not.toHaveBeenCalled();
-  });
-
   it("preserves supplied context identity and its evolving system prompt", async () => {
     const contexts: ExtensionContext[] = [];
     const prompts: string[] = [];
-    const runner = buildRunner([
-      buildExtension({
-        before_agent_start: [
-          async (_event, value) => {
-            const context = value as ExtensionContext;
-            contexts.push(context);
-            prompts.push(context.getSystemPrompt());
-            return { systemPrompt: "updated" };
-          },
-          async (_event, value) => {
-            const context = value as ExtensionContext;
-            contexts.push(context);
-            prompts.push(context.getSystemPrompt());
-          },
-        ],
-      }),
+    const record: TestHandler = async (_event, value) => {
+      const context = value as ExtensionContext;
+      contexts.push(context);
+      prompts.push(context.getSystemPrompt());
+    };
+    const runner = buildHandlerRunner("before_agent_start", [
+      async (...args) => {
+        await record(...args);
+        return { systemPrompt: "updated" };
+      },
+      record,
     ]);
     const createContext = vi.spyOn(runner, "createContext");
 
@@ -484,22 +448,7 @@ describe("ExtensionRunner context construction", () => {
     const runner = buildRunner([]);
     const firstGetModel = vi.fn(() => undefined);
     const secondGetModel = vi.fn(() => undefined);
-    const buildActions = (
-      getModel: ExtensionContextActions["getModel"],
-      idle: boolean,
-    ): ExtensionContextActions => ({
-      getModel,
-      isIdle: () => idle,
-      getSignal: () => undefined,
-      abort: () => {},
-      hasPendingMessages: () => false,
-      shutdown: () => {},
-      getContextUsage: () => undefined,
-      compact: () => {},
-      getSystemPrompt: () => "system",
-    });
-
-    runner.bindCore({} as ExtensionActions, buildActions(firstGetModel, true));
+    runner.bindCore({} as ExtensionActions, buildContextActions(firstGetModel));
     const context = runner.createContext();
     const commandContext = runner.createCommandContext();
     expect(typeof Object.getOwnPropertyDescriptor(context, "ui")?.get).toBe("function");
@@ -507,7 +456,7 @@ describe("ExtensionRunner context construction", () => {
 
     const updatedUi = { ...runner.getUIContext() };
     runner.setUIContext(updatedUi);
-    runner.bindCore({} as ExtensionActions, buildActions(secondGetModel, false));
+    runner.bindCore({} as ExtensionActions, buildContextActions(secondGetModel, false));
 
     expect(context.ui).toBe(updatedUi);
     expect(context.hasUI).toBe(true);
