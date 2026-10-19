@@ -1,6 +1,5 @@
 import { existsSync } from "node:fs";
 import { createServer, type RequestListener } from "node:http";
-import type { AddressInfo, Socket } from "node:net";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterAll, beforeAll, beforeEach, expect, it, vi, type TestContext } from "vitest";
@@ -9,6 +8,10 @@ import {
   openFixtureReceiptChannel,
   type FixtureReceiptChannel,
 } from "../../test/helpers/fixture-receipts.js";
+import {
+  closeHttpServer,
+  listenLoopback,
+} from "../../test/helpers/gateway-integration-fixtures.js";
 import { withinTest } from "../../test/helpers/promise.js";
 import type { MsgContext } from "../auto-reply/templating.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -62,77 +65,48 @@ vi.mock("../process/exec.js", async (importOriginal) => {
 });
 
 async function serve(handler: RequestListener, onTestFinished: TestContext["onTestFinished"]) {
-  const sockets = new Set<Socket>();
   const server = createServer(handler);
-  server.on("connection", (socket) => {
-    sockets.add(socket);
-    socket.once("close", () => sockets.delete(socket));
-  });
-  await new Promise<void>((resolve) => {
-    server.listen(0, "127.0.0.1", resolve);
-  });
-  onTestFinished(async () => {
-    for (const socket of sockets) {
-      socket.destroy();
-    }
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
-  return `http://loopback.test:${(server.address() as AddressInfo).port}`;
+  const base = await listenLoopback(server);
+  onTestFinished(() => closeHttpServer(server));
+  return base.replace("127.0.0.1", "loopback.test");
 }
 
-function startLink(
-  Body: string,
-  args = ["-e", "process.stdin.pipe(process.stdout)"],
-  timeoutSeconds = 10,
-) {
+const echoStdin = ["-e", "process.stdin.pipe(process.stdout)"];
+function startLink(Body: string, args = echoStdin, timeoutSeconds = 10) {
   const ctx: MsgContext = { Body };
   const original = { ...ctx };
   const controller = new AbortController();
-  const cfg: OpenClawConfig = {
-    tools: {
-      links: { models: [{ command: process.execPath, args, timeoutSeconds: 10 }], timeoutSeconds },
-    },
-  };
+  const models = [{ command: process.execPath, args, timeoutSeconds: 10 }];
+  const cfg: OpenClawConfig = { tools: { links: { models, timeoutSeconds } } };
   const result = applyLinkUnderstanding({ ctx, cfg, signal: controller.signal });
   return { ctx, original, controller, result };
 }
 
-beforeEach(() => {
-  vi.clearAllMocks();
-});
+beforeEach(vi.clearAllMocks);
 let receipts: FixtureReceiptChannel;
 beforeAll(async () => {
   receipts = await openFixtureReceiptChannel();
 });
-afterAll(async () => {
-  await receipts?.close();
-});
+afterAll(() => receipts?.close());
 
-it("cancels a non-OK response body before releasing its guarded transport", async ({
-  signal,
-  onTestFinished,
-}) => {
+it("cancels a non-OK response body before releasing its guarded transport", async (t) => {
   const requestSocketClosed = deferred();
   const base = await serve((request, response) => {
     request.socket.once("close", requestSocketClosed.resolve);
     response.writeHead(500, { "content-length": "1000000", "content-type": "text/plain" });
     // Leave the declared body unfinished so cleanup must actively cancel it.
     response.write("error");
-  }, onTestFinished);
+  }, t.onTestFinished);
   const { ctx, original, result } = startLink(`see ${base}/error`);
-  await withinTest(result, signal);
+  await withinTest(result, t.signal);
   expect(ctx).toEqual(original);
-  await withinTest(requestSocketClosed.promise, signal);
+  await withinTest(requestSocketClosed.promise, t.signal);
   expect(mocks.bodyCancel).toHaveBeenCalledOnce();
   expect(mocks.releaseAfterCancel).toHaveBeenCalledWith(true);
   expect(mocks.runCommandWithTimeout).not.toHaveBeenCalled();
 });
 
-it("cancels a streaming response and preserves the unmodified inbound context", async ({
-  onTestFinished,
-}) => {
+it("cancels a streaming response and preserves the unmodified inbound context", async (t) => {
   const requestStarted = deferred();
   const socketClosed = deferred();
   const requests: string[] = [];
@@ -142,7 +116,7 @@ it("cancels a streaming response and preserves the unmodified inbound context", 
     res.writeHead(200, { "content-type": "text/plain" });
     res.write("partial page");
     requestStarted.resolve();
-  }, onTestFinished);
+  }, t.onTestFinished);
   const { ctx, original, controller, result } = startLink(`${base}/first ${base}/second`, [
     "-e",
     "throw new Error('processor must not start')",
@@ -156,7 +130,7 @@ it("cancels a streaming response and preserves the unmodified inbound context", 
   expect(requests).toEqual(["/first"]);
 });
 
-it("skips a timed-out streaming link and processes the next link", async ({ onTestFinished }) => {
+it("skips a timed-out streaming link and processes the next link", async (t) => {
   const base = await serve((req, res) => {
     res.writeHead(200, { "content-type": "text/plain" });
     if (req.url === "/slow") {
@@ -164,21 +138,19 @@ it("skips a timed-out streaming link and processes the next link", async ({ onTe
     } else {
       res.end("complete page");
     }
-  }, onTestFinished);
+  }, t.onTestFinished);
   const { ctx, result } = startLink(`${base}/slow ${base}/good`, undefined, 0.5);
   await result;
   expect(ctx.LinkUnderstanding).toEqual(["complete page"]);
 });
 
-it("fetches bare URLs in order while ignoring titled markdown links", async ({
-  onTestFinished,
-}) => {
+it("fetches bare URLs in order while ignoring titled markdown links", async (t) => {
   const requests: string[] = [];
   const base = await serve((req, res) => {
     const requestPath = req.url ?? "";
     requests.push(requestPath);
     res.end(requestPath);
-  }, onTestFinished);
+  }, t.onTestFinished);
   const { ctx, result } = startLink(
     [
       `[quoted](${base}/quoted "Docs")`,
@@ -192,7 +164,7 @@ it("fetches bare URLs in order while ignoring titled markdown links", async ({
   expect(ctx.LinkUnderstanding).toEqual(["/bare-one", "/bare-two"]);
 });
 
-it("stops processor descendants after caller cancellation", async ({ signal, onTestFinished }) => {
+it("stops processor descendants after caller cancellation", async (t) => {
   await withTempDir("openclaw-link-cancel-", async (dir) => {
     const pidPath = path.join(dir, "worker.pid");
     const workerSource = "setInterval(() => {}, 1000); process.send('ready')";
@@ -204,7 +176,7 @@ it("stops processor descendants after caller cancellation", async ({ signal, onT
       `worker.once('message', () => { writeFileSync(${JSON.stringify(pidPath)}, String(worker.pid)); sendReceipt(${JSON.stringify(pidPath)}, 'ready'); })`,
       "process.stdin.resume()",
     ].join(";");
-    const base = await serve((_req, res) => res.end("page body"), onTestFinished);
+    const base = await serve((_req, res) => res.end("page body"), t.onTestFinished);
     let workerPid: number | undefined;
     const { ctx, original, controller, result } = startLink(`${base}/page`, [
       "--input-type=module",
@@ -214,27 +186,24 @@ it("stops processor descendants after caller cancellation", async ({ signal, onT
     const rejected = expect(result).rejects.toMatchObject({ name: "AbortError" });
     try {
       // IPC readiness is recorded before the socket receipt, which can arrive after settlement.
+      const requirePidFile = (error: unknown) => {
+        if (!existsSync(pidPath)) {
+          throw error;
+        }
+      };
       const settled = result.then(
-        () => {
-          if (!existsSync(pidPath)) {
-            throw new Error(`Timed out waiting for pid file: ${pidPath}`);
-          }
-        },
-        (error: unknown) => {
-          if (!existsSync(pidPath)) {
-            throw error;
-          }
-        },
+        () => requirePidFile(new Error(`Timed out waiting for pid file: ${pidPath}`)),
+        requirePidFile,
       );
-      await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), signal);
+      await withinTest(Promise.race([receipts.waitFor(pidPath, "ready"), settled]), t.signal);
       workerPid = await readPidFile(pidPath);
       expect(isPidAlive(workerPid)).toBe(true);
       controller.abort();
-      await withinTest(rejected, signal);
+      await withinTest(rejected, t.signal);
       expect(ctx).toEqual(original);
       // Caller rejection does not expose the adopted worker's native reap event.
       while (isPidAlive(workerPid)) {
-        await delay(25, undefined, { signal }).catch((error: unknown) => {
+        await delay(25, undefined, { signal: t.signal }).catch((error: unknown) => {
           throw new Error(`Processor descendant ${workerPid} stayed alive`, { cause: error });
         });
       }
