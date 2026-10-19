@@ -39,22 +39,27 @@ function prepareFixture() {
   const root = fs.realpathSync(tempRoots.makeTempDir());
   const bundled = path.join(root, "bundled");
   const workspaceDir = path.join(root, "workspace");
-  const declarations = [
-    ["catalog-owner", "provider", bundled, "static"],
-    ["direct", "direct", bundled, "static"],
-    ["disabled-owner", "disabled", bundled, "static"],
-    ["refreshable-owner", "refreshable", bundled, "refreshable"],
-    ["runtime-owner", "runtime", bundled, "runtime"],
-    ["workspace-owner", "workspace", path.join(workspaceDir, ".openclaw/extensions"), "static"],
-  ] as const;
-  const fixtures = declarations.map(([pluginId, providerId, parent, discovery]) => {
+  // The same-name convention must beat the competing alias.
+  const aliases = {
+    direct: { provider: "provider", baseUrl: url("competing") },
+    alias: { provider: "provider", api: "openai-responses", baseUrl: url("alias") },
+  };
+  const fixtures = (
+    [
+      ["catalog-owner", "provider", bundled, "static"],
+      ["direct", "direct", bundled, "static"],
+      ["disabled-owner", "disabled", bundled, "static"],
+      ["refreshable-owner", "refreshable", bundled, "refreshable"],
+      ["runtime-owner", "runtime", bundled, "runtime"],
+      ["workspace-owner", "workspace", path.join(workspaceDir, ".openclaw/extensions"), "static"],
+    ] as const
+  ).map(([pluginId, providerId, parent, discovery]) => {
     const rootDir = path.join(parent, pluginId);
     mkdirSafeDir(rootDir);
     return createColdPluginFixture({
       rootDir,
       pluginId,
       providerId,
-      packageName: `@example/${pluginId}`,
       manifest: {
         channels: [],
         channelConfigs: {},
@@ -68,14 +73,7 @@ function prepareFixture() {
             },
           },
           discovery: { [providerId]: discovery },
-          aliases:
-            pluginId === "catalog-owner"
-              ? {
-                  // The same-name convention must beat this competing alias.
-                  direct: { provider: providerId, baseUrl: url("competing") },
-                  alias: { provider: providerId, api: "openai-responses", baseUrl: url("alias") },
-                }
-              : undefined,
+          aliases: pluginId === "catalog-owner" ? aliases : undefined,
         },
       },
     });
@@ -105,74 +103,58 @@ function prepareFixture() {
     allowCurrent: false,
     preferPersisted: false,
   });
-  const manifestPaths = fixtures.map((fixture) =>
-    path.join(fixture.rootDir, "openclaw.plugin.json"),
-  );
-  return { cfg, env, workspaceDir, metadataSnapshot, fixtures, manifestPaths };
-}
-
-function readRows(
-  fixture: ReturnType<typeof prepareFixture>,
-  providerFilter?: string,
-  cfg = fixture.cfg,
-) {
-  const opens = vi.spyOn(fs, "openSync");
-  const reads = vi.spyOn(fs, "readFileSync");
-  const isManifest = (file: unknown) =>
-    fixture.manifestPaths.includes(file instanceof URL ? fileURLToPath(file) : String(file));
-  try {
-    const output = loadStaticManifestCatalogRowsForList({ ...fixture, cfg, providerFilter });
-    expect(fixture.fixtures.some(isColdPluginRuntimeLoaded)).toBe(false);
+  const manifests = new Set(fixtures.map((f) => path.join(f.rootDir, "openclaw.plugin.json")));
+  function readRows(providerFilter?: string, config = cfg) {
+    const opens = vi.spyOn(fs, "openSync");
+    const reads = vi.spyOn(fs, "readFileSync");
+    const isManifest = (file: unknown) =>
+      manifests.has(file instanceof URL ? fileURLToPath(file) : String(file));
+    const output = loadStaticManifestCatalogRowsForList({
+      cfg: config,
+      env,
+      metadataSnapshot,
+      providerFilter,
+    });
+    expect(fixtures.some(isColdPluginRuntimeLoaded)).toBe(false);
     // Forbidding manifest opens also catches reads through newly pinned descriptors.
     expect.soft(opens.mock.calls.filter(([file]) => isManifest(file))).toEqual([]);
     expect.soft(reads.mock.calls.filter(([file]) => isManifest(file))).toEqual([]);
     return output;
-  } finally {
-    opens.mockRestore();
-    reads.mockRestore();
   }
+  return { cfg, env, workspaceDir, metadataSnapshot, readRows };
 }
 
 it("uses the explicit profile's allowlist instead of process compatibility policy", () => {
-  const fixture = prepareFixture();
-  const processEnv = { OPENCLAW_STATE_DIR: path.join(fixture.workspaceDir, "other-profile") };
-  writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env: fixture.env });
+  const { cfg: baseConfig, env, workspaceDir, readRows } = prepareFixture();
+  const processEnv = { OPENCLAW_STATE_DIR: path.join(workspaceDir, "other-profile") };
+  writeConfigMachineState("plugins.bundledDiscovery", "allowlist", { env });
   writeConfigMachineState("plugins.bundledDiscovery", "compat", { env: processEnv });
   clearBundledDiscoveryModeMemo();
   const cfg: OpenClawConfig = {
-    ...fixture.cfg,
-    plugins: { ...fixture.cfg.plugins, allow: ["unrelated-owner"] },
+    ...baseConfig,
+    plugins: { ...baseConfig.plugins, allow: ["unrelated-owner"] },
   };
   withEnv(processEnv, () =>
-    ["direct", "alias"].forEach((provider) =>
-      expect.soft(readRows(fixture, provider, cfg)).toEqual([]),
-    ),
+    ["direct", "alias"].forEach((provider) => expect.soft(readRows(provider, cfg)).toEqual([])),
   );
 });
 
 it("keeps captured static provider and alias rows after manifest removal without I/O", () => {
-  const fixture = prepareFixture();
-  const coldRows = withEnv(fixture.env, () =>
-    loadStaticManifestCatalogRowsForList({ cfg: fixture.cfg }),
-  );
+  const { cfg, env, metadataSnapshot, readRows } = prepareFixture();
+  const coldRows = withEnv(env, () => loadStaticManifestCatalogRowsForList({ cfg }));
   expect(coldRows.map((row) => row.ref)).toEqual(refs("direct", "disabled", "provider"));
 
   for (const providerFilter of [" PROVIDER ", " ALIAS ", "direct", "disabled"]) {
-    const rows = readRows(fixture, providerFilter).map(({ ref, api, baseUrl }) => ({
-      ref,
-      api,
-      baseUrl,
-    }));
     const provider = providerFilter.trim().toLowerCase();
-    expect(rows).toEqual(
+    expect(readRows(providerFilter)).toMatchObject(
       provider === "disabled" ? [] : [expectedRow(provider, provider === "alias")],
     );
   }
-  const owner = fixture.metadataSnapshot.byPluginId.get("catalog-owner");
+  const owner = metadataSnapshot.byPluginId.get("catalog-owner");
   assert(owner, "missing fixture catalog owner");
   fs.unlinkSync(owner.manifestPath);
-  expect(readRows(fixture, "alias").map((row) => row.ref)).toEqual(refs("alias"));
-  expect(readRows(fixture).map((row) => row.ref)).toEqual(
+  expect(readRows("alias").map((row) => row.ref)).toEqual(refs("alias"));
+  expect(readRows().map((row) => row.ref)).toEqual(
     refs("direct", "disabled", "provider", "workspace"),
   );
 });

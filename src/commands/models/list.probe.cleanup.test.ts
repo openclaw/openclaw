@@ -23,7 +23,11 @@ vi.mock("../../agents/isolated-completion.js", () => ({ runIsolatedCompletion: r
 
 let state: OpenClawTestState;
 let signals: EventEmitter;
-let cfg: OpenClawConfig;
+const provider = {
+  apiKey: "config-key",
+  baseUrl: "https://fixture.invalid/v1",
+  models: [],
+};
 const lockPath = () => state.path("locks", "gateway.state.lock");
 function expectOwnership(held: boolean) {
   expect({
@@ -33,26 +37,10 @@ function expectOwnership(held: boolean) {
 }
 beforeEach(async () => {
   state = await createOpenClawTestState({
-    label: "probe-cleanup",
     env: { OPENCLAW_DISABLE_BUNDLED_PLUGINS: "1" },
   });
   signals = new EventEmitter();
 });
-async function prepareProbe() {
-  cfg = {
-    models: {
-      providers: {
-        "probe-control": {
-          api: "openai-completions",
-          apiKey: "synthetic-config-credential",
-          baseUrl: "https://fixture.invalid/v1",
-          models: [],
-        },
-      },
-    },
-  };
-  await state.writeConfig(cfg);
-}
 afterEach(async () => {
   vi.restoreAllMocks();
   runner.mockReset();
@@ -73,7 +61,9 @@ function stateOwnership() {
   };
 }
 
-function probeParams(concurrency: number) {
+async function probeParams(concurrency: number) {
+  const cfg: OpenClawConfig = { models: { providers: { "probe-control": provider } } };
+  await state.writeConfig(cfg);
   return {
     cfg,
     agentId: "main",
@@ -93,23 +83,13 @@ function probeParams(concurrency: number) {
 }
 
 it("holds state ownership for an in-flight sibling after progress rejects the probe batch", async () => {
-  await prepareProbe();
-  await state.writeAuthProfiles({
-    version: 1,
-    profiles: {
-      "probe-control:stored": {
-        type: "api_key",
-        provider: "probe-control",
-        key: "synthetic-stored-credential",
-      },
-    },
-  });
-  const firstStarted = createDeferredCore();
+  const params = await probeParams(2);
+  const profile = { type: "api_key", provider: "probe-control", key: "stored-key" };
+  await state.writeAuthProfiles({ version: 1, profiles: { "probe-control:stored": profile } });
+  const firstStarted = createDeferredCore<AbortSignal | undefined>();
   const finishFirst = createDeferredCore();
-  let firstSignal: AbortSignal | undefined;
-  runner.mockImplementation(async (params) => {
-    firstSignal = params.abortSignal;
-    firstStarted.resolve();
+  runner.mockImplementation(async ({ abortSignal }) => {
+    firstStarted.resolve(abortSignal);
     await finishFirst.promise;
     return { text: "OK" };
   });
@@ -120,7 +100,7 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
   try {
     operation = parent.track(() =>
       runAuthProbes({
-        ...probeParams(2),
+        ...params,
         onProgress(update) {
           expect(update.total).toBe(2);
           if (update.label && ++starts === 2) {
@@ -130,7 +110,7 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
       }),
     );
     await expect(operation).rejects.toBe(original);
-    await firstStarted.promise;
+    const firstSignal = await firstStarted.promise;
     expectOwnership(true);
     signals.emit("SIGTERM");
     expect(firstSignal?.aborted).toBe(true);
@@ -146,11 +126,11 @@ it("holds state ownership for an in-flight sibling after progress rejects the pr
 });
 
 it("retains the staged directory and releases state ownership when database disposal reports failure", async () => {
-  await prepareProbe();
+  const params = await probeParams(1);
   const original = new Error("synthetic database disposal failure");
   let stagedDir: string | undefined;
-  runner.mockImplementation(async (params) => {
-    stagedDir = params.agentDir;
+  runner.mockImplementation(async ({ agentDir }) => {
+    stagedDir = agentDir;
     return { text: "OK" };
   });
   const dispose = agentDatabaseDisposal.disposeOpenClawAgentDatabaseByPath;
@@ -165,7 +145,7 @@ it("retains the staged directory and releases state ownership when database disp
     });
   const cleanup = createAgentCleanupScope();
   try {
-    await expect(cleanup.run(() => runAuthProbes(probeParams(1)))).rejects.toMatchObject({
+    await expect(cleanup.run(() => runAuthProbes(params))).rejects.toMatchObject({
       cause: original,
     });
     expect(stagedDir).toContain("openclaw-auth-probe-");
