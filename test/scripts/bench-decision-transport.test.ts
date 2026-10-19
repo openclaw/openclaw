@@ -37,6 +37,7 @@ function fixture(candidateResult: Record<string, unknown> = {}) {
   roots.push(root);
   const memory = { rss: 100, heapTotal: 80, heapUsed: 40, external: 10, arrayBuffers: 5 };
   const result = {
+    workload: "decision-transport",
     requests: 2,
     connections: 1,
     responseBytes: 200,
@@ -57,12 +58,15 @@ function fixture(candidateResult: Record<string, unknown> = {}) {
     const source = `console.log(${JSON.stringify(`[bench-decision-transport-result] ${JSON.stringify(output)}`)});`;
     writeFileSync(path.join(directory, "worker.mjs"), source);
     const manifest = {
+      workload: "decision-transport",
+      substitutedModules: [],
       sourceRevision: (side === "baseline" ? "a" : "b").repeat(40),
       node: process.version,
       entry: "worker.mjs",
       lockfileSha256: "c".repeat(64),
       workerSourceSha256: "d".repeat(64),
       harnessSourceSha256: "e".repeat(64),
+      buildSourceSha256: "f".repeat(64),
       outputs: [{ file: "worker.mjs", sha256: createHash("sha256").update(source).digest("hex") }],
     };
     const file = path.join(directory, "manifest.json");
@@ -73,7 +77,7 @@ function fixture(candidateResult: Record<string, unknown> = {}) {
     spawnSync(
       process.execPath,
       [
-        "scripts/bench-decision-transport.mts",
+        "scripts/bench-utility-decision.mts",
         "--baseline",
         manifests[0]!.file,
         "--candidate",
@@ -111,20 +115,23 @@ it("runs serial ABAB samples and reports bounded evidence without unsupported ta
   expect(report.scope).toContain("no model inference, TLS or Gateway startup claims");
 });
 
-it.each(["workerSourceSha256", "harnessSourceSha256", "node"] as const)(
-  "rejects mismatched %s before running samples",
-  (field) => {
-    const { manifests, run } = fixture();
-    const candidate = manifests[1]!;
-    candidate.manifest[field] = "f".repeat(64);
-    writeFileSync(candidate.file, JSON.stringify(candidate.manifest));
-    const result = run();
-    expect(result.status).toBe(1);
-    expect(result.stderr).not.toContain("worker 1/4 start");
-    expect(result.stderr.trim()).toMatch(/\[bench-decision-transport\] FAILED \(exit 1\)$/u);
-    expect(result.stdout).toBe("");
-  },
-);
+it.each([
+  "workerSourceSha256",
+  "harnessSourceSha256",
+  "buildSourceSha256",
+  "node",
+  "workload",
+] as const)("rejects mismatched %s before running samples", (field) => {
+  const { manifests, run } = fixture();
+  const candidate = manifests[1]!;
+  candidate.manifest[field] = "0".repeat(64);
+  writeFileSync(candidate.file, JSON.stringify(candidate.manifest));
+  const result = run();
+  expect(result.status).toBe(1);
+  expect(result.stderr).not.toContain("worker 1/4 start");
+  expect(result.stderr.trim()).toMatch(/\[bench-utility-decision\] FAILED \(exit 1\)$/u);
+  expect(result.stdout).toBe("");
+});
 
 it("rejects changed build output instead of publishing a successful report", () => {
   const { manifests, run } = fixture();

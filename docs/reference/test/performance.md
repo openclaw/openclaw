@@ -196,7 +196,7 @@ and encoding keep their existing runtime behavior.
 
 ## Benchmarks
 
-<Accordion title="Decision transport (scripts/bench-decision-transport.mts)">
+<Accordion title="Decision transport (scripts/bench-utility-decision.mts)">
 
 This instrumented component benchmark calls the registered TypeSafe Decision
 provider against a deterministic loopback HTTP server. It checks normalized
@@ -217,18 +217,18 @@ and visible Linux CPU-quota evidence. Hidden ancestor quotas remain unknown.
 
 Prepare separate, clean source checkouts with their own frozen dependencies for
 the baseline and candidate. Overlay the same benchmark builder, worker, and
-`scripts/lib/{benchmark-harness,arg-utils}.mts` on both checkouts. Build once in
+`scripts/lib/{benchmark-harness,arg-utils,utility-benchmark-workloads}.mts` on both checkouts. Build once in
 each checkout, outside the measured interval:
 
 ```bash
-node --import ./scripts/tsx.mjs scripts/build-decision-transport-bench.mts <source-sha>
+node --import ./scripts/tsx.mjs scripts/build-utility-decision-bench.mts <source-sha>
 ```
 
 Each build prints its manifest path after a two-request correctness smoke test.
 Run both manifests on the same otherwise idle host and Node version:
 
 ```bash
-node scripts/bench-decision-transport.mts \
+node scripts/bench-utility-decision.mts \
   --baseline <baseline-manifest.json> --candidate <candidate-manifest.json> \
   --runs 20 --requests 50 --json --output .artifacts/decision-transport.json
 ```
@@ -254,6 +254,41 @@ exclude that initialization. CPU also includes the loopback server and answer
 checks. Model inference, TLS handshakes, and Gateway startup are not measured.
 RSS is sampled between requests and may miss short peaks. These results are not
 packaged Gateway or end-to-end agent performance evidence.
+
+</Accordion>
+
+<Accordion title="Progress narration work counts (scripts/bench-utility-decision.mts)">
+
+Use the same paired workflow with mode `progress-narration`. It runs the real
+reply-option wrapper, activity notes, cadence and cancellation lifecycle. Only
+`progress-narrator-model.ts` is replaced with a deterministic model fixture.
+The manifest records that replacement and hashes the fixture and build adapter.
+Both sides must use the same workload and benchmark sources.
+
+The schedule covers 41 ordinary tool starts in a five-second burst, a quiet
+tail without a follow-up event, an urgent failure during blocked generation,
+stop and abort during blocked generation, and a new turn without stale intent.
+Date and timers are simulated; model calls settle between cadence boundaries.
+The process supervisor retains a real timeout. After stopping each scenario,
+advance beyond two cadence intervals before resetting timers to detect late work.
+
+The shared runner repeats the schedule in serial ABAB order and rejects divergent
+replicas. Reports include offered events, forwarded callbacks, preparations,
+generation counts, maximum in-flight calls, simulated dispatch positions, model
+inputs and delivered updates. No wall-time, CPU, memory, token or inference-cost
+improvement is claimed from this workload.
+
+Before measuring, require fewer generations for the burst, unchanged event
+forwarding, at most one in-flight generation, and zero updates after stop/abort.
+The quiet tail must reach generation at the twelve-second boundary; urgent
+failure must not wait for that cadence. Report correctness improvements separately
+from reduced work. A missing quiet-tail update is not a cost saving.
+
+For manual builds, include `scripts/lib/bench-narration-model.ts` and
+`scripts/bench-progress-narration-worker.ts` in the overlay, pass
+`progress-narration` after the source SHA to the builder, and pass
+`--workload progress-narration` to the driver. These results measure scheduler
+behavior with synthetic generation, not complete utility inference or delivery.
 
 </Accordion>
 

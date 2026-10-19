@@ -149,6 +149,7 @@ export async function benchmarkDecisionTransport(requests: number) {
     const cpu = process.cpuUsage(cpuBefore);
     assert.equal(received, requests);
     result = {
+      workload: "decision-transport",
       requests,
       connections,
       responseBytes,

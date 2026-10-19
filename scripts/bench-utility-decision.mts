@@ -11,48 +11,14 @@ import {
   runBenchmarkEntrypoint,
   runBenchmarkJobs,
   runBenchmarkWorker,
-  summarizeBenchmarkTimings,
 } from "./lib/benchmark-harness.mts";
 import { readProcessMemoryCapacity } from "./lib/process-memory.mts";
-
-function nonNegative(value: unknown): number {
-  assert(typeof value === "number" && Number.isFinite(value) && value >= 0);
-  return value;
-}
-
-function memory(value: unknown) {
-  assert(isRecord(value), "Missing memory snapshot");
-  return Object.fromEntries(
-    ["rss", "heapTotal", "heapUsed", "external", "arrayBuffers"].map((key) => [
-      key,
-      nonNegative(value[key]),
-    ]),
-  );
-}
-
-function parseSample(value: unknown, requests: number) {
-  assert(isRecord(value), "Missing worker result");
-  assert.equal(value.requests, requests);
-  assert.equal(value.socketsAfterPoolClose, 0);
-  assert(Array.isArray(value.warmTimingsMs));
-  assert.equal(value.warmTimingsMs.length, requests - 1);
-  const connections = nonNegative(value.connections);
-  assert(Number.isInteger(connections) && connections >= 1 && connections <= requests);
-  return {
-    requests,
-    connections,
-    responseBytes: nonNegative(value.responseBytes),
-    firstEvaluationMs: nonNegative(value.firstEvaluationMs),
-    warmTimingsMs: value.warmTimingsMs.map(nonNegative),
-    cpuMs: nonNegative(value.cpuMs),
-    peakRssBytes: nonNegative(value.peakRssBytes),
-    memoryBefore: memory(value.memoryBefore),
-    memoryAfter: memory(value.memoryAfter),
-    memoryAfterDrain: memory(value.memoryAfterDrain),
-    idleSocketsBeforeTeardown: nonNegative(value.idleSocketsBeforeTeardown),
-    socketsAfterPoolClose: 0,
-  };
-}
+import {
+  narrationWorkload,
+  parseUtilityBenchmarkWorkload,
+  transportWorkload,
+  type UtilityBenchmarkWorkload,
+} from "./lib/utility-benchmark-workloads.mts";
 
 function hash(value: unknown) {
   assert(typeof value === "string" && /^[a-f0-9]{64}$/u.test(value));
@@ -66,6 +32,12 @@ function artifact(manifestPath: string) {
   assert(typeof value.sourceRevision === "string" && /^[a-f0-9]{40}$/u.test(value.sourceRevision));
   assert.equal(value.node, process.version, "Build and measurement Node versions differ");
   assert.equal(value.entry, "worker.mjs");
+  assert(typeof value.workload === "string");
+  const workload = parseUtilityBenchmarkWorkload(value.workload);
+  assert.deepEqual(
+    value.substitutedModules,
+    workload === "progress-narration" ? ["src/auto-reply/reply/progress-narrator-model.ts"] : [],
+  );
   assert(Array.isArray(value.outputs) && value.outputs.length > 0);
   const outputs = value.outputs.map((output: unknown) => {
     assert(isRecord(output));
@@ -79,11 +51,14 @@ function artifact(manifestPath: string) {
   assert(outputs.some((output) => output.file === value.entry));
   const manifest = {
     sourceRevision: value.sourceRevision,
+    workload,
+    substitutedModules: value.substitutedModules,
     node: process.version,
     entry: "worker.mjs",
     lockfileSha256: hash(value.lockfileSha256),
     workerSourceSha256: hash(value.workerSourceSha256),
     harnessSourceSha256: hash(value.harnessSourceSha256),
+    buildSourceSha256: hash(value.buildSourceSha256),
     outputs,
   };
   return {
@@ -93,48 +68,36 @@ function artifact(manifestPath: string) {
   };
 }
 
-await runBenchmarkEntrypoint("bench-decision-transport", () => {
-  const options = parseBenchmarkOptions(
-    process.argv.slice(2),
-    { baseline: "", candidate: "", runs: 20, requests: 50, json: false, help: false, output: "" },
-    {
-      "--baseline": (opts, value) => {
-        opts.baseline = value;
-      },
-      "--candidate": (opts, value) => {
-        opts.candidate = value;
-      },
-      "--runs": (opts, value) => {
-        opts.runs = parseBenchmarkInteger(value, "--runs", 1, 100);
-      },
-      "--requests": (opts, value) => {
-        opts.requests = parseBenchmarkInteger(value, "--requests", 2, 1000);
-      },
-      "--output": (opts, value) => {
-        opts.output = value;
-      },
-    },
-  );
-  if (options.help) {
-    console.log(
-      "Usage: node scripts/bench-decision-transport.mts --baseline <manifest.json> --candidate <manifest.json> [--runs 20] [--requests 50] [--json] [--output <report.json>]\nBuild each revision with scripts/build-decision-transport-bench.mts first. First evaluation and total CPU include lazy initialization. HTTP proves TCP reuse, not TLS-handshake savings.",
-    );
-    return;
-  }
+function runWorkload<Sample>(
+  definition: {
+    name: UtilityBenchmarkWorkload;
+    scope: string;
+    initialization: string;
+    validate: (value: unknown, requests: number) => Sample;
+    summarize: (rows: Sample[]) => unknown;
+  },
+  options: {
+    baseline: string;
+    candidate: string;
+    runs: number;
+    requests: number;
+    json: boolean;
+    help: boolean;
+    output: string;
+  },
+) {
   assert(options.baseline && options.candidate, "Both build manifests are required");
   const variants = ["baseline", "candidate"] as const;
   const artifacts = {
     baseline: artifact(options.baseline),
     candidate: artifact(options.candidate),
   };
-  assert.equal(
-    artifacts.baseline.manifest.workerSourceSha256,
-    artifacts.candidate.manifest.workerSourceSha256,
-  );
-  assert.equal(
-    artifacts.baseline.manifest.harnessSourceSha256,
-    artifacts.candidate.manifest.harnessSourceSha256,
-  );
+  for (const variant of variants) {
+    assert.equal(artifacts[variant].manifest.workload, definition.name);
+  }
+  for (const field of ["workerSourceSha256", "harnessSourceSha256", "buildSourceSha256"] as const) {
+    assert.equal(artifacts.baseline.manifest[field], artifacts.candidate.manifest[field]);
+  }
   const jobs = Array.from({ length: options.runs }, (_, sample) =>
     variants.map((variant) => ({ variant, sample })),
   ).flat();
@@ -145,7 +108,7 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
   });
   const before = hostSnapshot();
   const samples = runBenchmarkJobs(jobs, {
-    prefix: "bench-decision-transport",
+    prefix: "bench-utility-decision",
     describe: ({ variant, sample }) => `${variant} sample=${sample + 1}`,
     run: ({ variant, sample }) => ({
       variant,
@@ -153,30 +116,19 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
       result: runBenchmarkWorker({
         args: [artifacts[variant].entry, String(options.requests)],
         label: variant,
-        sentinel: "[bench-decision-transport-result] ",
+        sentinel: `[bench-${definition.name}-result] `,
         timeoutMs: 120_000,
-        validate: (value) => parseSample(value, options.requests),
+        validate: (value) => definition.validate(value, options.requests),
       }),
     }),
   });
   const summary = Object.fromEntries(
-    variants.map((variant) => {
-      const rows = samples
-        .filter((sample) => sample.variant === variant)
-        .map((sample) => sample.result);
-      return [
-        variant,
-        {
-          connectionsPerSample: summarizeBenchmarkTimings(rows.map((row) => row.connections)),
-          firstEvaluationMs: summarizeBenchmarkTimings(rows.map((row) => row.firstEvaluationMs)),
-          warmSampleMedianMs: summarizeBenchmarkTimings(
-            rows.map((row) => summarizeBenchmarkTimings(row.warmTimingsMs).p50),
-          ),
-          cpuMs: summarizeBenchmarkTimings(rows.map((row) => row.cpuMs)),
-          peakRssBytes: summarizeBenchmarkTimings(rows.map((row) => row.peakRssBytes)),
-        },
-      ];
-    }),
+    variants.map((variant) => [
+      variant,
+      definition.summarize(
+        samples.filter((sample) => sample.variant === variant).map((sample) => sample.result),
+      ),
+    ]),
   );
   for (const variant of variants) {
     assert.equal(artifact(options[variant]).manifestSha256, artifacts[variant].manifestSha256);
@@ -184,9 +136,9 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
   emitBenchmarkReport(
     {
       schemaVersion: 1,
-      workload: "registered-decision-http-loopback",
-      scope: "instrumented component; no model inference, TLS or Gateway startup claims",
-      initialization: "firstEvaluationMs and cpuMs include lazy client/validator initialization",
+      workload: definition.name,
+      scope: definition.scope,
+      initialization: definition.initialization,
       runtime: { node: process.version, platform: process.platform, arch: process.arch },
       hardware: {
         availableParallelism: availableParallelism(),
@@ -212,7 +164,7 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
         ]),
       ),
       runs: options.runs,
-      requests: options.requests,
+      ...(definition.name === "decision-transport" ? { requests: options.requests } : {}),
       order: "ABAB",
       summary,
       samples,
@@ -220,4 +172,51 @@ await runBenchmarkEntrypoint("bench-decision-transport", () => {
     options,
     (report) => [JSON.stringify(report.summary, null, 2)],
   );
+}
+
+await runBenchmarkEntrypoint("bench-utility-decision", () => {
+  const options = parseBenchmarkOptions(
+    process.argv.slice(2),
+    {
+      baseline: "",
+      candidate: "",
+      workload: "decision-transport" as UtilityBenchmarkWorkload,
+      runs: 20,
+      requests: 50,
+      json: false,
+      help: false,
+      output: "",
+    },
+    {
+      "--baseline": (opts, value) => {
+        opts.baseline = value;
+      },
+      "--candidate": (opts, value) => {
+        opts.candidate = value;
+      },
+      "--workload": (opts, value) => {
+        opts.workload = parseUtilityBenchmarkWorkload(value);
+      },
+      "--runs": (opts, value) => {
+        opts.runs = parseBenchmarkInteger(value, "--runs", 1, 100);
+      },
+      "--requests": (opts, value) => {
+        opts.requests = parseBenchmarkInteger(value, "--requests", 2, 1000);
+      },
+      "--output": (opts, value) => {
+        opts.output = value;
+      },
+    },
+  );
+  if (options.help) {
+    console.log(
+      "Usage: node scripts/bench-utility-decision.mts --baseline <manifest.json> --candidate <manifest.json> [--workload decision-transport|progress-narration] [--runs 20] [--requests 50] [--json] [--output <report.json>]\nBuild each revision with scripts/build-utility-decision-bench.mts <revision> <workload> first. Narration measures deterministic work counts only; transport measures loopback TCP reuse, not TLS or inference.",
+    );
+    return;
+  }
+  if (options.workload === "decision-transport") {
+    runWorkload(transportWorkload, options);
+  } else {
+    runWorkload(narrationWorkload, options);
+  }
 });
