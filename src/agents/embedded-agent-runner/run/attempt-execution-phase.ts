@@ -153,7 +153,10 @@ export async function runEmbeddedAttemptExecutionPhase(
     recoverStalledModelCall: () =>
       isModelCallActive() &&
       interruptIdleRequest(
-        new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+        Object.assign(
+          new Error("LLM idle timeout (diagnostic stuck recovery): no response from model"),
+          { code: "OPENCLAW_SESSION_WATCHDOG" },
+        ),
       ),
     getRunState: () => {
       const terminal = projectAgentRunAttemptTerminal(state.terminal);

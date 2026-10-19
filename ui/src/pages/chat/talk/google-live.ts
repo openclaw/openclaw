@@ -221,12 +221,12 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
     }
   }
 
-  async setVideoEnabled(enabled: boolean): Promise<void> {
-    await this.camera.setEnabled(enabled);
+  setVideoEnabled(enabled: boolean): Promise<void> {
+    return this.camera.setEnabled(enabled);
   }
 
-  async switchCamera(videoDeviceId: string | undefined): Promise<void> {
-    await this.camera.switchDevice(videoDeviceId);
+  switchCamera(videoDeviceId: string | undefined): Promise<void> {
+    return this.camera.switchDevice(videoDeviceId);
   }
 
   stop(options?: { emitClosed?: boolean }): void {
@@ -479,7 +479,6 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
           }
         },
         speakControlResult: (message) => this.sendControlSpeechMessage(message),
-        suppressSpeechForModes: ["cancel"],
       });
     }
     return !this.closed;

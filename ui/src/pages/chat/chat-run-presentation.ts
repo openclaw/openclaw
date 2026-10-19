@@ -121,15 +121,11 @@ class ChatRunPresentation<T extends object> {
       }
       return;
     }
-    this.clearFrame();
+    this.cancelFrame();
     this.notify();
   }
 
   cancelFrame(): void {
-    this.clearFrame();
-  }
-
-  private clearFrame(): void {
     if (this.frame !== null) {
       globalThis.cancelAnimationFrame?.(this.frame);
       this.frame = null;

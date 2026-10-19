@@ -77,10 +77,6 @@ function mayPrefetchHistory(
   );
 }
 
-function sessionActivityAt(row: GatewaySessionRow): number {
-  return row.lastActivityAt ?? row.updatedAt ?? 0;
-}
-
 // Synchronous request/cache owner; the page adapter below owns its lifetime.
 class SessionPrefetcher {
   private connected = false;
@@ -338,7 +334,7 @@ class SessionPrefetcher {
     if (openKeys.has(snapshotKey) || openKeys.size >= MAX_CACHED_CHAT_SESSIONS) {
       return null;
     }
-    const activityAt = sessionActivityAt(row);
+    const activityAt = row.lastActivityAt ?? row.updatedAt ?? 0;
     const savedAt = this.snapshotStore.readSavedAt(snapshotKey);
     if (savedAt !== null && savedAt >= activityAt) {
       return null;

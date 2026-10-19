@@ -12,7 +12,6 @@ import type {
   ChatQueueItem,
   ChatSelectionSource,
 } from "../../lib/chat/chat-types.ts";
-import type { PresentationValue } from "../../lib/presentation.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { isSessionRunVisuallyActive } from "../../lib/session-run-state.ts";
 import { areUiSessionKeysEquivalent } from "../../lib/sessions/session-key.ts";
@@ -83,7 +82,6 @@ export type ChatProps = Omit<
       sourceMessageId?: string,
     ) => Promise<boolean>;
     getQueue?: () => readonly ChatQueueItem[];
-    presented?: PresentationValue;
     historyState?: ChatState;
     awaitingActivity?: boolean;
     environmentStartStatus?: import("../../../../packages/gateway-protocol/src/schema/environments.js").WorkerEnvironmentStartStatus;

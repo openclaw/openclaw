@@ -103,10 +103,6 @@ const cronInventoryScopes = new WeakMap<
 >();
 const cronInventoryRequests = new WeakMap<CronJobsState<unknown>, object>();
 
-function isCronJobsScopeCurrent(state: CronJobsState<unknown>): boolean {
-  return cronInventoryScopes.get(state) === (state.cronSessionFilter ?? state.cronAgentId);
-}
-
 export function retireCronJobsRequest(state: CronJobsState<unknown>) {
   cronInventoryRequests.delete(state);
   state.cronLoading = false;
@@ -192,7 +188,7 @@ function applyCronJobsEvent<Row extends CronInventoryJob>(
     state.cronJobsError ||
     state.cronJobsHasMore ||
     state.cronJobs.length !== state.cronJobsTotal ||
-    !isCronJobsScopeCurrent(state) ||
+    !(cronInventoryScopes.get(state) === (state.cronSessionFilter ?? state.cronAgentId)) ||
     state.cronJobsLastStatusFilter !== "all" ||
     !isRecord(payload) ||
     !["started", "finished", "scheduled"].includes(String(payload.action)) ||

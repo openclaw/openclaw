@@ -150,6 +150,11 @@ import fs from "node:fs";
 import path from "node:path";
 const [registry, root] = process.argv.slice(2);
 for (const name of ["@openclaw/codex", "@openclaw/discord", "@openclaw/whatsapp"]) {
+  const packageResponse = await fetch(registry + "/" + encodeURIComponent(name));
+  assert.equal(packageResponse.status, 200, name + " metadata must be available");
+  const packageMetadata = await packageResponse.json();
+  assert.equal(packageMetadata["dist-tags"].beta, "2026.10.6-first-hop.0");
+  assert.equal(packageMetadata["dist-tags"].latest, "2026.10.6-first-hop.0");
   for (const version of ["2026.10.5", "2026.10.6-first-hop.0"]) {
     const response = await fetch(registry + "/" + encodeURIComponent(name) + "/" + version);
     assert.equal(response.status, 200, name + "@" + version + " must converge");

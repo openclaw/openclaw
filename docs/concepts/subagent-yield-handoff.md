@@ -208,6 +208,10 @@ owner, so callbacks from the closed Gateway cannot settle the recovered wake.
   holds it is not reported to that turn either.
 - **Descendant settlement.** Active descendants resume settlement through
   completion events, without periodic wake retries or retry-state writes.
+  A wave that owes no requester continuation retires before waiting on other
+  descendants. In particular, an individually delivered single child without a
+  yielded continuation does not retain a wake behind running siblings. Delivered
+  members of a grouped or yielded continuation remain owned by that batch.
   A frozen batch with terminal descendants whose delivery remains unresolved
   gets one fallback timer, five minutes after the latest recorded completion
   in the batch's descendant tree. Settlement events can release the wait

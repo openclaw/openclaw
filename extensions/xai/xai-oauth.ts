@@ -316,7 +316,7 @@ async function requestXaiDeviceCode(
 }
 
 function resolveNextXaiDeviceCodePollDelayMs(intervalMs: number, deadlineMs: number): number {
-  const remainingMs = Math.max(0, deadlineMs - Date.now());
+  const remainingMs = Math.max(0, deadlineMs - performance.now());
   return Math.min(Math.max(intervalMs, XAI_DEVICE_CODE_MIN_INTERVAL_MS), remainingMs);
 }
 
@@ -328,10 +328,10 @@ async function pollXaiDeviceCodeToken(
     intervalMs: number;
   } & XaiOAuthFetchOptions,
 ): Promise<XaiOAuthTokenResponse> {
-  const deadlineMs = Date.now() + params.expiresInMs;
+  const deadlineMs = performance.now() + params.expiresInMs;
   let intervalMs = params.intervalMs;
 
-  while (Date.now() < deadlineMs) {
+  while (performance.now() < deadlineMs) {
     const result = await fetchXaiOAuth(
       requireTrustedXaiOAuthEndpoint(params.tokenEndpoint, "token endpoint"),
       params,

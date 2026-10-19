@@ -57,10 +57,6 @@ function sessionRouteHints(location: RouteLocation) {
   };
 }
 
-function isPreferenceDerivedFace(location: RouteLocation): boolean {
-  return new URLSearchParams(location.search).get(SESSION_FACE_PREFERENCE_PARAM) === "1";
-}
-
 function locationWithoutSearchParam(location: RouteLocation, key: string): RouteLocation {
   const params = new URLSearchParams(location.search);
   params.delete(key);
@@ -294,7 +290,8 @@ export async function loadChatRoute(
     signal.throwIfAborted();
   }
   const routeLocation = resolvedTarget.location;
-  const preferenceDerived = isPreferenceDerivedFace(routeLocation);
+  const preferenceDerived =
+    new URLSearchParams(routeLocation.search).get(SESSION_FACE_PREFERENCE_PARAM) === "1";
   const presentation = {
     context,
     isResolutionSourceCurrent,

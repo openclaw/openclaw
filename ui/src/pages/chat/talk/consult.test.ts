@@ -389,7 +389,6 @@ describe("RealtimeTalkSession consult handoff", () => {
       } as never,
       text: "cancel that",
       speakControlResult,
-      suppressSpeechForModes: ["cancel"],
     });
 
     expect(request).toHaveBeenCalledWith("talk.client.steer", {

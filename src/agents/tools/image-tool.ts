@@ -222,12 +222,6 @@ function resolveImageModelConfigForTool(params: {
   });
 }
 
-if (process.env.VITEST || process.env.NODE_ENV === "test") {
-  (globalThis as Record<PropertyKey, unknown>)[Symbol.for("openclaw.imageToolTestApi")] = {
-    resolveImageModelConfigForTool,
-  };
-}
-
 export function createImageTool(options?: {
   config?: OpenClawConfig;
   agentId?: string;

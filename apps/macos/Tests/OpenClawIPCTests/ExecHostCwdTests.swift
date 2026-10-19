@@ -15,6 +15,7 @@ struct ExecHostCwdTests {
             file.defaults = ExecApprovalsDefaults(security: .full, ask: .off)
             return ExecApprovalsSQLiteMutation(value: (), documentToWrite: file)
         }
+        try ExecApprovalsSocketTestSupport.seedLocalCredentials(in: stateDirectoryURL)
         let response = await ExecHostExecutor.handle(ExecHostRequest(
             command: ["/bin/pwd", "-P"],
             cwd: cwd,
@@ -47,7 +48,7 @@ struct ExecHostCwdTests {
     }
 
     @Test func `cwd snapshot refuses files symlink loops and inaccessible paths`() throws {
-        let root = FileManager.default.temporaryDirectory.appendingPathComponent("openclaw-cwd-\(UUID().uuidString)")
+        let root = temporaryDirectoryForTests().appendingPathComponent("openclaw-cwd-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: root) }
         let file = root.appendingPathComponent("file")

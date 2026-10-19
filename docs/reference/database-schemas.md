@@ -23,7 +23,12 @@ fragments, and keeps engine schema versions in lockstep. See
 [shared-state schema generation](/reference/database-schemas/storage-changes#shared-state-postgresql-schema-generation)
 for catalog equivalence and the portable v22 identity columns.
 
-The Gateway process is the single owner of every OpenClaw database and its state.
+The Gateway process owns shared and agent databases and their state. Local client
+private identities, token caches, and native socket secrets have a separate owner
+at `<resolved-client-root>/client/credentials.sqlite`, even with a PostgreSQL or
+remote Gateway. The active native app routes authenticated requests to bounded local operations;
+app-absent clients acquire exclusive local custody for each operation. See
+[local client credentials](/reference/database-schemas/versioning#local-client-credentials).
 Its workers and native handles share that ownership. Committed write receipts
 invalidate in-process row caches before their next use; a cache without complete
 writer coverage must use a direct read instead. Runtime reads do not probe foreign
@@ -99,10 +104,11 @@ outside the transaction can refresh those facts through the existing owner.
 Native SQLite initialization reads the loaded library's version and extension
 capability in one query before admitting real state databases. Auth-profile
 readers install their lock-wait timeout at connection open.
-On first Gateway startup, a version-zero database containing only recognized
-native bootstrap tables is completed before runtime history is read. This uses
-the existing schema owner and preserves the native rows; it does not repair
-historical installations during ordinary startup.
+Before Gateway runtime history is read, the schema owner migrates a captured
+canonical database containing only recognized native bootstrap tables. It copies
+the credentials into the local store before retiring their shared tables.
+Independent native sources remain unchanged; ordinary startup does not repair
+historical installations without migration custody.
 Quarantine decision readers and writers set their existing lock-wait timeout at connection
 open. The quarantine store's format and each target's decision are loaded once
 per physical store. Record and clear operations publish the committed decision

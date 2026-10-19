@@ -146,7 +146,6 @@ export function applyChatAgentOwnerTransition(
   host.chatAvatarStatus = null;
   host.chatAvatarReason = null;
   host.modelAuthStatusResult = null;
-  host.modelAuthStatusError = null;
   // Global chats retain their session key across agent selection. Replace agent-owned
   // bindings now so their old fences reject later publications.
   void refreshChatMetadata(host, { automatic: true });
@@ -406,13 +405,11 @@ export async function refreshChatModelAuthStatus(host: ChatPageHost) {
       return;
     }
     host.modelAuthStatusResult = result;
-    host.modelAuthStatusError = result.unavailable?.message ?? null;
-  } catch (err) {
+  } catch {
     if (!ownsRequest()) {
       return;
     }
     host.modelAuthStatusResult = { ts: 0, providers: [] };
-    host.modelAuthStatusError = formatUiError(err);
   }
 }
 
@@ -664,9 +661,7 @@ async function refreshChat(
   void Promise.allSettled([sessionsRefresh, startupMetadataRefresh]);
   if (opts?.awaitHistory === true) {
     await historyRefresh;
-    return;
   }
-  await Promise.resolve();
 }
 
 export function refreshPageChat(host: ChatPageHost, opts?: ChatRefreshOptions) {

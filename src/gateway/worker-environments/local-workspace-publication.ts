@@ -1,8 +1,8 @@
+import { serialize } from "node:v8";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { Selectable } from "kysely";
-import { hasSqliteCommitReceiptCoverage } from "../../infra/sqlite-commit-receipt.js";
+import { SQLITE_WORKER_MAX_MESSAGE_BYTES } from "../../infra/sqlite-worker-contract.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
-import { createStateDomainPublication } from "../../state/state-domain-publication.js";
 
 type LocalWorkspaceProjection = Selectable<DB["local_workspace_projections"]>;
 
@@ -33,41 +33,20 @@ function isRow(value: unknown): value is LocalWorkspaceProjection {
   );
 }
 
-export const localWorkspacePublication = createStateDomainPublication<LocalWorkspaceProjection>({
-  domain: "local-workspace",
-  keyOf: (value) => value.worktree_id,
-  isValue: isRow,
-});
+/** Undefined is unknown coverage; only an explicit null certifies deletion. */
+export function boundLocalWorkspaceCommit(value: LocalWorkspaceProjection | null | undefined) {
+  return serialize(value).byteLength <= SQLITE_WORKER_MAX_MESSAGE_BYTES / 4 ? value : undefined;
+}
 
-export function readLocalWorkspaceCommit(value: unknown, operationId: string, id: string) {
-  if (!isRecord(value) || value.operationId !== operationId || !isRecord(value.receipt)) {
-    throw new Error("Local workspace has no committed receipt");
-  }
-  const receipt = value.receipt;
-  if (
-    !isRecord(receipt.source) ||
-    typeof receipt.source.identity !== "string" ||
-    typeof receipt.source.incarnation !== "string" ||
-    !hasSqliteCommitReceiptCoverage(receipt, {
-      source: { identity: receipt.source.identity, incarnation: receipt.source.incarnation },
-      domain: "local-workspace",
-      keys: [id],
-    }) ||
-    !(receipt.facts instanceof Map)
-  ) {
+export function readLocalWorkspaceCommit(value: unknown, id: string) {
+  if (value === undefined) {
     throw new Error("Local workspace commit coverage is incomplete");
   }
-  const fact: unknown = receipt.facts.get(id);
-  if (isRecord(fact) && fact.kind === "absent") {
+  if (value === null) {
     return undefined;
   }
-  if (
-    isRecord(fact) &&
-    fact.kind === "postimage" &&
-    isRow(fact.value) &&
-    fact.value.worktree_id === id
-  ) {
-    return Object.freeze(fact.value);
+  if (isRow(value) && value.worktree_id === id) {
+    return Object.freeze(value);
   }
   throw new Error("Local workspace committed row is invalid");
 }

@@ -12,7 +12,7 @@ import { t } from "../../../lib/reactive/i18n.ts";
 import "../../../components/tooltip.ts";
 import { ChatAvatar, type ChatAvatarProps } from "../chat-avatar-view.tsx";
 import type { ChatSubagentWait } from "../chat-subagent-wait.ts";
-import type { GroupedMessageOptions } from "./chat-message-bubble-options.ts";
+import type { MessageRenderOptions } from "./chat-message-bubble-options.ts";
 import { GroupedMessage } from "./chat-message-bubble-view.tsx";
 import {
   prepareChatMessageRender,
@@ -38,39 +38,7 @@ export type StreamGroupPart = Extract<
   { kind: "stream" } | { kind: "reading-indicator" } | { kind: "question" }
 >;
 
-type StreamMessageOptions = Pick<
-  GroupedMessageOptions,
-  | "onOpenReply"
-  | "replyNavigationId"
-  | "sessionKey"
-  | "presented"
-  | "boardProvider"
-  | "widgetLayout"
-  | "agentId"
-  | "runActive"
-  | "asyncQuestions"
-  | "mediaOwner"
-  | "canvasPluginSurfaceUrl"
-  | "resourceBasePath"
-  | "mediaPolicyKey"
-  | "connectionEpoch"
-  | "assistantAttachmentAuthToken"
-  | "resolveArtifactDownload"
-  | "getTurnVideoMessages"
-  | "onRequestOpenImage"
-  | "onOpenImage"
-  | "onAssistantAttachmentLoaded"
-  | "embedSandboxMode"
-  | "allowExternalEmbedUrls"
-  | "fetchLinkFavicon"
-  | "pluginToolIcons"
-  | "githubRepo"
-  | "githubRepositories"
-  | "onOpenWorkspaceFile"
-  | "onPermissionRetry"
->;
-
-export type StreamGroupOptions = StreamMessageOptions & {
+export type StreamGroupOptions = MessageRenderOptions & {
   resolveReplyPreview?: ReplyPreviewLookup;
   branding?: ThemeBranding;
   bubbleMode?: boolean;

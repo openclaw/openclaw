@@ -158,7 +158,6 @@ export function createPageState(
     chatBranches: [],
     chatBranchesSessionKey: null,
     chatBranchesConnectionEpoch: null,
-    chatThinkingLevel: null,
     chatReplyTarget: null,
     senderAgentAvatars: undefined,
     chatAvatarUrl: null,
@@ -192,8 +191,6 @@ export function createPageState(
     chatReadingHistory: false,
     sidebarLayout: normalizeSidebarLayout(settings.sidebarSessionLayouts?.[sidebarSessionKey]),
     sidebarContent: null,
-    sidebarFocusPanelId: settings.sidebarSessionActivePanels?.[sidebarSessionKey] ?? "",
-    sidebarFocusVersion: 0,
     imageLightbox: null,
   } satisfies Partial<ChatPageHost>;
   const state = Object.assign(errors, presentedFields, {
@@ -235,7 +232,6 @@ export function createPageState(
     waitingApprovalStatuses: new Map(),
     waitingApprovalResolvedIds: new Set(),
     modelAuthStatusRequestVersion: 0,
-    modelAuthStatusError: null,
     sessionsResult: null,
     sessionsResultAgentId: null,
     sessionsArchivedFilter: "active",
@@ -482,8 +478,6 @@ export function createPageState(
     if (!normalizedPanelId) {
       return;
     }
-    state.sidebarFocusPanelId = normalizedPanelId;
-    state.sidebarFocusVersion += 1;
     const selected = state.sidebarLayout.columns
       .flatMap((column) => column.panels)
       .find((panel) => panel.id === normalizedPanelId)?.slot;

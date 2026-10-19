@@ -515,8 +515,6 @@ function toImageFileName(fileName: string | undefined, mimeType: string): string
     : path.format({ dir: parsed.dir, name: parsed.name || trimmed, ext });
 }
 
-const DEFAULT_JPEG_SIDES = [2048, 1536, 1280, 1024, 800] as const;
-const DEFAULT_JPEG_QUALITIES = [80, 70, 60, 50, 40] as const;
 const DEFAULT_VISION_MAX_SIDE = 2048;
 const LOW_IMAGE_SIDE_FALLBACKS = [640, 512, 384, 256, 192, 128] as const;
 
@@ -690,29 +688,25 @@ function buildDescendingLadder(maxSide: number, values: readonly number[]): numb
   return uniqueValues(fallbackLadder.filter((value) => value > 0)).toSorted((a, b) => b - a);
 }
 
+const IMAGE_COMPRESSION_GRIDS = {
+  efficient: { sides: [1024, 800], qualities: [70, 60, 50, 40] },
+  high: {
+    sides: [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800],
+    qualities: [92, 85, 78, 70, 62, 52, 42],
+  },
+  balanced: { sides: [2048, 1536, 1280, 1024, 800], qualities: [80, 70, 60, 50, 40] },
+} as const;
+
 function resolveImageCompressionGrid(policy?: ImageCompressionPolicy): {
   sides: number[];
   qualities: number[];
 } {
   const preference = effectiveImageQualityPreference(policy);
-  const side = sideForPreference(preference, policy);
-  switch (preference) {
-    case "efficient":
-      return {
-        sides: buildDescendingLadder(side, [1024, 800]),
-        qualities: [70, 60, 50, 40],
-      };
-    case "high":
-      return {
-        sides: buildDescendingLadder(side, [3072, 2576, 2048, 1800, 1536, 1280, 1024, 800]),
-        qualities: [92, 85, 78, 70, 62, 52, 42],
-      };
-    default:
-      return {
-        sides: buildDescendingLadder(side, [...DEFAULT_JPEG_SIDES]),
-        qualities: [...DEFAULT_JPEG_QUALITIES],
-      };
-  }
+  const grid = IMAGE_COMPRESSION_GRIDS[preference];
+  return {
+    sides: buildDescendingLadder(sideForPreference(preference, policy), grid.sides),
+    qualities: [...grid.qualities],
+  };
 }
 
 /** Optimizes image bytes for web-media delivery while preserving accepted original formats when possible. */

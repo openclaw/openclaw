@@ -7,6 +7,11 @@ import type { GatewayRequestHandlerOptions } from "./types.js";
 vi.mock("../../infra/device-identity-async.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../infra/device-identity-async.js")>()),
   loadChatRequestIdentityKeyAsync: vi.fn(async (): Promise<Buffer | null> => Buffer.alloc(32, 7)),
+  loadOrCreateProcessDeviceIdentityAsync: vi.fn(async () => ({
+    deviceId: "chat-normalization-device",
+    publicKeyPem: "chat-normalization-public-key",
+    privateKeyPem: "chat-normalization-private-key",
+  })),
 }));
 
 function copilotClient(caps: string[] = []): NonNullable<GatewayRequestHandlerOptions["client"]> {

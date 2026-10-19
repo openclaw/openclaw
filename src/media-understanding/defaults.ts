@@ -13,7 +13,7 @@ import {
   resolveDefaultMediaModelFromRegistry,
 } from "./provider-registry-metadata.js";
 import type { MediaUnderstandingCapability, MediaUnderstandingProvider } from "./types.js";
-export { CLI_OUTPUT_MAX_BUFFER, DEFAULT_TIMEOUT_SECONDS } from "./defaults.constants.js";
+export { CLI_OUTPUT_MAX_BUFFER } from "./defaults.constants.js";
 
 // Defaults follow the selected immutable manifest generation, including retained
 // owners. Configured model overrides remain outside this projection.

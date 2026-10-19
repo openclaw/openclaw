@@ -17,7 +17,6 @@ import { scopedAgentIdForSession, visibleSessionMatches } from "../../lib/sessio
 import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
 import { showToast } from "../../lib/toast.ts";
 import { uploadsEnabled, uploadsDisabledMessage } from "../../lib/uploads.ts";
-import { composeBrowserAnnotationContext } from "./browser-annotation-context.ts";
 import {
   dispatchChatSlashCommand,
   requireChatSessionAction,
@@ -72,7 +71,6 @@ import {
   prepareOutboxPayload,
   retireOutboxPayload,
 } from "./outbox-payloads.ts";
-import { controlUiNowMs } from "./performance.ts";
 import { activeQueuedMessageEdit, retireEditedQueuedMessageSource } from "./queued-message-edit.ts";
 import {
   handleAbortChat,
@@ -130,7 +128,7 @@ export async function handleSendChat(
   const draftMentions = messageOverride == null ? previousMentions : opts?.mentionsOverride;
   const submitted = trimHumanMentions(rawMessage, draftMentions);
   const userMessage = intent ? rawMessage : submitted.text;
-  const submittedAtMs = controlUiNowMs();
+  const submittedAtMs = performance.now();
   const submittedSessionKey = host.sessionKey;
   const submittedConnectionIsCurrent = captureChatConnectionOwner(host, false);
   const submittedOwnerIsCurrent = captureOutboxPayloadOwner(host);
@@ -214,7 +212,14 @@ export async function handleSendChat(
   const message =
     rawParsedCommand || intent
       ? userMessage
-      : composeBrowserAnnotationContext(userMessage, attachmentsToSend);
+      : [
+          ...attachmentsToSend.map(({ browserAnnotation }) =>
+            browserAnnotation?.modelContext.trim(),
+          ),
+          userMessage,
+        ]
+          .filter(Boolean)
+          .join("\n\n");
   // Slash commands may use ordinary files, but annotations belong to the next model prompt.
   const deliveredAttachments = rawParsedCommand
     ? attachmentsToSend.filter(

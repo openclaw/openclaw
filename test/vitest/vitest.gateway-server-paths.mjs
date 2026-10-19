@@ -146,6 +146,7 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/operator-approval-mcp-grants.test.ts",
   "src/gateway/operator-approval-placement-grants.test.ts",
   "src/gateway/operator-approval-receipts.test.ts",
+  "src/gateway/operator-approval-runtime-token.test.ts",
   "src/gateway/operator-approval-session-events.test.ts",
   "src/gateway/operator-approval-standing-grants.test.ts",
   "src/gateway/operator-approval-store.execution-identity.test.ts",
@@ -320,7 +321,6 @@ export const gatewayDatabaseWorkerTestFiles = [
   "src/gateway/sessions-history-http.model-policy.test.ts",
   "src/gateway/sessions-history-http.physical-source.test.ts",
   "src/gateway/sessions-resolve-store.test.ts",
-  "src/gateway/setup-inference.first-signin.integration.test.ts",
   "src/gateway/skill-library-authoring.test.ts",
   "src/gateway/startup-local-cli-pairing.test.ts",
   "src/gateway/talk/client-agent-consult.terminal-writes.test.ts",
@@ -588,6 +588,8 @@ export const gatewayMethodsTestExclude = [
 export const gatewayServerIsolatedTestFiles = [
   // Real provider and subagent lifecycle registrations must survive the whole scenario.
   "src/gateway/gateway.prompt-cache.test.ts",
+  // Native provider imports must not retain a previous file's retired shared-state owner.
+  "src/gateway/setup-inference.first-signin.integration.test.ts",
   // Sibling threads can fork and retain listener sockets until exec on Linux.
   "src/gateway/server/plugin-legacy-listeners.test.ts",
   // Native source captures must not retain this fixture's forbidden process constructors.

@@ -75,7 +75,7 @@ enum TestIsolation {
                                            !configPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                                            !env.keys.contains("OPENCLAW_STATE_DIR")
         {
-            FileManager().temporaryDirectory
+            temporaryDirectoryForTests()
                 .appendingPathComponent("openclaw-config-state-\(UUID().uuidString)", isDirectory: true)
         } else {
             nil
@@ -141,7 +141,7 @@ enum TestIsolation {
     }
 
     nonisolated static func tempConfigPath() -> String {
-        FileManager().temporaryDirectory
+        temporaryDirectoryForTests()
             .appendingPathComponent("openclaw-test-config-\(UUID().uuidString).json")
             .path
     }
@@ -153,7 +153,7 @@ struct ExecApprovalsStateIsolationTrait: TestTrait, TestScoping {
         testCase: Test.Case?,
         performing function: @Sendable () async throws -> Void) async throws
     {
-        let stateDirectory = FileManager().temporaryDirectory
+        let stateDirectory = temporaryDirectoryForTests()
             .appendingPathComponent("openclaw-approvals-state-\(UUID().uuidString)", isDirectory: true)
         try FileManager().createDirectory(at: stateDirectory, withIntermediateDirectories: true)
         defer { try? FileManager().removeItem(at: stateDirectory) }

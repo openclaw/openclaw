@@ -105,6 +105,7 @@ export function admitPostgresPhysicalFacts(params: {
   expected?: readonly PostgresCatalogFact[];
   schema?: StoreSchema;
   recordSchema?: boolean;
+  preserveSchemaSeal?: boolean;
 }): PostgresPhysicalFacts {
   const retained = getPostgresPhysicalFacts(params.db);
   if (retained) {
@@ -126,7 +127,13 @@ export function admitPostgresPhysicalFacts(params: {
     if (params.recordSchema) {
       recordPostgresSchema(params.db, params.namespace, schema, snapshot);
     } else {
-      verifyPostgresSchema(params.db, params.namespace, schema, snapshot);
+      verifyPostgresSchema(
+        params.db,
+        params.namespace,
+        schema,
+        snapshot,
+        params.preserveSchemaSeal,
+      );
     }
     retainPostgresSchema(params.db, schema);
   }
