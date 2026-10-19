@@ -9,7 +9,7 @@ import {
   MAX_WORKSPACE_MANIFEST_BYTES,
 } from "./workspace-inventory-limits.js";
 import { workspacePathAncestors } from "./workspace-path-ancestors.js";
-import { isDerivedWorkspacePath } from "./workspace-path-exclusions.js";
+import { projectWorkspaceEntries } from "./workspace-path-exclusions.js";
 
 export type WorkerWorkspaceManifestEntry =
   | { path: string; type: "file"; mode: number; size: number; sha256: string }
@@ -168,7 +168,6 @@ function validateAndProjectEntries(values: unknown[]): {
     throw new Error("Worker workspace manifest has too many entries");
   }
   const rawEntries = values.map(parseRawEntry);
-  const stagedInputs = stagedInputDirectoriesFromEntries(rawEntries);
   let previous = "";
   const recordBudget = createManifestBudget();
   const byPath = new Map<string, RawManifestEntry>();
@@ -185,8 +184,9 @@ function validateAndProjectEntries(values: unknown[]): {
     byPath.set(entry.path, entry);
     previous = entry.path;
   }
-  const eligible = rawEntries.filter(
-    (entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
+  const stagedInputs = stagedInputDirectoriesFromEntries(rawEntries);
+  const eligible = projectWorkspaceEntries(rawEntries, (entryPath) =>
+    isStagedInputPath(entryPath, stagedInputs),
   );
   return {
     entries: eligible.filter((entry) => entry.type !== "directory"),
@@ -195,8 +195,7 @@ function validateAndProjectEntries(values: unknown[]): {
 }
 
 export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManifest): string {
-  const stagedInputs = stagedInputDirectoriesFromEntries(manifest.entries);
-  const entries = [
+  const rawEntries = [
     ...(manifest.directories ?? []).map((entryPath) => ({
       path: entryPath,
       type: "directory" as const,
@@ -205,11 +204,11 @@ export function serializeWorkerWorkspaceManifest(manifest: WorkerWorkspaceManife
       mode: 0o700,
     })),
     ...manifest.entries,
-  ]
-    .filter(
-      (entry) => !isDerivedWorkspacePath(entry.path, isStagedInputPath(entry.path, stagedInputs)),
-    )
-    .toSorted(compareManifestPaths);
+  ].toSorted(compareManifestPaths);
+  const stagedInputs = stagedInputDirectoriesFromEntries(rawEntries);
+  const entries = projectWorkspaceEntries(rawEntries, (entryPath) =>
+    isStagedInputPath(entryPath, stagedInputs),
+  );
   if (entries.length > MAX_WORKSPACE_INVENTORY_ENTRIES) {
     throw new Error("Worker workspace manifest has too many entries");
   }

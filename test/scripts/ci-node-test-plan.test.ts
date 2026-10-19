@@ -3294,8 +3294,8 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
       listTrackedTestFiles: (root: string) =>
         inventory.filter((file) => root === "." || file.startsWith(`${root}/`)),
     }));
-    vi.doMock("../../scripts/lib/ci-test-timings.mts", () => ({
-      ...testTimings,
+    vi.doMock("../../scripts/lib/ci-test-timings.mts", async (importOriginal) => ({
+      ...(await importOriginal<typeof import("../../scripts/lib/ci-test-timings.mts")>()),
       readCompactGroupTimings: () => ({}),
       readRuntimePlacementTimings: () => [],
     }));
