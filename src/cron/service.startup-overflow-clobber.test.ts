@@ -1,11 +1,12 @@
 import { MAX_DATE_TIMESTAMP_MS } from "@openclaw/normalization-core/number-coercion";
 import { describe, expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { start } from "./service/ops-lifecycle.js";
 import { status } from "./service/ops-read.js";
-import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
+import type { CronServiceDeps } from "./service/state.js";
 import { onTimer, runMissedJobs } from "./service/timer.test-support.js";
 import { loadCronStore, saveCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
@@ -17,14 +18,9 @@ const { logger: noopLogger, makeStorePath } = setupCronServiceSuite({
 });
 
 function makeState(storePath: string, overrides: Partial<CronServiceDeps>) {
-  return createCronServiceState({
-    scheduler: createTestGatewayScheduler(),
+  return createCronRegressionState({
     storePath,
-    cronEnabled: true,
     log: noopLogger,
-    nowMs: () => Date.now(),
-    enqueueSystemEvent: vi.fn(),
-    requestHeartbeat: vi.fn(),
     runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     ...overrides,
   });
@@ -32,18 +28,13 @@ function makeState(storePath: string, overrides: Partial<CronServiceDeps>) {
 
 describe("CronService startup catch-up repair scoping", () => {
   function createJob(id: string, nextRunAtMs: number, schedule: CronJob["schedule"]): CronJob {
-    return {
+    return makeCronJob({
       id,
-      name: `job-${id}`,
-      enabled: true,
-      createdAtMs: nextRunAtMs - 60_000,
-      updatedAtMs: nextRunAtMs - 60_000,
       schedule,
       sessionTarget: "main",
-      wakeMode: "next-heartbeat",
       payload: { kind: "systemEvent", text: `tick-${id}` },
       state: { nextRunAtMs },
-    };
+    });
   }
   const createHourlyCronJob = (id: string, next: number) =>
     createJob(id, next, { kind: "cron", expr: "0 * * * *", tz: "UTC" });

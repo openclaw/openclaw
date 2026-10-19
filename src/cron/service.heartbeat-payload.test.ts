@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { waitForAbortSignal } from "../infra/abort-signal.js";
 import {
   requestHeartbeatAndWait as requestQueuedHeartbeatAndWait,
   setHeartbeatWakeHandler,
-  type HeartbeatRunResult,
   type HeartbeatWakeHandler,
 } from "../infra/heartbeat-wake.js";
 import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
@@ -21,9 +21,9 @@ type HeartbeatOptions = Omit<
   "scheduler" | "storePath" | "logger" | "onEvent"
 >;
 
-let active: (HeartbeatHarness & { cleanup: () => Promise<void> }) | undefined;
+let active: HeartbeatHarness | undefined;
 async function startHeartbeatCron(options: HeartbeatOptions = {}) {
-  const { storePath, cleanup } = await makeStorePath();
+  const { storePath } = await makeStorePath();
   const events: CronEvent[] = [];
   const context = createStartedCronServiceWithFinishedBarrier({
     scheduler: createTestGatewayScheduler(),
@@ -32,7 +32,7 @@ async function startHeartbeatCron(options: HeartbeatOptions = {}) {
     ...options,
     onEvent: (event) => events.push(structuredClone(event)),
   });
-  active = { ...context, cleanup };
+  active = context;
   await context.cron.start();
   return { ...context, events };
 }
@@ -67,12 +67,9 @@ function expectWake(context: HeartbeatHarness, payload: unknown) {
 
 describe("heartbeat payload execution", () => {
   afterEach(async () => {
-    if (active) {
-      active.cron.stop();
-      await active.cron.waitForIdle();
-      await active.cleanup();
-      active = undefined;
-    }
+    active?.cron.stop();
+    await active?.cron.waitForIdle();
+    active = undefined;
   });
 
   it("fires a system-owned monitor as an interval wake without a system event", async () => {
@@ -156,15 +153,11 @@ describe("heartbeat payload execution", () => {
   it("times out an unsettled heartbeat wake without authoring success", async () => {
     vi.setSystemTime(new Date("2026-08-31T12:00:00Z"));
     const { cron, requestHeartbeatAndWait, events } = await startHeartbeatCron({
-      requestHeartbeatAndWait: async (_request, lifecycle) =>
-        await new Promise<HeartbeatRunResult>((resolve) => {
-          const onAbort = () => resolve({ status: "failed", reason: "heartbeat wake cancelled" });
-          if (lifecycle.abortSignal?.aborted) {
-            onAbort();
-          } else {
-            lifecycle.abortSignal?.addEventListener("abort", onAbort, { once: true });
-          }
-        }),
+      requestHeartbeatAndWait: async (_request, lifecycle) => {
+        expect(lifecycle.abortSignal).toBeInstanceOf(AbortSignal);
+        await waitForAbortSignal(lifecycle.abortSignal);
+        return { status: "failed", reason: "heartbeat wake cancelled" };
+      },
     });
     const job = await addMonitor(cron, 60 * 60_000);
     const runPromise = cron.run(job.id, "force");

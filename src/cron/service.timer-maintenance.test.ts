@@ -6,6 +6,7 @@ import {
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
 import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import { makeCronJob } from "./delivery.test-helpers.js";
 import { loadCronStoreFromDatabase } from "./store/load.kernel.js";
 import { ensureCronRunReceiptSchema } from "./store/run-receipt-store.js";
 import { saveCronStoreInDatabase } from "./store/save.kernel.js";
@@ -53,26 +54,19 @@ afterEach(() => {
 afterAll(async () => fixture?.cleanup());
 
 function job(id: string, overrides: Partial<CronJob>): CronJob {
-  return {
+  return makeCronJob({
     id,
     name: id,
-    enabled: true,
     createdAtMs: NOW - 60_000,
     updatedAtMs: NOW - 60_000,
     schedule: { kind: "every", everyMs: 60_000, anchorMs: NOW - 120_000 },
-    sessionTarget: "isolated",
-    wakeMode: "next-heartbeat",
     payload: { kind: "agentTurn", message: id },
-    state: {},
     ...overrides,
-  };
+  });
 }
 
 function withinWorker<T>(run: () => T): T {
-  return runWithSqliteWorkerStateContext(
-    { environment: { ...fixture.env, OPENCLAW_STATE_DIR: fixture.stateDir } },
-    run,
-  );
+  return runWithSqliteWorkerStateContext({ environment: fixture.env }, run);
 }
 
 function createScheduler(jobs: CronJob[]) {
@@ -100,6 +94,7 @@ function createScheduler(jobs: CronJob[]) {
     ),
   );
   send("cron.schedulerStart");
+  sqliteTransactionLabels.length = 0;
   actors.set(channelName, storeKey);
   return {
     read: () => loadCronStoreFromDatabase(database.db, storeKey).store,
@@ -107,20 +102,17 @@ function createScheduler(jobs: CronJob[]) {
   };
 }
 
-function runTimer(overrides: Partial<CronJob>) {
+function runTimer(overrides: Partial<CronJob>, expectedSweeps = 1) {
   const scheduler = createScheduler([job("timer", overrides)]);
-  sqliteTransactionLabels.length = 0;
   scheduler.tick();
-  return {
-    jobs: scheduler.read().jobs,
-    maintenanceCount: sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned")
-      .length,
-  };
+  expect(sqliteTransactionLabels.filter((label) => label === "cron.schedule-unowned")).toHaveLength(
+    expectedSweeps,
+  );
+  return scheduler.read().jobs[0]!;
 }
 
 it("uses the claimed job postimage for maintenance and the next wake", () => {
   const scheduler = createScheduler([job("due", { state: { nextRunAtMs: NOW } })]);
-  sqliteTransactionLabels.length = 0;
   const result = scheduler.tick();
   expect(result.accepted).toHaveLength(1);
   expect(scheduler.read().jobs[0]?.state.runningAtMs).toBe(NOW);
@@ -130,8 +122,7 @@ it("uses the claimed job postimage for maintenance and the next wake", () => {
 });
 
 it("skips a write sweep for an active due schedule", () => {
-  const result = runTimer({ state: { nextRunAtMs: NOW - 60_000, runningAtMs: NOW } });
-  expect(result.maintenanceCount).toBe(0);
+  runTimer({ state: { nextRunAtMs: NOW - 60_000, runningAtMs: NOW } }, 0);
 });
 
 it("does not recheck natural-next slots during a 1000-job timer tick", () => {
@@ -144,7 +135,6 @@ it("does not recheck natural-next slots during a 1000-job timer tick", () => {
   expect(before.jobs).toHaveLength(1_000);
   const changes = database.db.prepare("SELECT total_changes() AS changes").get();
   const previousRuns = vi.spyOn(Cron.prototype, "previousRuns");
-  sqliteTransactionLabels.length = 0;
   const result = scheduler.tick();
   expect(scheduler.read()).toEqual(before);
   expect(database.db.prepare("SELECT total_changes() AS changes").get()).toEqual(changes);
@@ -162,8 +152,7 @@ it("runs one sweep for a stale backoff slot", () => {
       consecutiveErrors: 1,
     },
   });
-  expect(result.maintenanceCount).toBe(1);
-  expect(result.jobs[0]?.state.nextRunAtMs).toBeGreaterThan(NOW);
+  expect(result.state.nextRunAtMs).toBeGreaterThan(NOW);
 });
 
 it("repairs a stale future trigger cron slot with one sweep", () => {
@@ -173,8 +162,7 @@ it("repairs a stale future trigger cron slot with one sweep", () => {
     payload: { kind: "systemEvent", text: "repair stale future slot" },
     trigger: { script: "json({ fire: false })" },
   });
-  expect(result.maintenanceCount).toBe(1);
-  expect(result.jobs[0]?.state.nextRunAtMs).toBe(NOW + 60_000);
+  expect(result.state.nextRunAtMs).toBe(NOW + 60_000);
 });
 
 it("keeps retrying malformed timed schedules until the third failure disables them", () => {
@@ -183,9 +171,7 @@ it("keeps retrying malformed timed schedules until the third failure disables th
   });
 
   for (let attempt = 1; attempt <= 3; attempt += 1) {
-    const result = runTimer(current);
-    expect(result.maintenanceCount).toBe(1);
-    current = result.jobs[0]!;
+    current = runTimer(current);
     expect(current.state.scheduleErrorCount).toBe(attempt);
     expect(current.enabled).toBe(attempt < 3);
   }

@@ -22,27 +22,11 @@ import { beginAgentDeletionJournal } from "../test-utils/agent-deletion-journal.
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { OpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { runSessionRegistryMaintenance } from "./session-registry-maintenance.js";
-import { saveCronStore } from "./store.js";
+import * as cronStore from "./store.js";
 import { makeCronReceiptJob } from "./store/run-receipt-store.test-support.js";
 
 const DAY_MS = 24 * 60 * 60_000;
 let state: OpenClawTestState;
-const mocks = vi.hoisted(() => ({
-  cronStoreLoadError: undefined as Error | undefined,
-}));
-
-vi.mock("./store.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("./store.js")>();
-  return {
-    ...actual,
-    loadCronJobsStore: async (storePath: string) => {
-      if (mocks.cronStoreLoadError) {
-        throw mocks.cronStoreLoadError;
-      }
-      return actual.loadCronJobsStore(storePath);
-    },
-  };
-});
 
 function writeAgentDeletion(agentId: string, cleanupCompleted: boolean): void {
   const deletion = beginAgentDeletionJournal({
@@ -66,10 +50,10 @@ async function writeStaleCronSession(
 ) {
   const sessionKey = `agent:${agentId}:cron:done-job:run:old-run`;
   const scope = { sessionKey, storePath };
-  await replaceSessionEntry(
-    { sessionKey, storePath },
-    { sessionId: `${agentId}-old-run`, updatedAt: Date.now() - 8 * DAY_MS },
-  );
+  await replaceSessionEntry(scope, {
+    sessionId: `${agentId}-old-run`,
+    updatedAt: Date.now() - 8 * DAY_MS,
+  });
   return scope;
 }
 
@@ -88,7 +72,7 @@ function withMaintenanceState<Args extends unknown[]>(run: (...args: Args) => Pr
 
 describe("runSessionRegistryMaintenance", () => {
   afterEach(() => {
-    mocks.cronStoreLoadError = undefined;
+    vi.restoreAllMocks();
     resetConfigRuntimeState();
     closeOpenClawAgentDatabasesForTest();
   });
@@ -97,7 +81,9 @@ describe("runSessionRegistryMaintenance", () => {
     "skips the sweep instead of pruning when the cron store is unreadable",
     withMaintenanceState(async () => {
       const stale = await writeStaleCronSession("main");
-      mocks.cronStoreLoadError = new Error("cron store load unavailable");
+      vi.spyOn(cronStore, "loadCronJobsStore").mockRejectedValue(
+        new Error("cron store load unavailable"),
+      );
 
       const summary = await runSessionRegistryMaintenance({
         apply: true,
@@ -117,7 +103,7 @@ describe("runSessionRegistryMaintenance", () => {
       const cronStorePath = state.statePath("custom-cron/jobs.json");
       const job = makeCronReceiptJob("done-job", "main");
       job.state.runningAtMs = Date.now();
-      await saveCronStore(cronStorePath, { version: 1, jobs: [job] });
+      await cronStore.saveCronStore(cronStorePath, { version: 1, jobs: [job] });
 
       const summary = await runSessionRegistryMaintenance({ apply: true, cronStorePath });
 
@@ -193,19 +179,14 @@ describe("runSessionRegistryMaintenance", () => {
           cronStorePath: state.statePath("cron/jobs.json"),
         });
 
-        expect(summary).toMatchObject({
-          pruned: 1,
-          skippedStores: 1,
-          stores: expect.arrayContaining([
-            expect.objectContaining({ agentId: "main", pruned: 1 }),
-            {
-              agentId: "retired",
-              storePath: retired.storePath,
-              skippedReason: cleanupCompleted
-                ? "agent-deletion-complete"
-                : "agent-deletion-pending",
-            },
-          ]),
+        expect(summary).toMatchObject({ pruned: 1, skippedStores: 1 });
+        expect(summary.stores).toContainEqual(
+          expect.objectContaining({ agentId: "main", pruned: 1 }),
+        );
+        expect(summary.stores).toContainEqual({
+          agentId: "retired",
+          storePath: retired.storePath,
+          skippedReason: cleanupCompleted ? "agent-deletion-complete" : "agent-deletion-pending",
         });
         expect(loadSessionEntry(main) !== undefined).toBe(!apply);
       },
@@ -235,14 +216,12 @@ describe("runSessionRegistryMaintenance", () => {
       expect(summary).toMatchObject({
         pruned: history === "missing" ? 0 : 1,
         skippedStores: history === "missing" ? 2 : 1,
-        stores: expect.arrayContaining([
-          {
-            agentId: "retained",
-            storePath: retained.storePath,
-            skippedReason: "agent-store-held",
-            warning: expect.stringContaining(`Held agent retained database ${databasePath}`),
-          },
-        ]),
+      });
+      expect(summary.stores).toContainEqual({
+        agentId: "retained",
+        storePath: retained.storePath,
+        skippedReason: "agent-store-held",
+        warning: expect.stringContaining(`Held agent retained database ${databasePath}`),
       });
       const held = summary.stores.find((store) => store.agentId === "retained");
       expect(held).toMatchObject({ warning: expect.stringContaining("openclaw doctor --fix") });

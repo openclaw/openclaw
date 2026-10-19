@@ -1,17 +1,16 @@
 import { expect, it, vi } from "vitest";
+import { createCronRegressionState } from "../../test/helpers/cron/service-regression-fixtures.js";
 import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import {
   openOpenClawStateDatabase,
   runOpenClawStateWriteTransaction,
 } from "../state/openclaw-state-db.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
 import { readCronRunHistoryPageForTests } from "./run-history.test-support.js";
 import { CronService } from "./service.js";
 import { setupCronServiceSuite } from "./service.test-harness.js";
 import { waitForActiveCronTaskRuns } from "./service/active-run-cancellation.js";
 import { findCronRunRecoveryInDatabase } from "./service/run-history-recovery.js";
 import { createCronRunHandle, finishCronRun } from "./service/run-history.js";
-import { createCronServiceState, type CronServiceDeps } from "./service/state.js";
 import { loadCronStore } from "./store.js";
 import { cronStoreKey } from "./store/key.js";
 import { inspectActiveCronRunReceipt } from "./store/run-receipt-store.test-support.js";
@@ -55,21 +54,17 @@ it.each(["predecessor", "pending", "late"] as const)(
       pending.started.resolve();
       return pending.completion.promise;
     });
-    const deps: CronServiceDeps = {
-      scheduler: createTestGatewayScheduler(),
-      nowMs: () => Date.now(),
+    const recoveryState = createCronRegressionState({
       storePath,
-      cronEnabled: true,
       cronConfig: { triggers: { enabled: true } },
       defaultAgentId: "alpha",
       resolveDefaultAgentId: () => "alpha",
       isAgentAvailable: () => true,
       log: logger,
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
       evaluateCronTrigger,
       runIsolatedAgentJob,
-    };
+    });
+    const deps = recoveryState.deps;
     const cron = new CronService(deps);
     let restarted: CronService | undefined;
     let run: ReturnType<CronService["run"]> | undefined;
@@ -91,7 +86,6 @@ it.each(["predecessor", "pending", "late"] as const)(
       });
       const readJob = async () => (await loadCronStore(storePath)).jobs[0]!;
       const readHistory = () => readCronRunHistoryPageForTests({ storeKey, jobId: job.id }).entries;
-      const recoveryState = createCronServiceState(deps);
       const startPayload = async () => {
         await cron.update(job.id, { state: { nextRunAtMs: firstStartedAt } });
         run = cron.run(job.id, "due");

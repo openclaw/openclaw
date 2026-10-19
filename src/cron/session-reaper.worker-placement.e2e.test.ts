@@ -68,16 +68,12 @@ describe("scheduled cron session retirement through the Gateway", () => {
   const entry = (sessionKey: string) =>
     loadExactSessionEntry({ storePath: sessionStorePath, sessionKey })?.entry;
   const placement = (sessionId: string) => {
-    const database = new DatabaseSync(stateDatabasePath, { readOnly: true });
-    try {
-      return database
-        .prepare(
-          "SELECT session_key, state, turn_claim_id FROM worker_session_placements WHERE session_id = ?",
-        )
-        .get(sessionId);
-    } finally {
-      database.close();
-    }
+    using database = new DatabaseSync(stateDatabasePath, { readOnly: true });
+    return database
+      .prepare(
+        "SELECT session_key, state, turn_claim_id FROM worker_session_placements WHERE session_id = ?",
+      )
+      .get(sessionId);
   };
   const history = async (id: string) =>
     (await call<{ entries: CronRunLogEntry[] }>("cron.runs", { id })).entries;
