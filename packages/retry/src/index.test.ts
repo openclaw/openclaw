@@ -1,5 +1,5 @@
 import { getEventListeners } from "node:events";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   computeBackoff,
@@ -14,7 +14,11 @@ import {
 } from "./index.js";
 
 const TIMER_MAX_MS = 2_147_000_000;
+const retryOptions = { attempts: 2, minDelayMs: 0, maxDelayMs: 0 };
 
+beforeEach(() => {
+  vi.useFakeTimers();
+});
 afterEach(() => {
   vi.restoreAllMocks();
   vi.clearAllTimers();
@@ -28,45 +32,52 @@ function createRetryOperation() {
     .mockResolvedValueOnce("ok");
 }
 
+function deadline<T>(
+  operation: Promise<T> | (() => Promise<T>),
+  options: { signal?: AbortSignal; onAbort?: (signal: AbortSignal) => string } = {},
+) {
+  return raceWithTimeout(operation, 10, () => "expired", options);
+}
+
+function expectCleanedUp(signal: AbortSignal) {
+  expect(vi.getTimerCount()).toBe(0);
+  expect(getEventListeners(signal, "abort")).toHaveLength(0);
+}
+
 async function expectAbortedSleep(promise: Promise<void>): Promise<Error> {
-  try {
-    await promise;
-  } catch (error) {
-    expect(error).toBeInstanceOf(Error);
-    return error as Error;
+  const error: unknown = await promise.catch((caught: unknown) => caught);
+  expect(error).toBeInstanceOf(Error);
+  if (!(error instanceof Error)) {
+    throw new Error("expected aborted sleep");
   }
-  throw new Error("expected aborted sleep");
+  expect(error.message).toBe("aborted");
+  return error;
 }
 
 describe("raceWithTimeout", () => {
   it("observes an existing abort when the operation factory throws synchronously", async () => {
-    vi.useFakeTimers();
     const failure = new Error("failed to start");
     const signal = AbortSignal.abort("stopped");
     await expect(
-      raceWithTimeout(
+      deadline(
         () => {
           expect(vi.getTimerCount()).toBe(1);
           throw failure;
         },
-        1_000,
-        () => "expired",
         { signal },
       ),
     ).rejects.toBe(failure);
     await vi.advanceTimersByTimeAsync(0);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(getEventListeners(signal, "abort")).toHaveLength(0);
+    expectCleanedUp(signal);
   });
 
   it.each(["operation", "timeout", "abort"] as const)(
     "releases both cancellation and deadline observation when %s wins",
     async (winner) => {
-      vi.useFakeTimers();
       const source = createDeferred<string>();
       const controller = new AbortController();
       const failure = new Error("cancelled");
-      const pending = raceWithTimeout(source.promise, 10, () => "expired", {
+      const pending = deadline(source.promise, {
         signal: controller.signal,
         onAbort: (signal) => {
           throw signal.reason;
@@ -83,46 +94,38 @@ describe("raceWithTimeout", () => {
       expect(await outcome).toBe(
         winner === "operation" ? "done" : winner === "timeout" ? "expired" : failure,
       );
-      expect(vi.getTimerCount()).toBe(0);
-      expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+      expectCleanedUp(controller.signal);
       source.reject(new Error("late operation rejection"));
     },
   );
 
   it("keeps source-first race order while arming cancellation before work", async () => {
-    vi.useFakeTimers();
     const controller = new AbortController();
-    const pending = raceWithTimeout(
+    const pending = deadline(
       () => {
         controller.abort();
         return Promise.resolve("done");
       },
-      10,
-      () => "expired",
       { signal: controller.signal },
     );
     await expect(pending).resolves.toBe("done");
-    expect(vi.getTimerCount()).toBe(0);
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    expectCleanedUp(controller.signal);
   });
 
   it("observes an existing abort without skipping an already-started operation", async () => {
-    vi.useFakeTimers();
     const source = createDeferred<string>();
     const signal = AbortSignal.abort("stopped");
     await expect(
-      raceWithTimeout(source.promise, 10, () => "expired", {
+      deadline(source.promise, {
         signal,
         onAbort: () => "cancelled",
       }),
     ).resolves.toBe("cancelled");
     source.reject(new Error("late operation rejection"));
-    expect(vi.getTimerCount()).toBe(0);
-    expect(getEventListeners(signal, "abort")).toHaveLength(0);
+    expectCleanedUp(signal);
   });
 
   it("preserves a timeout error and observes a late source rejection", async () => {
-    vi.useFakeTimers();
     const source = createDeferred<never>();
     const timeoutError = new Error("expired");
     const pending = raceWithTimeout(source.promise, 10, () => {
@@ -137,6 +140,7 @@ describe("raceWithTimeout", () => {
   });
 
   it("can unref the deadline timer", async () => {
+    vi.useRealTimers();
     const scheduled = vi.spyOn(globalThis, "setTimeout");
     const pending = raceWithTimeout(Promise.resolve("done"), 60_000, () => "expired", {
       ref: false,
@@ -176,7 +180,6 @@ describe("RetrySupervisor", () => {
   });
 
   it("cancels a pending wait with the canonical abort error", async () => {
-    vi.useFakeTimers();
     const supervisor = new RetrySupervisor({ initialMs: 100, maxMs: 100, factor: 2, jitter: 0 });
     const retry = supervisor.next();
     if (!retry) {
@@ -193,18 +196,16 @@ describe("RetrySupervisor", () => {
       message: "aborted",
       cause: reason,
     });
-    expect(vi.getTimerCount()).toBe(0);
-    expect(getEventListeners(retry.signal, "abort")).toHaveLength(0);
+    expectCleanedUp(retry.signal);
   });
 
   it("can unref the scheduled timer", async () => {
+    vi.useRealTimers();
     const controller = new AbortController();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     try {
       const sleeper = sleepWithAbort(60_000, controller.signal, { ref: false });
-      const timer = setTimeoutSpy.mock.results.at(-1)?.value as NodeJS.Timeout | undefined;
-
-      expect(timer?.hasRef()).toBe(false);
+      expect(setTimeoutSpy.mock.results.at(-1)?.value.hasRef()).toBe(false);
       controller.abort();
       await expect(sleeper).rejects.toMatchObject({ name: "AbortError", message: "aborted" });
     } finally {
@@ -214,12 +215,7 @@ describe("RetrySupervisor", () => {
 });
 
 describe("backoff helpers", () => {
-  const policy: BackoffPolicy = {
-    initialMs: 100,
-    maxMs: 250,
-    factor: 2,
-    jitter: 0.5,
-  };
+  const policy: BackoffPolicy = { initialMs: 100, maxMs: 250, factor: 2, jitter: 0.5 };
 
   it("treats attempts below one as the first backoff step", () => {
     vi.spyOn(Math, "random").mockReturnValue(0);
@@ -239,19 +235,13 @@ describe("backoff helpers", () => {
   });
 
   it("wraps aborted sleeps with a stable aborted error", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    controller.abort();
-
-    const error = await expectAbortedSleep(sleepWithAbort(5, controller.signal));
-    expect(error.message).toBe("aborted");
-    expect(error.cause).toBe(controller.signal.reason);
-    expect(vi.getTimerCount()).toBe(0);
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
+    const signal = AbortSignal.abort();
+    const error = await expectAbortedSleep(sleepWithAbort(5, signal));
+    expect(error.cause).toBe(signal.reason);
+    expectCleanedUp(signal);
   });
 
   it("removes the abort listener after the sleep completes", async () => {
-    vi.useFakeTimers();
     const controller = new AbortController();
     const sleeper = sleepWithAbort(50, controller.signal);
     const onSettled = vi.fn();
@@ -264,12 +254,10 @@ describe("backoff helpers", () => {
     await vi.advanceTimersByTimeAsync(1);
     await expect(sleeper).resolves.toBeUndefined();
 
-    expect(getEventListeners(controller.signal, "abort")).toHaveLength(0);
-    expect(vi.getTimerCount()).toBe(0);
+    expectCleanedUp(controller.signal);
   });
 
   it("clamps oversized sleep durations before scheduling", async () => {
-    vi.useFakeTimers();
     const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
     const sleeper = sleepWithAbort(Number.MAX_SAFE_INTEGER);
 
@@ -280,7 +268,6 @@ describe("backoff helpers", () => {
   });
 
   it("rejects if the signal aborts during listener registration", async () => {
-    vi.useFakeTimers();
     let aborted = false;
     const signal = {
       get aborted() {
@@ -296,7 +283,6 @@ describe("backoff helpers", () => {
     } as unknown as AbortSignal;
 
     const error = await expectAbortedSleep(sleepWithAbort(50, signal));
-    expect(error.message).toBe("aborted");
     expect(error.cause).toStrictEqual(new Error("listener-registration-race"));
     expect(vi.getTimerCount()).toBe(0);
   });
@@ -366,39 +352,28 @@ describe("retryAsync", () => {
 
 describe("retry scheduler long native waits", () => {
   it("honors full native waits, numeric clamping, and the zero-delay yield", async () => {
-    vi.useFakeTimers();
     const timer = vi.spyOn(globalThis, "setTimeout");
     const onRetry = vi.fn();
     const delayMs = 2 * TIMER_MAX_MS + 123;
-    const cases: {
-      args: [RetryOptions | number, number?];
-      advances: number[];
-      timers: number[];
-    }[] = [
-      {
-        args: [{ attempts: 2, minDelayMs: 0, maxDelayMs: 0, retryAfterMs: () => delayMs, onRetry }],
-        advances: [TIMER_MAX_MS, TIMER_MAX_MS, 122],
-        timers: [TIMER_MAX_MS, TIMER_MAX_MS, 123],
-      },
-      {
-        args: [
-          {
-            attempts: 2,
-            minDelayMs: 0,
-            maxDelayMs: 0,
-            delayMs: TIMER_MAX_MS,
-            jitter: "full",
-            random: () => 1,
-          },
-        ],
-        advances: [TIMER_MAX_MS],
-        timers: [TIMER_MAX_MS, TIMER_MAX_MS],
-      },
-      { args: [2, 0], advances: [], timers: [0] },
-      { args: [2, 10], advances: [], timers: [10] },
-      { args: [2, Infinity], advances: [], timers: [TIMER_MAX_MS] },
+    const fullJitter: RetryOptions = {
+      ...retryOptions,
+      delayMs: TIMER_MAX_MS,
+      jitter: "full",
+      random: () => 1,
+    };
+    type WaitCase = [args: [RetryOptions | number, number?], advances: number[], timers: number[]];
+    const cases: WaitCase[] = [
+      [
+        [{ ...retryOptions, retryAfterMs: () => delayMs, onRetry }],
+        [TIMER_MAX_MS, TIMER_MAX_MS, 122],
+        [TIMER_MAX_MS, TIMER_MAX_MS, 123],
+      ],
+      [[fullJitter], [TIMER_MAX_MS], [TIMER_MAX_MS, TIMER_MAX_MS]],
+      [[2, 0], [], [0]],
+      [[2, 10], [], [10]],
+      [[2, Infinity], [], [TIMER_MAX_MS]],
     ];
-    for (const { args, advances, timers } of cases) {
+    for (const [args, advances, timers] of cases) {
       timer.mockClear();
       const operation = createRetryOperation();
       const result = createRetryRunner()(operation, ...args);
