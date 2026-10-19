@@ -44,6 +44,10 @@ class FakeGatewayClient {
     return this.opts.url;
   }
 
+  get offlineRecoveryScope() {
+    return this.opts.offlineRecoveryScope;
+  }
+
   start() {
     this.started += 1;
   }

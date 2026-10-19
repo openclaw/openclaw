@@ -457,15 +457,12 @@ export async function runUpdateFinalizationDoctorInFreshProcess(params: {
       params.onDoctorStep?.(doctorStep);
     }
     if (params.databaseBackup) {
-      const step: UpdateStepResult = {
-        name: "database migration writes",
-        command: "record Doctor database write fingerprints",
-        cwd: params.root,
-        durationMs: 0,
-        exitCode: 0,
-      };
-      recordUpdateDatabaseWrites(params.databaseBackup, doctorResult?.databaseWrites, step);
-      params.onDoctorStep?.(step);
+      const receipt = recordUpdateDatabaseWrites(
+        params.databaseBackup,
+        doctorResult?.databaseWrites,
+        { name: `${params.phase} doctor` },
+      );
+      params.onDoctorStep?.(receipt);
     }
     if (doctorResult?.warnings?.length) {
       params.onWarnings?.(doctorResult.warnings);

@@ -20,10 +20,10 @@ import {
   projectChatTranscriptMetadata,
   readChatSessionSnapshot,
   type ChatMessageCache,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey, resolveChatSnapshotSessionKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 // Coalesce navigation intent while leaving time to warm history before a click.
 const SESSION_PREFETCH_INTENT_DELAY_MS = 75;

@@ -158,7 +158,7 @@ export function createConfigWriteCoordinator({
   };
   const invalidateConfigLoad = () => {
     resetConfigLoad();
-    nextRequestVersion(state, "config");
+    nextRequestVersion(state);
     state.configLoading = false;
   };
   const trackWrite = <T>(
@@ -367,6 +367,7 @@ export function createConfigWriteCoordinator({
   });
   let pluginGeneration = gateway.snapshot.pluginCapabilities?.generation;
   let canRead = hasOperatorReadAccess(gateway.snapshot.hello?.auth ?? null);
+  // Transport and authorization changes retire requests even when the client is reused.
   const stopGateway = gateway.subscribe((snapshot) => {
     const clientChanged = state.client !== snapshot.client;
     const connectionChanged = state.connected !== (snapshot.phase === "connected");
@@ -395,7 +396,6 @@ export function createConfigWriteCoordinator({
       resetLoads();
       // A retired flight cannot hold the replacement connection's FIFO.
       explicitOpQueue = null;
-      // Transport and authorization changes retire requests even when the client is reused.
       invalidateConfigConnection(state);
       cancelScheduledAutoSave();
       appliedRefresh.cancel();

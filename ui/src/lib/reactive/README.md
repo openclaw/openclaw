@@ -31,6 +31,12 @@ or dispose the authoritative owner.
 Event consumers subscribe directly to their owners, preserving each channel's
 delivery order, replay behavior, and completion contract.
 
+`observeState(initial)` adapts page-local synchronous request state through the
+same projection contract. Top-level assignments publish automatically; use
+`edit()` for nested changes and `invalidate()` for external owner receipts.
+Reads remain synchronous, and disposal retires notifications without changing
+the state or owning its requests. Existing domain owners still use `projectOwner()`.
+
 ## Adapter families
 
 | Module                   | Owners                                                            |

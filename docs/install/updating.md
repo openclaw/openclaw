@@ -45,6 +45,10 @@ using that generation through finalization, rollback, and CLI cleanup, even when
 the new build has different chunk filenames. The new Gateway starts from the
 activated build.
 
+Managed update helpers route diagnostic logs to stderr so debug logging cannot
+interrupt their control handshake. This applies to the installed updater; a newer
+candidate cannot change an older updater's pre-activation handshake.
+
 If native service inspection becomes unavailable after admission, the updater
 refuses activation before stopping the Gateway or replacing its package. When
 inspection is unavailable initially, a live or unverified Gateway state owner

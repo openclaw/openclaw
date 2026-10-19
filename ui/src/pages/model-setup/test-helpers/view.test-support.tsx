@@ -2,9 +2,10 @@ import { createSignal, flush } from "solid-js";
 import { vi } from "vitest";
 import type { SystemAgentSetupDetectResult } from "../../../api/types.ts";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
-import { ModelSetupView, type ModelSetupViewProps } from "../view.tsx";
+import type { ModelSetupViewProps } from "../view-types.ts";
+import { ModelSetupView } from "../view.tsx";
 
-export type { ModelSetupViewProps } from "../view.tsx";
+export type { ModelSetupViewProps } from "../view-types.ts";
 
 export const detected: SystemAgentSetupDetectResult = {
   candidates: [

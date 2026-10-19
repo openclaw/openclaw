@@ -188,9 +188,7 @@ export function createNextcloudTalkWebhookSpool(options: {
     drain: {
       startLimit: 32, // Keep the shared drain's active-delivery ceiling across repumps.
       resolveNonRetryableFailure,
-      ...(options.adoptionStallTimeoutMs === undefined
-        ? {}
-        : { adoptionStallTimeoutMs: options.adoptionStallTimeoutMs }),
+      adoptionStallTimeoutMs: options.adoptionStallTimeoutMs,
       onLog: (message) => options.runtime.log?.(`nextcloud-talk ${message}`),
     },
     ...(options.abortSignal ? { abortSignal: options.abortSignal } : {}),

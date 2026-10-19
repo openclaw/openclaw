@@ -4691,6 +4691,9 @@ invalidate the preservation inventory, while ordinary local claims leave it curr
 Pending or uncertain writes and database retirement retain the existing authority
 checks. Remote environment projections remain direct reads through their own owner.
 Eviction only requires another worker read; it does not change durable ownership.
+Internal projections borrow owner-frozen placement facts instead of copying the
+whole inventory on every read. The public runtime-refresh adapter still returns
+independent mutable placement, move, and pending-result values.
 
 Placement `get` and `getMany` now read only that receipt owner; cold or invalidated
 entries require `getAsync` or `getManyAsync`. Synchronous inventory, retirement,

@@ -141,7 +141,6 @@ export function MemoryImportPage() {
   let previousPlanArgs:
     | readonly [MemoryImportClient | null, boolean, boolean, string | null, boolean, number]
     | undefined;
-  // Only a changed request identity replans; unrelated owner receipts preserve errors and retries.
   function syncPlan() {
     const next = [
       context.gateway.snapshot.client,
@@ -192,6 +191,7 @@ export function MemoryImportPage() {
     void loadPlan();
   }
   onSettled(() => {
+    // Target/access receipts retire import and backfill epochs before replanning.
     const stops = [gateway, agents, selection].map((source) => source.subscribe(syncPlan));
     syncPlan();
     return () => {

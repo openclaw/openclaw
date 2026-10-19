@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { resolveReplyDirectiveRouting } from "./get-reply-directives-routing.js";
+import { routeReplyDirectivesForTest as route } from "./get-reply-directives-routing.test-support.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 const renderedMentionPattern = "<@BOT> \\(Bek \\(Ops\\)\\)";
@@ -10,29 +10,13 @@ vi.mock("../../channels/plugins/registry-loaded.js", async (importOriginal) => (
   ...(await importOriginal<typeof import("../../channels/plugins/registry-loaded.js")>()),
   getLoadedChannelPluginById: (id: string) =>
     id === "slack"
-      ? { mentions: { stripPatterns: () => [renderedMentionPattern, "<@[^>\\s]+>"] } }
+      ? {
+          id: "slack",
+          config: {},
+          mentions: { stripPatterns: () => [renderedMentionPattern, "<@[^>\\s]+>"] },
+        }
       : undefined,
 }));
-
-function route(
-  ctx: ReturnType<typeof buildTestCtx>,
-  overrides: Partial<Parameters<typeof resolveReplyDirectiveRouting>[0]> = {},
-) {
-  return resolveReplyDirectiveRouting({
-    commandText: ctx.commandText,
-    agentText: ctx.agentText,
-    modelAliases: [],
-    canInterpretTextDirectives: true,
-    isAuthorizedSender: true,
-    isGroup: false,
-    wasMentioned: false,
-    ctx,
-    cfg: { commands: { text: true } },
-    agentId: "main",
-    resetTriggered: false,
-    ...overrides,
-  });
-}
 
 describe("sender-owned directive projection", () => {
   it.each([
@@ -77,7 +61,7 @@ describe("sender-owned directive projection", () => {
       expected: "[Forwarded message]\nPlease /help continue",
       rejected: true,
     },
-  ])("$name", (testCase) => {
+  ])("$name", async (testCase) => {
     const { rawText, commandText, expected } = testCase;
     const isGroup = testCase.isGroup !== false;
     const ctx = buildTestCtx({
@@ -88,9 +72,10 @@ describe("sender-owned directive projection", () => {
       RawBody: rawText,
       BodyForAgent: testCase.agentText ?? rawText,
       CommandAuthorized: true,
+      WasMentioned: true,
       ChannelContext: { chat: { commandSourceText: testCase.commandSourceText ?? rawText } },
     });
-    const result = route(ctx, { isGroup, wasMentioned: true });
+    const result = await route(ctx, { isGroup });
     expect(result.inlineCommand).toBe(testCase.rejected ? undefined : "/help");
     expect(result.cleanedBody).toBe(expected);
   });
@@ -145,7 +130,7 @@ describe("sender-owned directive projection", () => {
     ],
   ])(
     "%s",
-    (
+    async (
       _name,
       commandText,
       agentText,
@@ -160,10 +145,48 @@ describe("sender-owned directive projection", () => {
         BodyForAgent: agentText,
         CommandAuthorized: true,
       });
-      const result = route(ctx, { resetTriggered });
+      const result = await route(ctx, { resetTriggered });
       expect(result.cleanedBody).toBe(expected);
-      expect(result.hasInlineStatus).toBe(inlineStatus);
+      expect(result.inlineStatusRequested).toBe(inlineStatus);
       expect(result.directives.hasThinkDirective).toBe(false);
+    },
+  );
+
+  it.each([
+    { body: "/status", suppressed: false },
+    { body: "/skill weather\n  first\n  second", suppressed: false },
+    { body: "/reset\ninspect this", suppressed: false },
+    { body: "/status", suppressed: true },
+  ])(
+    "keeps standalone command status out of attachment context: %j",
+    async ({ body, suppressed }) => {
+      const agentText = `[System receipt]\n\n${body}\n[media attached: media://inbound/voice.mp3]`;
+      const ctx = buildTestCtx({
+        CommandBody: body,
+        RawBody: `${body}\n[media attached: media://inbound/voice.mp3]`,
+        BodyForAgent: agentText,
+        CommandAuthorized: !suppressed,
+        CommandInterpretationSuppressed: suppressed,
+      });
+      const result = await route(ctx);
+      expect(result.inlineStatusRequested).toBe(false);
+      expect(result.cleanedBody).toBe(agentText);
+    },
+  );
+
+  it.each([true, false])(
+    "preserves reasoning authorization before clearing (authorized: %s)",
+    async (authorized) => {
+      const ctx = buildTestCtx({
+        Body: "/reasoning on",
+        CommandBody: "/reasoning on",
+        CommandAuthorized: authorized,
+      });
+      const result = await route(ctx);
+      expect(result.directives.hasReasoningDirective).toBe(authorized);
+      expect((await result.resolveModelLevels()).resolvedReasoningLevel).toBe(
+        authorized ? "on" : "off",
+      );
     },
   );
 });

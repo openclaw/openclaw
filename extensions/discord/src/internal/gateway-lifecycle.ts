@@ -38,11 +38,8 @@ export class GatewayHeartbeatTimers {
 
   stop(): void {
     for (const key of ["heartbeatInterval", "firstHeartbeatTimeout"] as const) {
-      const timer = this[key];
-      if (timer) {
-        clearTimeout(timer);
-        this[key] = undefined;
-      }
+      clearTimeout(this[key]);
+      this[key] = undefined;
     }
   }
 }
@@ -51,10 +48,8 @@ export class GatewayReconnectTimer {
   timeout?: GatewayTimer;
 
   stop(): void {
-    if (this.timeout) {
-      clearTimeout(this.timeout);
-      this.timeout = undefined;
-    }
+    clearTimeout(this.timeout);
+    this.timeout = undefined;
   }
 
   schedule(delayMs: number, callback: () => void): void {

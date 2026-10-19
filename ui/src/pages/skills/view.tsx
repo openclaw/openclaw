@@ -254,16 +254,14 @@ function SkillRow(props: { skill: SkillStatusEntry; view: SkillsProps }) {
 
 function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
   const updateLocked = createMemo(() => skillControlsLocked(props.view) || !props.view.canUpdate);
-  const active = createMemo(
-    () =>
-      props.view.state.skillOperation?.kind === "skill" &&
-      props.view.state.skillOperation.skillKey === props.skill.skillKey,
-  );
+  const active = () =>
+    props.view.state.skillOperation?.kind === "skill" &&
+    props.view.state.skillOperation.skillKey === props.skill.skillKey;
   const homepageHref = createMemo(() =>
     resolveSafeExternalUrl(props.skill.homepage ?? "", window.location.href),
   );
   const editValue = createMemo(() => props.view.state.skillEdits[props.skill.skillKey] ?? "");
-  const message = createMemo(() => props.view.state.skillMessages[props.skill.skillKey] ?? null);
+  const message = () => props.view.state.skillMessages[props.skill.skillKey] ?? null;
   const installOption = createMemo(() => {
     const missingBins = new Set([...props.skill.missing.bins, ...props.skill.missing.anyBins]);
     // An installer must provide a currently missing binary, not an unrelated dependency.
@@ -277,7 +275,7 @@ function SkillDetail(props: { skill: SkillStatusEntry; view: SkillsProps }) {
       ? "card"
       : "overview",
   );
-  const hasTabs = createMemo(() => Boolean(props.skill.clawhub || props.skill.skillCard?.present));
+  const hasTabs = () => Boolean(props.skill.clawhub || props.skill.skillCard?.present);
   return (
     <SkillReaderDialog
       label={props.skill.name}
@@ -560,7 +558,7 @@ function InstalledClawHubOverview(props: {
 
 function InstalledSkillCard(props: { skill: SkillStatusEntry; view: SkillsProps }) {
   const content = createMemo(() => props.view.state.skillCardContents[props.skill.skillKey]);
-  const error = createMemo(() => props.view.state.skillCardErrors[props.skill.skillKey]);
+  const error = () => props.view.state.skillCardErrors[props.skill.skillKey];
   return (
     <Show when={props.skill.skillCard?.present}>
       <Show

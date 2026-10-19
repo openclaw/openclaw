@@ -1,15 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { resolveProviderWebSearchPluginConfig } from "openclaw/plugin-sdk/provider-web-search-config-contract";
 import { isRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
 
 type JsonRecord = Record<string, unknown>;
-
-function resolvePluginSearchConfig(
-  config: OpenClawConfig | undefined,
-  key: "webSearch" | "xSearch",
-): JsonRecord | undefined {
-  const pluginConfig = config?.plugins?.entries?.xai?.config;
-  return isRecord(pluginConfig?.[key]) ? pluginConfig[key] : undefined;
-}
 
 function baseUrlFallback(config?: JsonRecord): JsonRecord | undefined {
   return typeof config?.baseUrl === "string" && config.baseUrl.trim()
@@ -18,11 +11,13 @@ function baseUrlFallback(config?: JsonRecord): JsonRecord | undefined {
 }
 
 export function resolveEffectiveXSearchConfig(config?: OpenClawConfig): JsonRecord | undefined {
-  const pluginWebSearchBaseUrl = baseUrlFallback(resolvePluginSearchConfig(config, "webSearch"));
-  const pluginOwned = resolvePluginSearchConfig(config, "xSearch");
+  const pluginWebSearchBaseUrl = baseUrlFallback(
+    resolveProviderWebSearchPluginConfig(config, "xai"),
+  );
+  const pluginOwned = config?.plugins?.entries?.xai?.config?.xSearch;
   const merged = {
     ...pluginWebSearchBaseUrl,
-    ...pluginOwned,
+    ...(isRecord(pluginOwned) ? pluginOwned : undefined),
   };
   if (Object.keys(merged).length === 0) {
     return undefined;

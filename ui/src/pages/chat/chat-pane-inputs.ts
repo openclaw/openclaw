@@ -1,42 +1,5 @@
 import type { ChatPaneRuntime } from "./chat-pane-render.ts";
 
-type PaneProperty =
-  | "mcpAppLaunch"
-  | "paneId"
-  | "paneLabel"
-  | "presentationId"
-  | "chatMessagesBySession"
-  | "sessionSnapshotStore"
-  | "sessionKey"
-  | "routeLoadingSkeleton"
-  | "agentId"
-  | "inputRegion"
-  | "compact"
-  | "onBackToSubagents"
-  | "workContext"
-  | "visuallyPresented"
-  | "presented"
-  | "active"
-  | "draft"
-  | "focusComposer"
-  | "dashboardExpanded"
-  | "routeFace"
-  | "onFaceChange"
-  | "onFocusPane"
-  | "onPaneSessionChange"
-  | "onSessionDeleted"
-  | "narrow"
-  | "mergedChrome"
-  | "navDrawerOpen"
-  | "gatewayStatus"
-  | "onboarding"
-  | "onOpenSplitView"
-  | "onSplitDown"
-  | "onSplitRight"
-  | "onClosePane"
-  | "boardProvider";
-export type ChatPaneProps = Pick<ChatPaneRuntime, PaneProperty>;
-
 /** The native host registration and retained view share one input contract. */
 export const chatPaneProperties = {
   mcpAppLaunch: { default: undefined },
@@ -47,6 +10,7 @@ export const chatPaneProperties = {
   sessionSnapshotStore: { default: undefined },
   sessionKey: { default: "" },
   routeLoadingSkeleton: { default: false },
+  routeResolutionPending: { default: false },
   agentId: { default: undefined },
   inputRegion: { default: "page" as const },
   compact: { default: false },
@@ -73,7 +37,9 @@ export const chatPaneProperties = {
   onSplitRight: { default: undefined },
   onClosePane: { default: undefined },
   boardProvider: { default: undefined },
-} satisfies { [Key in keyof ChatPaneProps]-?: { default: ChatPaneProps[Key] } };
+} satisfies { [Key in keyof ChatPaneRuntime]?: { default: ChatPaneRuntime[Key] } };
+
+export type ChatPaneProps = Pick<ChatPaneRuntime, keyof typeof chatPaneProperties>;
 
 // SAFETY: This checked literal owns every enumerable input key.
 export const chatPanePropertyKeys = Object.keys(chatPaneProperties) as (keyof ChatPaneProps)[];

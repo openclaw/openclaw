@@ -77,7 +77,7 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
   const connectionAnnouncement = createMemo(() => {
     const kind = shellConnectionStatus();
     return kind
-      ? gatewayStatusLabel(kind, view().sidebarProperties.storedOutboxes?.total)
+      ? gatewayStatusLabel(kind, view().gatewayStatus.queuedCount)
       : view().gatewayConnected
         ? t("nav.gateway.connected")
         : "";

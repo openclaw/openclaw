@@ -38,6 +38,28 @@ export function projectOwner<S extends { subscribe(notify: () => void): Dispose 
   });
 }
 
+/** Local owners publish through the same lazy projection subscription. */
+export function projectMutableSource<S, T>(
+  source: S,
+  read: (source: S) => T,
+  equality: SourceContract<S, T>["equality"] = "revision",
+) {
+  let notify = () => {};
+  return {
+    ...projectSource(source, {
+      read,
+      subscribe: (_source, listener) => {
+        notify = listener;
+        return () => {
+          notify = () => {};
+        };
+      },
+      equality,
+    }),
+    publish: () => notify(),
+  };
+}
+
 /** Read-through owner view; only revision tracks, never the sampled owner reads or subscriptions. */
 export function projectSource<S, T>(
   initialSource: S,

@@ -1,4 +1,5 @@
 import { setImmediate } from "node:timers/promises";
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   clearTestEmbeddedRun,
@@ -9,9 +10,17 @@ import {
   withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
 } from "../agents/tools/gateway-caller-context.js";
+import { callAgentToolGatewayRequest } from "../agents/tools/in-process-gateway.js";
 import { createSessionsSendTool } from "../agents/tools/sessions-send-tool.js";
-import { loadTranscriptEvents } from "../config/sessions/session-accessor.js";
+import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
+import {
+  loadTranscriptEvents,
+  upsertSessionEntryCore,
+} from "../config/sessions/session-accessor.js";
 import { readTranscriptEventMessage } from "../config/sessions/session-accessor.sqlite-read.js";
+import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
+import { withOwnedSessionTranscriptWrites } from "../config/sessions/transcript-write-context.js";
 import {
   claimAgentRunDelegatedAuthority,
   releaseAgentRunDelegatedAuthority,
@@ -27,6 +36,7 @@ import {
   withDelayedSessionToolsSteering,
   drainSessionToolsFixture,
 } from "./local-request-context.session-tools.test-support.js";
+import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
 import * as operatorContinuation from "./server-plugin-in-process-dispatch.js";
@@ -42,6 +52,173 @@ describe("sessions_send steering custody", () => {
     await import("./server-methods/sessions-read.js");
   });
   afterEach(drainSessionToolsFixture);
+
+  it.each(["owned child", "owned session", "shared noncreator", "foreign child"] as const)(
+    "uses session-write authority for %s without granting general agent access",
+    async (targetKind) => {
+      await withSessionToolsFixture(async (cfg) => {
+        const role = expectDefined(cfg.gateway?.roles?.definitions?.view, "session writer role");
+        role.scopes = ["operator.sessions.read", "operator.sessions.write"];
+        role.sandbox = "required";
+        cfg.agents!.defaults!.sandbox = { sessionToolsVisibility: "all" };
+        const client = roleClient("view", "steering-session-writer");
+        client.connect.scopes = [...role.scopes];
+        const profileId = expectDefined(
+          client.authenticatedUserProfile,
+          "session writer",
+        ).profileId;
+        const owned = targetKind === "owned child" || targetKind === "owned session";
+        for (const [sessionKey, sessionId] of [
+          [REQUESTER, "session-tools-requester-id"],
+          [PARTICIPANT_SHARED, "participant-shared-id"],
+        ] as const) {
+          await upsertSessionEntryCore(
+            { agentId: "main", sessionKey },
+            {
+              sessionId,
+              updatedAt: 1,
+              visibility: "shared",
+              sandbox: "required",
+              createdActor: {
+                type: "human",
+                source: "profile",
+                id: sessionKey === REQUESTER || owned ? profileId : "another-person",
+              },
+              ...(sessionKey === PARTICIPANT_SHARED && targetKind.endsWith("child")
+                ? { spawnedBy: REQUESTER, parentSessionId: "session-tools-requester-id" }
+                : {}),
+            },
+          );
+        }
+        if (targetKind === "shared noncreator") {
+          expect(
+            addSessionMember(
+              { agentId: "main", sessionKey: PARTICIPANT_SHARED },
+              {
+                identityId: profileId,
+                addedBy: "another-person",
+                expectedSessionId: "participant-shared-id",
+              },
+            ).inserted,
+          ).toBe(true);
+        }
+        const context = expectDefined(getPluginRuntimeGatewayRequestScope()?.context, "Gateway");
+        const captured = expectDefined(
+          await captureGatewayOperatorRunAuthority({ client, context }),
+          "session writer authority",
+        );
+        try {
+          await withPersonalToolTurn(
+            {
+              config: cfg,
+              owner: {
+                profileId,
+                senderId: "steering-session-writer",
+                name: "Session writer",
+                operatorAuthority: captured.authority,
+              },
+              sessionKey: REQUESTER,
+              sessionId: "session-tools-requester-id",
+            },
+            async () => {
+              await withDelayedSessionToolsSteering(cfg, async (receiver) => {
+                // Persisted membership permits discovery; it must not become creator authority.
+                expect(
+                  await callAgentToolGatewayRequest({
+                    method: "sessions.describe",
+                    params: { key: PARTICIPANT_SHARED },
+                  }),
+                ).toMatchObject({
+                  session: {
+                    key: PARTICIPANT_SHARED,
+                    sharingRole: owned
+                      ? "owner"
+                      : targetKind === "shared noncreator"
+                        ? "member"
+                        : "viewer",
+                  },
+                });
+                await expect(
+                  callAgentToolGatewayRequest({
+                    method: "agent",
+                    params: {
+                      sessionKey: PARTICIPANT_SHARED,
+                      message: "Unbound agent requests remain restricted",
+                      idempotencyKey: "session-scope-public-agent",
+                    },
+                  }),
+                ).rejects.toThrow("missing scope: operator.write");
+                const sent = withOwnedSessionTranscriptWrites(
+                  {
+                    sessionTarget: {
+                      agentId: "main",
+                      sessionKey: REQUESTER,
+                      sessionId: "session-tools-requester-id",
+                      storePath: resolveSessionStorePathCore(cfg.session?.store, {
+                        agentId: "main",
+                      }),
+                    },
+                    assertCommitAllowed: captured.authority.assertCurrent,
+                    withTranscriptWrite: async (write) => await write(),
+                  },
+                  () =>
+                    createSessionsSendTool({
+                      config: cfg,
+                      agentSessionKey: REQUESTER,
+                      idempotencyKey: "session-scope-steer",
+                    }).execute("session-scope-steer", {
+                      sessionKey: PARTICIPANT_SHARED,
+                      message: "Use the updated requirements",
+                      mode: "steer",
+                      timeoutSeconds: 0,
+                    }),
+                );
+                if (!owned) {
+                  expect((await sent).details).toMatchObject({
+                    status: "error",
+                    error: "Session-scoped writes require your own session.",
+                  });
+                  expect(receiver.pendingCount()).toBe(0);
+                  return;
+                }
+                await Promise.race([
+                  receiver.waitForAccepted(),
+                  sent.then((result) => {
+                    throw new Error(
+                      `Steering completed before admission: ${JSON.stringify(result.details)}`,
+                    );
+                  }),
+                ]);
+                expect(receiver.pendingCount()).toBe(1);
+                await receiver.commit();
+                expect((await sent).details).toMatchObject({
+                  status: "accepted",
+                  targetDisposition: "steered",
+                });
+                const messages = (
+                  await loadTranscriptEvents({
+                    agentId: "main",
+                    sessionKey: PARTICIPANT_SHARED,
+                    sessionId: "participant-shared-id",
+                  })
+                )
+                  .map(readTranscriptEventMessage)
+                  .filter((message) => message?.idempotencyKey === "session-scope-steer:user");
+                expect(messages).toHaveLength(1);
+                expect(messages[0]).toMatchObject({
+                  role: "user",
+                  content: expect.stringContaining("Use the updated requirements"),
+                  __openclaw: { steerTargetRunId: "participant-steering-target" },
+                });
+              });
+            },
+          );
+        } finally {
+          captured.release();
+        }
+      });
+    },
+  );
 
   it.each([
     ["end", false],

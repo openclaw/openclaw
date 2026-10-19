@@ -28,7 +28,7 @@ import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
 import { BrowserTabPreviews, syncToolDisclosureOverflow } from "./chat-tool-cards.solid.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
-import { ChatToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
+import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";
 import { summarizeToolCardOutcomes } from "./chat-tool-render-model.ts";
 import { ChatWorkingIndicator } from "./chat-working-indicator.tsx";
 
@@ -151,13 +151,10 @@ function NonstreamPart(props: {
   presentation: "standalone" | "continuation";
 }) {
   const indicator = () => (props.part.kind === "reading-indicator" ? props.part : undefined);
-  const question = createMemo(() => {
-    const prompt =
-      props.part.kind === "question"
-        ? props.options.questionPrompts?.get(props.part.questionId)
-        : undefined;
-    return prompt;
-  });
+  const question = () =>
+    props.part.kind === "question"
+      ? props.options.questionPrompts?.get(props.part.questionId)
+      : undefined;
   return (
     <Show
       when={indicator()}
@@ -416,11 +413,9 @@ function WorkGroupSummaryBody(props: {
         >
           <span class="chat-work-group__outcomes">
             {" · "}
-            <ChatToolOutcomeSummary
-              cards={props.summary.cards}
-              activity={props.summary.activity}
-              style={{ display: "contents" }}
-            />
+            <openclaw-chat-tool-outcome-summary style={{ display: "contents" }}>
+              <ToolOutcomeSummary cards={props.summary.cards} activity={props.summary.activity} />
+            </openclaw-chat-tool-outcome-summary>
           </span>
         </Show>
         <span class="chat-tool-row__chevron" aria-hidden="true">

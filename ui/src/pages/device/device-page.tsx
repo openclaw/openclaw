@@ -80,7 +80,6 @@ export function DevicePage() {
     pending: boolean;
     error?: Error;
   } | null>(null);
-  let gatewayHostingRequest = 0;
   let targetProfileTimer: ReturnType<typeof setTimeout> | null = null;
 
   const pendingEdits = () => {
@@ -233,10 +232,9 @@ export function DevicePage() {
             if (!capability) {
               return;
             }
-            const request = ++gatewayHostingRequest;
             setGatewayHostingEdit({ pending: true });
             capability.set("app.keepGatewayRunning", value, (error) => {
-              if (!disposed && gatewayHostingRequest === request) {
+              if (!disposed) {
                 setGatewayHostingEdit({ pending: false, error });
               }
             });

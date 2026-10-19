@@ -35,7 +35,6 @@ import {
   listStoredChatOutboxes as listOutboxes,
   loadChatComposerState as load,
   persistChatComposerState as persist,
-  removeStoredChatComposerQueueItem as removeItem,
   restoreChatComposerState as restore,
   updateStoredChatComposerQueueItems as updateItems,
 } from "./composer-persistence.ts";
@@ -99,7 +98,7 @@ const expectDraft = (state: ComposerState, draft: string, queue: ChatQueueItem[]
 function roundtripQueue(state: ComposerState, id: string) {
   const queued = reconnectItem(id, 1);
   expect(admitItem(state, queued)).toBe(true);
-  expect(removeItem(state, state.sessionKey, queued.id)).toBe(true);
+  expect(updateItems(state, state.sessionKey, [{ expected: queued, next: null }])).toBe(true);
 }
 
 function outbox(items: ChatQueueItem | ChatQueueItem[], sessionKey: string, agentId?: string) {
@@ -354,9 +353,9 @@ it("rejects stale updates and deletes after an attachment payload replacement", 
   expect(admitItem(state, original)).toBe(true);
   expect(replaceItem(state, original, successor)).toBe(true);
   expect(replaceItem(state, original, { ...original, sendAttempts: 2 })).toBe(false);
-  expect(removeItem(state, state.sessionKey, original.id, original)).toBe(false);
+  expect(updateItems(state, state.sessionKey, [{ expected: original, next: null }])).toBe(false);
   expect(snapshot(state)?.queue[0]).toMatchObject(successor);
-  expect(removeItem(state, state.sessionKey, successor.id, successor)).toBe(true);
+  expect(updateItems(state, state.sessionKey, [{ expected: successor, next: null }])).toBe(true);
   expectDraft(state, "keep this draft");
 });
 
@@ -379,9 +378,9 @@ it("keeps unresolved bare main and raw global independent until their owners res
   const attemptedGlobal = { ...globalBox.queue[0]!, sendAttempts: 1 };
   expect(replaceItem(resolved, mainBox.queue[0]!, attemptedMain)).toBe(true);
   expect(replaceItem(resolved, globalBox.queue[0]!, attemptedGlobal)).toBe(true);
-  expect(removeItem(resolved, "global", mainItem.id, attemptedMain)).toBe(true);
+  expect(updateItems(resolved, "global", [{ expected: attemptedMain, next: null }])).toBe(true);
   expect(listOutboxes(resolved)).toEqual([outbox(attemptedGlobal, "global", "alpha")]);
-  expect(removeItem(resolved, "global", globalItem.id, attemptedGlobal)).toBe(true);
+  expect(updateItems(resolved, "global", [{ expected: attemptedGlobal, next: null }])).toBe(true);
   expect(listOutboxes(resolved)).toEqual([]);
 });
 
@@ -413,7 +412,7 @@ it("reviews shipped selected-agent opaque rows without passively adopting either
 
   const attempted = { ...restored, sendAttempts: 1 };
   expect(replaceItem(state, restored, attempted)).toBe(true);
-  expect(removeItem(state, sessionKey, first.id, attempted)).toBe(true);
+  expect(updateItems(state, sessionKey, [{ expected: attempted, next: null }])).toBe(true);
   expectDraft(state, "older draft");
   expect(readRecovery(state).entries.map((entry) => entry.session)).toMatchObject([
     { draft: "newer draft", queue: [second] },
@@ -927,7 +926,20 @@ describe("chat composer draft presence notifications", () => {
       unsubscribe();
     }
 
-    expect(removeItem(state, state.sessionKey, updated.id, updated, updated.agentId)).toBe(true);
+    expect(
+      updateItems(state, state.sessionKey, [{ expected: updated, next: null }], updated.agentId),
+    ).toBe(true);
     expect(listener).toHaveBeenCalledTimes(6);
+    const write = vi.spyOn(sessionStorage, "setItem");
+    const remove = vi.spyOn(sessionStorage, "removeItem");
+    const stop = subscribeStoredChatOutboxChanges(listener);
+    try {
+      expect(updateItems(state, state.sessionKey, [{ expected: updated, next: null }])).toBe(true);
+      expect(write).not.toHaveBeenCalled();
+      expect(remove).not.toHaveBeenCalled();
+      expect(listener).toHaveBeenCalledTimes(6);
+    } finally {
+      stop();
+    }
   });
 });

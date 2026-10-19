@@ -108,6 +108,7 @@ export function createDesktopPanel(
   const lifecycle = createDesktopPanelLifecycle(host, scheduleAfterRender, {
     dockLayout,
     reconcile,
+    // Inventory and target events admit connection changes in the synchronous owner.
     subscribeClient: (client) => sessionSource.subscribe(client),
     handleToggleRequest: (event) => handleToggleRequest(event),
     detach,

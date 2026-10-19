@@ -51,16 +51,17 @@ it("resolveFinalAssistantText formats malformed fragments when final and streame
 
 it("resolveTuiLocalAuthCliInvocation filters inspector flags while preserving CLI runtime context", () => {
   const originalArgv = [...process.argv];
+  const originalExecArgv = process.execArgv;
   try {
     const cliEntry = path.resolve("openclaw.mjs");
     const loaderArgs = ["--import", "/repo/node_modules/tsx/dist/loader.mjs"];
     const authArgs = ["models", "auth", "login", "--provider", "test-provider"];
     process.argv[1] = cliEntry;
+    process.execArgv = [...loaderArgs, "--inspect-brk=0", "--trace-warnings"];
 
     expect(
       resolveTuiLocalAuthCliInvocation({
         provider: "test-provider",
-        execArgv: [...loaderArgs, "--inspect-brk=0", "--trace-warnings"],
       }),
     ).toStrictEqual({
       command: process.execPath,
@@ -69,6 +70,7 @@ it("resolveTuiLocalAuthCliInvocation filters inspector flags while preserving CL
     });
   } finally {
     process.argv = originalArgv;
+    process.execArgv = originalExecArgv;
   }
 });
 
@@ -99,8 +101,9 @@ describe("resolveInitialTuiAgentId", () => {
     ["agent:main:incident", "ops", "/tmp/openclaw/projects/ops/src", "main"],
     ["global", "ops", "/tmp/openclaw", "ops"],
   ])("resolves initial owner for %s", (initialSessionInput, agentId, cwd, expected) => {
+    vi.spyOn(process, "cwd").mockReturnValue(cwd);
     expect(
-      resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main", initialSessionInput, agentId, cwd }),
+      resolveInitialTuiAgentId({ cfg, fallbackAgentId: "main", initialSessionInput, agentId }),
     ).toBe(expected);
   });
 
@@ -112,13 +115,15 @@ describe("resolveInitialTuiAgentId", () => {
   });
 
   it("keeps an ownerless explicit fleet selection-required", () => {
+    vi.spyOn(process, "cwd").mockReturnValue("/var/tmp/unrelated");
     const retained = retainLegacyDefaultAgentId(structuredClone(cfg), "ops");
-    expect(() => resolveInitialTuiAgentId({ cfg: retained, cwd: "/var/tmp/unrelated" })).toThrow(
+    expect(() => resolveInitialTuiAgentId({ cfg: retained })).toThrow(
       "Multiple agents are configured, but TUI startup has no explicit owner. Pass an agent-scoped --session key (e.g., 'openclaw tui --session agent:agentname:main').",
     );
   });
 
   it("uses the persisted fixed-store owner for an unscoped global session", () => {
+    vi.spyOn(process, "cwd").mockReturnValue("/tmp/openclaw");
     const restartConfig: OpenClawConfig = {
       session: { scope: "global", store: "/tmp/shared.sqlite" },
       agents: {
@@ -129,9 +134,7 @@ describe("resolveInitialTuiAgentId", () => {
     };
 
     for (const initialSessionInput of ["global", undefined]) {
-      expect(
-        resolveInitialTuiAgentId({ cfg: restartConfig, initialSessionInput, cwd: "/tmp/openclaw" }),
-      ).toBe("ops");
+      expect(resolveInitialTuiAgentId({ cfg: restartConfig, initialSessionInput })).toBe("ops");
     }
   });
 });
@@ -237,7 +240,8 @@ function dedupeKeys(input: readonly string[], interval: number, windowsTerminal 
     },
     () => {
       let now = 1000;
-      const dedupe = createBackspaceDeduper({ dedupeWindowMs: 8, now: () => now });
+      vi.spyOn(Date, "now").mockImplementation(() => now);
+      const dedupe = createBackspaceDeduper();
       return input.map((data) => {
         const result = dedupe(data);
         now += interval;
@@ -527,7 +531,8 @@ it.each([
   ["linux", "/usr/local/bin/codex"],
   ["win32", "C:\\tools\\codex.exe"],
 ] as const)("directly executes non-wrapper commands on %s", (platform, command) => {
-  expect(resolveLocalAuthSpawnInvocation({ command, args: ["login"], platform })).toStrictEqual({
+  vi.spyOn(process, "platform", "get").mockReturnValue(platform);
+  expect(resolveLocalAuthSpawnInvocation({ command, args: ["login"] })).toStrictEqual({
     command,
     args: ["login"],
     options: {},

@@ -491,6 +491,50 @@ describe("gateway harness questions", () => {
     },
   );
 
+  it("releases an aborted registration without disturbing its replacement", async () => {
+    const registration = createDeferred<{ id: string }>();
+    const requestStarted = createDeferred();
+    const controller = new AbortController();
+    const sessionKey = "agent:main:aborted-registration";
+    const onBlockReply = vi.fn();
+    const gatewayCall = vi.fn(
+      gatewayStub({
+        "question.request": () => {
+          requestStarted.resolve();
+          return registration.promise;
+        },
+        "question.resolve": () => ({ status: "cancelled" }),
+      }),
+    );
+    const run = startQuestion(sessionKey, gatewayCall, onBlockReply, {
+      signal: controller.signal,
+    });
+    await requestStarted.promise;
+    controller.abort();
+    const replacement = reserveQuestion(
+      sessionKey,
+      gatewayStub({ "question.resolve": () => ({ status: "answered" }) }),
+    );
+    replacement.attachRegistration(Promise.resolve());
+    try {
+      registration.resolve({ id: questionId });
+      await expect(run).resolves.toEqual({ status: "cancelled" });
+      expect(onBlockReply).not.toHaveBeenCalled();
+      const cancellations = gatewayCall.mock.calls.filter(
+        ([method]) => method === "question.resolve",
+      );
+      expect(cancellations.length).toBeGreaterThan(0);
+      for (const call of cancellations) {
+        expect(call[2]).toMatchObject({ id: questionId, resolvedBy: "run-abort" });
+      }
+      await expect(claimQuestion(sessionKey)).resolves.toBe(true);
+    } finally {
+      registration.resolve({ id: questionId });
+      replacement.dispose();
+      await run;
+    }
+  });
+
   it.each(["request", "wait"] as const)("handles an early %s rejection", async (phase) => {
     const error = new Error("gateway disconnected");
     const gatewayCall = gatewayStub({

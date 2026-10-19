@@ -156,7 +156,7 @@ describe("exec safe bin policy boolean flags", () => {
     expect(
       "allowedBooleanFlags" in expectDefined(normalized.wc, "normalized.wc test invariant"),
     ).toBe(false);
-    const profiles = resolveSafeBinProfiles(customFixtures);
+    const profiles = resolveSafeBinProfiles(normalized);
     expect(
       expectDefined(profiles.wc, "profiles.wc test invariant").allowedBooleanFlags?.size ?? 0,
     ).toBe(0);

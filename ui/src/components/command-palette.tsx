@@ -53,6 +53,7 @@ export const CommandPalette = defineSolidBridge<CommandPaletteProperties, Comman
     host.style.display = "contents";
     const stops = [
       context.gateway.subscribeEvents(state.handleGatewayEvent),
+      // Selection receipts retire the old agent's draft before another action can use it.
       context.agentSelection.subscribe(state.handleAgentSelection),
       listen(host.ownerDocument, "keydown", state.handleGlobalKeydown),
     ];

@@ -10,7 +10,7 @@ import {
 } from "@solidjs/signals";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { ValueSignal } from "../board/provider-signals.ts";
-import { projectSource } from "./projection.ts";
+import { projectMutableSource, projectSource } from "./projection.ts";
 
 const disposals: Array<() => void> = [];
 afterEach(() => {
@@ -53,6 +53,55 @@ function source<T>(value: T, equality: "revision" | ((a: T, b: T) => boolean) = 
 }
 
 describe("owner projections", () => {
+  it("publishes local mutations while observed and reconnects after the last reader leaves", () => {
+    const state = { count: 1 };
+    const projection = projectMutableSource(state, (current) => current);
+    disposals.push(projection.dispose);
+    state.count = 2;
+    projection.publish();
+    expect(projection.read().count).toBe(2);
+    expect(projection.revision()).toBe(0);
+
+    const first = observe(() => projection.read().count);
+    state.count = 3;
+    projection.publish();
+    expect(projection.read().count).toBe(3);
+    expect(first.values).toEqual([2]);
+    flush();
+    expect(first.values).toEqual([2, 3]);
+    first.dispose();
+    flush();
+
+    state.count = 4;
+    projection.publish();
+    expect(projection.revision()).toBe(1);
+    const second = observe(() => projection.read().count);
+    expect(second.values).toEqual([4]);
+    state.count = 5;
+    projection.publish();
+    flush();
+    expect(second.values).toEqual([4, 5]);
+    projection.dispose();
+    state.count = 6;
+    projection.publish();
+    flush();
+    expect(second.values).toEqual([4, 5]);
+  });
+
+  it("preserves value equality for local publications", () => {
+    const state = { value: "same" };
+    const projection = projectMutableSource(state, (current) => current.value, Object.is);
+    disposals.push(projection.dispose);
+    const listener = vi.fn();
+    disposals.push(projection.subscribe(listener));
+    projection.publish();
+    expect(listener).not.toHaveBeenCalled();
+    state.value = "changed";
+    projection.publish();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(projection.read()).toBe("changed");
+  });
+
   it.each([
     { name: "pending", probe: isPending },
     { name: "latest", probe: latest },

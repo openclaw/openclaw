@@ -4,11 +4,6 @@ import type { ResolvedMemorySearchConfig } from "openclaw/plugin-sdk/memory-core
 
 export type TemporalDecayConfig = ResolvedMemorySearchConfig["query"]["hybrid"]["temporalDecay"];
 
-export const DEFAULT_TEMPORAL_DECAY_CONFIG: TemporalDecayConfig = {
-  enabled: false,
-  halfLifeDays: 30,
-};
-
 const DAY_MS = 24 * 60 * 60 * 1000;
 const DATED_MEMORY_PATH_RE = /(?:^|\/)memory\/(?:[^/]+\/)*(\d{4})-(\d{2})-(\d{2})(?:-[^/]+)?\.md$/;
 
@@ -19,7 +14,7 @@ function applyTemporalDecayToScore(params: {
 }): number {
   const { halfLifeDays } = params;
   const clampedAge = Math.max(0, params.ageInDays);
-  if (!Number.isFinite(halfLifeDays) || halfLifeDays <= 0 || !Number.isFinite(clampedAge)) {
+  if (!Number.isFinite(clampedAge)) {
     return params.score;
   }
   return params.score * Math.exp(-(Math.LN2 / halfLifeDays) * clampedAge);
@@ -93,13 +88,13 @@ export async function applyTemporalDecayToHybridResults<
   T extends { path: string; score: number; source: string },
 >(params: {
   results: T[];
-  temporalDecay?: Partial<TemporalDecayConfig>;
+  temporalDecay: TemporalDecayConfig;
   workspaceDir?: string;
   sessionSourceMtimes?: ReadonlyMap<string, number | undefined>;
   memorySourceMtimes?: ReadonlyMap<string, number | undefined>;
   nowMs?: number;
 }): Promise<T[]> {
-  const config = { ...DEFAULT_TEMPORAL_DECAY_CONFIG, ...params.temporalDecay };
+  const config = params.temporalDecay;
   if (!config.enabled) {
     return [...params.results];
   }
