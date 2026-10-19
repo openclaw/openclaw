@@ -28,7 +28,7 @@ import {
   consumeGatewayRunOptionToken,
 } from "./gateway-run-argv.js";
 import { getCoreCliParentDefaultHelpCommands } from "./program/core-command-descriptors.js";
-import { getSubCliParentDefaultHelpCommands } from "./program/subcli-descriptors.js";
+import { getSubCliCommandMetadata } from "./program/subcli-command-metadata.js";
 import type { BareRootLaunchTarget } from "./run-main.gateway-types.js";
 
 export const TUI_REQUIRES_TTY =
@@ -37,7 +37,9 @@ const ROOT_HELP_ALIASES = new Set(["tools", "help"]);
 const SETUP_ONBOARD_CONFIGURE_HELP_COMMANDS = new Set(["setup", "onboard", "configure"]);
 const BARE_PARENT_DEFAULT_HELP_COMMANDS = new Set([
   ...getCoreCliParentDefaultHelpCommands(),
-  ...getSubCliParentDefaultHelpCommands(),
+  ...getSubCliCommandMetadata()
+    .filter((descriptor) => descriptor.parentDefaultHelp)
+    .map((descriptor) => descriptor.name),
 ]);
 export function shouldLoadCliDotEnv(loadGlobalEnv: boolean): boolean {
   const cwd = tryProcessCwd();
