@@ -35,7 +35,7 @@ const COMPUTER_CLEANUP_TIMEOUT_MS = 2 * 30_000;
 
 export type WorkerEnvironmentNodeTunnel = Pick<
   NodeWorkerTunnelManager,
-  "status" | "start" | "stop" | "stopAll" | "observeProcesses"
+  "status" | "start" | "stop" | "stopAll" | "beginClose" | "observeProcesses"
 >;
 
 /** Lease teardown joins every transport sharing that environment owner. */

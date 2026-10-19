@@ -467,6 +467,7 @@ export function buildRestartSafeChatTranscriptState(params: {
   sourceIngress: "control-ui" | "internal";
   lastInteractionAt?: number;
   operatorSource?: InternalSessionEntry["restartRecoveryOperatorSource"];
+  requesterSource?: InternalSessionEntry["restartRecoveryRequesterSource"];
 }): {
   expectedSessionState?: SessionTranscriptTurnExpectedState;
   sessionLifecyclePatch: SessionTranscriptTurnLifecyclePatch;
@@ -500,6 +501,9 @@ export function buildRestartSafeChatTranscriptState(params: {
       restartRecoveryOperatorSource: params.admission.retryExpectedState
         ? params.admission.retryExpectedState.restartRecoveryOperatorSource
         : params.operatorSource,
+      restartRecoveryRequesterSource: params.admission.retryExpectedState
+        ? params.admission.retryExpectedState.restartRecoveryRequesterSource
+        : params.requesterSource,
       restartRecoverySourceReplyDeliveryMode: undefined,
       ...(params.admission.priorTerminalSourceRunId
         ? { restartRecoveryTerminalRunIds: [params.admission.priorTerminalSourceRunId] }

@@ -272,7 +272,13 @@ const synchronousScopes = new Map<string, ReadonlyMap<string, number>>([
   ["src/state/openclaw-state-db.ts", new Map([["runOpenClawStateWriteTransaction", 0]])],
   ["src/state/user-profile-mutation.ts", new Map([["runUserProfileWriteTransaction", 0]])],
   ["src/state/user-profiles-internal.ts", new Map([["readResolvedUserProfile", 1]])],
-  ["src/infra/sqlite-transaction.ts", new Map([["runSqliteDeferredTransactionSync", 1]])],
+  [
+    "src/infra/sqlite-transaction.ts",
+    new Map([
+      ["runSqliteDeferredTransactionSync", 1],
+      ["runSqliteReadSnapshotSync", 1],
+    ]),
+  ],
   [
     "src/plugins/runtime/generation-state.ts",
     new Map([["withPluginRuntimeGenerationRegistryScope", 1]]),

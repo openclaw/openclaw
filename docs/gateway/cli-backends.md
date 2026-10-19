@@ -469,6 +469,8 @@ imageMode: "repeat"
 
 OpenClaw writes base64 images to temp files. If `imageArg` is set, those paths are passed as CLI args. If not, OpenClaw appends the file paths to the prompt (path injection), which works for CLIs that auto-load local files from plain paths.
 
+Images come from the current turn's attachments and explicit image references, including reply-to media supplied by the channel. Image paths in injected conversation history or runtime context do not become new attachments on later text-only turns. Starting a new session with `/new` still clears the native conversation binding.
+
 ## Inputs and outputs
 
 - `output: "text"` (default) treats stdout as the final response.

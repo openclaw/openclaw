@@ -40,6 +40,8 @@ export type GatewayBenchCommand =
       kind: "resource-usage";
       action: "sample";
       initial?: boolean;
+      collectGarbage?: boolean;
+      snapshotPath?: string;
     };
 
 type GatewayProfileReply = {
@@ -106,7 +108,7 @@ export async function readGatewayCpuUsage(child: ChildProcess): Promise<GatewayC
 /** Samples the Gateway itself, not the controller or its descendants. */
 export async function readGatewayResources(
   child: ChildProcess,
-  options: { initial?: boolean } = {},
+  options: { initial?: boolean; collectGarbage?: boolean; snapshotPath?: string } = {},
 ): Promise<GatewayResourceSnapshot> {
   const reply = await sendGatewayBenchCommand(child, {
     channel: GATEWAY_PROFILE_CHANNEL,

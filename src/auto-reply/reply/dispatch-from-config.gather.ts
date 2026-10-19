@@ -156,7 +156,9 @@ export async function gatherDispatchRequest(
       return (
         replayUnsafeActivity ||
         (admission?.status === "accepted" && admission.mode === "steer") ||
-        (admission?.status === "skipped" && admission.reason === "question-response-indeterminate")
+        (admission?.status === "skipped" &&
+          (admission.reason === "question-response-indeterminate" ||
+            admission.reason === "collaborative-steering-disabled"))
       );
     },
     turnAdoptionState: turnAdoptionLifecycle ? turnAdoptionState : undefined,

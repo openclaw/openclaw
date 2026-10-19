@@ -234,7 +234,6 @@ function FallbackModel(props: {
           ]}
           disabled={props.disabled}
           title={props.title}
-          showSelectedDetail={true}
           onChange={(value) => props.onChange(value || null)}
         />
       }
@@ -375,7 +374,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               ]}
               disabled={props.models.length === 0 || saving()}
               title={title()}
-              showSelectedDetail={true}
               onChange={props.onPrimaryChange}
             />
           }
@@ -400,7 +398,6 @@ export function DefaultModels(props: DefaultModelsViewProps) {
               options={utilityOptions()}
               disabled={modelControlsDisabled() || saving()}
               title={title() || utilityRoute()?.detail || ""}
-              showSelectedDetail={true}
               onChange={(value) =>
                 props.onUtilityChange(value === AUTOMATIC_UTILITY_VALUE ? null : value)
               }

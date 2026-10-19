@@ -17,6 +17,7 @@ import {
 } from "../app-sidebar.ts";
 import "../../components/app-sidebar.tsx";
 import { domProbe } from "../dom-probe.ts";
+import { waitForSolid } from "../solid-settle.ts";
 import { agentList } from "./compact.test-support.ts";
 import { settleRoster } from "./roster.test-support.ts";
 
@@ -398,7 +399,7 @@ describe("AppSidebar agent chip", () => {
       avatar = researchRow?.querySelector(".agent-select__avatar");
       expect(avatar?.classList).toContain("is-pending");
       avatar?.querySelector("img")?.dispatchEvent(new Event("load"));
-      expect(avatar?.classList).not.toContain("is-pending");
+      await waitForSolid(() => expect(avatar?.classList).not.toContain("is-pending"));
       expect(createObjectURL).toHaveBeenCalledTimes(1);
       expect(fetchMock).toHaveBeenCalledWith(
         `${globalThis.location.origin}/avatar/research?v=140879`,

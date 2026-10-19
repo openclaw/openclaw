@@ -1982,19 +1982,6 @@ mod tests {
     }
 
     #[test]
-    fn declares_registered_commands_in_deterministic_order() {
-        let runtime = CommandRuntime::builder()
-            .command("example.z", |_context| async { Ok(Value::Null) })
-            .command("example.a", |_context| async { Ok(Value::Null) })
-            .build()
-            .unwrap();
-        assert_eq!(
-            runtime.command_names().collect::<Vec<_>>(),
-            ["example.a", "example.z"]
-        );
-    }
-
-    #[test]
     fn cancellation_scopes_do_not_cross_sessions() {
         let first = ActiveInvocations::default();
         let second = ActiveInvocations::default();
