@@ -312,9 +312,9 @@ export async function handleFeishuCommentEvent(
               result.delivery_mode === "reply_comment" ? result.reply_id : result.comment_id,
           });
           acceptedChunks.push(chunk);
-        } catch (error: unknown) {
+        } catch (deliveryError: unknown) {
           throw createFeishuPartialReplyDeliveryError(
-            error,
+            deliveryError,
             createFeishuReplyDeliveryResult({
               results,
               visibleReplySent: results.length > 0,

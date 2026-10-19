@@ -154,7 +154,7 @@ describe("Feishu comment event reply delivery", () => {
     });
     expect(cleanup).toHaveBeenCalledTimes(1);
 
-    void created.dispatcherOptions?.onCleanup?.();
+    created.dispatcherOptions?.onCleanup?.();
     expect(cleanup).toHaveBeenCalledTimes(2);
 
     resolveCleanup?.();
