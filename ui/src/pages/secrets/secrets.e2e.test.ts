@@ -27,41 +27,24 @@ beforeEach(() => {
   }
 });
 
-const entryMetadata = {
-  scopeKind: "team",
-  scopeId: "",
-  createdAtMs: 1_786_352_400_000,
-  updatedAtMs: 1_786_352_400_000,
-  updatedBy: "E2E Operator",
-} satisfies Partial<SecretStoreEntry>;
-
-const envEntry: SecretStoreEntry = {
-  ...entryMetadata,
-  name: "SERVICE_URL",
-  kind: "env",
-  value: "https://service.test",
-};
-
-const secretEntry: SecretStoreEntry = {
-  ...entryMetadata,
-  name: "SERVICE_API_KEY",
-  kind: "secret",
-  allowedHosts: ["api.example.com"],
-};
-
-const bulkEnvEntry: SecretStoreEntry = {
-  ...envEntry,
-  name: "BULK_URL",
-  value: "https://bulk.test",
-};
-
-const bulkSecretEntry: SecretStoreEntry = {
-  ...secretEntry,
-  name: "BULK_PRIVATE_KEY",
-  allowedHosts: [],
-};
-
-const longNameSecretEntry: SecretStoreEntry = {
+function entry(name: string, content: string | string[]): SecretStoreEntry {
+  return {
+    name,
+    scopeKind: "team",
+    scopeId: "",
+    updatedBy: "E2E Operator",
+    createdAtMs: 1_786_352_400_000,
+    updatedAtMs: 1_786_352_400_000,
+    ...(typeof content === "string"
+      ? { kind: "env", value: content }
+      : { kind: "secret", allowedHosts: content }),
+  };
+}
+const envEntry = entry("SERVICE_URL", "https://service.test");
+const secretEntry = entry("SERVICE_API_KEY", ["api.example.com"]);
+const bulkEnvEntry = entry("BULK_URL", "https://bulk.test");
+const bulkSecretEntry = entry("BULK_PRIVATE_KEY", []);
+const longNameSecretEntry = {
   ...secretEntry,
   name: "REUTERS_OUTLOOK_CALENDAR_ICS_PRODUCTION_ACCESS_TOKEN",
 };
@@ -114,7 +97,7 @@ async function tableBodyContrast(page: Page): Promise<number> {
     });
 }
 
-async function activeGatewayIdentity(page: Page) {
+async function gatewayIdentity(page: Page) {
   return await evaluateControlUiContext(page, (context) => {
     const gateway = context.gateway;
     return {
@@ -133,8 +116,6 @@ const modal = (page: Page, label: string) =>
   page.locator(`openclaw-modal-dialog[label="${label}"]`);
 const notice = (page: Page, text: string | RegExp) =>
   page.getByRole("status").getByText(text).waitFor();
-const validation = (dialog: Locator, text: string) =>
-  dialog.getByRole("alert").getByText(text).waitFor();
 const openSecrets = (page: Page) => page.goto(`${suite.server.baseUrl}settings/secrets`);
 const listResponse = (...snapshots: SecretStoreEntry[][]) => ({
   sequence: snapshots.map((entries) => ({ entries })),
@@ -177,28 +158,6 @@ async function rowAction(page: Page, name: string, action: "edit" | "delete") {
   return row;
 }
 
-async function prepareDeletion(page: Page) {
-  const gateway = await openStore(page, {
-    list: listResponse([envEntry], [envEntry], []),
-    delete: saved,
-  });
-  const entryRow = await rowAction(page, "SERVICE_URL", "delete");
-  const confirmation = modal(page, "Delete");
-  await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
-  return { gateway, entryRow, confirmation };
-}
-
-async function waitForReconnect(
-  gateway: Awaited<ReturnType<typeof installMockGateway>>,
-  socketCount: number,
-  listCount: number,
-) {
-  await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
-  await expect
-    .poll(async () => (await gateway.getRequests("secrets.store.list")).length)
-    .toBeGreaterThan(listCount);
-}
-
 suite.define(() => {
   it.each([false, true])("keeps narrow row actions visible (touch: %s)", async (hasTouch) => {
     await suite.withPage({ viewport: { width: 1000, height: 900 }, hasTouch }, async ({ page }) => {
@@ -222,71 +181,62 @@ suite.define(() => {
     });
   });
 
-  it("keeps long secret names inside the Name column", async () => {
-    await suite.withPage({ viewport: { height: 900, width: 1440 } }, async ({ page }) => {
+  it.each([
+    { width: 1440, height: 900, phone: false },
+    { width: 390, height: 844, phone: true },
+  ])("contains long secret names (phone: $phone)", async ({ width, height, phone }) => {
+    await suite.withPage({ viewport: { width, height } }, async ({ page }) => {
       await openStore(page, { list: { entries: [longNameSecretEntry] } });
       const row = page.getByRole("row", { name: longNameSecretEntry.name });
       const name = row.locator(".secrets-store__name");
-      const access = row.locator(".secrets-store__mode");
-
-      expect(await name.getAttribute("title")).toBe(longNameSecretEntry.name);
-      const [nameBox, accessBox] = await Promise.all([name.boundingBox(), access.boundingBox()]);
-      if (!nameBox || !accessBox) {
-        throw new Error("Expected Name and Access cells to have layout boxes");
+      if (phone) {
+        expect(await name.textContent()).toBe(longNameSecretEntry.name);
+      } else {
+        expect(await name.getAttribute("title")).toBe(longNameSecretEntry.name);
+        const [nameBox, accessBox] = await Promise.all([
+          name.boundingBox(),
+          row.locator(".secrets-store__mode").boundingBox(),
+        ]);
+        if (!nameBox || !accessBox) {
+          throw new Error("Expected Name and Access cells to have layout boxes");
+        }
+        expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(accessBox.x);
       }
-      expect(nameBox.x + nameBox.width).toBeLessThanOrEqual(accessBox.x);
-      const nameStyle = await name.evaluate((element) => {
-        const style = getComputedStyle(element);
-        return {
-          overflowX: style.overflowX,
-          textOverflow: style.textOverflow,
-          whiteSpace: style.whiteSpace,
-          overflows: element.scrollWidth > element.clientWidth,
-        };
-      });
-      expect(nameStyle).toEqual({
-        overflowX: "hidden",
-        textOverflow: "ellipsis",
-        whiteSpace: "nowrap",
-        overflows: true,
-      });
-    });
-  });
-
-  it("wraps long secret names in the stacked phone layout", async () => {
-    await suite.withPage({ viewport: { height: 844, width: 390 } }, async ({ page }) => {
-      await openStore(page, { list: { entries: [longNameSecretEntry] } });
-      const row = page.getByRole("row", { name: longNameSecretEntry.name });
-      const name = row.locator(".secrets-store__name");
-
-      expect(await name.textContent()).toBe(longNameSecretEntry.name);
-      const nameStyle = await name.evaluate((element) => {
+      const layout = await name.evaluate((element) => {
         const style = getComputedStyle(element);
         const text = document.createRange();
         text.selectNodeContents(element);
         return {
+          overflowX: style.overflowX,
+          textOverflow: style.textOverflow,
           overflowWrap: style.overflowWrap,
           whiteSpace: style.whiteSpace,
           fitsHorizontally: element.scrollWidth <= element.clientWidth,
           wraps: text.getClientRects().length > 1,
         };
       });
-      expect(nameStyle).toEqual({
-        overflowWrap: "anywhere",
-        whiteSpace: "normal",
-        fitsHorizontally: true,
-        wraps: true,
-      });
-      for (const selector of ["html", ".secrets-store__table-wrap", ".secrets-store__table"]) {
-        const fits = await page.locator(selector).evaluate((element) => {
-          const box = element.getBoundingClientRect();
-          return (
-            element.scrollWidth <= element.clientWidth &&
-            box.left >= 0 &&
-            box.right <= window.innerWidth
-          );
-        });
-        expect(fits, `${selector} stays inside the phone viewport`).toBe(true);
+      expect(layout).toMatchObject(
+        phone
+          ? { overflowWrap: "anywhere", whiteSpace: "normal", fitsHorizontally: true, wraps: true }
+          : {
+              overflowX: "hidden",
+              textOverflow: "ellipsis",
+              whiteSpace: "nowrap",
+              fitsHorizontally: false,
+            },
+      );
+      if (phone) {
+        for (const selector of ["html", ".secrets-store__table-wrap", ".secrets-store__table"]) {
+          const fits = await page.locator(selector).evaluate((element) => {
+            const box = element.getBoundingClientRect();
+            return (
+              element.scrollWidth <= element.clientWidth &&
+              box.left >= 0 &&
+              box.right <= window.innerWidth
+            );
+          });
+          expect(fits, `${selector} stays inside the phone viewport`).toBe(true);
+        }
       }
     });
   });
@@ -297,32 +247,33 @@ suite.define(() => {
         list: listResponse([secretEntry], [secretEntry], [secretEntry]),
         set: { sequence: [saved, saved] },
       });
-      await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
 
+      async function reject(dialog: Locator, text = "Enter a value.", proof?: string) {
+        await button(dialog, "Save").click();
+        await dialog.getByRole("alert").getByText(text).waitFor();
+        expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
+        if (proof) {
+          await capture(page, proof);
+        }
+        await button(dialog, "Cancel").click();
+      }
       await rowAction(page, "SERVICE_API_KEY", "edit");
       const editSecret = modal(page, "Edit");
-      await button(editSecret, "Save").click();
-      await validation(editSecret, "Enter a value.");
-      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
-      await button(editSecret, "Cancel").click();
+      await reject(editSecret);
 
       const addSecret = await openDialog(page, "Add");
       await field(addSecret, "Name").fill("EMPTY_API_KEY");
       await expectMode(addSecret, /Protected secret/u);
-      await button(addSecret, "Save").click();
-      await validation(addSecret, "Enter a value.");
-      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
-      await capture(page, "04-empty-secret-local-validation.png");
-      await button(addSecret, "Cancel").click();
+      await reject(addSecret, "Enter a value.", "04-empty-secret-local-validation.png");
 
       const protectedBulk = await openDialog(page, "Bulk Add");
       await bulkValue(protectedBulk).fill("EMPTY_API_KEY=\nEMPTY_ENV=");
       await protectedBulk.getByText("1 protected secret detected").waitFor();
-      await button(protectedBulk, "Save").click();
-      await validation(protectedBulk, "EMPTY_API_KEY: Enter a value.");
-      expect(await gateway.getRequests("secrets.store.set")).toHaveLength(0);
-      await capture(page, "05-empty-bulk-local-validation.png");
-      await button(protectedBulk, "Cancel").click();
+      await reject(
+        protectedBulk,
+        "EMPTY_API_KEY: Enter a value.",
+        "05-empty-bulk-local-validation.png",
+      );
 
       const addEnv = await openDialog(page, "Add");
       await field(addEnv, "Name").fill("EMPTY_ENV");
@@ -374,7 +325,6 @@ suite.define(() => {
           set: { sequence: [saved, { ok: true, reloaded: true, warningCount: 2 }, saved, saved] },
           delete: saved,
         });
-        await page.getByRole("heading", { name: "Secrets", level: 1, exact: true }).waitFor();
 
         const addDialog = await openDialog(page, "Add");
         await addDialog.getByText("Agent-readable environment", { exact: true }).waitFor();
@@ -445,81 +395,72 @@ suite.define(() => {
     );
   });
 
-  it("rejects a confirmed deletion after same-URL credentials replace the Gateway client", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const { gateway, entryRow, confirmation } = await prepareDeletion(page);
-
-      const socketCount = await gateway.getSocketCount();
-      const listCount = (await gateway.getRequests("secrets.store.list")).length;
-      const originalGateway = await evaluateControlUiContext(page, (context) => {
-        const activeGateway = context.gateway;
-        const client = activeGateway.snapshot.client;
-        if (!client) {
-          throw new Error("Expected a connected Gateway client before confirmation");
+  it.each([false, true])(
+    "handles confirmed deletion after reconnect (replace client: %s)",
+    async (replace) => {
+      await suite.withPage({}, async ({ page }) => {
+        const gateway = await openStore(page, {
+          list: listResponse([envEntry], [envEntry], []),
+          delete: saved,
+        });
+        const entryRow = await rowAction(page, "SERVICE_URL", "delete");
+        const confirmation = modal(page, "Delete");
+        await confirmation.getByText("Delete SERVICE_URL?", { exact: true }).waitFor();
+        const original = await gatewayIdentity(page);
+        expect(original.clientInstanceId).toBeDefined();
+        const socketCount = await gateway.getSocketCount();
+        const listCount = (await gateway.getRequests("secrets.store.list")).length;
+        if (replace) {
+          await evaluateControlUiContext(page, (context) => {
+            context.gateway.connect({ token: "replacement-secret-delete-proof" });
+          });
+        } else {
+          await gateway.closeLatest(1012, "secret delete confirmation reconnect proof");
         }
-        const identity = {
-          clientInstanceId: client.instanceId,
-          gatewayUrl: activeGateway.connection.gatewayUrl,
-        };
-        activeGateway.connect({ token: "replacement-secret-delete-proof" });
-        return identity;
+        await expect.poll(() => gateway.getSocketCount()).toBeGreaterThan(socketCount);
+        await expect
+          .poll(async () => (await gateway.getRequests("secrets.store.list")).length)
+          .toBeGreaterThan(listCount);
+        await expect
+          .poll(() => gatewayIdentity(page))
+          .toMatchObject({
+            gatewayUrl: original.gatewayUrl,
+            phase: "connected",
+            ...(replace ? {} : { clientInstanceId: original.clientInstanceId }),
+          });
+        if (replace) {
+          expect((await gatewayIdentity(page)).clientInstanceId).not.toBe(
+            original.clientInstanceId,
+          );
+          await expect.poll(() => button(entryRow, "Actions: SERVICE_URL").isEnabled()).toBe(true);
+        }
+        await button(confirmation, "Delete").click();
+        if (replace) {
+          await expect
+            .poll(
+              async () =>
+                (await page.getByRole("alert").count()) +
+                (await gateway.getRequests("secrets.store.delete")).length,
+            )
+            .toBeGreaterThan(0);
+          expect(await gateway.getRequests("secrets.store.delete")).toHaveLength(0);
+          await page
+            .getByRole("alert")
+            .getByText("The secret was not deleted. Reload the list and try again.", {
+              exact: true,
+            })
+            .waitFor();
+          await capture(page, "06-client-replacement-delete-rejected.png");
+          await entryRow.waitFor();
+        } else {
+          await expect
+            .poll(async () => (await gateway.getRequests("secrets.store.delete")).length)
+            .toBe(1);
+          await expect.poll(() => entryRow.count()).toBe(0);
+        }
       });
-      await waitForReconnect(gateway, socketCount, listCount);
-      await expect
-        .poll(() => activeGatewayIdentity(page))
-        .toMatchObject({
-          gatewayUrl: originalGateway.gatewayUrl,
-          phase: "connected",
-        });
-      const replacementGateway = await activeGatewayIdentity(page);
-      expect(replacementGateway.clientInstanceId).not.toBe(originalGateway.clientInstanceId);
-      await expect
-        .poll(() => entryRow.getByRole("button", { name: "Actions: SERVICE_URL" }).isEnabled())
-        .toBe(true);
-
-      await button(confirmation, "Delete").click();
-
-      await expect
-        .poll(async () => ({
-          alerts: await page.getByRole("alert").count(),
-          deletes: (await gateway.getRequests("secrets.store.delete")).length,
-        }))
-        .not.toEqual({ alerts: 0, deletes: 0 });
-      expect(await gateway.getRequests("secrets.store.delete")).toHaveLength(0);
-      await page
-        .getByRole("alert")
-        .getByText("The secret was not deleted. Reload the list and try again.", { exact: true })
-        .waitFor();
-      await capture(page, "06-client-replacement-delete-rejected.png");
-      await entryRow.waitFor();
-    });
-  });
-
-  it("deletes a confirmed entry after the same Gateway client reconnects", async () => {
-    await suite.withPage({}, async ({ page }) => {
-      const { gateway, entryRow, confirmation } = await prepareDeletion(page);
-
-      const originalGateway = await activeGatewayIdentity(page);
-      const socketCount = await gateway.getSocketCount();
-      const listCount = (await gateway.getRequests("secrets.store.list")).length;
-      await gateway.closeLatest(1012, "secret delete confirmation reconnect proof");
-      await waitForReconnect(gateway, socketCount, listCount);
-      await expect
-        .poll(() => activeGatewayIdentity(page))
-        .toMatchObject({
-          clientInstanceId: originalGateway.clientInstanceId,
-          gatewayUrl: originalGateway.gatewayUrl,
-          phase: "connected",
-        });
-
-      await button(confirmation, "Delete").click();
-
-      await expect
-        .poll(async () => (await gateway.getRequests("secrets.store.delete")).length)
-        .toBe(1);
-      await expect.poll(() => entryRow.count()).toBe(0);
-    });
-  });
+    },
+  );
 
   it("keeps optional store actions hidden when the Gateway omits method discovery", async () => {
     await suite.withPage({}, async ({ page }) => {
