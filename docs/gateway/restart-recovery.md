@@ -423,10 +423,13 @@ database available until accepted effects have recorded their outcomes.
 Worker-environment shutdown also names its computer, inference, transfer, tunnel,
 and accepted-operation joins. For an attached worker, shutdown stops the exact
 remote environment before draining its workspace queue: a foreground command
-can hold that queue until the stop cancels it. Remote stop and drain acknowledgments
-share at most five seconds after shutdown begins, capped by the remaining process
-cleanup budget, including stops already started by reconciliation. An unreachable
-worker keeps its durable attachment for cleanup on reconnect; it is not reported
+can hold that queue until the stop cancels it. Remote stop, drain, and active-turn
+cancellation acknowledgments share at most five seconds after shutdown begins,
+capped by the remaining process cleanup budget, including cancellation already
+started before shutdown. Tunnel cleanup separately times initialization, active
+launches, workspace operations, and transfers, so a slow reconciliation join names
+the work it is waiting for. An unreachable worker keeps its durable attachment
+for cleanup on reconnect; it is not reported
 as physically stopped. Local writes and transfer cleanup still settle before
 database retirement.
 
