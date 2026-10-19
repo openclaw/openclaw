@@ -1664,6 +1664,8 @@ async function prepareCliRunContextWithinReadFence(
           ...params,
           config: runConfig,
           prompt: preparedPrompt,
+          // History and runtime context may mention images already delivered to the native session.
+          imagePrompt: params.imagePrompt ?? params.prompt,
           transcriptPrompt: finalizedTranscriptPrompt,
           ...(requireExplicitMessageTarget ? { requireExplicitMessageTarget: true } : {}),
         },
@@ -1753,7 +1755,6 @@ async function prepareCliRunContextWithinReadFence(
       });
     }
     const hadSessionFile = await hasCliSessionTranscript(params);
-    const contextEngineTurnPrompt = params.transcriptPrompt ?? params.prompt;
     let preparedParams = await admitFinalParams();
 
     const note = await claimHeartbeatContextForUserRun({
@@ -1790,7 +1791,7 @@ async function prepareCliRunContextWithinReadFence(
       hadSessionFile,
       contextEngine,
       deferContextEngineDisposalUntil,
-      contextEngineTurnPrompt,
+      contextEngineTurnPrompt: params.transcriptPrompt ?? params.prompt,
       ...(promptContext ? { promptContext, promptForHooks } : {}),
       ...(nodeSkillWorkshop ? { nodeSkillWorkshop } : {}),
       ...(openClawHistoryPrompt ? { openClawHistoryPrompt } : {}),
