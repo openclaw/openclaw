@@ -42,15 +42,6 @@ const timingDefaults = {
   trendHours: null,
   useLatestMain: false,
 };
-function expectArgError(args: string, message: string) {
-  expect(() => parseRunTimingArgs(args.split(" "))).toThrow(message);
-}
-function expectInvalidArgs(cases: string[], message: string) {
-  for (const args of cases) {
-    expectArgError(args, message);
-  }
-}
-
 describe("scripts/ci-run-timings.mjs", () => {
   it("separates start delay from job duration without mislabeling dependency wait", () => {
     const summary = summarizeRunTimings(
@@ -149,32 +140,18 @@ describe("scripts/ci-run-timings.mjs", () => {
     ).toBe(false);
   });
 
-  it("ignores pnpm passthrough sentinels when parsing monitor args", () => {
-    expect(parseRunTimingArgs(["--latest-main", "--", "--limit", "3"])).toEqual({
-      ...timingDefaults,
-      limit: 3,
-      useLatestMain: true,
-    });
+  it.each([
+    ["--latest-main -- --limit 3", { limit: 3, useLatestMain: true }],
+    [
+      "--trend-hours=72 --compare-hours 12 --detail-runs=80 --json --output ci-trend.json",
+      { detailRuns: 80, json: true, outputPath: "ci-trend.json", trendHours: 72 },
+    ],
+  ])("parses monitor options: %s", (args, expected) => {
+    expect(parseRunTimingArgs(args.split(" "))).toEqual({ ...timingDefaults, ...expected });
   });
 
-  it("parses bounded trend comparison and JSON report options", () => {
-    expect(
-      parseRunTimingArgs(
-        "--trend-hours=72 --compare-hours 12 --detail-runs=80 --json --output ci-trend.json".split(
-          " ",
-        ),
-      ),
-    ).toEqual({
-      ...timingDefaults,
-      detailRuns: 80,
-      json: true,
-      outputPath: "ci-trend.json",
-      trendHours: 72,
-    });
-  });
-
-  it("rejects malformed monitor limits instead of falling back", () => {
-    expectInvalidArgs(
+  it.each([
+    [
       [
         "--limit 3jobs",
         "--limit 0",
@@ -186,11 +163,8 @@ describe("scripts/ci-run-timings.mjs", () => {
         "--detail-runs all",
       ],
       "must be a positive integer",
-    );
-  });
-
-  it("rejects missing monitor limits instead of treating flags as values", () => {
-    expectInvalidArgs(
+    ],
+    [
       [
         "--limit",
         "--limit --recent 4",
@@ -203,20 +177,18 @@ describe("scripts/ci-run-timings.mjs", () => {
         "--output=",
       ],
       "requires a value",
-    );
-  });
-
-  it("rejects unknown monitor flags and duplicate run ids", () => {
-    expectArgError("--run-id 123456", "Unknown CI run timing option: --run-id");
-    expectArgError("123456 789012", "Unexpected CI run id argument: 789012");
-  });
-
-  it("rejects ambiguous monitor modes and incomplete comparison windows", () => {
-    expectArgError("--recent 3 --latest-main", "--recent cannot be combined");
-    expectArgError("123456 --latest-main", "A run id cannot be combined");
-    expectArgError("--trend-hours 72 --recent 3", "--trend-hours cannot be combined");
-    expectArgError("--trend-hours 23", "must cover at least two");
-    expectArgError("--json", "require --trend-hours");
+    ],
+    [["--run-id 123456"], "Unknown CI run timing option: --run-id"],
+    [["123456 789012"], "Unexpected CI run id argument: 789012"],
+    [["--recent 3 --latest-main"], "--recent cannot be combined"],
+    [["123456 --latest-main"], "A run id cannot be combined"],
+    [["--trend-hours 72 --recent 3"], "--trend-hours cannot be combined"],
+    [["--trend-hours 23"], "must cover at least two"],
+    [["--json"], "require --trend-hours"],
+  ])("rejects monitor arguments: %s", (cases, message) => {
+    for (const args of cases) {
+      expect(() => parseRunTimingArgs(args.split(" "))).toThrow(message);
+    }
   });
 
   it("excludes manual, failed, and unfinished runs from recent main timings", () => {
