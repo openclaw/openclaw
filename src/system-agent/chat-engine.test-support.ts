@@ -299,7 +299,7 @@ export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
       ...opts,
       verifiedInference: explicitBinding ?? sharedFixture.binding,
       deps: {
-        readConfigFileSnapshot: async () => sharedSnapshot(),
+        readConfigFileSnapshot: mocks.readConfigFileSnapshot,
         ...opts.deps,
       },
     });
