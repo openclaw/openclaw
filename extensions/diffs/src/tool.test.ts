@@ -49,11 +49,11 @@ function executeDiff(tool: ReturnType<typeof createDiffsTool>, args: Record<stri
 }
 
 async function readViewerHtml(store: DiffArtifactStore, result: unknown) {
-  const viewerPath = String(readDetails(result).viewerPath);
+  const segments = String(readDetails(result).viewerPath).split("/");
   const viewer = await store.readAuthorizedViewer(
-    requireString(viewerPath.split("/").at(-2), "artifact id"),
+    requireString(segments.at(-2), "artifact id"),
     requireString(
-      viewerPath.split("/").findLast((segment) => segment.length > 0),
+      segments.findLast((segment) => segment.length > 0),
       "artifact token",
     ),
   );
@@ -96,7 +96,13 @@ describe("diffs tool", () => {
     await cleanupRootDir();
   });
 
-  function createTool(overrides: Partial<Parameters<typeof createDiffsTool>[0]> = {}) {
+  function createTool(
+    overrides: Partial<Parameters<typeof createDiffsTool>[0]> = {},
+    screenshotter?: DiffScreenshotter,
+  ) {
+    if (screenshotter) {
+      browserRuntime.screenshotter = screenshotter;
+    }
     return createDiffsTool({
       getConfig: () => ({}),
       store,
@@ -142,7 +148,7 @@ describe("diffs tool", () => {
 
   it("short-circuits identical before/after input without creating an artifact", async () => {
     const screenshotHtml = vi.fn<DiffScreenshotter["screenshotHtml"]>();
-    const tool = createToolWithScreenshotter(store, { screenshotHtml });
+    const tool = createTool({ context: toolContext }, { screenshotHtml });
 
     const result = await executeDiff(tool, {
       before: "same\n",
@@ -180,14 +186,11 @@ describe("diffs tool", () => {
   });
 
   it("renders PDF output when fileFormat is pdf", async () => {
-    const screenshotter = createScreenshotter("pdf", {
-      assertOutputPath: (outputPath) => {
-        expect(outputPath).toMatch(/preview\.pdf$/);
-      },
+    const screenshotter = createScreenshotter("pdf", ({ outputPath }) => {
+      expect(outputPath).toMatch(/preview\.pdf$/);
     });
 
-    browserRuntime.screenshotter = screenshotter;
-    const tool = createTool();
+    const tool = createTool({}, screenshotter);
 
     const result = await executeDiff(tool, {
       mode: "image",
@@ -210,7 +213,7 @@ describe("diffs tool", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     try {
       const screenshotter = createScreenshotter();
-      const tool = createToolWithScreenshotter(fixture.store, screenshotter);
+      const tool = createTool({ store: fixture.store, context: toolContext }, screenshotter);
       const result = await executeDiff(tool, {
         mode: "file",
         ttlSeconds: "1",
@@ -259,34 +262,22 @@ describe("diffs tool", () => {
     );
   });
 
-  it("rejects invalid base URLs as tool input errors", async () => {
-    const tool = createTool();
-
-    await expect(
-      executeDiff(tool, { mode: "view", baseUrl: "javascript:alert(1)" }),
-    ).rejects.toThrow("Invalid baseUrl");
-  });
-
-  it("returns a tool input error for malformed raw arguments", async () => {
-    const tool = createTool();
-
-    await expect(tool.execute?.("tool-malformed-null", null)).rejects.toThrow(
-      "Provide patch or both before and after text.",
-    );
-    await expect(tool.execute?.("tool-malformed-undefined", undefined)).rejects.toThrow(
-      "Provide patch or both before and after text.",
-    );
-  });
-
-  it("rejects oversized patch payloads", async () => {
-    const tool = createTool();
-
-    await expect(
-      tool.execute?.("tool-oversize-patch", {
-        patch: "x".repeat(2_100_000),
-        mode: "view",
-      }),
-    ).rejects.toThrow("patch exceeds maximum size");
+  it.each([
+    [
+      "base URL",
+      { before: "one\n", after: "two\n", mode: "view", baseUrl: "javascript:alert(1)" },
+      "Invalid baseUrl",
+    ],
+    ["null", null, "Provide patch or both before and after text."],
+    ["undefined", undefined, "Provide patch or both before and after text."],
+    ["patch size", { patch: "x".repeat(2_100_000), mode: "view" }, "patch exceeds maximum size"],
+    [
+      "before size",
+      { before: "x".repeat(600_000), after: "ok", mode: "view" },
+      "before exceeds maximum size",
+    ],
+  ] as const)("rejects invalid %s input", async (_name, args, message) => {
+    await expect(createTool().execute("invalid", args)).rejects.toThrow(message);
   });
 
   it("classifies patch render validation failures as tool input errors", async () => {
@@ -301,19 +292,6 @@ describe("diffs tool", () => {
       name: "ToolInputError",
       message: "Patch input did not contain any file diffs.",
     });
-  });
-
-  it("rejects oversized before/after payloads", async () => {
-    const tool = createTool();
-
-    const large = "x".repeat(600_000);
-    await expect(
-      tool.execute?.("tool-oversize-before", {
-        before: large,
-        after: "ok",
-        mode: "view",
-      }),
-    ).rejects.toThrow("before exceeds maximum size");
   });
 
   it("uses configured defaults when tool params omit them", async () => {
@@ -343,28 +321,30 @@ describe("diffs tool", () => {
   });
 
   it("prefers explicit tool params over configured defaults", async () => {
-    const screenshotter = createScreenshotter("png", {
-      assertHtml: (html) => {
-        expect(html).toContain("../../assets/viewer.js");
-      },
-      assertImage: (image) => {
-        expect(image).toMatchObject({
-          format: "png",
-          qualityPreset: "print",
-          scale: 2.75,
-          maxWidth: 1320,
-        });
-      },
+    const screenshotter = createScreenshotter("png", ({ html, image }) => {
+      expect(html).toContain("../../assets/viewer.js");
+      expect(image).toMatchObject({
+        format: "png",
+        qualityPreset: "print",
+        scale: 2.75,
+        maxWidth: 1320,
+      });
     });
-    const tool = createToolWithScreenshotter(store, screenshotter, {
-      ...DEFAULT_DIFFS_TOOL_DEFAULTS,
-      mode: "view",
-      theme: "light",
-      layout: "split",
-      fileQuality: "hq",
-      fileScale: 2.2,
-      fileMaxWidth: 1180,
-    });
+    const tool = createTool(
+      {
+        context: toolContext,
+        defaults: {
+          ...DEFAULT_DIFFS_TOOL_DEFAULTS,
+          mode: "view",
+          theme: "light",
+          layout: "split",
+          fileQuality: "hq",
+          fileScale: 2.2,
+          fileMaxWidth: 1180,
+        },
+      },
+      screenshotter,
+    );
 
     const result = await executeDiff(tool, {
       mode: "both",
@@ -388,40 +368,18 @@ describe("diffs tool", () => {
   });
 });
 
-function createToolWithScreenshotter(
-  store: DiffArtifactStore,
-  screenshotter: DiffScreenshotter,
-  defaults = DEFAULT_DIFFS_TOOL_DEFAULTS,
-  context: OpenClawPluginToolContext = toolContext,
-) {
-  browserRuntime.screenshotter = screenshotter;
-  return createDiffsTool({
-    getConfig: () => ({}),
-    store,
-    defaults,
-    context,
-  });
-}
-
 function createScreenshotter(
   format: DiffRenderOptions["image"]["format"] = "png",
-  params: {
-    assertHtml?: (html: string) => void;
-    assertImage?: (image: DiffRenderOptions["image"]) => void;
-    assertOutputPath?: (outputPath: string) => void;
-  } = {},
+  inspect?: (params: Parameters<DiffScreenshotter["screenshotHtml"]>[0]) => void,
 ): DiffScreenshotter {
-  const screenshotHtml = vi.fn<DiffScreenshotter["screenshotHtml"]>(
-    async ({ html, outputPath, image }) => {
-      expect(image.format).toBe(format);
-      params.assertHtml?.(html);
-      params.assertImage?.(image);
-      params.assertOutputPath?.(outputPath);
-      await fs.mkdir(path.dirname(outputPath), { recursive: true });
-      await fs.writeFile(outputPath, Buffer.from(format === "pdf" ? "%PDF-1.7" : "png"));
-      return outputPath;
-    },
-  );
+  const screenshotHtml = vi.fn<DiffScreenshotter["screenshotHtml"]>(async (params) => {
+    const { outputPath, image } = params;
+    expect(image.format).toBe(format);
+    inspect?.(params);
+    await fs.mkdir(path.dirname(outputPath), { recursive: true });
+    await fs.writeFile(outputPath, Buffer.from(format === "pdf" ? "%PDF-1.7" : "png"));
+    return outputPath;
+  });
   return { screenshotHtml };
 }
 
@@ -438,8 +396,7 @@ function requireString(value: unknown, label: string): string {
 }
 
 function readTextContent(result: unknown, index: number): string {
-  const content = (result as { content?: Array<{ type?: string; text?: string }> } | undefined)
-    ?.content;
-  const entry = content?.[index];
+  const entry = (result as { content?: Array<{ type?: string; text?: string }> } | undefined)
+    ?.content?.[index];
   return entry?.type === "text" ? (entry.text ?? "") : "";
 }

@@ -28,6 +28,7 @@ const toolContext = {
   messageChannel: "discord",
   agentAccountId: "default",
 };
+const browserConfig: OpenClawConfig = { browser: { executablePath: process.execPath } };
 
 let PlaywrightDiffScreenshotter: typeof import("./browser.runtime.js").PlaywrightDiffScreenshotter;
 type ScreenshotParams = Parameters<
@@ -39,13 +40,6 @@ vi.mock("playwright-core", () => ({
     launch: launchMock,
   },
 }));
-
-function firstMockCall(
-  mock: { mock: { calls: Array<readonly unknown[]> } },
-  label: string,
-): readonly unknown[] {
-  return expectDefined(mock.mock.calls[0], `expected ${label} call`);
-}
 
 afterAll(() => {
   vi.doUnmock("playwright-core");
@@ -101,13 +95,6 @@ describe("PlaywrightDiffScreenshotter", () => {
     };
   }
 
-  async function renderWithBrowserDiscovery(): Promise<{ executablePath?: string }> {
-    launchMock.mockResolvedValue(createMockBrowser([]));
-    const screenshotter = new PlaywrightDiffScreenshotter({ config: {} });
-    await screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1 } }));
-    return firstMockCall(launchMock, "browser launch")[0] as { executablePath?: string };
-  }
-
   it("uses standard Windows system roots when install-root overrides are blank", async () => {
     Object.defineProperty(process, "platform", { ...originalPlatform, value: "win32" });
     for (const [key, value] of Object.entries({
@@ -124,7 +111,11 @@ describe("PlaywrightDiffScreenshotter", () => {
     vi.spyOn(os, "homedir").mockReturnValue("C:\\Users\\test");
     const accessMock = vi.spyOn(fs, "access").mockRejectedValue(new Error("ENOENT"));
 
-    await expect(renderWithBrowserDiscovery()).resolves.not.toHaveProperty("executablePath");
+    launchMock.mockResolvedValue(createMockBrowser([]));
+    const screenshotter = new PlaywrightDiffScreenshotter({ config: {} });
+    await screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1 } }));
+    const [options] = expectDefined(launchMock.mock.calls[0], "browser launch");
+    expect(options).not.toHaveProperty("executablePath");
     const candidates = accessMock.mock.calls.map(([candidate]) => String(candidate));
     expect(candidates).toEqual([
       "C:\\Users\\test\\AppData\\Local\\Google\\Chrome\\Application\\chrome.exe",
@@ -148,10 +139,10 @@ describe("PlaywrightDiffScreenshotter", () => {
 
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(browser.newPage).toHaveBeenCalledTimes(2);
-    const firstPageParams = (
-      browser.newPage.mock.calls as Array<[{ deviceScaleFactor?: number }?]>
-    )[0]?.[0];
-    expect(firstPageParams?.deviceScaleFactor).toBe(2);
+    expect(browser.newPage).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({ deviceScaleFactor: 2 }),
+    );
     expect(pages).toHaveLength(2);
     expect(pages[0]?.close).toHaveBeenCalledTimes(1);
     expect(pages[1]?.close).toHaveBeenCalledTimes(1);
@@ -164,35 +155,29 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(launchMock).toHaveBeenCalledTimes(2);
   });
 
-  it.each(["config"] as const)(
-    "uses explicit tool %s for viewer links and screenshot browser selection",
-    async (configField) => {
-      const processConfig: OpenClawConfig = {
-        gateway: { publicOrigin: "https://process.example" },
-        browser: { executablePath: path.join(rootDir, "unavailable-browser") },
-      };
-      const explicitConfig: OpenClawConfig = {
-        gateway: { publicOrigin: "https://explicit.example" },
-        browser: { executablePath: process.execPath },
-      };
-      const { render } = createRegistrationHarness({
-        pluginConfig: {},
-        currentConfig: () => processConfig,
-      });
-      launchMock.mockResolvedValue(createMockBrowser([]));
+  it("uses explicit tool config for viewer links and screenshot browser selection", async () => {
+    const processConfig: OpenClawConfig = {
+      gateway: { publicOrigin: "https://process.example" },
+      browser: { executablePath: path.join(rootDir, "unavailable-browser") },
+    };
+    const explicitConfig: OpenClawConfig = {
+      gateway: { publicOrigin: "https://explicit.example" },
+      browser: { executablePath: process.execPath },
+    };
+    const { render } = createRegistrationHarness({}, processConfig);
+    launchMock.mockResolvedValue(createMockBrowser([]));
 
-      const { details } = await render({ [configField]: explicitConfig });
+    const { details } = await render({ config: explicitConfig });
 
-      expect
-        .soft(String(details.viewerUrl))
-        .toContain("https://explicit.example/plugins/diffs/view/");
-      expect(details.fileError).toBeUndefined();
-      expect(launchMock).toHaveBeenCalledWith(
-        expect.objectContaining({ executablePath: process.execPath }),
-      );
-      await expect(fs.readFile(String(details.filePath), "utf8")).resolves.toBe("png");
-    },
-  );
+    expect
+      .soft(String(details.viewerUrl))
+      .toContain("https://explicit.example/plugins/diffs/view/");
+    expect(details.fileError).toBeUndefined();
+    expect(launchMock).toHaveBeenCalledWith(
+      expect.objectContaining({ executablePath: process.execPath }),
+    );
+    await expect(fs.readFile(String(details.filePath), "utf8")).resolves.toBe("png");
+  });
 
   it("renders PDF output when format is pdf", async () => {
     const { pages, screenshotter } = await createScreenshotterHarness();
@@ -206,69 +191,53 @@ describe("PlaywrightDiffScreenshotter", () => {
     expect(pages).toHaveLength(1);
     const page = expectDefined(pages[0], "diffs browser page");
     expect(page.pdf).toHaveBeenCalledTimes(1);
-    const pdfCall = expectDefined(firstMockCall(page.pdf, "PDF render")[0], "PDF render call");
+    const pdfCall = expectDefined(page.pdf.mock.calls[0]?.[0], "PDF render call");
     expect(pdfCall).not.toHaveProperty("pageRanges");
     expect(page.screenshot).toHaveBeenCalledTimes(0);
     await expect(fs.readFile(pdfPath, "utf8")).resolves.toContain("%PDF-1.7");
   });
 
-  it("fails fast when PDF render exceeds size limits", async () => {
-    const { pages, screenshotter } = await createScreenshotterHarness({
-      boundingBox: { x: 40, y: 40, width: 960, height: 60_000 },
-    });
-    const pdfPath = path.join(rootDir, "oversized.pdf");
-
-    await expect(
-      screenshotter.screenshotHtml(
-        screenshotParams({ outputPath: pdfPath, theme: "light", image: { format: "pdf" } }),
-      ),
-    ).rejects.toThrow("Diff frame did not render within image size limits.");
-
+  it.each(["pdf", "png"] as const)("rejects oversized %s output", async (format) => {
+    const { pages, screenshotter } = await createScreenshotterHarness(
+      format === "pdf" ? { boundingBox: { x: 40, y: 40, width: 960, height: 60_000 } } : undefined,
+    );
+    const params =
+      format === "pdf"
+        ? screenshotParams({
+            outputPath: path.join(rootDir, "oversized.pdf"),
+            theme: "light",
+            image: { format },
+          })
+        : screenshotParams({ image: { scale: 1, maxPixels: 10 } });
+    await expect(screenshotter.screenshotHtml(params)).rejects.toThrow(
+      "Diff frame did not render within image size limits.",
+    );
     expect(launchMock).toHaveBeenCalledTimes(1);
     expect(pages).toHaveLength(1);
-    expect(pages[0]?.pdf).toHaveBeenCalledTimes(0);
-    expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
+    expect(pages[0]?.pdf).not.toHaveBeenCalled();
+    expect(pages[0]?.screenshot).not.toHaveBeenCalled();
   });
 
-  it("fails fast when maxPixels is still exceeded at scale 1", async () => {
-    const { pages, screenshotter } = await createScreenshotterHarness();
-
-    await expect(
-      screenshotter.screenshotHtml(screenshotParams({ image: { scale: 1, maxPixels: 10 } })),
-    ).rejects.toThrow("Diff frame did not render within image size limits.");
-    expect(pages).toHaveLength(1);
-    expect(pages[0]?.screenshot).toHaveBeenCalledTimes(0);
-  });
-
-  it("wraps browser launch failures with Chromium installation guidance", async () => {
-    launchMock.mockRejectedValue(new Error("launch failed"));
-    const screenshotter = new PlaywrightDiffScreenshotter({
-      config: createConfig(),
-    });
-
-    await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
-      "requires a Chromium-compatible browser",
-    );
-  });
-
-  it("wraps new-page failures with Chromium installation guidance", async () => {
+  it.each(["launch", "new-page"])("wraps %s failures with Chromium guidance", async (failure) => {
     const browser = createMockBrowser([]);
-    browser.newPage.mockRejectedValue(new Error("page creation failed"));
-    launchMock.mockResolvedValue(browser);
-    const screenshotter = new PlaywrightDiffScreenshotter({
-      config: createConfig(),
-    });
-
+    if (failure === "launch") {
+      launchMock.mockRejectedValue(new Error("launch failed"));
+    } else {
+      browser.newPage.mockRejectedValue(new Error("page creation failed"));
+      launchMock.mockResolvedValue(browser);
+    }
+    const screenshotter = new PlaywrightDiffScreenshotter({ config: browserConfig });
     await expect(screenshotter.screenshotHtml(screenshotParams())).rejects.toThrow(
       "requires a Chromium-compatible browser",
     );
   });
 });
 
-function createRegistrationHarness(params: {
-  pluginConfig: Record<string, unknown>;
-  currentConfig: () => OpenClawConfig;
-}) {
+function createRegistrationHarness(
+  pluginConfig: Record<string, unknown> = {},
+  initialConfig = createRuntimeConfig(pluginConfig),
+) {
+  let config = initialConfig;
   const registered: {
     tool?: Parameters<OpenClawPluginApi["registerTool"]>[0];
     httpHandler?: Parameters<OpenClawPluginApi["registerHttpRoute"]>[0]["handler"];
@@ -278,9 +247,9 @@ function createRegistrationHarness(params: {
   const api = createTestPluginApi({
     id: "diffs",
     config: { gateway: { port: 18789, bind: "loopback" } },
-    pluginConfig: params.pluginConfig,
+    pluginConfig,
     runtime: {
-      config: { current: params.currentConfig },
+      config: { current: () => config },
       state: { openBlobStore: () => blobStore },
     } as never,
     registerTool(tool) {
@@ -293,13 +262,16 @@ function createRegistrationHarness(params: {
   });
   registerDiffsPlugin(api);
   const registration = expectDefined(registered.tool, "registered diffs tool");
-  if (typeof registration !== "function" && "contextVersion" in registration) {
-    throw new Error("expected legacy diffs registration");
+  if (typeof registration !== "function") {
+    throw new Error("expected diffs tool factory");
   }
   const handleRequest = expectDefined(registered.httpHandler, "registered diffs HTTP handler");
 
   return {
     on,
+    setConfig: (next: OpenClawConfig) => {
+      config = next;
+    },
     get: async (viewerPath: string, headers?: IncomingMessage["headers"]) => {
       const res = createMockServerResponse();
       expect(await handleRequest(localReq({ method: "GET", url: viewerPath, headers }), res)).toBe(
@@ -308,20 +280,14 @@ function createRegistrationHarness(params: {
       return res;
     },
     render: async (context: OpenClawPluginToolContext = toolContext) => {
-      const tool = expectDefined(
-        typeof registration === "function" ? registration(context) : registration,
-        "diffs tool for context",
-      );
+      const tool = expectDefined(registration(context), "diffs tool for context");
       if (Array.isArray(tool)) {
         throw new Error("expected one registered diffs tool");
       }
       const result = await tool.execute("tool-1", { before: "one\n", after: "two\n" });
       const details = expectDefined(asOptionalRecord(result.details), "diffs tool details");
-      const viewerPath = details.viewerPath;
-      if (typeof viewerPath !== "string") {
-        throw new Error("expected a diff viewer path");
-      }
-      return { details, viewerPath };
+      expect(typeof details.viewerPath).toBe("string");
+      return { details, viewerPath: String(details.viewerPath) };
     },
   };
 }
@@ -349,24 +315,22 @@ describe("diffs plugin registration", () => {
       viewerBaseUrl: "https://startup.example.com/openclaw",
       defaults: STARTUP_DIFFS_DEFAULTS,
     };
-    let configFile = createRuntimeConfig(startupConfig);
-    const { render, get } = createRegistrationHarness({
-      pluginConfig: startupConfig,
-      currentConfig: () => configFile,
-    });
+    const { render, get, setConfig } = createRegistrationHarness(startupConfig);
 
-    configFile = createRuntimeConfig({
-      viewerBaseUrl: "https://live.example.com/gateway",
-      defaults: {
-        mode: "view",
-        theme: "dark",
-        background: true,
-        layout: "unified",
-        showLineNumbers: true,
-        diffIndicators: "bars",
-        lineSpacing: 1.6,
-      },
-    });
+    setConfig(
+      createRuntimeConfig({
+        viewerBaseUrl: "https://live.example.com/gateway",
+        defaults: {
+          mode: "view",
+          theme: "dark",
+          background: true,
+          layout: "unified",
+          showLineNumbers: true,
+          diffIndicators: "bars",
+          lineSpacing: 1.6,
+        },
+      }),
+    );
 
     const { details, viewerPath } = await render({ ...toolContext, sessionId: "session-456" });
     const res = await get(viewerPath);
@@ -381,17 +345,16 @@ describe("diffs plugin registration", () => {
   });
 
   it("uses live runtime viewer-access config through the registered HTTP handler", async () => {
-    let configFile = createRuntimeConfig({ security: { allowRemoteViewer: true } });
-    const { on, render, get } = createRegistrationHarness({
-      pluginConfig: {
-        defaults: STARTUP_DIFFS_DEFAULTS,
-        security: { allowRemoteViewer: true },
-      },
-      currentConfig: () => configFile,
-    });
+    const { on, render, get, setConfig } = createRegistrationHarness(
+      { defaults: STARTUP_DIFFS_DEFAULTS, security: { allowRemoteViewer: true } },
+      createRuntimeConfig({ security: { allowRemoteViewer: true } }),
+    );
 
     expect(on).toHaveBeenCalledTimes(1);
-    const [hookName, beforePromptBuild] = firstMockCall(on, "plugin hook registration");
+    const [hookName, beforePromptBuild] = expectDefined(
+      on.mock.calls[0],
+      "plugin hook registration",
+    );
     expect(hookName).toBe("before_prompt_build");
     if (typeof beforePromptBuild !== "function") {
       throw new Error("expected before_prompt_build callback");
@@ -407,9 +370,7 @@ describe("diffs plugin registration", () => {
         "Include `path` when you know the filename, and omit presentation overrides unless needed.",
       ].join("\n"),
     );
-    // This guidance is prepended unconditionally, so it must not name a tool owned by
-    // another toolset: `message` is absent whenever `disableMessageTool` is set, and
-    // `canvas` ships as a separate plugin.
+    // Unconditional guidance cannot require optional message/canvas tools.
     expect(promptResult?.prependSystemContext).not.toMatch(/\bmessage\b|\bcanvas\b/i);
     expect(promptResult?.prependContext).toBeUndefined();
 
@@ -418,25 +379,20 @@ describe("diffs plugin registration", () => {
     expect(res.statusCode).toBe(200);
     expect(details.context).toEqual(toolContext);
 
-    configFile = createRuntimeConfig({ security: { allowRemoteViewer: false } });
+    setConfig(createRuntimeConfig({ security: { allowRemoteViewer: false } }));
 
     const proxiedRes = await get(viewerPath, { "x-forwarded-for": "203.0.113.10" });
     expect(proxiedRes.statusCode).toBe(404);
   });
 
   it("fails closed for remote viewer access when the live diffs plugin entry is removed", async () => {
-    let configFile = createRuntimeConfig({ security: { allowRemoteViewer: true } });
-    const { render, get } = createRegistrationHarness({
-      pluginConfig: { security: { allowRemoteViewer: true } },
-      currentConfig: () => configFile,
+    const { render, get, setConfig } = createRegistrationHarness({
+      security: { allowRemoteViewer: true },
     });
 
     const { viewerPath } = await render({ ...toolContext, sessionId: "session-789" });
 
-    configFile = {
-      ...configFile,
-      plugins: { entries: {} },
-    };
+    setConfig({ ...createRuntimeConfig({}), plugins: { entries: {} } });
 
     const proxiedRes = await get(viewerPath, { "x-forwarded-for": "203.0.113.10" });
     expect(proxiedRes.statusCode).toBe(404);
@@ -447,10 +403,7 @@ function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetada
   const entries = new Map<string, PluginBlobEntry<TMetadata>>();
   const read = (key: string): PluginBlobEntry<TMetadata> | undefined => {
     const entry = entries.get(key);
-    if (!entry) {
-      return undefined;
-    }
-    if (entry.expiresAt !== undefined && entry.expiresAt <= Date.now()) {
+    if (!entry || (entry.expiresAt !== undefined && entry.expiresAt <= Date.now())) {
       entries.delete(key);
       return undefined;
     }
@@ -525,10 +478,6 @@ function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetada
   };
 }
 
-function createConfig(): OpenClawConfig {
-  return { browser: { executablePath: process.execPath } };
-}
-
 function localReq(input: {
   method: string;
   url: string;
@@ -545,9 +494,7 @@ async function createScreenshotterHarness(options?: Parameters<typeof createMock
   const pages: Array<ReturnType<typeof createMockPage>> = [];
   const browser = createMockBrowser(pages, options);
   launchMock.mockResolvedValue(browser);
-  const screenshotter = new PlaywrightDiffScreenshotter({
-    config: createConfig(),
-  });
+  const screenshotter = new PlaywrightDiffScreenshotter({ config: browserConfig });
   return { pages, browser, screenshotter };
 }
 
@@ -570,12 +517,10 @@ function createMockPage(options?: {
   boundingBox?: { x: number; y: number; width: number; height: number };
 }) {
   const box = options?.boundingBox ?? { x: 40, y: 40, width: 640, height: 240 };
-  const screenshot = vi.fn(async ({ path: screenshotPath }: { path: string }) => {
-    await fs.writeFile(screenshotPath, Buffer.from("png"));
-  });
-  const pdf = vi.fn(async ({ path: pdfPath }: { path: string }) => {
-    await fs.writeFile(pdfPath, "%PDF-1.7 mock");
-  });
+  const writer = (contents: string) =>
+    vi.fn(async ({ path: output }: { path: string }) => {
+      await fs.writeFile(output, contents);
+    });
 
   return {
     route: vi.fn(async () => {}),
@@ -588,8 +533,8 @@ function createMockPage(options?: {
       boundingBox: vi.fn(async () => box),
     })),
     setViewportSize: vi.fn(async () => {}),
-    screenshot,
-    pdf,
+    screenshot: writer("png"),
+    pdf: writer("%PDF-1.7 mock"),
     close: vi.fn(async () => {}),
   };
 }
