@@ -38,6 +38,15 @@ describe("node host version mismatch guard", () => {
   let localIdentity: DeviceIdentity;
   let instanceId: string;
 
+  async function pairSurface(identity: DeviceIdentity, commands: string[] = []) {
+    const { request } = await requestNodePairing({
+      nodeId: identity.deviceId,
+      ...nodePlatform,
+      commands,
+    });
+    return approveNodePairing(request.requestId, pairingScopes);
+  }
+
   async function pairNode(identity: DeviceIdentity) {
     const request = await requestDevicePairing({
       deviceId: identity.deviceId,
@@ -50,12 +59,7 @@ describe("node host version mismatch guard", () => {
     });
     const approved = await approveDevicePairing(request.request.requestId, { callerScopes: [] });
     expect(approved?.status).toBe("approved");
-    const surface = await requestNodePairing({
-      nodeId: identity.deviceId,
-      ...nodePlatform,
-      commands: [],
-    });
-    const node = await approveNodePairing(surface.request.requestId, pairingScopes);
+    const node = await pairSurface(identity);
     expect(node && "node" in node).toBe(true);
   }
 
@@ -167,12 +171,7 @@ describe("node host version mismatch guard", () => {
   });
 
   test("rejected local reconnects preserve the active node pending reapproval", async () => {
-    const initial = await requestNodePairing({
-      nodeId: localIdentity.deviceId,
-      ...nodePlatform,
-      commands: ["screen.snapshot"],
-    });
-    await approveNodePairing(initial.request.requestId, pairingScopes);
+    await pairSurface(localIdentity, ["screen.snapshot"]);
 
     const upgraded = await connectNode({ commands: ["screen.snapshot", "system.run"] });
     try {

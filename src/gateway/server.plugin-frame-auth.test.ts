@@ -24,6 +24,8 @@ import { createGatewayTestRegistry } from "./server/__tests__/test-utils.js";
 import { createGatewayPluginRequestHandler } from "./server/plugins-http.js";
 import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-generation.js";
 
+const unusedHandler = () => vi.fn(async () => true);
+
 function cookie(
   pluginId: string,
   path: string,
@@ -74,7 +76,7 @@ function withRoutes(
 
 describe("control ui plugin frame auth route boundaries", () => {
   test("probes cookie availability inside the sandbox without invoking plugin code", async () => {
-    const handler = vi.fn(async () => true);
+    const handler = unusedHandler();
     const nonce = "0123456789abcdef0123456789abcdef";
     const targetOrigin = "https://gateway.example";
     const path = `/secure-hook?${CONTROL_UI_PLUGIN_AUTH_PROBE_QUERY}=${nonce}&${CONTROL_UI_PLUGIN_AUTH_PROBE_ORIGIN_QUERY}=${encodeURIComponent(targetOrigin)}`;
@@ -101,46 +103,59 @@ describe("control ui plugin frame auth route boundaries", () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
-  test("does not broaden an exact-route grant to child paths", async () => {
-    const handler = vi.fn(async () => true);
-    await withRoutes([route("frame", "/secure-hook/child", handler)], async (server) => {
-      const response = await sendRequest(server, {
-        path: "/secure-hook/child",
-        headers: { cookie: cookie("frame", "/secure-hook") },
-      });
-      expect(response.res.statusCode).toBe(401);
-    });
-    expect(handler).not.toHaveBeenCalled();
-  });
-
-  test("rejects encoded path traversal outside the signed route root", async () => {
-    const outer = vi.fn(async () => true);
-    const admin = vi.fn(async () => true);
-    await withRoutes(
-      [route("frame", "/admin", admin), route("frame", "/plugins/same", outer, "prefix")],
-      async (server) => {
-        const response = await sendRequest(server, {
-          path: "/plugins/same/%252e%252e/%252e%252e/admin",
-          headers: { cookie: cookie("frame", "/plugins/same", "prefix", ["operator.admin"]) },
-        });
-        expect(response.res.statusCode).toBe(401);
-      },
+  test.each<{
+    name: string;
+    routes: Array<[string, string, ("exact" | "prefix")?]>;
+    path: string;
+    grant: Parameters<typeof cookie>;
+    method?: string;
+  }>([
+    {
+      name: "exact grants do not cover child paths",
+      routes: [["frame", "/secure-hook/child"]],
+      path: "/secure-hook/child",
+      grant: ["frame", "/secure-hook"],
+    },
+    {
+      name: "encoded traversal cannot escape the signed root",
+      routes: [
+        ["frame", "/admin"],
+        ["frame", "/plugins/same", "prefix"],
+      ],
+      path: "/plugins/same/%252e%252e/%252e%252e/admin",
+      grant: ["frame", "/plugins/same", "prefix", ["operator.admin"]],
+    },
+    {
+      name: "cookies cannot authorize mutations",
+      routes: [["frame", "/secure-hook", "prefix"]],
+      path: "/secure-hook/action",
+      grant: ["frame", "/secure-hook", "prefix"],
+      method: "POST",
+    },
+    {
+      name: "outer grants cannot authorize another plugin's nested route",
+      routes: [
+        ["outer", "/plugins/outer", "prefix"],
+        ["nested", "/plugins/outer/nested"],
+      ],
+      path: "/plugins/outer/nested",
+      grant: ["outer", "/plugins/outer", "prefix", ["operator.write"]],
+    },
+  ])("rejects $name before plugin dispatch", async ({ routes, path, grant, method }) => {
+    const registrations = routes.map(([id, root, match]) =>
+      route(id, root, unusedHandler(), match),
     );
-    expect(outer).not.toHaveBeenCalled();
-    expect(admin).not.toHaveBeenCalled();
-  });
-
-  test("rejects mutation requests that present only a control ui plugin auth cookie", async () => {
-    const handler = vi.fn(async () => true);
-    await withRoutes([route("frame", "/secure-hook", handler, "prefix")], async (server) => {
+    await withRoutes(registrations, async (server) => {
       const response = await sendRequest(server, {
-        path: "/secure-hook/action",
-        method: "POST",
-        headers: { cookie: cookie("frame", "/secure-hook", "prefix") },
+        path,
+        method,
+        headers: { cookie: cookie(...grant) },
       });
       expect(response.res.statusCode).toBe(401);
     });
-    expect(handler).not.toHaveBeenCalled();
+    for (const { handler } of registrations) {
+      expect(handler).not.toHaveBeenCalled();
+    }
   });
 
   test("does not accept a control ui plugin auth cookie for websocket upgrade auth", async () => {
@@ -161,85 +176,49 @@ describe("control ui plugin frame auth route boundaries", () => {
     });
   });
 
-  test("keeps trusted-operator routes constrained to control ui plugin auth cookie scopes", async () => {
+  test.each<{ name: string; dispatch: boolean; scopes: OperatorScope[] }>([
+    {
+      name: "trusted-operator scope restriction",
+      dispatch: false,
+      scopes: ["operator.read", "operator.write"],
+    },
+    { name: "first-dispatched-route grant selection", dispatch: true, scopes: ["operator.write"] },
+  ])("preserves $name", async ({ dispatch, scopes: expectedScopes }) => {
     const scopes: string[][] = [];
     const adminAllowed: boolean[] = [];
-    await withRoutes(
-      [
-        {
-          ...route("frame", "/secure-hook", async (_req, res) => {
-            const observed = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes ?? [];
-            scopes.push([...observed]);
-            adminAllowed.push(authorizeOperatorScopesForMethod("set-heartbeats", observed).allowed);
-            res.end("ok");
-            return true;
-          }),
-          gatewayRuntimeScopeSurface: "trusted-operator",
-        },
-      ],
-      async (server) => {
-        const response = await sendRequest(server, {
-          path: "/secure-hook",
-          headers: {
-            cookie: cookie("frame", "/secure-hook", "exact", ["operator.read", "operator.write"]),
-          },
-        });
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
-      },
-    );
-    expect(scopes).toEqual([["operator.read", "operator.write"]]);
-    expect(adminAllowed).toEqual([false]);
-  });
-
-  test("rejects a broader plugin grant when a nested gateway route belongs to another plugin", async () => {
-    const outer = vi.fn(async () => true);
-    const nested = vi.fn(async () => true);
-    await withRoutes(
-      [
-        route("outer", "/plugins/outer", outer, "prefix"),
-        route("nested", "/plugins/outer/nested", nested),
-      ],
-      async (server) => {
-        const response = await sendRequest(server, {
-          path: "/plugins/outer/nested",
-          headers: { cookie: cookie("outer", "/plugins/outer", "prefix", ["operator.write"]) },
-        });
-        expect(response.res.statusCode).toBe(401);
-      },
-    );
-    expect(outer).not.toHaveBeenCalled();
-    expect(nested).not.toHaveBeenCalled();
-  });
-
-  test("selects the grant owned by the first dispatched gateway route", async () => {
-    const scopes: string[][] = [];
-    const exact = vi.fn<PluginHttpRouteRegistration["handler"]>(async (_req, res) => {
-      scopes.push([...(getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes ?? [])]);
+    const handler = vi.fn<PluginHttpRouteRegistration["handler"]>(async (_req, res) => {
+      const observed = getPluginRuntimeGatewayRequestScope()?.client?.connect?.scopes ?? [];
+      scopes.push([...observed]);
+      adminAllowed.push(authorizeOperatorScopesForMethod("set-heartbeats", observed).allowed);
       res.end("ok");
       return true;
     });
-    const nested = vi.fn(async () => true);
-    const outer = vi.fn(async () => true);
-    await withRoutes(
-      [
-        route("outer", "/plugins/outer/nested/action", exact),
-        route("nested", "/plugins/outer/nested", nested, "prefix"),
-        route("outer", "/plugins/outer", outer, "prefix"),
-      ],
-      async (server) => {
-        const response = await sendRequest(server, {
-          path: "/plugins/outer/nested/action",
-          headers: {
-            cookie: `${cookie("outer", "/plugins/outer", "prefix", ["operator.write"])}; ${cookie("nested", "/plugins/outer/nested", "prefix")}`,
+    const nested = unusedHandler();
+    const outer = unusedHandler();
+    const path = dispatch ? "/plugins/outer/nested/action" : "/secure-hook";
+    const routes = dispatch
+      ? [
+          route("outer", path, handler),
+          route("nested", "/plugins/outer/nested", nested, "prefix"),
+          route("outer", "/plugins/outer", outer, "prefix"),
+        ]
+      : [
+          {
+            ...route("frame", path, handler),
+            gatewayRuntimeScopeSurface: "trusted-operator" as const,
           },
-        });
-        expect(response.res.statusCode).toBe(200);
-        expect(response.getBody()).toBe("ok");
-      },
-    );
-    expect(scopes).toEqual([["operator.write"]]);
-    expect(exact).toHaveBeenCalledOnce();
+        ];
+    await withRoutes(routes, async (server) => {
+      const grant = dispatch
+        ? `${cookie("outer", "/plugins/outer", "prefix", expectedScopes)}; ${cookie("nested", "/plugins/outer/nested", "prefix")}`
+        : cookie("frame", path, "exact", expectedScopes);
+      const response = await sendRequest(server, { path, headers: { cookie: grant } });
+      expect(response.res.statusCode).toBe(200);
+      expect(response.getBody()).toBe("ok");
+    });
+    expect(scopes).toEqual([expectedScopes]);
+    expect(adminAllowed).toEqual([false]);
+    expect(handler).toHaveBeenCalledOnce();
     expect(nested).not.toHaveBeenCalled();
     expect(outer).not.toHaveBeenCalled();
   });
