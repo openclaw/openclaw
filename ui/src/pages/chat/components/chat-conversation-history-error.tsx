@@ -35,7 +35,7 @@ export function ChatConversationHistoryError(props: { message: string; onRetry: 
         <path d="M82 55v6M82 66v.1" stroke="var(--muted)" stroke-width="2" stroke-linecap="round" />
       </svg>
       <h2>{t("chat.historyUnavailableTitle")}</h2>
-      <p>{t("chat.historyUnavailableBody")}</p>
+      <p>{props.message || t("chat.historyUnavailableBody")}</p>
       <button class="btn chat-history-error__retry" type="button" onClick={() => props.onRetry()}>
         <Icon name="refresh" />
         {t("common.retry")}
