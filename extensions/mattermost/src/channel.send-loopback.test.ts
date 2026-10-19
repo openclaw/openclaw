@@ -1,3 +1,4 @@
+import type { ServerResponse } from "node:http";
 import { PlatformMessageNotDispatchedError } from "openclaw/plugin-sdk/error-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { createPluginRuntimeMock } from "openclaw/plugin-sdk/plugin-test-runtime";
@@ -23,66 +24,53 @@ vi.mock("./mattermost/runtime-api.js", async () => ({
 }));
 
 function loopbackConfig(baseUrl: string, botToken = "loopback-fixture"): OpenClawConfig {
-  return {
-    channels: {
-      mattermost: {
-        baseUrl,
-        botToken,
-        network: { dangerouslyAllowPrivateNetwork: true },
-      },
-    },
-  };
+  const mattermost = { baseUrl, botToken, network: { dangerouslyAllowPrivateNetwork: true } };
+  return { channels: { mattermost } };
 }
 
-async function sendPreparedMattermostLoopback(
-  cfg: OpenClawConfig,
-  actionParams: Record<string, unknown>,
-) {
-  const to = typeof actionParams.to === "string" ? actionParams.to.trim() : "";
-  const text = typeof actionParams.message === "string" ? actionParams.message : "";
-  const prepareSendPayload = mattermostPlugin.actions?.prepareSendPayload;
-  const sendPayload = mattermostPlugin.outbound?.sendPayload;
-  if (!to || !prepareSendPayload || !sendPayload) {
-    throw new Error("Mattermost prepared outbound send surface missing");
-  }
-  const payload = await prepareSendPayload({
+async function sendPrepared(cfg: OpenClawConfig, params: Record<string, unknown>) {
+  const context = { cfg, to: `channel:${CHANNEL_ID}`, accountId: "default" };
+  const text = typeof params.message === "string" ? params.message : "";
+  const payload = await mattermostPlugin.actions!.prepareSendPayload!({
     ctx: {
       channel: "mattermost",
       action: "send",
-      params: actionParams,
-      cfg,
-      accountId: "default",
+      params: { to: context.to, ...params },
+      ...context,
     },
-    to,
+    to: context.to,
     payload: { text },
   });
-  if (!payload) {
-    throw new Error("Mattermost send preparation declined");
-  }
-  return await sendPayload({
-    cfg,
-    to,
-    text,
-    payload,
-    accountId: "default",
-  });
+  expect(payload).not.toBeNull();
+  return mattermostPlugin.outbound!.sendPayload!({ ...context, text, payload: payload! });
 }
 
-type LoopbackRequest = { path: string; body: string };
+type Request = { path: string; body: string; authorization?: string };
+type Reply = (request: Request, response: ServerResponse) => void;
+function replyJson(response: ServerResponse, body: unknown, code = 201) {
+  response.writeHead(code, { "content-type": "application/json" });
+  response.end(JSON.stringify(body));
+}
+const defaultReply: Reply = ({ path }, response) =>
+  replyJson(
+    response,
+    path === "/api/v4/files"
+      ? { file_infos: [{ id: "file-loopback" }] }
+      : { id: "post-loopback", channel_id: CHANNEL_ID },
+  );
 
-function expectPost(requests: LoopbackRequest[], message: string) {
-  expect(requests).toEqual([
-    {
-      path: "/api/v4/posts",
-      body: JSON.stringify({ channel_id: CHANNEL_ID, message }),
-    },
+function expectPost(requests: Request[], message: string) {
+  expect(requests.map(({ path, body }) => [path, body])).toEqual([
+    ["/api/v4/posts", JSON.stringify({ channel_id: CHANNEL_ID, message })],
   ]);
 }
 
 async function withMattermostServer(
-  run: (cfg: OpenClawConfig, requests: LoopbackRequest[]) => Promise<void>,
+  run: (cfg: OpenClawConfig, requests: Request[]) => Promise<void>,
+  reply: Reply = defaultReply,
+  token?: string,
 ) {
-  const requests: LoopbackRequest[] = [];
+  const requests: Request[] = [];
   await withServer(
     (request, response) => {
       let body = "";
@@ -91,21 +79,18 @@ async function withMattermostServer(
         body += chunk;
       });
       request.on("end", () => {
-        const path = request.url ?? "";
-        requests.push({ path, body });
-        response.writeHead(201, { "content-type": "application/json" });
-        response.end(
-          JSON.stringify(
-            path === "/api/v4/files"
-              ? { file_infos: [{ id: "file-loopback" }] }
-              : { id: "post-loopback", channel_id: CHANNEL_ID },
-          ),
-        );
+        const entry = {
+          path: request.url ?? "",
+          body,
+          authorization: request.headers.authorization,
+        };
+        requests.push(entry);
+        reply(entry, response);
       });
     },
     async (baseUrl) => {
       setMattermostRuntime(createPluginRuntimeMock());
-      await run(loopbackConfig(baseUrl), requests);
+      await run(loopbackConfig(baseUrl, token), requests);
     },
   );
 }
@@ -136,8 +121,7 @@ describe("Mattermost send action loopback", () => {
 
   it("sends text with blank attachment placeholders and rejects nonblank payloads", async () => {
     await withMattermostServer(async (cfg, requests) => {
-      const result = await sendPreparedMattermostLoopback(cfg, {
-        to: "channel:" + CHANNEL_ID,
+      const result = await sendPrepared(cfg, {
         message: "loopback proof",
         buffer: "",
         base64: "  ",
@@ -149,8 +133,7 @@ describe("Mattermost send action loopback", () => {
       });
       expectPost(requests, "loopback proof");
       await expect(
-        sendPreparedMattermostLoopback(cfg, {
-          to: "channel:" + CHANNEL_ID,
+        sendPrepared(cfg, {
           message: "must not send",
           base64: "cmVwb3J0",
         }),
@@ -167,8 +150,7 @@ describe("Mattermost send action loopback", () => {
         contentType: "image/png",
         kind: "image",
       });
-      await sendPreparedMattermostLoopback(cfg, {
-        to: "channel:" + CHANNEL_ID,
+      await sendPrepared(cfg, {
         message: "loopback media proof",
         mediaUrl: "https://media.example.test/unnamed",
       });
@@ -193,81 +175,50 @@ describe("Mattermost sender authority over HTTP", () => {
       const entered = createDeferred<void>();
       const release = createDeferred<void>();
       const heldPath = mode === "text" ? "/api/v4/users/username/alice" : "/api/v4/files";
-      const requests: Array<{ path: string; authorization?: string }> = [];
-      const postBodies: unknown[] = [];
       const sequence: string[] = [];
       const token = `synthetic-authority-${mode}-${revoke}`;
       const retirement = new Error("Mattermost sender is no longer current");
       let current = true;
-
-      await withServer(
-        (request, response) => {
-          let postBody = "";
-          request.setEncoding("utf8");
-          request.on("data", (chunk) => {
-            if (request.url === "/api/v4/posts") {
-              postBody += chunk;
-            }
-          });
-          request.on("end", () => {
-            const requestPath = request.url ?? "";
-            requests.push({ path: requestPath, authorization: request.headers.authorization });
-            if (requestPath === "/api/v4/posts") {
-              postBodies.push(JSON.parse(postBody) as unknown);
-            }
-            sequence.push(requestPath);
-            const respond = () => {
-              response.writeHead(uploadFails && requestPath === "/api/v4/files" ? 503 : 200, {
-                "content-type": "application/json",
-              });
-              if (requestPath === "/api/v4/users/username/alice") {
-                response.end(JSON.stringify({ id: "bbbbbbbbbbbbbbbbbbbbbbbbbb" }));
-              } else if (requestPath === "/api/v4/users/me") {
-                response.end(JSON.stringify({ id: "cccccccccccccccccccccccccc" }));
-              } else if (requestPath === "/api/v4/channels/direct") {
-                response.end(JSON.stringify({ id: CHANNEL_ID }));
-              } else if (requestPath === "/api/v4/files") {
-                response.end(
-                  JSON.stringify(
-                    uploadFails
-                      ? { message: "Temporary upload failure" }
-                      : { file_infos: [{ id: "file-authority" }] },
-                  ),
-                );
-              } else {
-                response.end(JSON.stringify({ id: "post-authority", channel_id: CHANNEL_ID }));
-              }
-            };
-            if (requestPath === heldPath) {
-              entered.resolve();
-              void release.promise.then(respond);
-            } else {
-              respond();
-            }
-          });
-        },
-        async (baseUrl) => {
-          setMattermostRuntime(createPluginRuntimeMock());
+      const responses: Record<string, unknown> = {
+        "/api/v4/users/username/alice": { id: "bbbbbbbbbbbbbbbbbbbbbbbbbb" },
+        "/api/v4/users/me": { id: "cccccccccccccccccccccccccc" },
+        "/api/v4/channels/direct": { id: CHANNEL_ID },
+        "/api/v4/files": uploadFails
+          ? { message: "Temporary upload failure" }
+          : { file_infos: [{ id: "file-authority" }] },
+      };
+      const reply: Reply = ({ path }, response) => {
+        sequence.push(path);
+        const respond = () =>
+          replyJson(
+            response,
+            responses[path] ?? { id: "post-authority", channel_id: CHANNEL_ID },
+            uploadFails && path === "/api/v4/files" ? 503 : 200,
+          );
+        if (path === heldPath) {
+          entered.resolve();
+          void release.promise.then(respond);
+        } else {
+          respond();
+        }
+      };
+      await withMattermostServer(
+        async (cfg, requests) => {
           loadOutboundMediaFromUrl.mockReset();
           loadOutboundMediaFromUrl.mockResolvedValue({
             buffer: Buffer.from("authority attachment"),
             contentType: "text/plain",
             fileName: "report.txt",
           });
-          const send = mattermostPlugin.message?.send;
-          if (!send?.text || !send.media || !send.payload) {
-            throw new Error("Mattermost preferred send registration missing");
-          }
-          const onDeliveryResult = vi.fn<NonNullable<MattermostSendContext["onDeliveryResult"]>>(
-            async () => {
-              sequence.push("result");
-            },
-          );
+          const send = mattermostPlugin.message!.send!;
+          const onDeliveryResult = vi.fn(async () => {
+            sequence.push("result");
+          });
           const onPlatformSendDispatch = vi.fn(async () => {
             sequence.push("dispatch");
           });
           const ctx: MattermostSendContext = {
-            cfg: loopbackConfig(baseUrl, token),
+            cfg,
             to: mode === "text" ? "@alice" : `channel:${CHANNEL_ID}`,
             text: "authority proof",
             threadId: "thread-root",
@@ -284,10 +235,10 @@ describe("Mattermost sender authority over HTTP", () => {
           const mediaUrl = "https://media.example.test/report.txt";
           const pending =
             mode === "text"
-              ? send.text(ctx)
+              ? send.text!(ctx)
               : mode === "media"
-                ? send.media({ ...ctx, mediaUrl })
-                : send.payload({
+                ? send.media!({ ...ctx, mediaUrl })
+                : send.payload!({
                     ...ctx,
                     payload: {
                       text: ctx.text,
@@ -321,7 +272,11 @@ describe("Mattermost sender authority over HTTP", () => {
               expect(onPlatformSendDispatch).toHaveBeenCalledOnce();
               expect(onDeliveryResult).toHaveBeenCalledOnce();
               expect(sequence.slice(-3)).toEqual(["dispatch", "/api/v4/posts", "result"]);
-              expect(postBodies).toMatchObject([
+              expect(
+                requests
+                  .filter(({ path }) => path === "/api/v4/posts")
+                  .map(({ body }) => JSON.parse(body) as unknown),
+              ).toMatchObject([
                 {
                   message: uploadFails ? `${ctx.text}\n${mediaUrl}` : ctx.text,
                   root_id: mode === "text" ? "thread-root" : "explicit-root",
@@ -335,6 +290,8 @@ describe("Mattermost sender authority over HTTP", () => {
             release.resolve();
           }
         },
+        reply,
+        token,
       );
     },
   );

@@ -50,37 +50,30 @@ describe("mattermost session route", () => {
     expect(route.threadId).toBeUndefined();
   });
 
-  it("keys a private channel as group when the resolved target kind is group", () => {
-    const route = resolveRoute("mattermost:channel:priv123", {
-      resolvedTarget: {
+  it.each(["directory", "session"] as const)(
+    "keys a private channel as group from %s",
+    (source) => {
+      const route = resolveRoute(
+        "mattermost:channel:priv123",
+        source === "directory"
+          ? { resolvedTarget: { to: "channel:priv123", kind: "group", source: "directory" } }
+          : { currentSessionKey: "agent:main:mattermost:group:priv123:thread:root-post" },
+      );
+      expect(route).toMatchObject({
+        peer: { kind: "group", id: "priv123" },
+        chatType: "group",
+        from: "mattermost:group:priv123",
         to: "channel:priv123",
-        kind: "group",
-        source: "directory",
-      },
-    });
-
-    expect(route).toMatchObject({
-      peer: { kind: "group", id: "priv123" },
-      chatType: "group",
-      from: "mattermost:group:priv123",
-      baseSessionKey: "agent:main:mattermost:group:priv123",
-      to: "channel:priv123",
-    });
-  });
-
-  it("keys a private channel as group from the inbound currentSessionKey", () => {
-    const route = resolveRoute("mattermost:channel:priv123", {
-      currentSessionKey: "agent:main:mattermost:group:priv123:thread:root-post",
-    });
-
-    expect(route).toMatchObject({
-      peer: { kind: "group" },
-      chatType: "group",
-      from: "mattermost:group:priv123",
-      sessionKey: "agent:main:mattermost:group:priv123:thread:root-post",
-      threadId: "root-post",
-    });
-  });
+        baseSessionKey: "agent:main:mattermost:group:priv123",
+      });
+      if (source === "session") {
+        expect(route).toMatchObject({
+          sessionKey: "agent:main:mattermost:group:priv123:thread:root-post",
+          threadId: "root-post",
+        });
+      }
+    },
+  );
 
   it("keeps a public channel as channel when an unrelated group session key exists", () => {
     const route = resolveRoute("mattermost:channel:pub999", {
