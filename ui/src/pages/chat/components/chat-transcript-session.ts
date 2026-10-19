@@ -96,10 +96,11 @@ export type TranscriptRenderSnapshot<T> = {
 export function createTranscriptPresentation(
   scrollElement: () => HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  rowElements: () => Iterable<HTMLElement>,
   beforeMeasure: () => void,
 ) {
   const readConnectedRows = (): (() => boolean) | null => {
-    const apply = readConnectedTranscriptRows(scrollElement(), virtualizer);
+    const apply = readConnectedTranscriptRows(scrollElement(), virtualizer, rowElements());
     return apply
       ? () => {
           beforeMeasure();

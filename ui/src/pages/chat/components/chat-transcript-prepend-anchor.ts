@@ -122,7 +122,7 @@ function captureTranscriptPrependAnchor(
   // Prepended refs register after retained ones; choose by DOM order, not insertion order.
   const bubbles = [...messageElements]
     .filter((bubble) => scrollElement.contains(bubble))
-    .sort((left, right) => {
+    .toSorted((left, right) => {
       const position = left.compareDocumentPosition(right);
       if (position & Node.DOCUMENT_POSITION_FOLLOWING) {
         return -1;

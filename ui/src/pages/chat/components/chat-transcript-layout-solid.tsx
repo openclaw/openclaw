@@ -325,8 +325,8 @@ export class ChatTranscriptRenderer {
                   <TranscriptRows
                     snapshot={snapshot()}
                     measureRowRefFor={next.measureRowRefFor}
-                    columnRef={(element) => {
-                      this.column = element;
+                    columnRef={(column) => {
+                      this.column = column;
                     }}
                   />
                 </ContentPresentation>

@@ -137,6 +137,7 @@ export function isTranscriptRangeCommitted(
 export function readConnectedTranscriptRows(
   scrollElement: HTMLDivElement | null,
   virtualizer: Virtualizer<HTMLDivElement, HTMLElement>,
+  rowElements: Iterable<HTMLElement>,
 ): (() => boolean) | null {
   const rect = scrollElement?.getBoundingClientRect();
   if (
@@ -150,8 +151,8 @@ export function readConnectedTranscriptRows(
   // Width changes and retired smooth commands can have undelivered sizes.
   // Ordinary row refs stay on TanStack's observer path; never clear its cache.
   const measurements: Array<{ index: number; height: number }> = [];
-  // Cached refs can arrive out of order during prepends; preserve DOM-order corrections.
-  const rows = [...virtualizer.elementsCache.values()]
+  // Refs can arrive out of order during prepends; preserve DOM-order corrections.
+  const rows = [...rowElements]
     .filter((row) => scrollElement.contains(row))
     .toSorted(
       (left, right) => virtualizer.indexFromElement(left) - virtualizer.indexFromElement(right),

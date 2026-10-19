@@ -77,7 +77,8 @@ function escape() {
 describe("transcript search Escape", () => {
   it("returns to the composer when the shortcut origin has been removed", async () => {
     const pane = createPane();
-    const trigger = pane.container.appendChild(document.createElement("button"));
+    const chat = expectDefined(pane.container.querySelector(".chat"), "chat shortcut owner");
+    const trigger = chat.appendChild(document.createElement("button"));
     trigger.focus();
     trigger.dispatchEvent(
       new KeyboardEvent("keydown", { key: "f", ctrlKey: true, bubbles: true, cancelable: true }),

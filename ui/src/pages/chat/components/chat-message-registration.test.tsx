@@ -23,7 +23,7 @@ it("keeps conflict roots registered across updates and retires replaced roots", 
     timestamp: 1,
   };
   const registry = createTranscriptMessageElements(() => undefined);
-  const view = mountSolid(
+  const view = mountSolid<{ message: unknown }>(
     (props: { message: unknown }) => (
       <TranscriptMessageElementsContext value={registry}>
         <GroupedMessage
@@ -39,6 +39,7 @@ it("keeps conflict roots registered across updates and retires replaced roots", 
   try {
     const conflictRoot = expectDefined(
       view.container.querySelector(".chat-bubble--workspace-conflict"),
+      "workspace conflict root",
     );
     await waitForSolid(() => expect(registry.elements.get("custom-message")).toBe(conflictRoot));
 
@@ -61,7 +62,7 @@ it("keeps conflict roots registered across updates and retires replaced roots", 
     await waitForSolid(() =>
       expect(view.container.querySelector(".chat-bubble--workspace-conflict")).toBeNull(),
     );
-    const replacement = expectDefined(view.container.querySelector(".chat-bubble"));
+    const replacement = expectDefined(view.container.querySelector(".chat-bubble"), "message root");
     expect(replacement).not.toBe(conflictRoot);
     expect(registry.elements.get("custom-message")).toBe(replacement);
 
