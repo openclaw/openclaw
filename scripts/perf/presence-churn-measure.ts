@@ -299,6 +299,11 @@ try {
         ? createGatewayPresenceObserver({
             requestSnapshot: async () => {
               recoveryRequests++;
+              console.error("Presence recovery", {
+                socket: index,
+                measured,
+                phase: Object.keys(phases).at(-1) ?? "setup",
+              });
               return (await rpc(peers[index]!, "system-presence", {
                 snapshot: true,
               })) as PresenceReset;
@@ -366,6 +371,8 @@ try {
       },
     });
     peers.push(peer);
+    // Node ws can deliver hello and the first reset in one synchronous receive batch.
+    observer?.synchronize(peer);
     await peer.waitOpen();
     const timeout = setTimeout(
       () => challenge.reject(new Error("connect challenge timed out")),
@@ -428,7 +435,6 @@ try {
       },
       caps: mode === "delta" ? ["presence-deltas"] : [],
     })) as HelloOk;
-    observer?.synchronize(hello);
     if (index === clients - 1) {
       actorHello = hello;
     }
