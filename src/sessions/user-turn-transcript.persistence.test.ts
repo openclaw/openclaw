@@ -5,7 +5,7 @@ import {
 } from "openclaw/plugin-sdk/hook-runtime";
 import { createMockPluginRegistry } from "openclaw/plugin-sdk/plugin-test-runtime";
 import { castAgentMessage } from "openclaw/plugin-sdk/test-fixtures";
-import { afterAll, afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AgentMessage } from "../../packages/agent-core/src/types.js";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { runAgentHarnessBeforeMessageWriteHook } from "../agents/harness/hook-helpers.js";
@@ -107,9 +107,7 @@ describe("persistUserTurnTranscript", () => {
     target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
   });
 
-  afterEach(() => {
-    resetGlobalHookRunner();
-  });
+  afterEach(resetGlobalHookRunner);
 
   it("does not resume a cold transcript when its archive is missing", async () => {
     await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
@@ -482,23 +480,23 @@ describe("persistUserTurnTranscript", () => {
   );
 
   it("does not fail or retry a committed input when notification and diagnostic callbacks throw", async () => {
-    const errors: unknown[] = [];
-    let attempts = 0;
+    const notify = vi.fn(() => {
+      throw new Error("notification failed");
+    });
+    const diagnose = vi.fn(() => {
+      throw new Error("diagnostic failed");
+    });
     const recorder = makeRecorder({
       input: { text: "@Ada", idempotencyKey: "notification-error:user" },
-      onOriginalInputCommitted: () => {
-        attempts += 1;
-        throw new Error("notification failed");
-      },
-      onPersistenceError: (error) => {
-        errors.push(error);
-        throw new Error("diagnostic failed");
-      },
+      onOriginalInputCommitted: notify,
+      onPersistenceError: diagnose,
     });
     await expect(recorder.persistApproved()).resolves.toMatchObject({ appended: true });
     await recorder.persistFallback();
-    expect(attempts).toBe(1);
-    expect(errors).toEqual([expect.objectContaining({ message: "notification failed" })]);
+    expect(notify).toHaveBeenCalledTimes(1);
+    expect(diagnose.mock.calls).toEqual([
+      [expect.objectContaining({ message: "notification failed" })],
+    ]);
     expect(await readMessages()).toHaveLength(1);
   });
 
@@ -507,21 +505,21 @@ describe("persistUserTurnTranscript", () => {
     const failure = new Error("committed source publication failed");
     const sourcePublished = createDeferred();
     const acceptedCompletion = createDeferred();
-    let approvals = 0;
+    const approve = vi.fn(({ message }: { message: PersistedUserTurnMessage }) => ({
+      ...message,
+      content: "approved input",
+    }));
     const createRecorder = () =>
       makeRecorder({
         input: { text: "original input", idempotencyKey: "publication-failure:user" },
         target: { ...target, expectedSessionId: target.sessionId },
-        beforeMessageWrite: ({ message }) => {
-          approvals += 1;
-          return { ...message, content: "approved input" };
-        },
+        beforeMessageWrite: approve,
         onPersistenceError: () => {},
         updateMode: "none",
       });
     const recorder = createRecorder();
     recorder.setAdmissionHandler?.(() => acceptedCompletion.promise);
-    let settled = false;
+    const settled = vi.fn();
     const pending = withSessionTranscriptSourcePublication(
       target,
       () => {
@@ -530,15 +528,12 @@ describe("persistUserTurnTranscript", () => {
       },
       () => recorder.persistApproved(),
     );
-    const markSettled = () => {
-      settled = true;
-    };
-    void pending.then(markSettled, markSettled);
+    void pending.then(settled, settled);
     const rejected = expect(pending).rejects.toThrow(failure.message);
     try {
       await sourcePublished.promise;
       expect(recorder.hasPersisted()).toBe(true);
-      expect(settled).toBe(false);
+      expect(settled).not.toHaveBeenCalled();
     } finally {
       acceptedCompletion.resolve();
     }
@@ -556,7 +551,7 @@ describe("persistUserTurnTranscript", () => {
     await expect(reopened.persistApproved()).resolves.toMatchObject({ appended: false });
     expect(reopened.getPersistedMessage?.()).toEqual(stored);
     expect(reopened.getAdmissionReceipt()?.entryId).toBe(admission?.entryId);
-    expect(approvals).toBe(1);
+    expect(approve).toHaveBeenCalledTimes(1);
     expect(await readMessages()).toEqual([stored]);
   });
 
