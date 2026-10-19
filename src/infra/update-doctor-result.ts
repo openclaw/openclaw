@@ -210,6 +210,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
     return undefined;
   }
   let expectedGenerations: UpdateDatabaseGenerations | undefined = { ...input };
+  const migratedSources = new Set<string>();
   let fromGenerations: UpdateDatabaseGenerations | undefined;
   let unchanged = true;
   let receipt: UpdateDatabaseWriteReceipt | undefined;
@@ -247,6 +248,10 @@ export function createUpdateDoctorDatabaseWriteCapture(
       return runWithUpdateDoctorMigrationCapture(
         {
           expected: (pathname) => expectedGenerations?.[pathname],
+          // Later Doctor maintenance may write leases to a migrated store. Those
+          // writes still fail final rollback attribution; they are not a new source.
+          migrationSource: (pathname) =>
+            migratedSources.has(pathname) ? undefined : expectedGenerations?.[pathname],
           assertCurrent: () => options.assertCurrent?.(),
           accept(pathname, before, after) {
             options.assertCurrent?.();
@@ -256,6 +261,7 @@ export function createUpdateDoctorDatabaseWriteCapture(
               return;
             }
             expected[pathname] = after;
+            migratedSources.add(pathname);
           },
           refuse(message) {
             unchanged = false;

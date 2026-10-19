@@ -14,6 +14,7 @@ import { truncateSqliteWal } from "./sqlite-wal-checkpoint.js";
 
 export type UpdateDoctorMigrationCapture = {
   expected(pathname: string): string | null | undefined;
+  migrationSource(pathname: string): string | null | undefined;
   assertCurrent(): void;
   accept(pathname: string, before: string | null, after: string | null): void;
   refuse(message: string): void;
@@ -178,7 +179,7 @@ export function runUpdateSqliteMigration<T>(
     return operation();
   }
   const { capture } = context;
-  const expected = capture.expected(pathname);
+  const expected = capture.migrationSource(pathname);
   if (typeof expected !== "string" && !(expected === null && options?.created)) {
     return operation();
   }
