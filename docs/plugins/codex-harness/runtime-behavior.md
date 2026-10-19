@@ -78,6 +78,9 @@ When a binding preserves its native model, `/btw` prepares model, credentials,
 and search policy for that bound provider and model, even if the chat's outer
 model differs. A native model change after preparation rejects the side question
 before dispatch; retry to prepare for the current model.
+Supervised native models use Codex's model and authentication ownership, including
+models configured only in Codex; they do not require a host catalog entry or host
+credentials. Side questions use reasoning capabilities from their selected model.
 
 `sessions_yield`, `sessions_spawn`, and message-tool-only source replies stay
 direct because they are turn-control or delegation contracts. Guidance uses

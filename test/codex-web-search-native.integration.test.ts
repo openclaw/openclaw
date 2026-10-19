@@ -74,10 +74,14 @@ it.each([
   "model-less",
   "core-btw-host-unchanged",
   "core-btw-host-changed",
+  "core-btw-native-only",
 ] as const)(
   "binds prepared hosted search to current native authority for transition %s",
   async (scenario) => {
     const coreDispatch = scenario.startsWith("core-btw-");
+    const nativeOnly = scenario === "core-btw-native-only";
+    const nativeModel = nativeOnly ? "native-only" : "search-allowed";
+    const nativeProvider = nativeOnly ? "ollama" : "openai";
     const sideQuestion = coreDispatch || scenario.startsWith("btw-");
     const modelLess = scenario === "model-less";
     const transition = scenario.replace(/^btw-/, "");
@@ -161,14 +165,14 @@ it.each([
         threadId: "thread-native-search",
         cwd: fixture.tempDir,
         historyCoveredThrough: "2026-01-01T00:00:00.000Z",
-        ...(coreDispatch
+        ...(coreDispatch && !nativeOnly
           ? {}
           : {
               connectionScope: "supervision" as const,
               supervisionSourceThreadId: "thread-native-search",
             }),
-        model: "search-allowed",
-        modelProvider: "openai",
+        model: nativeModel,
+        modelProvider: nativeProvider,
         preserveNativeModel: true,
         conversationSourceTransferComplete: true,
         rolloutPath: path.join(codexHome, "sessions", "thread-native-search.jsonl"),
@@ -338,7 +342,13 @@ it.each([
       const wire = await fixture.createLeasedCodexLifecycleHarness({
         agentDir: path.join(fixture.tempDir, "wire-agent"),
         codexHome,
-        persistedThreads: [fixture.threadStartResult(binding.threadId, { cwd: fixture.tempDir })],
+        persistedThreads: [
+          {
+            ...fixture.threadStartResult(binding.threadId, { cwd: fixture.tempDir }),
+            model: nativeModel,
+            modelProvider: nativeProvider,
+          },
+        ],
         respond(method) {
           if (method === "thread/resume") {
             return {
@@ -350,8 +360,8 @@ it.each([
           if (method === "thread/fork") {
             const response = {
               ...fixture.threadStartResult("side-thread", { cwd: fixture.tempDir }),
-              model: "search-allowed",
-              modelProvider: "openai",
+              model: nativeModel,
+              modelProvider: nativeProvider,
             };
             wire.seed(response, { loaded: true, subscribed: true });
             return response;
@@ -634,7 +644,11 @@ it.each([
           expect(nativeSearch.length).toBeGreaterThan(0);
           expect(nativeWrites.filter(({ method }) => method === "turn/start")).toHaveLength(1);
         }
-      } else if (transition !== "unchanged" && scenario !== "core-btw-host-unchanged") {
+      } else if (
+        transition !== "unchanged" &&
+        scenario !== "core-btw-host-unchanged" &&
+        !nativeOnly
+      ) {
         expect(outcome).toHaveProperty("error");
         expect("error" in outcome && outcome.error).toMatchObject({
           message: expect.stringMatching(
@@ -659,7 +673,7 @@ it.each([
           nativeWrites.find(
             ({ method }) => method === (sideQuestion ? "thread/fork" : "thread/resume"),
           )?.params,
-        ).toMatchObject({ config: { web_search: "cached" } });
+        ).toMatchObject({ config: { web_search: nativeOnly ? "disabled" : "cached" } });
         expect(nativeWrites.filter(({ method }) => method === "turn/start")).toHaveLength(1);
         if (!sideQuestion && !modelLess) {
           expect(resolvePolicy).not.toHaveBeenCalled();
@@ -672,15 +686,31 @@ it.each([
             modelContextWindowTokens: 32_000,
           });
         }
-        expect(coreInput?.runtimeModel).toMatchObject({ provider: "openai", id: "search-allowed" });
-        expect(coreInput?.preparedRuntimeAuth.plan).toMatchObject({
-          providerForAuth: "openai",
-          modelId: "search-allowed",
-          modelRoute: { provider: "openai", modelId: "search-allowed", authRequirement: "api-key" },
+        expect(coreInput?.runtimeModel).toMatchObject({
+          provider: nativeProvider,
+          id: nativeModel,
         });
+        expect(coreInput?.preparedRuntimeAuth.plan).toMatchObject({
+          providerForAuth: nativeProvider,
+          modelId: nativeModel,
+          ...(nativeOnly
+            ? { harnessAuthProvider: "openai" }
+            : {
+                modelRoute: {
+                  provider: nativeProvider,
+                  modelId: nativeModel,
+                  authRequirement: "api-key",
+                },
+              }),
+        });
+        if (nativeOnly) {
+          expect(coreInput?.preparedRuntimeAuth.resolvedApiKey).toBeUndefined();
+          expect(coreInput?.preparedRuntimeAuth.authProfileStore.profiles).toEqual({});
+          expect(coreInput?.preparedRuntimeAuth.plan.modelRoute).toBeUndefined();
+        }
         expect(coreInput?.preparedWebSearchPolicy).toMatchObject({
           allowed: true,
-          modelRef: { provider: "openai", model: "search-allowed" },
+          modelRef: { provider: nativeProvider, model: nativeModel },
         });
       }
     } finally {

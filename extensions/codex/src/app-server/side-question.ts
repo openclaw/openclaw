@@ -862,7 +862,7 @@ export async function runCodexAppServerSideQuestion(
             thinkLevel: params.resolvedThinkLevel ?? "off",
             modelId: modelSelection.model,
             supportedReasoningEfforts: readCodexSupportedReasoningEfforts(
-              params.runtimeModel?.compat,
+              effectiveParams.runtimeModel?.compat,
             ),
           });
       const turnResponse = assertCodexTurnStartResponse(

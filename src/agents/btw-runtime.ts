@@ -14,6 +14,7 @@ import {
   type AdmittedRunOperatorAuthority,
 } from "./admitted-run-context.js";
 import { resolveExternalCliAuthOverlayScopeFromSelection } from "./auth-profiles/external-cli-auth-selection.js";
+import { createEmptyAuthProfileStore } from "./auth-profiles/runtime-snapshot-owner.js";
 import { resolveSessionAuthSelection } from "./auth-profiles/session-override.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { reconcileAuthProfileQuotaBlocks } from "./auth-profiles/usage.js";
@@ -21,6 +22,7 @@ import { buildBtwCliPrompt, buildBtwSystemPrompt } from "./btw-prompts.js";
 import { normalizeBtwContentBlocks } from "./btw-transcript.js";
 import { executePreparedCliRun } from "./cli-runner/execute.runtime.js";
 import { prepareCliRunContext } from "./cli-runner/prepare.runtime.js";
+import { createNativeModelOwnedRuntimeModel } from "./defaults.js";
 import type { BlockReplyChunking } from "./embedded-agent-block-chunker.js";
 import { resolveModelAsync } from "./embedded-agent-runner/model.js";
 import {
@@ -40,6 +42,7 @@ import {
   type PreparedModelRuntimeSnapshot,
   type PreparedModelRuntimeStores,
 } from "./prepared-model-runtime.js";
+import { buildAgentRuntimeAuthPlan } from "./runtime-plan/auth.js";
 import { materializePreparedRuntimeModel } from "./runtime-plan/materialize-model.js";
 import { prepareAgentRuntimeAuth } from "./runtime-plan/prepare-auth.js";
 import {
@@ -335,6 +338,28 @@ export async function resolveRuntimeModel(params: {
   const nativeOwnership = await readSessionRuntimeOwnershipAsync({ ...params, config: cfg });
   const modelRef = nativeOwnership?.modelRef ?? params;
   const { authStorage, modelRegistry } = preparedModelRuntime.createStores();
+  if (nativeOwnership?.auth === "native") {
+    const plan = buildAgentRuntimeAuthPlan({
+      provider: modelRef.provider,
+      modelId: modelRef.model,
+      config: cfg,
+      workspaceDir,
+      metadataSnapshot: preparedModelRuntime.metadataSnapshot,
+      harnessId: params.harnessId,
+      allowHarnessAuthProfileForwarding: false,
+    });
+    return {
+      model: createNativeModelOwnedRuntimeModel({
+        provider: modelRef.provider,
+        modelId: modelRef.model,
+      }),
+      authProfileStore: createEmptyAuthProfileStore(),
+      runtimeAuthPreparation: { plan, attempts: [{ kind: "implicit", plan }] },
+      authStorage,
+      modelRegistry,
+      nativeOwnership,
+    };
+  }
   const resolution = await resolveModelAsync(modelRef.provider, modelRef.model, agentDir, cfg, {
     abortSignal: params.abortSignal,
     authStorage,

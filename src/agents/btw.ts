@@ -259,15 +259,17 @@ export async function runBtwSideQuestion(
             });
       const runtimeAuthPreparation = authPreparation?.preparation ?? runtime.runtimeAuthPreparation;
       const selectedAuthProfileStore = authPreparation?.store ?? runtime.authProfileStore;
+      const nativeAuth = runtime.nativeOwnership?.auth === "native";
+      const firstAuthAttempt = runtimeAuthPreparation.attempts[0];
       const implicitHarnessAuthPlan =
-        selectedHarness.authBootstrap === "harness" &&
         runtimeAuthPreparation.attempts.length === 1 &&
-        runtimeAuthPreparation.attempts[0]?.kind === "implicit" &&
-        runtimeAuthPreparation.attempts[0].plan.harnessAuthProvider
-          ? runtimeAuthPreparation.attempts[0].plan
+        firstAuthAttempt?.kind === "implicit" &&
+        (nativeAuth ||
+          (selectedHarness.authBootstrap === "harness" &&
+            firstAuthAttempt.plan.harnessAuthProvider))
+          ? firstAuthAttempt.plan
           : undefined;
-      // A native harness owns this deferred auth decision. Resolving it through
-      // OpenClaw would incorrectly require a host credential before handoff.
+      // Native authentication is already owned by the binding, not a host credential route.
       const resolvedAttempt = implicitHarnessAuthPlan
         ? { plan: implicitHarnessAuthPlan, model: runtime.model }
         : await resolveBtwPreparedRuntimeAuth({
@@ -286,12 +288,14 @@ export async function runBtwSideQuestion(
         resolvedAttempt.model,
         getProviderAuthAuthority("auth" in resolvedAttempt ? resolvedAttempt.auth : undefined),
       );
-      const finalizedHarness = await prepareHarness(runtimeModel.provider, runtimeModel.id, {
-        api: runtimeModel.api,
-        baseUrl: runtimeModel.baseUrl,
-        ...resolveAgentHarnessPreparedRouteSupport(runtimeAuthPlan),
-        preparedAuth: resolveAgentHarnessPreparedAuthSupport({ plan: runtimeAuthPlan }),
-      });
+      const finalizedHarness = nativeAuth
+        ? selectedHarness
+        : await prepareHarness(runtimeModel.provider, runtimeModel.id, {
+            api: runtimeModel.api,
+            baseUrl: runtimeModel.baseUrl,
+            ...resolveAgentHarnessPreparedRouteSupport(runtimeAuthPlan),
+            preparedAuth: resolveAgentHarnessPreparedAuthSupport({ plan: runtimeAuthPlan }),
+          });
       if (finalizedHarness.id !== selectedHarness.id) {
         if (routeFinalized) {
           throw new Error("Agent harness selection changed after route materialization.");

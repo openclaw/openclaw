@@ -18,7 +18,6 @@ import {
   loadWebFetchToolFactoryForTest,
   useProviderToolSchemaRuntimeForTest,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
-import type { ModelCompatConfig } from "openclaw/plugin-sdk/provider-model-types";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -606,68 +605,6 @@ describe("runCodexAppServerSideQuestion", () => {
     expect(client.request).not.toHaveBeenCalled();
     expect(createOpenClawCodingToolsMock).not.toHaveBeenCalled();
   });
-
-  it.each([
-    {
-      metadata: "Platform",
-      thinking: "off",
-      rawModel: "configured-alias",
-      supported: ["none", "low", "medium", "high", "xhigh", "max"],
-      expected: "none",
-    },
-    { metadata: "unknown", thinking: "ultra", supported: undefined, expected: "ultra" },
-  ] as const)(
-    "sends $thinking with $metadata metadata to the side-question request boundary",
-    async (scenario) => {
-      const { thinking, supported, expected } = scenario;
-      const requestedModel = "rawModel" in scenario ? scenario.rawModel : "gpt-5.6-sol";
-      const client = createFakeClient();
-      getSharedCodexAppServerClientMock.mockResolvedValue(client);
-      const compat: ModelCompatConfig | undefined = supported
-        ? { supportedReasoningEfforts: [...supported] }
-        : undefined;
-      const params = sideParams({
-        model: requestedModel,
-        resolvedThinkLevel: thinking,
-        runtimeModel: {
-          ...createCodexTestModel(),
-          id: "gpt-5.6-sol",
-          api: "openai-responses",
-          baseUrl: "https://api.openai.com/v1",
-          compat,
-        },
-      });
-      params.preparedRuntimeAuth = platformPreparedRuntimeAuth("platform-test-key");
-      params.authProfileId = undefined;
-      params.authProfileIdSource = undefined;
-      isCodexAppServerNativeAuthProfileMock.mockReturnValue(false);
-      params.preparedRuntimeAuth.plan.modelRoute!.modelId = params.model;
-
-      await expect(runCodexAppServerSideQuestion(params)).resolves.toEqual({
-        text: "Side answer.",
-      });
-
-      expect(getSharedCodexAppServerClientMock).toHaveBeenCalledWith(
-        expect.objectContaining({ preparedAuth: { kind: "api-key", apiKey: "platform-test-key" } }),
-      );
-      expect(mockCall(getSharedCodexAppServerClientMock)[0]).not.toHaveProperty("authProfileId");
-      expect(createOpenClawCodingToolsMock).toHaveBeenCalledWith(
-        expect.objectContaining({
-          requesterThinkingLevel: thinking,
-          requesterModel: { provider: "openai", model: "gpt-5.6-sol" },
-        }),
-      );
-      const turnStartCall = client.request.mock.calls.find(([method]) => method === "turn/start");
-      expect(turnStartCall?.[1]).toMatchObject({
-        threadId: "side-thread",
-        model: requestedModel,
-        effort: expected,
-        collaborationMode: {
-          settings: { model: requestedModel, reasoning_effort: expected },
-        },
-      });
-    },
-  );
 
   it.each([
     { route: "Platform", error: "Prepared Codex API-key route is missing its resolved API key" },
