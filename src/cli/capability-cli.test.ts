@@ -1813,7 +1813,7 @@ describe("capability cli", () => {
     {
       name: "root provider",
       config: { tts: { providers: { openai: { voice: "coral" } } } },
-      args: ["--provider", "OpenAI", "--model", "openai/gpt-4o-mini-tts", "--voice", "alloy"],
+      args: ["--provider", " OpenAI ", "--model", " openai/gpt-4o-mini-tts ", "--voice", "alloy"],
       expectedOverrides: {
         provider: "openai",
         providerOverrides: { openai: { modelId: "gpt-4o-mini-tts", voiceId: "alloy" } },
