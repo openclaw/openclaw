@@ -167,9 +167,13 @@ suite.define(() => {
             .first()
             .waitFor();
           expect((await files.boundingBox())!.width).toBeGreaterThanOrEqual(viewport.width - 24);
+          const filesRoot = await files.elementHandle();
           await showDetails();
-          expect(await files.isVisible()).toBe(true);
-          await hideDetails();
+          expect(await files.isVisible()).toBe(false);
+          expect(await filesRoot?.evaluate((element) => element.isConnected)).toBe(true);
+          const host = page.locator(".chat-pane-cache__pane--active .chat-mobile-host");
+          await host.getByRole("button", { name: "Panels", exact: true }).click();
+          await files.waitFor();
           await page.setViewportSize({ width: 1280, height: 900 });
           await header.getByRole("button", { name: "Layout", exact: true }).waitFor();
           await expect.poll(async () => (await files.boundingBox())!.width).toBeLessThan(800);
@@ -178,6 +182,8 @@ suite.define(() => {
           await expect
             .poll(async () => (await files.boundingBox())!.width)
             .toBeGreaterThanOrEqual(viewport.width - 24);
+          expect(await filesRoot?.evaluate((element) => element.isConnected)).toBe(true);
+          await filesRoot?.dispose();
           await page.getByRole("button", { name: "Close Files", exact: true }).click();
 
           await header.getByRole("button", { name: "Actions for " + title, exact: true }).click();

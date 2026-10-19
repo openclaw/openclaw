@@ -1,12 +1,13 @@
 import type { Locator } from "playwright";
 import { expect, it } from "vitest";
+import { waitForLayoutSettled } from "../pages/chat/chat-layout.browser.test-support.ts";
 import { controlUiSessionUrl, installMockGateway } from "../test-helpers/control-ui-e2e.ts";
 import { openChatDetails } from "./chat-details.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Subagent task notice" });
 
-function footerBelow(details: Locator, footerSelector: string, margin = 0) {
+function footerClearOfDetails(details: Locator, footerSelector: string, margin = 1) {
   return details.evaluate(
     (element, { selector, tolerance }) => {
       const bounds = element.getBoundingClientRect();
@@ -15,8 +16,12 @@ function footerBelow(details: Locator, footerSelector: string, margin = 0) {
         .querySelector(selector)!
         .getBoundingClientRect();
       return bounds.height > 0 &&
+        bounds.bottom <= innerHeight &&
         footer.height > 0 &&
-        bounds.bottom <= footer.top + tolerance &&
+        (bounds.bottom <= footer.top + tolerance ||
+          bounds.top >= footer.bottom - tolerance ||
+          bounds.right <= footer.left ||
+          bounds.left >= footer.right) &&
         footer.bottom <= innerHeight
         ? footer.top
         : null;
@@ -26,7 +31,7 @@ function footerBelow(details: Locator, footerSelector: string, margin = 0) {
 }
 
 suite.define(() => {
-  it.each([1440, 768])("keeps task progress above the view-only footer at %ipx", (width) =>
+  it.each([1440, 768])("keeps progress and the view-only footer usable at %ipx", (width) =>
     suite.withPage({ viewport: { width, height: 900 }, colorScheme: "dark" }, async ({ page }) => {
       const parent = { key: "agent:main:task-parent", kind: "direct", label: "Workspace review" };
       const child = {
@@ -76,11 +81,19 @@ suite.define(() => {
       if (!(await progress.evaluate((element) => element.hasAttribute("open")))) {
         await progress.locator("summary").click();
       }
+      await waitForLayoutSettled(
+        page,
+        "openclaw-chat-pane.chat-pane-cache__pane--active :is(.chat-details, .agent-chat__disabled-banner--replacement)",
+      );
       // Capture the baseline with the layout check, before a reactive banner replacement.
       let footerTop = 0;
       await expect
         .poll(async () => {
-          const top = await footerBelow(details, ".agent-chat__disabled-banner--replacement", 1);
+          const top = await footerClearOfDetails(
+            details,
+            ".agent-chat__disabled-banner--replacement",
+            1,
+          );
           footerTop = top ?? 0;
           return top !== null;
         })
@@ -108,7 +121,7 @@ suite.define(() => {
       await openChatDetails(pane);
       await progress.waitFor();
       expect(await input.locator("textarea").inputValue()).toBe("Continue the review");
-      await expect.poll(() => footerBelow(details, ".agent-chat__input")).not.toBeNull();
+      await expect.poll(() => footerClearOfDetails(details, ".agent-chat__input")).not.toBeNull();
       await input.locator(".chat-send-btn--send:visible").click({ trial: true });
       expect(await pane.getByText("View-only subagent", { exact: true }).count()).toBe(0);
       expect(
