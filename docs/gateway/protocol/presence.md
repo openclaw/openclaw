@@ -35,7 +35,7 @@ For opted-in readers, the same `presence` event carries one of two payloads:
   "reset": true,
   "version": 12,
   "presence": [{ "connectionId": "connection-a", "ts": 1000 }],
-  "keys": ["entry:connection-a"]
+  "keys": ["1"]
 }
 ```
 
@@ -43,14 +43,16 @@ For opted-in readers, the same `presence` event carries one of two payloads:
 {
   "base": 12,
   "version": 13,
-  "upsert": [{ "key": "entry:connection-a", "set": { "ts": 2000 }, "unset": ["watchedSessions"] }],
+  "upsert": [{ "key": "1", "set": { "ts": 2000 }, "unset": ["watchedSessions"] }],
   "remove": [],
-  "order": ["entry:connection-a"]
+  "order": ["1"]
 }
 ```
 
 Keys are opaque, stable identities assigned by the presence owner, independent
 of display names and recipient visibility. A reset replaces the complete roster;
+keys are compact identifiers, not connection or device IDs, and are never reused
+within a Gateway process after a row expires or is removed. Do not persist or parse them.
 `keys` parallels `presence`. For an existing row, an upsert's `set` contains only
 changed top-level fields and `unset` names removed fields. Nested objects and arrays
 are replaced as fields, not merged. A new row uses `{ key, presence }` with its

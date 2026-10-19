@@ -35,6 +35,7 @@ export async function servePublicSessionRepresentation(params: {
 }): Promise<true> {
   const { req, res, config, gate, locator, projection, offset, unavailable } = params;
   const result = await gate.run({
+    kind: "transcript",
     publicationKey: locator.shareId,
     sessionKey: locator.sessionKey,
     config,

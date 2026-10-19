@@ -17,7 +17,7 @@ import { isGatewayMethodAdvertised } from "../lib/gateway-methods.ts";
 import { projectGateway, projectOverlays } from "../lib/reactive/application.ts";
 import { projectAgents } from "../lib/reactive/domain-capabilities.ts";
 import { createParkedProjection } from "../lib/reactive/parked-projection.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import { activeSessionAgentStatus, sessionRowAttention } from "../lib/session-attention.ts";
 import { uiConversationMatches } from "../lib/sessions/session-key.ts";
 import { nextSessionSnoozeWakeAt } from "../lib/sessions/session-snooze.ts";
@@ -45,11 +45,7 @@ export function createSessionAttention(
   const agents = projectAgents(context.agents);
   const hello = createMemo(() => gateway.read().snapshot.hello);
   const agentsList = createMemo(() => agents.read().agentsList);
-  const prompts = projectSource(questions, {
-    read: (state) => state.revision,
-    subscribe: (state, notify) => state.subscribe(notify),
-    equality: "revision",
-  });
+  const prompts = projectOwner(questions, (state) => state.revision);
   const [clock, setClock] = createSignal(0);
   const presentationClock = createParkedProjection(clock, presented);
   let resolverMemo = new SidebarProjectionMemo<SessionAttentionResolver>();

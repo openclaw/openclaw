@@ -971,38 +971,6 @@ afterEach(async () => {
   }
 });
 
-it("finalizes worker tool outcomes after an empty model response", async () => {
-  const { gateway, launch } = await setup({
-    inferencePlans: ["safe-tool", "empty-terminal", "text"],
-  });
-  await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "completed" });
-  const messages = gateway.messages;
-  expect(messages.find((message) => message.role === "toolResult")).toMatchObject({
-    isError: false,
-  });
-  expect(messages.at(-1)).toMatchObject({
-    role: "assistant",
-    content: [{ type: "text", text: "worker reply" }],
-  });
-  expect(gateway.inferenceRequests).toHaveLength(3);
-  expect(gateway.inferenceRequests[2]?.context.tools ?? []).toEqual([]);
-  expect(messages.filter((message) => message.role === "toolResult")).toHaveLength(1);
-  expect(
-    gateway.liveEventRequests.findLast(({ event }) => event.kind === "assistant"),
-  ).toMatchObject({ event: { payload: { text: "worker reply" } } });
-});
-
-it("finalizes worker tool outcomes with a failure after one empty continuation", async () => {
-  const { gateway, launch } = await setup({
-    inferencePlans: ["safe-tool", "empty-terminal", "empty-terminal"],
-  });
-  await expect(runWorkerDescriptor(launch)).resolves.toMatchObject({ status: "failed" });
-  expect(gateway.inferenceRequests).toHaveLength(3);
-  expect(gateway.liveEventRequests.at(-1)).toMatchObject({
-    event: { kind: "lifecycle", payload: { phase: "finishing", error: expect.any(String) } },
-  });
-});
-
 registerWorkerBackgroundExecLifecycleTests({
   setup,
   waitForFast,

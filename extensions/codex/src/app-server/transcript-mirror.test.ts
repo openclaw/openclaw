@@ -28,6 +28,7 @@ import {
   registerCodexEventProjectorTestLifecycle,
   turnCompleted,
 } from "./event-projector.test-harness.js";
+import { createCodexTestHostCapabilities } from "./host-capability.test-support.js";
 import type { CodexThread } from "./protocol.js";
 import { readCodexMirroredSessionHistoryMessages } from "./session-history.js";
 import { projectBoundedCodexThreadHistory } from "./transcript-history-projection.js";
@@ -728,6 +729,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       runId,
       sessionId,
       sessionTarget: { storePath },
+      hostCapabilities: createCodexTestHostCapabilities(),
     } as unknown as Parameters<typeof mirrorPromptAtTurnStartBestEffort>[0]["params"];
 
     await mirrorPromptAtTurnStartBestEffort({
@@ -741,12 +743,10 @@ describe("mirrorCodexAppServerTranscript", () => {
     });
 
     expect(warn).toHaveBeenCalledWith("failed to mirror codex app-server prompt at turn start", {
-      error: expect.any(String),
+      error: expect.stringContaining(blockedParent),
       runId,
       sessionId,
     });
-    const warning = warn.mock.calls.at(-1)?.[1] as { error?: string } | undefined;
-    expect(warning?.error).not.toBe("");
 
     warn.mockClear();
     await mirrorTranscriptBestEffort({
@@ -766,7 +766,7 @@ describe("mirrorCodexAppServerTranscript", () => {
       turnId: "turn-1",
     });
     expect(warn).toHaveBeenCalledWith("failed to mirror codex app-server transcript", {
-      error: expect.any(String),
+      error: expect.stringContaining(blockedParent),
       runId,
       sessionId,
     });

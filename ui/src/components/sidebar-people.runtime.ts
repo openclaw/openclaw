@@ -2,12 +2,7 @@ import { presenceUserKey } from "../../../src/shared/presence-user.ts";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { selectApplicationSession } from "../app/agent-selection.ts";
 import type { ApplicationGateway } from "../app/gateway.ts";
-import { i18n, t } from "../i18n/index.ts";
-import {
-  presenceUserLabel,
-  projectOnlinePresenceViewers,
-  profilePresenceViewer,
-} from "../lib/presence-users.ts";
+import { projectOnlinePresenceViewers, profilePresenceViewer } from "../lib/presence-users.ts";
 import { profileDirectory } from "../lib/profile-directory.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { runSessionNavigationIntent } from "../lib/sessions/navigation-handoff.ts";
@@ -42,12 +37,10 @@ export class SidebarPeopleRuntime {
   private readonly observer = new MutationObserver(() => this.sync());
   private lastOpenAt = -Infinity;
   private activity: ReturnType<typeof observePersonActivityData> | undefined;
-  private readonly stopLocale: () => void;
   private readonly stopGateway: (() => void) | undefined;
   private stopListeners: Array<() => void> = [];
 
   constructor(private readonly host: AppSidebarSessionNavigationElement) {
-    this.stopLocale = i18n.subscribe(() => this.sync());
     // Retire connection-bound cards without waiting for a sidebar repaint.
     this.stopGateway = host.sessionDataContext?.gateway.subscribe(() => {
       if (!this.isCurrent()) {
@@ -249,51 +242,53 @@ export class SidebarPeopleRuntime {
         `openclaw-person-activity-${++nextCardId}`,
         "session-progress-hovercard person-activity-hovercard",
       );
-    const label = presenceUserLabel(user, t("presence.card.person"));
-    card.setAttribute("aria-label", t("presence.card.ariaLabel", { name: label.name }));
     this.portal.renderContents(card, () =>
-      updatePersonActivityCard(card, {
-        user,
-        sessionData: activity.data,
-        watchAgentId: resolveUiDefaultAgentId(defaults),
-        mainKey: resolveUiConfiguredMainKey(defaults),
-        globalScope: isUiGlobalScopeConfigured(defaults),
-        routing: personActivityRouting(
-          {
-            basePath: this.host.basePath,
-            navigate: (route, options) => this.host.onNavigate?.(route, options),
-          },
-          () => this.close(),
-        ),
-        openSession: (row, agentId, options) => {
-          const face = resolveSessionPreferredFace(row);
-          this.close();
-          runSessionNavigationIntent(this.host, {
-            agentId,
-            face,
-            sessionKey: row.key,
-            commit: () => {
-              if (
-                this.host.sessionDataContext?.gateway !== active.gateway ||
-                context.gateway.snapshot.client !== active.client ||
-                context.gateway.snapshot.phase !== "connected" ||
-                active.scope !== this.scope()
-              ) {
-                return false;
-              }
-              this.host.prepareSessionNavigation(row.key, options.pathname);
-              this.host.onNavigate?.(face, options);
-              selectApplicationSession({
-                selection: context.agentSelection,
-                gateway: context.gateway,
-                sessionKey: row.key,
-                agentId,
-              });
-              return true;
+      updatePersonActivityCard(
+        card,
+        {
+          user,
+          sessionData: activity.data,
+          watchAgentId: resolveUiDefaultAgentId(defaults),
+          mainKey: resolveUiConfiguredMainKey(defaults),
+          globalScope: isUiGlobalScopeConfigured(defaults),
+          routing: personActivityRouting(
+            {
+              basePath: this.host.basePath,
+              navigate: (route, options) => this.host.onNavigate?.(route, options),
             },
-          });
+            () => this.close(),
+          ),
+          openSession: (row, agentId, options) => {
+            const face = resolveSessionPreferredFace(row);
+            this.close();
+            runSessionNavigationIntent(this.host, {
+              agentId,
+              face,
+              sessionKey: row.key,
+              commit: () => {
+                if (
+                  this.host.sessionDataContext?.gateway !== active.gateway ||
+                  context.gateway.snapshot.client !== active.client ||
+                  context.gateway.snapshot.phase !== "connected" ||
+                  active.scope !== this.scope()
+                ) {
+                  return false;
+                }
+                this.host.prepareSessionNavigation(row.key, options.pathname);
+                this.host.onNavigate?.(face, options);
+                selectApplicationSession({
+                  selection: context.agentSelection,
+                  gateway: context.gateway,
+                  sessionKey: row.key,
+                  agentId,
+                });
+                return true;
+              },
+            });
+          },
         },
-      }),
+        () => this.portal.position(),
+      ),
     );
     if (existing) {
       this.portal.position();
@@ -350,7 +345,6 @@ export class SidebarPeopleRuntime {
 
   dispose(): void {
     this.close();
-    this.stopLocale();
     this.stopGateway?.();
   }
 }
