@@ -58,121 +58,109 @@ it("preserves Talk setting precedence and explicit blank-key clearing", () => {
   });
 });
 
-it.each([undefined, "s2.1-pro", "drama-3", "drama-3-preview"])(
-  "maps hosted model %s and preserves Fish expression tags",
-  async (model) => {
-    respond((url, init) => {
-      expect(url).toBe("https://api.fish.audio/v1/tts");
-      expect(Object.fromEntries(new Headers(init?.headers))).toMatchObject({
-        model: model ?? "s2.1-pro",
-        authorization: "Bearer fish-test",
-      });
+it.each([
+  [undefined, "audio-file", "mp3", 44100],
+  ["s2.1-pro", "audio-file", "mp3", 44100],
+  ["drama-3", "audio-file", "mp3", 44100],
+  ["drama-3-preview", "audio-file", "mp3", 44100],
+  ["drama-3-preview", "voice-note", "opus", 48000],
+  ["drama-3-preview", "telephony", "pcm", 8000],
+] as const)("synthesizes %s for %s", async (model, target, format, sampleRate) => {
+  const bytes = [1, 2, 3];
+  const hosted = target === "audio-file";
+  const metadata = {
+    outputFormat: format,
+    fileExtension: `.${format}`,
+    voiceCompatible: target === "voice-note",
+  };
+  respond((url, init) => {
+    expect(url).toBe("https://api.fish.audio/v1/tts");
+    expect(Object.fromEntries(new Headers(init?.headers))).toMatchObject({
+      model: model ?? "s2.1-pro",
+      authorization: "Bearer fish-test",
+    });
+    if (hosted) {
       expect(init?.body).toBe(
         '{"text":"[barely holding it together] Keep this quiet. <whisper>Now celebrate!</whisper>","format":"mp3","reference_id":"voice-123","sample_rate":44100,"latency":"normal","prosody":{"speed":1.1},"temperature":0.6,"top_p":0.8,"normalize":false}',
       );
-      return new Response(new Uint8Array([1, 2, 3]), { headers: { "content-type": "audio/mpeg" } });
-    });
-    expect(
-      await provider.synthesize({
-        ...request,
-        text: "[barely holding it together] Keep this quiet. <whisper>Now celebrate!</whisper>",
-        providerConfig: {
-          apiKey: "fish-test",
-          model,
-          speakerVoiceId: "voice-123",
-          latency: "normal",
-          speed: 1.1,
-          temperature: 0.6,
-          topP: 0.8,
-          normalize: false,
-        },
-        target: "audio-file",
-        timeoutMs: 12_345,
-      }),
-    ).toMatchObject({
-      audioBuffer: Buffer.from([1, 2, 3]),
-      outputFormat: "mp3",
-      fileExtension: ".mp3",
-      voiceCompatible: false,
+    } else {
+      expect(typeof init?.body).toBe("string");
+      expect(JSON.parse(String(init?.body))).toMatchObject({ format, sample_rate: sampleRate });
+    }
+    return new Response(
+      new Uint8Array(bytes),
+      format === "pcm"
+        ? undefined
+        : { headers: { "content-type": format === "mp3" ? "audio/mpeg" : "audio/opus" } },
+    );
+  });
+  let result;
+  if (hosted) {
+    result = await provider.synthesize({
+      ...request,
+      text: "[barely holding it together] Keep this quiet. <whisper>Now celebrate!</whisper>",
+      providerConfig: {
+        apiKey: "fish-test",
+        model,
+        speakerVoiceId: "voice-123",
+        latency: "normal",
+        speed: 1.1,
+        temperature: 0.6,
+        topP: 0.8,
+        normalize: false,
+      },
+      target,
+      timeoutMs: 12_345,
     });
     expect(fetchMock).toHaveBeenCalledWith(
       expect.objectContaining({ timeoutMs: 12_345, auditContext: "fish-audio.tts" }),
     );
-  },
-);
-
-it.each(["voice-note", "telephony"] as const)("uses native audio for %s", async (target) => {
-  const streaming = target === "voice-note";
-  const format = streaming ? "opus" : "pcm";
-  const sampleRate = streaming ? 48000 : 8000;
-  const bytes = streaming ? [4, 5, 6] : [7, 8];
-  respond((_url, init) => {
-    if (typeof init?.body !== "string") {
-      throw new Error("expected Fish Audio JSON request body");
-    }
-    expect(JSON.parse(init.body)).toMatchObject({ format, sample_rate: sampleRate });
-    expect(new Headers(init.headers).get("model")).toBe("drama-3-preview");
-    return new Response(
-      new Uint8Array(bytes),
-      streaming ? { headers: { "content-type": "audio/opus" } } : undefined,
-    );
-  });
-  if (streaming) {
-    const result = await provider.streamSynthesize?.({
+  } else if (target === "voice-note") {
+    result = await provider.streamSynthesize?.({
       ...request,
       target,
-      providerOverrides: { model: "drama-3-preview" },
+      providerOverrides: { model },
     });
-    expect(result).toMatchObject({
-      outputFormat: "opus",
-      fileExtension: ".opus",
-      voiceCompatible: true,
-    });
-    expect([...new Uint8Array(await new Response(result?.audioStream).arrayBuffer())]).toEqual(
-      bytes,
-    );
-    await result?.release?.();
   } else {
     const providerConfig = provider.resolveTalkConfig?.({
       ...request,
       baseTtsConfig: { providers: { "fish-audio": request.providerConfig } },
-      talkProviderConfig: { modelId: "drama-3-preview" },
+      talkProviderConfig: { modelId: model },
     });
     if (!providerConfig) {
       throw new Error("expected Fish Audio Talk configuration");
     }
-    expect(await provider.synthesizeTelephony?.({ ...request, providerConfig })).toEqual({
+    result = await provider.synthesizeTelephony?.({ ...request, providerConfig });
+  }
+  if (result && "audioStream" in result) {
+    const { audioStream, release, ...actualMetadata } = result;
+    expect(actualMetadata).toEqual(metadata);
+    expect([...new Uint8Array(await new Response(audioStream).arrayBuffer())]).toEqual(bytes);
+    await release?.();
+  } else {
+    expect(result).toEqual({
       audioBuffer: Buffer.from(bytes),
-      outputFormat: "pcm",
-      sampleRate: 8000,
+      ...(target === "telephony" ? { outputFormat: "pcm", sampleRate: 8000 } : metadata),
     });
   }
 });
 
 it("lists all owned pages then one public page with deduplication", async () => {
   const own = Array.from({ length: 101 }, (_, index) => ({ _id: `own-${index}` }));
+  const publicVoice = {
+    _id: "public-1",
+    languages: [null, " en ", "", 1],
+    tags: [" warm ", false, " ", "warm"],
+  };
   respond((url) => {
     const params = new URL(url).searchParams;
     if (params.get("self") === "true") {
       const offset = (Number(params.get("page_number")) - 1) * 100;
       return Response.json({ total: own.length, items: own.slice(offset, offset + 100) });
     }
-    return Response.json({
-      items: [
-        { _id: "own-0", title: "Duplicate" },
-        {
-          _id: "public-1",
-          title: "Public",
-          languages: [null, " en ", "", 1],
-          tags: [" warm ", false, " ", "warm"],
-        },
-      ],
-    });
+    return Response.json({ items: [{ _id: "own-0", title: "Duplicate" }, publicVoice] });
   });
-  const voices = await provider.listVoices?.({
-    providerConfig: request.providerConfig,
-    timeoutMs: 9_000,
-  });
+  const voices = await provider.listVoices?.({ ...request, timeoutMs: 9_000 });
   expect(voices).toHaveLength(102);
   expect(voices?.at(-1)).toMatchObject({
     id: "public-1",
@@ -203,20 +191,18 @@ it.each([
   { key: "topp", value: "1", overrides: { topP: 1 } },
   { key: "speed", value: "0.5", overrides: { speed: 0.5 } },
 ])("accepts the $key=$value directive boundary", ({ key, value, overrides }) => {
-  expect(
-    provider.parseDirectiveToken?.({
-      key,
-      value,
-      policy: {
-        enabled: true,
-        allowText: true,
-        allowProvider: true,
-        allowVoice: true,
-        allowModelId: true,
-        allowVoiceSettings: true,
-        allowNormalization: true,
-        allowSeed: true,
-      },
-    }),
-  ).toEqual({ handled: true, overrides });
+  const policy = {
+    enabled: true,
+    allowText: true,
+    allowProvider: true,
+    allowVoice: true,
+    allowModelId: true,
+    allowVoiceSettings: true,
+    allowNormalization: true,
+    allowSeed: true,
+  };
+  expect(provider.parseDirectiveToken?.({ key, value, policy })).toEqual({
+    handled: true,
+    overrides,
+  });
 });
