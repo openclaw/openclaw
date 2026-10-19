@@ -1796,7 +1796,7 @@ describe("cron method validation", () => {
       expect(context.cron.update).not.toHaveBeenCalled();
       expectResponseError(respond, {
         code: "INVALID_REQUEST",
-        messageIncludes: "explicit payload.toolsAllow cap",
+        messageIncludes: "belongs to another conversation or account",
       });
     },
   );
@@ -1871,7 +1871,7 @@ describe("cron method validation", () => {
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(updated.payload);
       client = callerClient("ops", "work", "agent:ops:discord:work:direct:user-2");
       await expect(edit({ message: "another session" })).rejects.toThrow(
-        "explicit payload.toolsAllow cap",
+        "belongs to another conversation or account",
       );
       expect((await loadCronStore(storePath)).jobs[0]?.payload).toEqual(updated.payload);
       client = callerClient("ops", "work", sessionKey);
@@ -1883,6 +1883,76 @@ describe("cron method validation", () => {
           ownerAccountId: "work",
         },
       });
+    } finally {
+      cron.stop();
+    }
+  });
+
+  it("refuses chat edits to an ownerless legacy job's prompt or tools in plain words", async () => {
+    const { storePath } = await makeStorePath();
+    const legacy = createCronJob({
+      enabled: false,
+      agentId: "ops",
+      sessionKey: "agent:ops:telegram:group:-1001",
+      payload: { kind: "agentTurn", message: "legacy" },
+    });
+    await saveCronStore(storePath, { version: 1, jobs: [legacy] });
+    const cfg: OpenClawConfig = { agents: { entries: { ops: {} } } };
+    await applyLegacyCronStoreRepair({
+      cfg,
+      state: expectDefined(
+        await loadLegacyCronRepairState({ cfg, storePath }),
+        "legacy cron repair state",
+      ),
+    });
+    const seeded = expectDefined((await loadCronStore(storePath)).jobs[0], "seeded job");
+    expect(seeded.owner).toBeUndefined();
+    const cron = new CronService({
+      scheduler: createTestGatewayScheduler(),
+      nowMs: () => Date.now(),
+      storePath,
+      cronEnabled: false,
+      defaultAgentId: "ops",
+      log: cronLogger,
+      enqueueSystemEvent: vi.fn(),
+      requestHeartbeat: vi.fn(),
+      runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
+    });
+    const context = createCronContext();
+    context.cron.readJob.mockImplementation((id) => cron.readJob(id));
+    context.cron.updateWithPrecondition.mockImplementation((...args) =>
+      cron.updateWithPrecondition(...args),
+    );
+    const client = callerClient("ops", "default", "agent:ops:telegram:group:-1001");
+    const edit = async (patch: Record<string, unknown>) =>
+      await updateCronJobFromAgentTool({
+        id: legacy.id,
+        patch,
+        creatorToolAllowlist: [{ name: "read" }],
+        gatewayOpts: {},
+        callGateway: async (method, _opts, params) => {
+          const { respond } = await invokeCron(method, requireRecord(params, "cron params"), {
+            context,
+            client,
+          });
+          const [ok, result, error] = expectDefined(respond.mock.calls[0], "cron response");
+          if (!ok) {
+            throw new Error(error.message);
+          }
+          return result;
+        },
+      });
+    try {
+      for (const payload of [
+        { message: "prompt only" },
+        { kind: "agentTurn", message: "new", toolsAllow: [] },
+      ]) {
+        await expect(edit({ enabled: true, payload })).rejects.toThrow(
+          "only a Gateway owner or an operator can change its prompt or tools",
+        );
+      }
+      expect((await loadCronStore(storePath)).jobs[0]).toEqual(seeded);
+      await expect(edit({ enabled: true })).resolves.toMatchObject({ enabled: true });
     } finally {
       cron.stop();
     }
@@ -2147,6 +2217,116 @@ describe("cron method validation", () => {
       to: "slack:C123",
     }),
   );
+
+  // Creation records no host inference account for a CLI-backed model, so an
+  // edit must accept the same model ref instead of demanding a stored account.
+  const cliBackedModelRef = "anthropic/claude-sonnet-4-6";
+  const embeddedModelRef = "anthropic/claude-opus-4-6";
+  function cliBackedModelConfig(runtime = "claude-cli"): OpenClawConfig {
+    return {
+      agents: {
+        ownership: "explicit",
+        entries: { main: {} },
+        defaults: {
+          model: { primary: cliBackedModelRef, fallbacks: [] },
+          models: {
+            [cliBackedModelRef]: { agentRuntime: { id: runtime } },
+            [embeddedModelRef]: { agentRuntime: { id: "openclaw" } },
+          },
+        },
+      },
+      models: {
+        providers: {
+          anthropic: {
+            api: "anthropic-messages",
+            baseUrl: "https://api.anthropic.com",
+            apiKey: "synthetic-unused-model-key",
+            models: ["claude-sonnet-4-6", "claude-opus-4-6"].map((id) => ({
+              id,
+              name: `Synthetic ${id}`,
+              reasoning: false,
+              input: ["text"],
+              cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+              contextWindow: 200_000,
+              maxTokens: 8192,
+            })),
+          },
+        },
+      },
+    } as OpenClawConfig;
+  }
+  const cliModelPatch = (model: string) => ({
+    payload: { kind: "agentTurn", message: "updated", model },
+  });
+
+  it("accepts a CLI-backed model with a selected profile on cron.update", async () => {
+    setRuntimeConfig(cliBackedModelConfig());
+
+    const accepted = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@selected-profile`) },
+      createCronJob(),
+    );
+    expect(accepted.context.cron.update).toHaveBeenCalled();
+    expectCronSuccess(accepted.respond);
+
+    // Control: an embedded-runtime reference still needs its stored account.
+    const refused = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${embeddedModelRef}@missing-profile`) },
+      createCronJob(),
+    );
+    expect(refused.context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(refused.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
+  it("keeps explicit native-account validation when automatic routing defaults to CLI", async () => {
+    const cfg = cliBackedModelConfig("auto");
+    cfg.auth = {
+      order: { anthropic: ["anthropic:cli"] },
+      profiles: {
+        "anthropic:cli": { provider: "claude-cli", mode: "oauth" },
+        "anthropic:missing-api": { provider: "anthropic", mode: "api_key" },
+      },
+    };
+    setRuntimeConfig(cfg);
+
+    const refused = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@anthropic:missing-api`) },
+      createCronJob(),
+    );
+    expect(refused.context.committedUpdates).toEqual([]);
+    expectResponseError(refused.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
+
+  // A bound job keeps its rejection: the store would otherwise clone its recorded
+  // account onto the CLI route while the same patch replaces the model.
+  it("keeps the stored account rejection when a bound job moves to a CLI-backed model", async () => {
+    setRuntimeConfig(cliBackedModelConfig());
+
+    const bound = await invokeCronUpdate(
+      { id: "cron-1", patch: cliModelPatch(`${cliBackedModelRef}@selected-profile`) },
+      Object.assign(createCronJob(), {
+        inferenceBinding: {
+          version: 1 as const,
+          provider: "anthropic",
+          profileId: "anthropic:stored-account",
+          authorizationId: "9f2b1c0d4e5a67890123456789abcdef0123456789abcdef0123456789abcdef",
+          authRequirement: "api-key" as const,
+          source: "user" as const,
+        },
+      }),
+    );
+    expect(bound.context.cron.update).not.toHaveBeenCalled();
+    expectResponseError(bound.respond, {
+      code: "INVALID_REQUEST",
+      messageIncludes: "is unavailable",
+    });
+  });
 
   it("accepts provider-prefixed announce targets when delivery.channel uses a channel alias", async () => {
     setRuntimeConfig(msteamsConfig());

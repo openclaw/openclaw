@@ -344,7 +344,6 @@ describe("source completion", () => {
           const { replyPayloads } = await buildReplyPayloads({
             payloads: [finalPayload],
             isHeartbeat: false,
-            didLogHeartbeatStrip: false,
             blockStreamingEnabled: true,
             blockReplyPipeline: pipeline,
             replyToMode: "off",
@@ -483,7 +482,6 @@ describe("source completion", () => {
           const { replyPayloads } = await buildReplyPayloads({
             payloads: [{ text: "See [" }],
             isHeartbeat: false,
-            didLogHeartbeatStrip: false,
             blockStreamingEnabled: true,
             blockReplyPipeline: pipeline,
             replyToMode: "off",

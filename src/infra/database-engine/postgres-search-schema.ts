@@ -91,7 +91,10 @@ export function assertPostgresSearchAdmitted(
   schema: SearchSchema,
 ): void {
   if (!db.isOpen || !getSqliteDatabaseAdmission(db, key)?.includes(JSON.stringify(schema))) {
-    throw new Error(
+    throw new DatabaseSearchCapabilityUnavailableError(
+      schema.mode !== "keyword-only" && Object.keys(schema.vector ?? {}).length
+        ? "vector"
+        : "fullText",
       "PostgreSQL search requires matching store admission; reopen the store with its search schema.",
     );
   }
@@ -164,8 +167,12 @@ END $$;`);
 CREATE FUNCTION ${pgSearchName(`${index.table}_sync`)}() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_OP = 'UPDATE' AND OLD.${embedding} IS NOT DISTINCT FROM NEW.${embedding} THEN RETURN NEW; END IF;
-  DELETE FROM ${table} WHERE id = NEW.${id};
-  IF octet_length(NEW.${embedding}) > 0 THEN INSERT INTO ${table}(id, embedding) VALUES (NEW.${id}, openclaw_vector(NEW.${embedding}, ${source.dimensions})); END IF;
+  IF octet_length(NEW.${embedding}) > 0 THEN
+    INSERT INTO ${table}(id, embedding) VALUES (NEW.${id}, openclaw_vector(NEW.${embedding}, ${source.dimensions}))
+    ON CONFLICT (id) DO UPDATE SET embedding = EXCLUDED.embedding;
+  ELSE
+    DELETE FROM ${table} WHERE id = NEW.${id};
+  END IF;
   RETURN NEW;
 END $$;
 CREATE TRIGGER ${pgSearchName(`${index.table}_sync`)} AFTER INSERT OR UPDATE OF ${embedding} ON ${owner} FOR EACH ROW EXECUTE FUNCTION ${pgSearchName(`${index.table}_sync`)}();

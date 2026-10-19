@@ -2,8 +2,13 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../../infra/node-sqlite.js";
 import { createSqliteWorkerOperationAdmission } from "../../infra/sqlite-worker-operation-admission.js";
+import { executeExistingOpenClawStateRead } from "../../state/openclaw-state-db-readonly.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { runOpenClawStateWorkerOperation } from "../../state/openclaw-state-worker-store.js";
@@ -11,6 +16,7 @@ import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js"
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import {
   deleteTemplateAsync,
+  hasTemplatesAsync,
   listTemplatesAsync,
   markTemplateReadyAsync,
   readTemplateAsync,
@@ -50,7 +56,9 @@ describe("worktree template registry", () => {
     };
   });
 
-  it("recovers an absent same-version table and fences stale replacement mutations", async () => {
+  it("reads absent templates without writer queueing and recovers on the first mutation", async ({
+    onTestFinished,
+  }) => {
     const database = openOpenClawStateDatabase({ env });
     const databasePath = database.path;
     await closeStateDatabaseForTest();
@@ -61,7 +69,37 @@ describe("worktree template registry", () => {
     older.exec("DROP TABLE IF EXISTS worktree_templates");
     older.close();
 
-    await reserveTemplateAsync(env, template, guard);
+    const readerQueues: string[] = [];
+    onTestFinished(
+      onInternalDiagnosticEvent(
+        (event) => {
+          if (
+            event.type === "worker.request" &&
+            event.phase === "queued" &&
+            [
+              "worktrees.templates.read",
+              "worktrees.templates.has",
+              "worktrees.templates.list",
+            ].includes(event.requestClass)
+          ) {
+            readerQueues.push(event.kind);
+          }
+        },
+        { include: ["worker.request"] },
+      ),
+    );
+    const absentSql = observeMainThreadSql();
+    try {
+      expect(await readTemplateAsync(env, template.cacheKey)).toBeUndefined();
+      expect(await hasTemplatesAsync(env)).toBe(false);
+      expect(await listTemplatesAsync(env)).toEqual([]);
+      await reserveTemplateAsync(env, template, guard);
+      expect(await readTemplateAsync(env, template.cacheKey)).toEqual(template);
+      expect(await hasTemplatesAsync(env)).toBe(true);
+      absentSql.expectIdle();
+    } finally {
+      absentSql.restore();
+    }
     await expect(
       reserveTemplateAsync(env, { ...template, id: "contender" }, guard),
     ).rejects.toThrow();
@@ -88,6 +126,9 @@ describe("worktree template registry", () => {
       expect(await listTemplatesAsync(env)).toEqual([
         { ...replacement, status: "ready", lastUsedAt: 40 },
       ]);
+      await waitForDiagnosticEventsDrained();
+      expect(readerQueues.length).toBeGreaterThan(0);
+      expect(new Set(readerQueues)).toEqual(new Set(["stateRead"]));
       sql.expectIdle();
     } finally {
       sql.restore();
@@ -201,9 +242,13 @@ describe("worktree template registry", () => {
         context,
         async (scope) => {
           await scope.execute({ type: "worktrees.templates.reserve", input: template });
-          expect(await scope.execute({ type: "worktrees.templates.has", input: undefined })).toBe(
-            true,
-          );
+          expect(
+            await executeExistingOpenClawStateRead(
+              { env, path: selectedPath },
+              { type: "worktrees.templates.has", input: undefined },
+              { context, current: true },
+            ),
+          ).toMatchObject({ type: "worktrees.templates.has", has: true });
           await scope.execute({
             type: "worktrees.templates.ready",
             input: { id: template.id, now: 20 },
@@ -218,11 +263,15 @@ describe("worktree template registry", () => {
             },
           });
           expect(
-            await scope.execute({
-              type: "worktrees.templates.read",
-              input: { cacheKey: template.cacheKey },
-            }),
-          ).toEqual({ ...template, lastUsedAt: 20 });
+            await executeExistingOpenClawStateRead(
+              { env, path: selectedPath },
+              { type: "worktrees.templates.read", input: { cacheKey: template.cacheKey } },
+              { context, current: true },
+            ),
+          ).toMatchObject({
+            type: "worktrees.templates.read",
+            record: { ...template, lastUsedAt: 20 },
+          });
           expect(
             await scope.execute({
               type: "worktrees.templates.hasReaders",
@@ -241,8 +290,12 @@ describe("worktree template registry", () => {
           ).toBe(false);
           await scope.execute({ type: "worktrees.templates.delete", input: { id: template.id } });
           expect(
-            await scope.execute({ type: "worktrees.templates.list", input: undefined }),
-          ).toEqual([]);
+            await executeExistingOpenClawStateRead(
+              { env, path: selectedPath },
+              { type: "worktrees.templates.list", input: undefined },
+              { context, current: true },
+            ),
+          ).toMatchObject({ type: "worktrees.templates.list", records: [] });
         },
         {
           createAdmission: () => ({

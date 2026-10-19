@@ -22,8 +22,9 @@ const resolveApiKeyForProfile = vi.hoisted(() =>
     return profile?.type === "api_key" ? { apiKey: profile.key, source: "profile" } : null;
   }),
 );
+// mock-isolation: Key-precedence tests inspect synthetic accounts without reading host secrets.
 vi.mock("../../agents/auth-profiles.js", () => ({
-  ensureAuthProfileStore: vi.fn(() => authStore),
+  ensureAuthProfileStoreAsync: vi.fn(async () => authStore),
   resolveApiKeyForProfile,
   resolveAuthProfileOrder: vi.fn(() => Object.keys(authStore.profiles)),
 }));

@@ -75,8 +75,13 @@ hooks read the accepted activity for their attempt from the transcript when need
 If a `before_message_write` hook suppresses a nested activity row, finalization and
 agent-end hooks omit that activity too. The successful tool still counts as completed
 for turn settlement; suppressing its display history does not undo its execution.
-Starts and partial updates remain transient. Older missing child history cannot be
-reconstructed from source code or outer results.
+Terminal tool and activity events are published only after the nested activity
+append is accepted. Effect and replay-safety evidence is captured before that
+append, so a persistence failure cannot undo a known tool effect or make it safe
+to repeat. Lifecycle accounting settles from the captured outcome even when
+cancellation, supersession, or persistence failure suppresses terminal presentation.
+Starts and partial updates remain transient. Older missing child
+history cannot be reconstructed from source code or outer results.
 
 Thrown tool errors are catchable. Returned values may instead report failure.
 Follow the tool's result contract, and inspect possible effects before retrying.
@@ -123,7 +128,9 @@ statuses: `completed`, `waiting`, or `failed`.
 
 - A `waiting` result retains an executor continuation, pending bridge requests, and
   scoping metadata (agent run id, session id/key) until `wait` resumes it or
-  it expires.
+  it expires. Successful completion of the observing tool call or model response
+  leaves this parked work available. Cancellation of an active `exec`/`wait`,
+  the parent run, or its catalog still cancels the cell and pending calls.
 - Expiry, wrong-session, wrong-run, and unknown/already-resuming `runId`
   values do not produce a distinct terminal status; they surface as a
   `failed` result (`code: "invalid_input"`) with a message such as `code mode

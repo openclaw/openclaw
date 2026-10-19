@@ -4,7 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../../test/helpers/promise.js";
 import type { ChatAttachment } from "../../../lib/chat/chat-types.ts";
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
 import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import * as payloads from "../attachment-payload-store.ts";
@@ -239,6 +239,8 @@ describe("chat attachment read failures", () => {
   });
 
   async function expectOverflowToast(name: string) {
+    await toastHost.updateComplete;
+    await vi.dynamicImportSettled();
     await waitForSolid(() => {
       expect(toastHost.querySelectorAll(".app-toast")).toHaveLength(1);
       expect(toastHost.querySelector(".app-toast__message")).toMatchObject({
@@ -538,6 +540,68 @@ describe("chat attachment read failures", () => {
       expect(props.onAttachmentsChange).not.toHaveBeenCalled();
     },
   );
+});
+
+it("retains focused pasted-text actions when a peer read completes and uses current controls", async () => {
+  vi.stubGlobal("FileReader", StubFileReader as unknown as typeof FileReader);
+  StubFileReader.failNames = new Set();
+  StubFileReader.heldNames = new Set();
+  onTestFinished(() => {
+    vi.unstubAllGlobals();
+  });
+  const pasted: ChatAttachment = {
+    id: "pasted",
+    mimeType: "text/plain",
+    fileName: "pasted-text-123.txt",
+    origin: "paste",
+    dataUrl: "data:text/plain,Restored%20text",
+  };
+  const previousDraftChange = vi.fn();
+  const currentDraftChange = vi.fn();
+  const h = previewFixture(
+    [pasted],
+    { draft: "Earlier draft", onDraftChange: previousDraftChange },
+    true,
+  );
+  const { container } = h;
+  document.body.append(container);
+  onTestFinished(() => container.remove());
+  h.append([imageFile("peer.png", "hi")]);
+  const restore = expectDefined(
+    container.querySelector<HTMLButtonElement>(".chat-attachment-text-action"),
+    "pasted text restore action",
+  );
+  const remove = expectDefined(
+    container.querySelector<HTMLButtonElement>(".chat-attachment-remove"),
+    "pasted text remove action",
+  );
+  restore.focus();
+  expect(document.activeElement).toBe(restore);
+
+  h.previewProps.draft = "Current draft";
+  h.previewProps.onDraftChange = currentDraftChange;
+  await h.done.promise;
+
+  expect(h.attachments.map(({ fileName }) => fileName)).toEqual([
+    "pasted-text-123.txt",
+    "peer.png",
+  ]);
+  expect(container.querySelector(".chat-attachment-text-action")).toBe(restore);
+  expect(container.querySelector(".chat-attachment-remove")).toBe(remove);
+  expect(document.activeElement).toBe(restore);
+  h.previewProps.disabled = true;
+  h.props.onAttachmentsChange(h.attachments);
+  expect(restore.disabled).toBe(true);
+  restore.click();
+  expect(currentDraftChange).not.toHaveBeenCalled();
+
+  h.previewProps.disabled = false;
+  h.props.onAttachmentsChange(h.attachments);
+  expect(restore.disabled).toBe(false);
+  restore.click();
+  expect(previousDraftChange).not.toHaveBeenCalled();
+  expect(currentDraftChange).toHaveBeenCalledExactlyOnceWith("Current draft\n\nRestored text");
+  expect(h.attachments.map(({ fileName }) => fileName)).toEqual(["peer.png"]);
 });
 
 describe("attachment removal names", () => {

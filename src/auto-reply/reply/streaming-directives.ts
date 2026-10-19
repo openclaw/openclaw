@@ -98,7 +98,7 @@ export function createStreamingDirectiveAccumulator(): StreamingDirectiveAccumul
         prepared = pendingProtocol;
         protocolResolved = true;
       } else {
-        const candidate = pendingProtocol.trimStart();
+        const candidate = pendingProtocol.trimStart().toUpperCase();
         if (
           !candidate ||
           SILENT_REPLY_TOKEN.startsWith(candidate) ||

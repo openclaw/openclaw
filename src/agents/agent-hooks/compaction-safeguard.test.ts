@@ -257,26 +257,16 @@ describe("compaction-safeguard runtime registry", () => {
     expect(getCompactionSafeguardRuntime(undefined)).toBeNull();
   });
 
-  it.each([true])("consumes cancellation provenance once (replaced=%s)", (replaced) => {
+  it("replaces cancellation provenance and consumes it once", () => {
     const sm = {};
     const error = Object.assign(new Error("provider unavailable"), { status: 503 });
-    if (!replaced) {
-      setCompactionSafeguardRuntime(sm, { recentTurnsPreserve: 3 });
-    }
     setCompactionSafeguardCancellation(sm, "summarization failed", error);
-    if (replaced) {
-      setCompactionSafeguardCancellation(sm, "quality guard declined");
-    }
-    expect(consumeCompactionSafeguardCancellation(sm)).toEqual(
-      replaced
-        ? { reason: "quality guard declined" }
-        : {
-            reason: "summarization failed",
-            error: expect.objectContaining({ message: "provider unavailable", status: 503 }),
-          },
-    );
+    setCompactionSafeguardCancellation(sm, "quality guard declined");
+    expect(consumeCompactionSafeguardCancellation(sm)).toEqual({
+      reason: "quality guard declined",
+    });
     expect(consumeCompactionSafeguardCancellation(sm)).toBeNull();
-    expect(getCompactionSafeguardRuntime(sm)).toEqual(replaced ? null : { recentTurnsPreserve: 3 });
+    expect(getCompactionSafeguardRuntime(sm)).toEqual(null);
   });
 
   it("wires oversized safeguard runtime values when config validation is bypassed", () => {
@@ -360,41 +350,28 @@ describe("compaction-safeguard recent-turn preservation", () => {
     }
   });
 
-  it.each([
-    {
-      name: "case-normalized identifiers",
-      input:
-        "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and URL https://example.com/a and /tmp/x.log plus port host.local:18789",
-      expected: [
-        "A1B2C3D4E5F6", // pragma: allowlist secret
-        "https://example.com/a",
-        "/tmp/x.log",
-        "host.local:18789",
-      ],
-    },
-  ])("extracts $name", ({ name, input, expected }) => {
-    const identifiers = extractOpaqueIdentifiers(input);
-    if (expected) {
-      expect(identifiers).toStrictEqual(expected);
-    } else {
-      expect(identifiers).toHaveLength(12);
-      expect(new Set(identifiers).size).toBe(12);
-      expect(identifiers).toContain("A0B0C0D0");
-    }
-    if (name === "case-normalized identifiers") {
-      const latestAsk = "Explain post-compaction behavior for memory indexing";
-      expect(
-        auditSummaryQuality({
-          summary: structuredSummary({
-            rules: "Preserve identifiers.",
-            asks: `Latest user request context: ${JSON.stringify(latestAsk)}`,
-            identifiers: identifiers.join(", ").toLowerCase(),
-          }),
-          identifiers,
-          latestAsk,
-        }).ok,
-      ).toBe(true);
-    }
+  it("extracts case-normalized identifiers", () => {
+    const identifiers = extractOpaqueIdentifiers(
+      "Track id a1b2c3d4e5f6 plus A1B2C3D4E5F6 and URL https://example.com/a and /tmp/x.log plus port host.local:18789",
+    );
+    expect(identifiers).toStrictEqual([
+      "A1B2C3D4E5F6", // pragma: allowlist secret
+      "https://example.com/a",
+      "/tmp/x.log",
+      "host.local:18789",
+    ]);
+    const latestAsk = "Explain post-compaction behavior for memory indexing";
+    expect(
+      auditSummaryQuality({
+        summary: structuredSummary({
+          rules: "Preserve identifiers.",
+          asks: `Latest user request context: ${JSON.stringify(latestAsk)}`,
+          identifiers: identifiers.join(", ").toLowerCase(),
+        }),
+        identifiers,
+        latestAsk,
+      }).ok,
+    ).toBe(true);
   });
 
   it.each([
@@ -493,42 +470,27 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(instructions).toContain("<untrusted-text>");
   });
 
-  it.each([true])(
-    "preserves history when summarization fails (caller aborted=%s)",
-    async (aborted) => {
-      const controller = new AbortController();
-      const abortError = Object.assign(new Error("This operation was aborted"), {
-        name: "AbortError",
-      });
-      mockSummarizeCompactionHistory.mockImplementationOnce(async () => {
-        if (aborted) {
-          controller.abort(abortError);
-          throw new Error("transport failed after cancellation");
-        }
-        throw new Error("summary unavailable");
-      });
-      const sessionManager = modelSession({ recentTurnsPreserve: 0 });
-      const messagesToSummarize = [userMessage("older context", 1), userMessage("latest ask", 2)];
-      const transcriptBefore = structuredClone(messagesToSummarize);
-      const event = createCompactionEvent({
-        preparation: { messagesToSummarize },
-        signal: controller.signal,
-      });
-      if (aborted) {
-        await expect(runCompactionScenario(sessionManager, event)).rejects.toBe(abortError);
-        expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
-      } else {
-        const { result } = await runCompactionScenario(sessionManager, event);
-        expect(result).toEqual({ cancel: true });
-        expect(result).not.toHaveProperty("compaction");
-        expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toBe(
-          "Compaction safeguard could not summarize the session: summary unavailable",
-        );
-      }
-      expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
-      expect(messagesToSummarize).toStrictEqual(transcriptBefore);
-    },
-  );
+  it("preserves history and caller abort when summarization fails", async () => {
+    const controller = new AbortController();
+    const abortError = Object.assign(new Error("This operation was aborted"), {
+      name: "AbortError",
+    });
+    mockSummarizeCompactionHistory.mockImplementationOnce(async () => {
+      controller.abort(abortError);
+      throw new Error("transport failed after cancellation");
+    });
+    const sessionManager = modelSession({ recentTurnsPreserve: 0 });
+    const messagesToSummarize = [userMessage("older context", 1), userMessage("latest ask", 2)];
+    const transcriptBefore = structuredClone(messagesToSummarize);
+    const event = createCompactionEvent({
+      preparation: { messagesToSummarize },
+      signal: controller.signal,
+    });
+    await expect(runCompactionScenario(sessionManager, event)).rejects.toBe(abortError);
+    expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
+    expect(mockSummarizeCompactionHistory).toHaveBeenCalledTimes(1);
+    expect(messagesToSummarize).toStrictEqual(transcriptBefore);
+  });
 
   it.each(["cap-staged-limit", "copilot-headers", "keyless-sdk-auth"] as const)(
     "summarizes with provider-prepared model settings: %s",
@@ -595,86 +557,74 @@ describe("compaction-safeguard recent-turn preservation", () => {
     },
   );
 
-  it.each([true])(
-    "sends one authoritative safeguard summary format (prefix=%s)",
-    async (prefix) => {
-      testing.setSummarizeCompactionHistoryForTest(
-        actualCompactionModule.summarizeCompactionHistory,
-      );
-      const model = createAnthropicModelFixture({
-        api: "test-api" as never,
-        baseUrl: "",
-        reasoning: true,
+  it("sends distinct history and split-turn summary formats", async () => {
+    testing.setSummarizeCompactionHistoryForTest(actualCompactionModule.summarizeCompactionHistory);
+    const model = createAnthropicModelFixture({
+      api: "test-api" as never,
+      baseUrl: "",
+      reasoning: true,
+    });
+    const sessionManager = configuredSession({ model, recentTurnsPreserve: 0 });
+
+    const providerPrompts: string[] = [];
+    const providerBudgets: Array<number | undefined> = [];
+    const streamFn: StreamFn = (_activeModel, context, options) => {
+      expect(options?.reasoning).toBe("high");
+      providerPrompts.push(JSON.stringify(context));
+      providerBudgets.push(options?.maxTokens);
+      const stream = createAssistantMessageEventStream();
+      stream.push({
+        type: "done",
+        reason: "stop",
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "provider summary" }],
+          api: model.api,
+          provider: model.provider,
+          model: model.id,
+          usage: createZeroUsageFixture(),
+          stopReason: "stop",
+          timestamp: 1,
+        },
       });
-      const sessionManager = configuredSession({ model, recentTurnsPreserve: 0 });
+      stream.end();
+      return stream;
+    };
+    const event = {
+      ...createCompactionEvent({
+        messageText: "summarize me: receipt_90210",
+        tokensBefore: 1_000,
+      }),
+      customInstructions: "Keep the deployment decision.",
+      thinkingLevel: "high" as const,
+      streamFn,
+    };
+    const preparation = {
+      ...event.preparation,
+      isSplitTurn: true,
+      messagesToSummarize: [],
+      turnPrefixMessages: event.preparation.messagesToSummarize,
+      previousSummary: undefined,
+    };
 
-      const providerPrompts: string[] = [];
-      const providerBudgets: Array<number | undefined> = [];
-      const streamFn: StreamFn = (_activeModel, context, options) => {
-        expect(options?.reasoning).toBe("high");
-        providerPrompts.push(JSON.stringify(context));
-        providerBudgets.push(options?.maxTokens);
-        const stream = createAssistantMessageEventStream();
-        stream.push({
-          type: "done",
-          reason: "stop",
-          message: {
-            role: "assistant",
-            content: [{ type: "text", text: "provider summary" }],
-            api: model.api,
-            provider: model.provider,
-            model: model.id,
-            usage: createZeroUsageFixture(),
-            stopReason: "stop",
-            timestamp: 1,
-          },
-        });
-        stream.end();
-        return stream;
-      };
-      const event = {
-        ...createCompactionEvent({
-          messageText: "summarize me: receipt_90210",
-          tokensBefore: 1_000,
-        }),
-        customInstructions: "Keep the deployment decision.",
-        thinkingLevel: "high" as const,
-        streamFn,
-      };
-      const preparation = {
-        ...event.preparation,
-        isSplitTurn: prefix,
-        messagesToSummarize: prefix ? [] : event.preparation.messagesToSummarize,
-        turnPrefixMessages: prefix ? event.preparation.messagesToSummarize : [],
-        previousSummary: prefix ? undefined : "Earlier deployment decision: use canary staging.",
-      };
+    const { result } = await runCompactionScenario(sessionManager, { ...event, preparation });
 
-      const { result } = await runCompactionScenario(sessionManager, { ...event, preparation });
-
-      expect(result.cancel).not.toBe(true);
-      expect(result.compaction?.summary).toContain("provider summary");
-      expect(result.compaction?.summary).not.toContain("Earlier deployment decision");
-      expect(providerPrompts).toHaveLength(prefix ? 2 : 1);
-      expect(providerPrompts[0]).toContain("[User]: summarize me");
-      expect(providerPrompts[0]).toContain("receipt_90210");
-      expect(providerPrompts[0]).toContain("Keep the deployment decision.");
-      expect(providerPrompts[0]).toContain("Preserve all opaque identifiers exactly");
-      expect(providerPrompts[0]).not.toContain("## Goal");
-      expect(providerPrompts[0]).not.toContain("## Constraints & Preferences");
-      expect(providerPrompts[0]).toContain("## Pending user asks");
-      expect(providerPrompts[0]).not.toContain("## Original Request");
-      if (prefix) {
-        expect(providerPrompts[1]).toContain("## Original Request");
-        expect(providerPrompts[1]).not.toContain("## Pending user asks");
-      }
-      expect(providerBudgets).toEqual(prefix ? [3_200, 2_000] : [3_200]);
-      if (!prefix) {
-        expect(providerPrompts[0]).toContain(
-          "<previous-summary>\\nEarlier deployment decision: use canary staging.",
-        );
-      }
-    },
-  );
+    expect(result.cancel).not.toBe(true);
+    expect(result.compaction?.summary).toContain("provider summary");
+    expect(result.compaction?.summary).not.toContain("Earlier deployment decision");
+    expect(providerPrompts).toHaveLength(2);
+    expect(providerPrompts[0]).toContain("[User]: summarize me");
+    expect(providerPrompts[0]).toContain("receipt_90210");
+    expect(providerPrompts[0]).toContain("Keep the deployment decision.");
+    expect(providerPrompts[0]).toContain("Preserve all opaque identifiers exactly");
+    expect(providerPrompts[0]).not.toContain("## Goal");
+    expect(providerPrompts[0]).not.toContain("## Constraints & Preferences");
+    expect(providerPrompts[0]).toContain("## Pending user asks");
+    expect(providerPrompts[0]).not.toContain("## Original Request");
+    expect(providerPrompts[1]).toContain("## Original Request");
+    expect(providerPrompts[1]).not.toContain("## Pending user asks");
+    expect(providerBudgets).toEqual([3_200, 2_000]);
+  });
 
   it("surfaces a total provider failure and leaves the safeguard transcript unchanged", async () => {
     testing.setSummarizeCompactionHistoryForTest(actualCompactionModule.summarizeCompactionHistory);
@@ -697,7 +647,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
           model: model.id,
           usage: createZeroUsageFixture(),
           stopReason: "error",
-          errorMessage: "Cannot convert undefined or null to object",
+          errorMessage: "Cannot convert undefined or null to object: synthetic-private-summary",
           timestamp: 1,
         },
       });
@@ -717,6 +667,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
     expect(event.preparation.messagesToSummarize).toStrictEqual(transcriptBefore);
     expect(consumeCompactionSafeguardCancellation(sessionManager)?.reason).toContain(
       "Cannot convert undefined or null to object",
+    );
+    expect(compactionLogger.warn).toHaveBeenCalledExactlyOnceWith(
+      "Compaction summarization failed; cancelling compaction to preserve history.",
+    );
+    expect(JSON.stringify(compactionLogger.warn.mock.calls)).not.toContain(
+      "synthetic-private-summary",
     );
   });
 
@@ -857,7 +813,7 @@ describe("compaction-safeguard recent-turn preservation", () => {
       ownerRequest: false,
       expected: ["report metric status"],
       absent: ["123456789", "23456789e", "987654321", "12345678"],
-      audit: { identifiers: [], latestAsk: undefined },
+      audit: { identifiers: [] },
     },
   ])(
     "audits all-preserved turns containing $name without summarization",
@@ -880,14 +836,6 @@ describe("compaction-safeguard recent-turn preservation", () => {
         expect(mockAuditSummaryQuality).toHaveBeenCalledTimes(1);
         const input = requireRecord(mockCallArg(mockAuditSummaryQuality));
         expect(input.identifiers).toEqual(audit.identifiers);
-        if (audit.latestAsk) {
-          expect(input.latestAsk).toBe(audit.latestAsk);
-          for (const text of expected) {
-            expect(input.summary).toContain(text);
-          }
-          expect(mockAuditSummaryQuality.mock.results[0]?.value).toEqual({ ok: true, reasons: [] });
-          expect(consumeCompactionSafeguardCancellation(sessionManager)).toBeNull();
-        }
       }
     },
   );
@@ -1157,9 +1105,12 @@ describe("compaction-safeguard recent-turn preservation", () => {
     "handles provider AbortError according to caller cancellation (aborted=%s)",
     async (aborted) => {
       mockSummarizeCompactionHistory.mockResolvedValue("llm fallback summary");
-      const providerAbortErr = Object.assign(new Error("This operation was aborted"), {
-        name: "AbortError",
-      });
+      const providerAbortErr = Object.assign(
+        new Error("This operation was aborted: synthetic-private-provider"),
+        {
+          name: "AbortError",
+        },
+      );
       installCompactionProviderForTest(
         "aborting-provider",
         vi.fn().mockRejectedValue(providerAbortErr),
@@ -1192,6 +1143,9 @@ describe("compaction-safeguard recent-turn preservation", () => {
         expect(result.cancel).not.toBe(true);
         expect(mockSummarizeCompactionHistory).toHaveBeenCalled();
       }
+      expect(JSON.stringify(compactionLogger.warn.mock.calls)).not.toContain(
+        "synthetic-private-provider",
+      );
     },
   );
 

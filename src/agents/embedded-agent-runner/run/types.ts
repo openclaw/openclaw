@@ -168,6 +168,15 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   operation?: EmbeddedRunAttemptOperation;
   /** Core-prepared fact that explicit requester/config policy restricts plugin-native tools. */
   pluginHarnessToolPolicyRestricted?: boolean;
+  /** Requester policy prepared by core; turn-specific tool restrictions still apply. */
+  preparedWebSearchPolicy?: {
+    allowed: boolean;
+    persistentAllowed: boolean;
+    /** Core binds the policy to this tuple; optional for existing SDK callers. */
+    modelRef?: ModelRef;
+    /** Exact requester reads used during preparation; absence preserves existing SDK callers. */
+    requesterFacts?: import("../../subagents/spawn/subagent-session-store.js").SessionCapabilitySnapshot[];
+  };
   /** Host-prepared policy lifetime; turn-scoped policy can still allow every native tool. */
   pluginHarnessToolPolicyScope?: "conversation" | "turn";
   /** Audited exact denies that the plugin harness must enforce against native equivalents. */
@@ -238,6 +247,11 @@ export type EmbeddedRunAttemptParams = EmbeddedRunAttemptBase & {
   onAttemptTimeout?: (reason: Error) => void;
   /** Signals an explicit cancellation through the active native run handle. */
   onAttemptAbort?: () => void;
+  /** Called before attempt cleanup; only core decides whether to request verified context. */
+  onSettledTurn?: (
+    attempt: EmbeddedRunAttemptResult,
+    captureContext: () => Promise<EmbeddedRunAttemptResult["settledTurnFinalizationContext"]>,
+  ) => Promise<void>;
   onDeferredLifecycleOwner?: (owner: DeferredEmbeddedRunLifecycleOwner) => void;
   onDeferredLifecycleAbort?: (reason?: "user_abort" | "restart" | "superseded") => void;
   /** Host-requested runtime replacement takes effect after the current tool batch is persisted. */

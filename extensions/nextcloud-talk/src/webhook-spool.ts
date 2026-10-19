@@ -1,4 +1,3 @@
-// Nextcloud Talk plugin module owns durable webhook admission and replay draining.
 import {
   createChannelIngressMonitor,
   type ChannelIngressQueue,

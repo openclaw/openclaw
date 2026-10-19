@@ -4,7 +4,7 @@ import type { LazyViewError } from "../../../components/solid/lazy-view-error.ts
 import type { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import type { AgentIdentity } from "../../../lib/identity-avatar-view.ts";
 import type { KeyboardShortcutCombo } from "../../../lib/keyboard-shortcut-contract.ts";
-import type { SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import type { SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import type {
   SidebarPanelData,
   SidebarPanelDefinitionParams,
@@ -19,6 +19,8 @@ export type SidebarPanelDefinition = {
   shortcut?: KeyboardShortcutCombo;
   available: boolean;
   content: JSX.Element;
+  /** Explicit host for caller-owned panel content. */
+  panelHost?: SidebarPanelHost;
   view?: SidebarPanelData;
   loadState?: Parameters<typeof LazyViewError>[0] | null;
   loading: Parameters<typeof PanelLoadingSkeleton>[0];
@@ -42,6 +44,12 @@ export type SidebarRegionCallbacks = {
 };
 
 export type RegionProps = {
+  elements: {
+    readonly shell: HTMLElement;
+    readonly header: HTMLElement;
+    readonly primary: HTMLElement;
+    readonly outlet: HTMLElement;
+  } | null;
   panelIdPrefix: string;
   conversationTab?: Pick<SidebarPanelDefinition, "label"> & {
     avatar: AgentIdentity;
@@ -56,5 +64,17 @@ export type RegionProps = {
   sideFocusOrigin?: () => HTMLElement | null;
   availableWidth: number;
 };
-export type RegionMethods = { deliverPanelEvent: (slot: SidebarSlotId, event: Event) => boolean };
+export type SidebarPanelHost = HTMLElement & {
+  readonly updateComplete?: Promise<unknown>;
+  handleToggleRequest?: (event: Event) => void;
+  activateTerminalHost?: () => void;
+};
+export type SidebarPanelHostRegistration = (element: SidebarPanelHost) => () => void;
+export type RegionMethods = {
+  readPanelHost: (slot: SidebarSlotId) => SidebarPanelHost | null;
+  awaitPanelCommit: (slot: SidebarSlotId) => Promise<void>;
+  activateTerminalHost: () => boolean;
+  focusActiveSideTab: (options?: FocusOptions) => void;
+  deliverPanelEvent: (slot: SidebarSlotId, event: Event) => boolean;
+};
 export type RegionElement = SolidBridgeElement<RegionProps, RegionMethods>;

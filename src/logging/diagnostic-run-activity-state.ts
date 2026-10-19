@@ -85,7 +85,7 @@ export function sessionRefs(params: { sessionId?: string; sessionKey?: string })
   return refs;
 }
 
-export function registerSessionActivityRefs(
+function registerSessionActivityRefs(
   activity: SessionActivity,
   params: { sessionId?: string; sessionKey?: string; runId?: string; seq?: number },
 ): void {

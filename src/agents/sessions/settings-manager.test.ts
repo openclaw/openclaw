@@ -98,6 +98,48 @@ describe("SettingsManager scoped persistence", () => {
     expect(manager.getTheme()).toBe("project");
   });
 
+  it("preserves a pure-read backend error and still loads the other scope", () => {
+    const error = new Error("Global settings unavailable");
+    const manager = SettingsManager.fromStorage({
+      readSettingsScope: (scope) => {
+        if (scope === "global") {
+          throw error;
+        }
+        return JSON.stringify({ theme: "project" });
+      },
+      withLock: () => {
+        throw new Error("This backend only supports pure reads");
+      },
+    });
+    const errors = manager.drainErrors();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.scope).toBe("global");
+    expect(errors[0]?.error).toBe(error);
+    expect(manager.getGlobalSettings()).toEqual({});
+    expect(manager.getTheme()).toBe("project");
+  });
+
+  it("normalizes a non-Error backend failure without losing the other scope", () => {
+    const failure = { code: "UNAVAILABLE" };
+    const manager = SettingsManager.fromStorage({
+      withLock: (scope, read) => {
+        if (scope === "global") {
+          // oxlint-disable-next-line typescript/only-throw-error -- Custom backends can throw non-Error values; exercise that normalization boundary.
+          throw failure;
+        }
+        read(JSON.stringify({ theme: "project" }));
+      },
+    });
+    const errors = manager.drainErrors();
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.scope).toBe("global");
+    expect(errors[0]?.error).toBeInstanceOf(Error);
+    expect(errors[0]?.error.message).toBe("Session settings could not be loaded");
+    expect(errors[0]?.error.cause).toBe(failure);
+    expect(manager.getGlobalSettings()).toEqual({});
+    expect(manager.getTheme()).toBe("project");
+  });
+
   it("preserves external sibling changes while writing global and project scopes", async () => {
     const storage = new InspectableSettingsStorage();
     storage.set("global", {

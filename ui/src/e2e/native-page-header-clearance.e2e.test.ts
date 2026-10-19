@@ -2,7 +2,10 @@ import path from "node:path";
 import type { BrowserContext, Locator, Page } from "playwright";
 import { afterEach, beforeEach, expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import {
+  defaultControlUiFeatureMethods,
+  installMockGateway,
+} from "../test-helpers/control-ui-e2e.ts";
 import {
   discoveryCategories,
   discoveryResult,
@@ -89,7 +92,9 @@ suite.define(() => {
     }
   }
   async function expectActions(header: Locator, y: number, right: number) {
-    const buttons = header.locator(".page-header-actions .btn");
+    const buttons = header.locator(
+      ".page-header-actions button:visible, .page-header-actions a.btn:visible",
+    );
     const count = await buttons.count();
     expect(count).toBeGreaterThan(0);
     for (let index = 0; index < count; index++) {
@@ -100,10 +105,22 @@ suite.define(() => {
 
   it.each([true, false])("centers page titles and clears controls (native: %s)", async (native) => {
     const { page, toolbar } = await openPage(
-      "agents",
+      "usage",
       native ? installNativeWebChrome : undefined,
       undefined,
-      undefined,
+      {
+        methodResponses: {
+          "agents.list": {
+            defaultId: "main",
+            mainKey: "main",
+            scope: "per-sender",
+            agents: [
+              { id: "main", name: "Main" },
+              { id: "research", name: "Research" },
+            ],
+          },
+        },
+      },
       native ? undefined : "rtl",
     );
     const header = page.locator(".content .content-header").first();
@@ -127,21 +144,147 @@ suite.define(() => {
     await expectActions(header, y, right);
   });
 
-  it("puts hub tabs in the row instead of a redundant title", async () => {
-    const { page, toolbar } = await openPage(
-      "sessions",
-      installNativeWebChrome,
-      ".hub-page-header__tabs",
-    );
-    const header = page.locator(".content .content-header.hub-page-header");
-    const titleBox = (await header.locator(".page-title").boundingBox())!;
-    expect(Math.max(titleBox.width, titleBox.height)).toBeLessThanOrEqual(1);
-    const tabs = header.locator(".hub-page-header__tabs");
-    await expectAligned(tabs, center(toolbar, "y"), "y");
-    await expectAligned(tabs, header, "x");
-    const tabsBox = (await tabs.boundingBox())!;
-    expect(tabsBox.x).toBeGreaterThan(toolbar.x + toolbar.width);
-  });
+  it.each([
+    { width: 1524, height: 864, native: false, narrowColumn: false },
+    { width: 1366, height: 768, native: false, narrowColumn: false },
+    { width: 768, height: 1024, native: false, narrowColumn: false },
+    { width: 768, height: 1024, native: false, narrowColumn: true },
+    { width: 390, height: 844, native: false, narrowColumn: false },
+    { width: 1524, height: 864, native: true, narrowColumn: false },
+  ])(
+    "groups the Agents heading and keeps actions reachable at $width×$height (native: $native, narrow: $narrowColumn)",
+    async ({ width, height, native, narrowColumn }) => {
+      const { page, toolbar } = await openPage(
+        "agents",
+        native ? installNativeWebChrome : undefined,
+        undefined,
+        { featureMethods: [...defaultControlUiFeatureMethods, "openclaw.chat"] },
+      );
+      await page.setViewportSize({ width, height });
+      if (narrowColumn) {
+        // Match the content width left during the tablet sidebar transition.
+        await page.locator(".agents-home__header").evaluate((element) => {
+          (element as HTMLElement).style.width = "430px";
+        });
+      }
+      if (width <= 560) {
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--mobile-nav");
+      }
+      const header = page.locator(".agents-home__header .content-header");
+      const title = header.getByRole("heading", { name: "Agents", exact: true });
+      const subtitle = header.locator(".page-subtitle");
+      await expect
+        .poll(async () => {
+          const [heading, intro] = await Promise.all([title.boundingBox(), subtitle.boundingBox()]);
+          return heading && intro ? Math.abs(heading.x - intro.x) : Infinity;
+        })
+        .toBeLessThanOrEqual(1);
+      // A viewport change can move the header between separate boundingBox calls.
+      const { heading, intro } = await header.evaluate((element) => {
+        const box = (selector: string): Box => {
+          const rect = element.querySelector(selector)!.getBoundingClientRect();
+          return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+        };
+        return { heading: box(".page-title"), intro: box(".page-subtitle") };
+      });
+      expect(intro.y).toBeGreaterThanOrEqual(heading.y + heading.height);
+      expect(intro.y - heading.y - heading.height).toBeLessThanOrEqual(8);
+      if (native) {
+        expect(heading.y).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      }
+      const manage = header.getByRole("link", { name: "Manage agents" });
+      const create = header.getByRole("button", { name: "New agent" });
+      expect(await manage.getAttribute("href")).toBe("/settings/agents");
+      for (const action of [manage, create]) {
+        const { box, introBox } = await action.evaluate((element) => {
+          const bounds = (target: Element): Box => {
+            const rect = target.getBoundingClientRect();
+            return { x: rect.x, y: rect.y, width: rect.width, height: rect.height };
+          };
+          const introElement = element.closest(".content-header")!.querySelector(".page-subtitle")!;
+          return { box: bounds(element), introBox: bounds(introElement) };
+        });
+        expect(box.x).toBeGreaterThanOrEqual(0);
+        expect(box.x + box.width).toBeLessThanOrEqual(width);
+        expect(box.y + box.height).toBeLessThanOrEqual(height);
+        expect(
+          box.x + box.width <= introBox.x ||
+            box.x >= introBox.x + introBox.width ||
+            box.y + box.height <= introBox.y ||
+            box.y >= introBox.y + introBox.height,
+          `Agent action ${JSON.stringify(box)} overlaps intro ${JSON.stringify(introBox)}`,
+        ).toBe(true);
+        await action.click({ trial: true });
+      }
+      await capture(
+        page,
+        `agents-header-${width}-${native ? "native" : "browser"}${narrowColumn ? "-narrow" : ""}.png`,
+      );
+      await create.click();
+      await expect.poll(() => new URL(page.url()).pathname).toBe("/custodian");
+      expect(new URL(page.url()).searchParams.get("intent")).toBe("new-agent");
+    },
+  );
+
+  it.each([
+    { width: 1280, height: 900 },
+    { width: 390, height: 844 },
+  ])(
+    "shares a stacked title and aligned tabs across Sessions and Worktrees at $width px",
+    async ({ width, height }) => {
+      const { page, toolbar } = await openPage(
+        "sessions",
+        installNativeWebChrome,
+        ".hub-page-header__tabs",
+        { methodResponses: { "worktrees.list": { worktrees: [] } } },
+      );
+      await page.setViewportSize({ width, height });
+      if (width <= 560) {
+        await expect
+          .poll(() => page.locator(".shell").getAttribute("class"))
+          .toContain("shell--mobile-nav");
+      }
+      const header = page.locator(".content .content-header.hub-page-header");
+      const title = header.locator(".page-title");
+      await expect.poll(() => title.textContent()).toBe("Sessions");
+      const tabs = header.locator(".hub-page-header__tabs");
+      const alignment = () =>
+        header.evaluate((element) => {
+          const titleBox = element.querySelector(".page-title")!.getBoundingClientRect();
+          const tabsBox = element.querySelector(".hub-page-header__tabs")!.getBoundingClientRect();
+          return {
+            titleWidth: titleBox.width,
+            titleY: titleBox.y,
+            tabsBelowTitle: tabsBox.y >= titleBox.bottom,
+            xDelta: Math.abs(tabsBox.x - titleBox.x),
+          };
+        });
+      const expectAlignedHub = async () => {
+        await expect
+          .poll(async () => {
+            const { titleWidth, tabsBelowTitle, xDelta } = await alignment();
+            return titleWidth > 1 && tabsBelowTitle ? xDelta : Infinity;
+          })
+          .toBeLessThanOrEqual(1);
+      };
+      await expectAlignedHub();
+      if (width > 560) {
+        expect((await alignment()).titleY).toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      }
+      await capture(page, `sessions-stacked-header-${width}.png`);
+      await tabs.getByRole("tab", { name: "Worktrees" }).click();
+      await expect.poll(() => title.textContent()).toBe("Worktrees");
+      await expectAlignedHub();
+      if (width > 560) {
+        await expect
+          .poll(async () => (await title.boundingBox())?.y ?? -1)
+          .toBeGreaterThanOrEqual(toolbar.y + toolbar.height);
+      }
+      await capture(page, `worktrees-stacked-header-${width}.png`);
+    },
+  );
 
   it.each(["ltr", "rtl"] as const)(
     "keeps the stacked hub title and tabs below collapsed Mac controls (%s)",
@@ -183,7 +326,7 @@ suite.define(() => {
   );
 
   it("keeps the legacy Mac app's lowered web controls clear of intro text", async () => {
-    const { page } = await openPage("agents", async (target) => {
+    const { page } = await openPage("usage", async (target) => {
       await target.addInitScript(() => {
         const stamp = () => document.documentElement.classList.add("openclaw-native-macos");
         if (document.documentElement) {

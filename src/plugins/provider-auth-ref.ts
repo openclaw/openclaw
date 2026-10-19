@@ -149,7 +149,7 @@ async function promptProviderSecretRefForSetup(params: {
   defaultFilePointer: string;
   copy?: SecretRefSetupPromptCopy;
   env?: NodeJS.ProcessEnv;
-}): Promise<{ ref: SecretRef; resolvedValue: string }> {
+}): Promise<{ ref: SecretRef; resolvedValue: string } | undefined> {
   const externalProviders = Object.entries(params.config.secrets?.providers ?? {}).filter(
     ([, provider]) =>
       provider?.source === "file" || provider?.source === "exec" || provider?.source === "store",
@@ -160,7 +160,7 @@ async function promptProviderSecretRefForSetup(params: {
         "No file/exec/store secret providers are configured yet. Add one under secrets.providers, or select a built-in source.",
       "No providers configured",
     );
-    throw new Error("retry");
+    return undefined;
   }
 
   const defaultProvider = resolveDefaultSecretProviderAlias(params.config, "file", {
@@ -193,7 +193,7 @@ async function promptProviderSecretRefForSetup(params: {
       `Provider "${selectedProvider}" is not a file/exec/store provider.`,
       "Invalid provider",
     );
-    throw new Error("retry");
+    return undefined;
   }
 
   const idInput =
@@ -265,7 +265,7 @@ async function promptProviderSecretRefForSetup(params: {
       ].join("\n"),
       "Reference check failed",
     );
-    throw new Error("retry", { cause: error });
+    return undefined;
   }
 }
 
@@ -345,16 +345,12 @@ export async function promptSecretRefForSetup(params: {
       return { ref, resolvedValue };
     }
 
-    try {
-      return await promptProviderSecretRefForSetup({
-        ...params,
-        defaultFilePointer,
-      });
-    } catch (error) {
-      if (error instanceof Error && error.message === "retry") {
-        continue;
-      }
-      throw error;
+    const result = await promptProviderSecretRefForSetup({
+      ...params,
+      defaultFilePointer,
+    });
+    if (result) {
+      return result;
     }
   }
 }

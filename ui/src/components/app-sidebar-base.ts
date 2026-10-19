@@ -15,10 +15,10 @@ import {
 import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-handoff.ts";
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
-import type { SolidController } from "../lit/solid-controller-host.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
-import type { SessionOwnerFilterController } from "./session-owner-filter-controller.ts";
-import type { ContextualSidebar } from "./sidebar-context-state.ts";
+import type { GatewayStatusProps } from "./gateway-status.ts";
+import type { SessionOwnerFilter } from "./session-owner-filter.ts";
+import { selectSidebarContext, type ContextualSidebar } from "./sidebar-context-state.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 export type AppSidebarProps = {
@@ -29,7 +29,13 @@ export type AppSidebarProps = {
   enabledRouteIds: readonly NavigationRouteId[] | undefined;
   connected: boolean;
   connectionStatus: GatewayStatus | null;
-  lastError: string | null;
+  gatewayStatus: GatewayStatusProps | null;
+  connectionRecovery: boolean;
+  connectionFlagVisible: boolean;
+  connectionFlagAllowed: boolean;
+  footerControlsOverlap:
+    | ((bounds: Pick<DOMRectReadOnly, "left" | "right" | "top" | "bottom">) => boolean)
+    | undefined;
   storedOutboxes: SidebarOutboxSummary | undefined;
   terminalAvailable: boolean;
   catalogOpenTarget: CatalogOpenTarget;
@@ -66,7 +72,11 @@ export const appSidebarProperties = {
   enabledRouteIds: { default: undefined, attribute: false },
   connected: { default: false, attribute: false },
   connectionStatus: { default: null, attribute: false },
-  lastError: { default: null, attribute: false },
+  gatewayStatus: { default: null, attribute: false },
+  connectionRecovery: { default: false, attribute: false },
+  connectionFlagVisible: { default: false, attribute: false },
+  connectionFlagAllowed: { default: false, attribute: false },
+  footerControlsOverlap: { default: undefined, attribute: false },
   storedOutboxes: { default: undefined, attribute: false },
   terminalAvailable: { default: false, attribute: false },
   catalogOpenTarget: { default: "viewer", attribute: false },
@@ -99,7 +109,7 @@ export const appSidebarProperties = {
   };
 };
 
-/** Synchronous sidebar state and controller lifecycle; Solid owns its DOM. */
+/** Synchronous sidebar state and native attachment; Solid owns its DOM. */
 export abstract class AppSidebarBase {
   declare basePath: AppSidebarProps["basePath"];
   declare activeRouteId: AppSidebarProps["activeRouteId"];
@@ -108,7 +118,11 @@ export abstract class AppSidebarBase {
   declare enabledRouteIds: AppSidebarProps["enabledRouteIds"];
   declare connected: AppSidebarProps["connected"];
   declare connectionStatus: AppSidebarProps["connectionStatus"];
-  declare lastError: AppSidebarProps["lastError"];
+  declare gatewayStatus: AppSidebarProps["gatewayStatus"];
+  declare connectionRecovery: AppSidebarProps["connectionRecovery"];
+  declare connectionFlagVisible: AppSidebarProps["connectionFlagVisible"];
+  declare connectionFlagAllowed: AppSidebarProps["connectionFlagAllowed"];
+  declare footerControlsOverlap: AppSidebarProps["footerControlsOverlap"];
   declare storedOutboxes: AppSidebarProps["storedOutboxes"];
   declare terminalAvailable: AppSidebarProps["terminalAvailable"];
   declare catalogOpenTarget: AppSidebarProps["catalogOpenTarget"];
@@ -140,29 +154,30 @@ export abstract class AppSidebarBase {
   declare readonly addEventListener: HTMLElement["addEventListener"];
   declare readonly removeEventListener: HTMLElement["removeEventListener"];
   declare readonly contains: HTMLElement["contains"];
-  declare readonly matches: HTMLElement["matches"];
 
-  private readonly controllers = new Set<SolidController>();
   private readonly listeners = new Set<() => void>();
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
-  contextualSidebar: ContextualSidebar | undefined;
+  get contextualSidebar(): ContextualSidebar | undefined {
+    return this.isConnected && this.router
+      ? selectSidebarContext(this.router.getState())
+      : undefined;
+  }
 
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
 
   constructor(
-    private props: AppSidebarProps,
     protected context: ApplicationContext,
-    readonly hostElement: HTMLElement,
+    readonly hostElement: HTMLElement & AppSidebarProps,
   ) {
     for (const key of Object.keys(appSidebarProperties)) {
       Object.defineProperty(this, key, {
         get: () =>
           key === "sidebarAgentsMode"
-            ? (this.sidebarSnapshot?.mode ?? Reflect.get(this.props, key))
-            : Reflect.get(this.props, key),
+            ? (this.sidebarSnapshot?.mode ?? Reflect.get(hostElement, key))
+            : Reflect.get(hostElement, key),
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },
@@ -176,7 +191,6 @@ export abstract class AppSidebarBase {
       "addEventListener",
       "removeEventListener",
       "contains",
-      "matches",
     ] as const) {
       const value = hostElement[key];
       Object.defineProperty(this, key, {
@@ -185,10 +199,9 @@ export abstract class AppSidebarBase {
     }
   }
 
-  bindInputs(props: AppSidebarProps, context: ApplicationContext): void {
-    this.props = props;
+  bindContext(context: ApplicationContext): void {
     this.context = context;
-    this.requestUpdate();
+    this.invalidate();
   }
 
   attach(): void {
@@ -196,11 +209,8 @@ export abstract class AppSidebarBase {
       return;
     }
     this.attached = true;
-    for (const controller of this.controllers) {
-      controller.hostConnected?.();
-    }
     this.connectedCallback();
-    this.requestUpdate();
+    this.invalidate();
   }
   detach(): void {
     if (!this.attached) {
@@ -208,9 +218,6 @@ export abstract class AppSidebarBase {
     }
     this.attached = false;
     this.disconnectedCallback();
-    for (const controller of this.controllers) {
-      controller.hostDisconnected?.();
-    }
     this.finishUpdate?.(false);
     this.finishUpdate = undefined;
   }
@@ -218,20 +225,11 @@ export abstract class AppSidebarBase {
     // The bridge delays disposal across moves; detached hosts cannot admit new work.
     return this.attached && this.hostElement.isConnected;
   }
-  addController(controller: SolidController): void {
-    this.controllers.add(controller);
-    if (this.isConnected) {
-      controller.hostConnected?.();
-    }
-  }
-  removeController(controller: SolidController): void {
-    this.controllers.delete(controller);
-  }
   subscribe(listener: () => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
   }
-  requestUpdate(): void {
+  invalidate(): void {
     if (!this.finishUpdate) {
       this.complete = new Promise((resolve) => {
         this.finishUpdate = resolve;
@@ -249,9 +247,6 @@ export abstract class AppSidebarBase {
       return;
     }
     this.willUpdate();
-    for (const controller of this.controllers) {
-      controller.hostUpdate?.();
-    }
   }
   commitRender(): void {
     if (!this.isConnected) {
@@ -259,9 +254,6 @@ export abstract class AppSidebarBase {
     }
     const finish = this.finishUpdate;
     this.finishUpdate = undefined;
-    for (const controller of this.controllers) {
-      controller.hostUpdated?.();
-    }
     this.updated();
     finish?.(true);
   }
@@ -271,7 +263,7 @@ export abstract class AppSidebarBase {
   protected updated(): void {}
 
   get sessionInvolvingMeFilterActive(): boolean {
-    return this.sidebarSnapshot?.involvingMe ?? this.sessionOwnerFilter.involvingMe;
+    return this.sidebarSnapshot?.involvingMe ?? this.sessionOwnerFilter.read().involvingMe;
   }
 
   get sessionCatalogRowsVisible(): boolean {
@@ -282,7 +274,7 @@ export abstract class AppSidebarBase {
     );
   }
 
-  abstract readonly sessionOwnerFilter: SessionOwnerFilterController;
+  abstract readonly sessionOwnerFilter: SessionOwnerFilter;
 
   setSessionOwnerFilter = (ownerId: string | null, involvingMe = false) => {
     this.sessionOwnerFilter.set(ownerId, involvingMe);

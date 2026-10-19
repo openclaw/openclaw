@@ -1,5 +1,3 @@
-// Windows process environment helpers for the MXC ProcessContainer backend.
-//
 // MXC's BaseContainerRunner treats a non-empty `process.env` as a replacement
 // environment block for CreateProcessInSandbox: when present it replaces the
 // entire default OS environment, so any required OS var (SystemRoot, COMSPEC, …)

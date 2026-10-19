@@ -1,6 +1,3 @@
-/**
- * Exec tool policy, host dispatch, and process lifecycle pipeline.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -84,7 +81,6 @@ type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>
 const BACKGROUND_EXEC_FOLLOW_UP =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
-/** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(defaults?: ExecToolDefaults) {
   const secretEgressEnabled = isSecretEgressProxyActive();
   const cleanupMs = defaults?.cleanupMs;
@@ -97,6 +93,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
   let subagentExecutionPromise: Promise<boolean> | undefined;
   const resolveSubagentExecution = () =>
+    defaults?.preparedSubagentExecution ??
     (subagentExecutionPromise ??= withPreparedSessionCapabilityRead(
       () =>
         resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
@@ -740,5 +737,4 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   });
 }
 
-/** Default exec tool instance used by agent tool registries. */
 export const execTool = createExecTool();

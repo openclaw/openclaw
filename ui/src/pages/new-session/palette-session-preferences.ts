@@ -1,5 +1,5 @@
 import type { ApplicationContext } from "../../app/context.ts";
-import type { NewSessionDraft } from "./draft-controller.ts";
+import type { NewSessionDraft } from "./draft.ts";
 import type { PaletteIdentityPreferences } from "./palette-identity-preferences.ts";
 import type { PaletteSessionPreference } from "./preferences.ts";
 

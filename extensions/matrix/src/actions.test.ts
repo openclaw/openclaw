@@ -1,4 +1,5 @@
 // Matrix tests cover actions plugin behavior.
+import type { ChannelMessageToolDiscovery } from "openclaw/plugin-sdk/channel-contract";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "../runtime-api.js";
 import { matrixMessageActions } from "./actions.js";
@@ -29,6 +30,10 @@ function createConfiguredMatrixConfig(): CoreConfig {
       },
     },
   } as CoreConfig;
+}
+
+function listSchemas(schema: ChannelMessageToolDiscovery["schema"] | undefined) {
+  return Array.isArray(schema) ? schema : schema ? [schema] : [];
 }
 
 describe("matrixMessageActions", () => {
@@ -85,17 +90,44 @@ describe("matrixMessageActions", () => {
 
     expect(enabled?.actions).toContain("emoji-list");
     expect(matrixMessageActions.supportsAction?.({ action: "emoji-list" } as never)).toBe(true);
-    expect(enabled?.schema).toMatchObject({
+    expect(listSchemas(enabled?.schema)).toContainEqual({
       actions: ["react", "reactions"],
       properties: {
-        emoji: {
+        emoji: expect.objectContaining({
           description: expect.stringContaining('action:"emoji-list"'),
-        },
+        }),
       },
     });
     expect(disabled?.actions).not.toContain("emoji-list");
     expect(disabled?.actions).not.toContain("react");
-    expect(disabled?.schema).toBeNull();
+    expect(listSchemas(disabled?.schema).some((schema) => "emoji" in schema.properties)).toBe(
+      false,
+    );
+  });
+
+  it("adds metadata-only pagination-token guidance for read cursors", () => {
+    const cfg = createConfiguredMatrixConfig();
+    const enabled = matrixMessageActions.describeMessageTool({ cfg } as never);
+    const readDisabled = matrixMessageActions.describeMessageTool({
+      cfg: { channels: { matrix: { ...cfg.channels?.matrix, actions: { messages: false } } } },
+    } as never);
+
+    // An empty action list keeps this guidance metadata-only for cross-channel discovery.
+    expect(listSchemas(enabled?.schema)).toContainEqual({
+      actions: [],
+      properties: {
+        before: expect.objectContaining({
+          description: expect.stringContaining("nextBatch/prevBatch, not an event id"),
+        }),
+        after: expect.objectContaining({
+          description: expect.stringContaining("nextBatch/prevBatch, not an event id"),
+        }),
+      },
+    });
+    expect(readDisabled?.actions).not.toContain("read");
+    expect(listSchemas(readDisabled?.schema).some((schema) => "before" in schema.properties)).toBe(
+      false,
+    );
   });
 
   it("hides actions until defaultAccount is set for ambiguous multi-account configs", () => {

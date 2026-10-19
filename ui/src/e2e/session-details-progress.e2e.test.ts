@@ -360,11 +360,18 @@ suite.define(() => {
         await trigger.focus();
         await trigger.press("Enter");
         await expect.poll(() => details.getAttribute("role")).toBe("dialog");
+        expect(await details.locator(".chat-details__participants").count()).toBe(0);
         await page.keyboard.press("Tab");
         await expect
           .poll(() =>
-            details
-              .locator(".chat-details__environment > summary")
+            environment.locator(":scope > summary").evaluate((el) => el === document.activeElement),
+          )
+          .toBe(true);
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() =>
+            environment
+              .getByRole("button", { name: "Copy path", exact: true })
               .evaluate((el) => el === document.activeElement),
           )
           .toBe(true);
@@ -383,7 +390,7 @@ suite.define(() => {
           await progress
             .getByRole("button", { name: "Task progress options", exact: true })
             .isVisible(),
-        ).toBe(false);
+        ).toBe(true);
         expect(await session.isVisible()).toBe(true);
         await progressToggle.click();
         const checks = pullRequest.locator(".chat-pr__checks-pill");
@@ -419,9 +426,9 @@ suite.define(() => {
         expect(await menu.locator('[role^="menuitem"]:visible').count()).toBe(0);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
         await menu.locator('[data-value="hide"]').waitFor({ state: "visible" });
-        expect(await menu.locator('[role^="menuitem"]').count()).toBe(4);
+        expect(await menu.locator('[role^="menuitem"]').count()).toBe(6);
         await page.keyboard.press("Escape");
-        expect(await menu.locator('[role^="menuitem"]').count()).toBe(4);
+        expect(await menu.locator('[role^="menuitem"]').count()).toBe(6);
         await progress.getByRole("button", { name: "Task progress options", exact: true }).click();
         await menu.locator('[data-value="hide"]').click();
         await expect.poll(() => progress.count()).toBe(0);

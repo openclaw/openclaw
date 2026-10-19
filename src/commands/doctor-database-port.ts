@@ -3,13 +3,15 @@ import fs from "node:fs";
 import path from "node:path";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
-import { setConfigValueAtPath } from "../config/config-paths.js";
+import { setConfigValueAtPath, unsetConfigValueAtPath } from "../config/config-paths.js";
 import { resolveConfigEnvVars } from "../config/env-substitution.js";
 import { writeConfigFile } from "../config/io.js";
 import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.js";
 import { withConfigWriteLock } from "../config/write-lock.js";
 import { discoverBackupDatabasePaths } from "../infra/backup-sqlite-snapshot.js";
+import { resolveDatabaseEngineInput } from "../infra/database-engine/config.js";
+import { getDatabaseEngineInput } from "../infra/database-engine/context.js";
 import {
   runDatabasePortTask,
   type DatabasePortInspection,
@@ -31,12 +33,14 @@ import {
 } from "../infra/database-port-recovery.js";
 import { hasActiveGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import { createVerifiedSqliteSnapshot } from "../infra/sqlite-snapshot.js";
+import { preparePluginMetadataMachineStateAsync } from "../plugins/installed-plugin-index-record-state.js";
 import { resolvePluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import {
   assertDatabaseArtifact,
   captureDatabaseArtifact,
   capturePostgresBackup,
   readBackupEngine,
+  readPostgresBackupFamily,
 } from "../snapshot/database-backup.js";
 import {
   assertPortSelection,
@@ -44,6 +48,8 @@ import {
   configInputs,
   type Context,
   digest,
+  databasePortFamilySchema,
+  type DatabasePortFamily,
   finalize,
   inputsSchema,
   livePath,
@@ -58,6 +64,7 @@ import {
   storeAt,
   storeDirectory,
 } from "./doctor-database-port-context.js";
+import { assertDatabasePortPluginMigrationsComplete } from "./doctor-database-port-migrations.js";
 import {
   assertOriginal,
   loadDatabasePortStateReceipt,
@@ -72,6 +79,7 @@ import {
 } from "./doctor-database-port-state.js";
 
 export type DatabasePortOptions = {
+  family?: DatabasePortFamily;
   to?: DatabaseEngineId;
   dryRun?: boolean;
   resume?: string;
@@ -86,38 +94,74 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     await assertDatabaseArtifact(input);
   }
   const config = current.snapshot.config;
-  assertPortSelection(config, options.to);
-  const from = resolveDatabaseFamilyEngines(config).state,
+  assertPortSelection(config, options.to, ctx.family);
+  const engines = resolveDatabaseFamilyEngines(config);
+  const from = engines[ctx.family ?? "state"],
     to = options.to!;
-  await prepareSharedStatePortSource(ctx, from, to, options.dryRun);
+  if (getDatabaseEngineInput("state")) {
+    // Both migration gates and resource discovery need cold PostgreSQL facts from a worker.
+    const activate = await preparePluginMetadataMachineStateAsync({
+      env: ctx.env,
+      stateDir: ctx.stateDir,
+      artifactPreservingReadOnly: true,
+    });
+    activate();
+  }
+  await assertDatabasePortPluginMigrationsComplete({
+    config,
+    env: ctx.env,
+    stateDir: ctx.stateDir,
+    to,
+    family: ctx.family,
+  });
+  if (!ctx.family || ctx.family === "state") {
+    await prepareSharedStatePortSource(ctx, from, to, options.dryRun);
+  }
   const context = { stateDir: ctx.stateDir, config, env: ctx.env };
   const plugins = resolvePluginMetadataSnapshot(context);
-  const roots = databasePortProviders.flatMap((provider) =>
-    provider.resolveRoots({ ...context, plugins }),
+  const families = await Promise.all(
+    databasePortProviders.map(async (provider) => ({
+      id: provider.id,
+      roots: await provider.resolveRoots({ ...context, plugins }),
+    })),
   );
-  privatePaths(ctx, roots);
+  privatePaths(
+    ctx,
+    families.flatMap((family) => family.roots),
+  );
   const all = await discoverBackupDatabasePaths({ stateDir: ctx.stateDir, config, env: ctx.env });
-  const stores = all.filter((file) =>
-    roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`)),
-  );
+  const owner = (file: string) =>
+    families.find((family) =>
+      family.roots.some((root) => file === root || file.startsWith(`${root}${path.sep}`)),
+    )?.id;
+  const stores = all.filter((file) => owner(file) && (!ctx.family || owner(file) === ctx.family));
+  const outOfScope: { path: string; engine: DatabaseEngineId }[] = [];
   const inspected = new Map<string, DatabasePortInspection>();
   for (const file of all) {
     ctx.target = file;
     privatePaths(ctx, [file]);
     if (!stores.includes(file)) {
-      if (readBackupEngine(file).engine !== "sqlite") {
-        refuse(
-          ctx,
-          "unclassified PostgreSQL anchor",
-          `registered ownership; supported families: ${databasePortProviders.map((provider) => provider.id).join(", ")}`,
-        );
+      const physical = readBackupEngine(file);
+      if (physical.engine === "postgres") {
+        const family = await readPostgresBackupFamily(file, postgresConfig(config));
+        if (!owner(file) || family !== owner(file)) {
+          refuse(
+            ctx,
+            "unclassified PostgreSQL anchor",
+            "registered ownership matching its physical family",
+          );
+        }
       }
+      outOfScope.push({ path: file, engine: physical.engine });
       continue;
     }
     const facts = await runDatabasePortTask(
       { operation: "inspect", sourcePath: file, config: postgresConfig(config), to },
       ctx,
     );
+    if (ctx.family && facts.family !== ctx.family) {
+      refuse(ctx, "store outside its registered family", "matching physical family ownership");
+    }
     if (facts.engine !== from) {
       refuse(ctx, `${facts.engine} store with ${from} config`, "matching physical/config engines");
     }
@@ -128,6 +172,10 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     stores.map((file) => ({ path: file, size: fs.statSync(file).size })),
   );
   if (stores.length && from !== to) {
+    ctx.engineSelection.postgres ??= await resolveDatabaseEngineInput(
+      postgresConfig(config),
+      ctx.env,
+    );
     await runDatabasePortTask(
       { operation: "preflight", config: postgresConfig(config), probe: false },
       ctx,
@@ -141,7 +189,7 @@ async function preflight(ctx: Context, options: DatabasePortOptions) {
     stores,
     inspected,
     migrations: stores.filter((file) => inspected.get(file)?.migrationRequired),
-    remainingSqlite: all.filter((file) => !stores.includes(file)),
+    outOfScope,
   };
 }
 
@@ -155,8 +203,15 @@ async function captureOriginals(ctx: Context, facts: Awaited<ReturnType<typeof p
   const authored = facts.snapshot.snapshot.authoredConfig ?? facts.snapshot.snapshot.sourceConfig;
   ctx.inputs = {
     stores: [],
-    remainingSqlite: facts.remainingSqlite,
-    originalEngine: authored.database?.engine ?? null,
+    selection: {
+      path: ctx.family ? ["database", "families", ctx.family, "engine"] : ["database", "engine"],
+      originalValue:
+        (ctx.family
+          ? authored.database?.families?.[ctx.family]?.engine
+          : authored.database?.engine) ?? null,
+      effectiveSource: facts.from,
+    },
+    outOfScope: facts.outOfScope,
   };
   for (const [index, [file, info]] of [...facts.inspected].entries()) {
     ctx.target = file;
@@ -348,20 +403,30 @@ async function switchConfig(ctx: Context, restoring: boolean) {
   const { current, engine } = await classifyConfig(ctx),
     saved = manifest(ctx);
   const wanted = restoring ? saved.direction.from : saved.direction.to;
-  const value = restoring ? (ctx.inputs!.originalEngine ?? undefined) : wanted;
+  const selection = ctx.inputs!.selection;
+  const configPath = selection?.path ?? ["database", "engine"];
+  const value = restoring
+    ? (selection?.originalValue ?? ctx.inputs!.originalEngine ?? undefined)
+    : ctx.family && wanted === (current.snapshot.config.database?.engine ?? "sqlite")
+      ? undefined
+      : wanted;
   if (engine !== wanted) {
     const candidate = structuredClone(
       current.snapshot.authoredConfig ?? current.snapshot.sourceConfig,
     );
     const unsetEngine = value === undefined;
-    setConfigValueAtPath(candidate, ["database", "engine"], value);
+    if (unsetEngine) {
+      unsetConfigValueAtPath(candidate, configPath);
+    } else {
+      setConfigValueAtPath(candidate, configPath, value);
+    }
     const result = await withDatabasePortConfigStateReceipt(ctx, current.snapshot.config, () =>
       writeConfigFile(candidate, {
         ...current.writeOptions,
         baseSnapshot: current.snapshot,
         inputBase: "source",
-        explicitSetPaths: unsetEngine ? [] : [["database", "engine"]],
-        unsetPaths: unsetEngine ? [["database", "engine"]] : undefined,
+        explicitSetPaths: unsetEngine ? [] : [configPath],
+        unsetPaths: unsetEngine ? [configPath] : undefined,
         assertCurrent: ctx.assertCurrent,
         observe: false,
         skipOutputLogs: true,
@@ -369,7 +434,13 @@ async function switchConfig(ctx: Context, restoring: boolean) {
         beforeCommit: async () => {
           await publishStores(ctx);
           // Source reads are finished; every config publication effect now belongs to the target.
-          await selectDatabasePortEngine(ctx, current.snapshot.config, wanted);
+          await selectDatabasePortEngine(
+            ctx,
+            current.snapshot.config,
+            !ctx.family || ctx.family === "state"
+              ? wanted
+              : ctx.engineSelection.effectiveEngines.state,
+          );
           ctx.phase = "switch config";
           ctx.target = ctx.configPath;
         },
@@ -396,11 +467,15 @@ async function switchConfig(ctx: Context, restoring: boolean) {
 async function resume(ctx: Context) {
   const current = manifest(ctx),
     config = (await readDatabasePortConfigSnapshot(ctx)).snapshot.config;
-  assertPortSelection(config, current.direction.to);
+  assertPortSelection(config, current.direction.to, ctx.family);
   if (current.state === "preparing") {
     for (const input of current.originalConfig) {
       await assertDatabaseArtifact(input);
     }
+    ctx.engineSelection.postgres ??= await resolveDatabaseEngineInput(
+      postgresConfig(config),
+      ctx.env,
+    );
     for (const index of current.targets.keys()) {
       await stageMaterialize(ctx, index, config);
     }
@@ -408,7 +483,11 @@ async function resume(ctx: Context) {
   return await finishPort(ctx, config, false);
 }
 async function rollback(ctx: Context) {
-  const engine = resolveConfigEnvVars(ctx.inputs!.originalEngine, ctx.env) ?? "sqlite";
+  const selection = ctx.inputs!.selection;
+  const current = (await readDatabasePortConfigSnapshot(ctx)).snapshot.config;
+  const authored = selection?.originalValue ?? ctx.inputs!.originalEngine;
+  const inherited = selection?.path.length === 4 ? current.database?.engine : undefined;
+  const engine = resolveConfigEnvVars(authored ?? inherited, ctx.env) ?? "sqlite";
   if (engine !== manifest(ctx).direction.from) {
     refuse(ctx, "changed engine environment", "original engine environment before rollback");
   }
@@ -418,9 +497,17 @@ async function finishPort(ctx: Context, config: OpenClawConfig, restoring: boole
   assertPortSelection(
     config,
     restoring ? manifest(ctx).direction.from : manifest(ctx).direction.to,
+    ctx.family,
   );
   try {
     const preparingRollback = restoring && manifest(ctx).state === "preparing";
+    // Reverse recovery can already have SQLite config while its PG originals need restoration.
+    if (!preparingRollback || manifest(ctx).direction.from === "postgres") {
+      ctx.engineSelection.postgres ??= await resolveDatabaseEngineInput(
+        postgresConfig(config),
+        ctx.env,
+      );
+    }
     if (preparingRollback) {
       for (const index of manifest(ctx).targets.keys()) {
         await assertOriginal(ctx, index, config);
@@ -467,11 +554,20 @@ async function loadRecovery(ctx: Context) {
   ctx.inputs = inputsSchema.parse(
     JSON.parse(fs.readFileSync(path.join(ctx.directory, "inputs.json"), "utf8")),
   );
+  if (ctx.inputs.selection) {
+    const selection = ctx.inputs.selection;
+    ctx.family = selection.path.length === 4 ? selection.path[2] : undefined;
+    if (selection.effectiveSource !== saved.direction.from) {
+      refuse(ctx, "mismatched source engine", "captured effective source engine");
+    }
+  }
   if (
     ctx.inputs.stores.length !== saved.targets.length ||
     saved.targets.some((target, index) => {
       const file = ctx.inputs?.stores[index]?.original.path;
-      return !file?.startsWith(`${ctx.stateDir}${path.sep}`) || file !== livePath(target);
+      // Configured and retained agents can live outside the state root. The
+      // verified private input must still name its manifest-bound target.
+      return !file || file !== livePath(target);
     })
   ) {
     refuse(ctx, "mismatched target set", "complete captured store set");
@@ -483,6 +579,8 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
   const stateDir = path.resolve(resolveStateDir()),
     configPath = path.resolve(resolveConfigPath());
   const ctx: Context = {
+    family:
+      options.family === undefined ? undefined : databasePortFamilySchema.parse(options.family),
     stateDir,
     configPath,
     env: process.env,
@@ -495,7 +593,13 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
   };
   try {
     privatePaths(ctx, [stateDir, configPath]);
-    assertPortSelection((await readDatabasePortConfigSnapshot(ctx)).snapshot.config);
+    if (!options.resume && !options.rollback) {
+      assertPortSelection(
+        (await readDatabasePortConfigSnapshot(ctx)).snapshot.config,
+        options.to,
+        ctx.family,
+      );
+    }
     if (hasActiveGatewayStateOwner(path.join(stateDir, "state", "openclaw.sqlite"))) {
       refuse(ctx, "hosted Gateway owner", "exclusive offline custody");
     }
@@ -526,7 +630,10 @@ export async function doctorDatabasePort(options: DatabasePortOptions) {
           to: facts.to,
           stores: facts.stores,
           migrations: facts.migrations,
-          remainingSqlite: facts.remainingSqlite,
+          remainingSqlite: facts.outOfScope
+            .filter((store) => store.engine === "sqlite")
+            .map((store) => store.path),
+          ...(ctx.family ? { family: ctx.family, outOfScope: facts.outOfScope } : {}),
           verification: options.dryRun
             ? `${facts.migrations.length} stores need private migration; copy and privilege probe not performed`
             : "verified no-op",

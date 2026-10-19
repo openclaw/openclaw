@@ -1,10 +1,15 @@
-import { loadSqliteVecExtension } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
+import {
+  isPostgresSqlConnection,
+  loadSqliteVecExtension,
+} from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import { withFreshOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/sqlite-runtime";
 import {
   executeSqliteQuerySync,
   getNodeSqliteKysely,
   openNodeSqliteDatabase,
   tableExists,
+  tableHasColumn,
+  sqliteStringSet,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
 import { referencesSession, scrubMemoryContent } from "./memory-forget-content.js";
 import type {
@@ -12,7 +17,6 @@ import type {
   ForgetIndexPlan,
   ForgetIndexReadInput,
 } from "./memory-forget-index-task.js";
-import { requireMemorySearchDatabase } from "./memory-search-database.js";
 import { isMemorySessionIndexable } from "./memory/manager-session-sync-state.js";
 
 export async function readMemoryForgetIndexInWorker(
@@ -32,8 +36,8 @@ export async function readMemoryForgetIndexInWorker(
     entryKeys: new Set(request.entryKeys),
     corpusSnippets: new Set(request.corpusSnippets),
   };
-  const result = withFreshOpenClawAgentDatabaseReadOnly(({ db: connection }) => {
-    const db = requireMemorySearchDatabase(connection);
+  const result = withFreshOpenClawAgentDatabaseReadOnly(({ db }) => {
+    const postgres = isPostgresSqlConnection(db);
     const kysely = getNodeSqliteKysely<ForgetDatabase>(db);
     const indexedChunks = executeSqliteQuerySync(
       db,
@@ -98,8 +102,11 @@ export async function readMemoryForgetIndexInWorker(
           )
         : [];
     const chunkIds = chunks.map((chunk) => chunk.id);
-    const ftsRows =
-      chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
+    const ftsRows = postgres
+      ? tableHasColumn(db, "memory_index_chunks", "openclaw_search")
+        ? chunkIds.length
+        : 0
+      : chunkIds.length > 0 && tableExists(db, "memory_index_chunks_fts")
         ? executeSqliteQuerySync(
             db,
             kysely
@@ -116,6 +123,16 @@ export async function readMemoryForgetIndexInWorker(
           ).rows[0]!.count
         : 0;
     const hasVectorTable = tableExists(db, "memory_index_chunks_vec");
+    const vectorRows =
+      postgres && hasVectorTable && chunkIds.length > 0
+        ? executeSqliteQuerySync(
+            db,
+            kysely
+              .selectFrom("memory_index_chunks_vec")
+              .select((eb) => eb.fn.countAll<number>().as("count"))
+              .where("id", "in", sqliteStringSet(chunkIds)),
+          ).rows[0]!.count
+        : 0;
     let embeddingCacheRows = 0;
     if (params.sessionIds.size > 0 && tableExists(db, "memory_embedding_cache")) {
       embeddingCacheRows = executeSqliteQuerySync(
@@ -131,6 +148,8 @@ export async function readMemoryForgetIndexInWorker(
       ftsRows,
       embeddingCacheRows,
       hasVectorTable,
+      vectorRows,
+      postgres,
     };
   }, options);
   if (!result.found) {
@@ -142,6 +161,10 @@ export async function readMemoryForgetIndexInWorker(
       embeddingCacheRows: 0,
       hasVectorTable: false,
     };
+  }
+  const { postgres, ...plan } = result.value;
+  if (postgres) {
+    return plan;
   }
   let vectorRows = 0;
   let extensionPath: string | undefined;
@@ -164,7 +187,10 @@ export async function readMemoryForgetIndexInWorker(
     // stays read-only while exposing vec0.
     const vectorResult = withFreshOpenClawAgentDatabaseReadOnly(
       ({ db: connection }) => {
-        const db = requireMemorySearchDatabase(connection);
+        if (isPostgresSqlConnection(connection)) {
+          throw new Error("memory forget vector extension requires a SQLite connection");
+        }
+        const db = connection;
         db.enableLoadExtension(true);
         db.loadExtension(preparedExtensionPath);
         const vectorKysely = getNodeSqliteKysely<ForgetDatabase>(db);
@@ -185,5 +211,5 @@ export async function readMemoryForgetIndexInWorker(
     );
     vectorRows = vectorResult.found ? vectorResult.value : 0;
   }
-  return { ...result.value, vectorRows, extensionPath };
+  return { ...plan, vectorRows, extensionPath };
 }

@@ -153,20 +153,10 @@ export class SessionFollowupCompletion implements FollowupCompletionOwner {
   }
   promoteYield(runId: string, entries: readonly SubagentRunRecord[], generation: number) {
     this.assertCurrent();
-    if (
-      this.execution.runId !== runId ||
-      this.terminal ||
-      entries.length === 0 ||
-      entries.some(
-        (entry) =>
-          entry.requesterSessionKey !== this.request.targetSessionKey ||
-          entry.requesterSettleWake?.rearmGeneration !== generation ||
-          entry.requesterSettleWake.requesterYieldBatch !== true,
-      )
-    ) {
+    if (this.execution.runId !== runId || this.terminal || entries.length === 0) {
       throw new Error("Followup yield does not own the committed completion cohort.");
     }
-    this.cohort = { entries: [...entries], generation };
+    this.cohort = { entries, generation };
     for (const entry of entries) {
       bindFollowupCohortOwner(entry, this);
     }

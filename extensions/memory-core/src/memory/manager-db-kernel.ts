@@ -3,8 +3,6 @@ import {
   dropMemoryChunkFtsTriggers,
   dropMemoryPathFtsTriggers,
   ensureMemoryChunkFtsTriggers,
-  ensureMemoryChunkProvenance,
-  ensureMemoryRecallMetadataSchema,
   ensureMemoryPathFtsTriggers,
   MEMORY_INDEX_CHUNK_RECALL_METADATA_TABLE,
   MEMORY_INDEX_PATHS_FTS_TABLE,
@@ -16,6 +14,7 @@ import {
   runSqliteImmediateTransactionSync,
   tableExists as admittedTableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
@@ -89,9 +88,6 @@ type MemoryDatabasePublication = {
 
 /** The admitted connection owns ATTACH, atomic replacement, COMMIT and DETACH. */
 export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): void {
-  ensureMemoryRecallMetadataSchema(params.targetDb);
-  // Existing pre-provenance databases need this before the publication writes it.
-  ensureMemoryChunkProvenance(params.targetDb);
   // Admission precedes ATTACH; no shadow attachment or transaction crosses an await.
   params.targetDb.prepare(`ATTACH DATABASE ? AS ${MEMORY_REINDEX_SCHEMA}`).run(params.sourcePath);
   try {
@@ -174,6 +170,7 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
         if (params.vectorIndexComplete) {
           markMemoryVectorIndexClean(params.targetDb);
         }
+        advanceMemoryIndexRevision(params.targetDb);
       },
       { withCommit: params.withCommit },
     );

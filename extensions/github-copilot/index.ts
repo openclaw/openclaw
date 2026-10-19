@@ -38,8 +38,7 @@ import {
   buildGithubCopilotReplayPolicy,
   sanitizeGithubCopilotReplayHistory,
 } from "./replay-policy.js";
-import { buildCopilotRuntimeHeaders } from "./runtime-identity.js";
-import { wrapCopilotProviderStream } from "./stream.js";
+import { wrapCopilotProviderStream, wrapCopilotSimpleCompletionStream } from "./stream.js";
 
 const COPILOT_ENV_VAR = "COPILOT_GITHUB_TOKEN";
 const DEFAULT_COPILOT_PROFILE_ID = "github-copilot:github";
@@ -614,6 +613,7 @@ export default definePluginEntry({
       refreshOAuth: async (credential) => refreshGithubCopilotOAuth(credential),
       buildAuthDoctorHint: buildGithubCopilotAuthDoctorHint,
       wrapStreamFn: wrapCopilotProviderStream,
+      wrapSimpleCompletionStreamFn: wrapCopilotSimpleCompletionStream,
       buildReplayPolicy: buildGithubCopilotReplayPolicy,
       sanitizeReplayHistoryAsync: sanitizeGithubCopilotReplayHistory,
       resolveThinkingProfile,
@@ -629,12 +629,13 @@ export default definePluginEntry({
             config: ctx.config,
           }),
         });
+        // Runtime auth output is sealed and registered for redaction. Configured
+        // headers may hold credentials, so they keep that protection; public
+        // identity headers come from the stream wrappers instead.
         return {
           apiKey: auth.apiKey,
           baseUrl: auth.baseUrl,
-          request: {
-            headers: buildCopilotRuntimeHeaders({ config: ctx.config, headers: ctx.model.headers }),
-          },
+          ...(ctx.model.headers ? { request: { headers: ctx.model.headers } } : {}),
         };
       },
       resolveUsageAuth: async (ctx) => await ctx.resolveOAuthToken(),

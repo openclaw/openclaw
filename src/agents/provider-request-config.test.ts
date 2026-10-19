@@ -1,12 +1,17 @@
-// Verifies provider request transport config normalization and sanitization.
 import { describe, expect, it } from "vitest";
 import type { ConfiguredProviderRequest } from "../config/types.provider-request.js";
 import type { SecretRef } from "../config/types.secrets.js";
 import type { PluginMetadataSnapshotOwnerMaps } from "../plugins/plugin-metadata-snapshot.types.js";
+import {
+  attachProviderAuthAuthority,
+  assertProviderAuthAuthority,
+} from "../plugins/provider-auth-authority.js";
 import { resolveProviderTransportSsrFPolicy } from "./provider-network-policy.js";
 import {
   applyPreparedRuntimeAuthToModel,
   attachModelProviderRequestRouteFacts,
+  attachModelProviderRequestTransport,
+  getModelProviderRequestTransport,
   buildProviderRequestDispatcherPolicy,
   getModelProviderRequestRouteFacts,
   inheritModelProviderRequestRouteFacts,
@@ -40,22 +45,26 @@ function buildProviderMetadataOwners(
   };
 }
 
+const requestConfig = (overrides: Partial<Parameters<typeof resolveProviderRequestConfig>[0]>) =>
+  resolveProviderRequestConfig({
+    provider: "custom-openai",
+    baseUrl: "https://proxy.example.com/v1",
+    ...overrides,
+  });
+const streaming = { capability: "llm", transport: "stream" } as const;
+const clientTls = { cert: "client-cert", key: "client-key", serverName: "gateway.internal" };
+const proxy = {
+  mode: "explicit-proxy",
+  url: "http://proxy.internal:8443",
+  tls: { ca: "proxy-ca" },
+} as const;
+
 describe("provider request config", () => {
   it("carries lifecycle plugin metadata ownership through model projections", () => {
-    const owners = {
-      channels: new Map(),
-      channelConfigs: new Map(),
-      providers: new Map(),
-      modelCatalogProviders: new Map(),
-      cliBackends: new Map(),
-      setupProviders: new Map(),
-      commandAliases: new Map(),
-      contracts: new Map(),
-      providerAuthContributions: [],
-      modelIdNormalizationPolicies: new Map(),
-      providerEndpoints: [],
-      providerRequests: new Map([["prepared", { family: "prepared-family" }]]),
-    };
+    const owners = buildProviderMetadataOwners(
+      [],
+      new Map([["prepared", { family: "prepared-family" }]]),
+    );
     const prepared = attachModelProviderRequestRouteFacts(
       makeProviderModelFixture<"openai-completions">({
         provider: "prepared",
@@ -98,32 +107,68 @@ describe("provider request config", () => {
         auth: { mode: "header", headerName: "x-api-key", value: "profile-key" },
       },
     });
-    expect(apiKeyModel.headers).toEqual({
-      "X-Tenant": "tenant-a",
-      "x-api-key": "profile-key",
+    expect(apiKeyModel.headers).toEqual({ "X-Tenant": "tenant-a", "x-api-key": "profile-key" });
+  });
+
+  it("keeps exchanged request auth aligned with visible headers and authored network policy", () => {
+    const model = attachModelProviderRequestTransport(
+      {
+        provider: "fixture",
+        api: "openai-responses" as const,
+        baseUrl: "https://fixture.invalid/v1",
+        headers: { "x-api-key": "old-key", "x-tenant": "tenant" },
+      },
+      {
+        headers: { "x-api-key": "old-key" },
+        auth: { mode: "authorization-bearer", token: "old-token" },
+        proxy: { mode: "env-proxy" },
+        tls: { ca: "fixture-ca" },
+        allowPrivateNetwork: false,
+      },
+    );
+    let credentialCurrent = true;
+    const retired = new Error("synthetic credential owner retired");
+    const prepared = applyPreparedRuntimeAuthToModel(
+      model,
+      attachProviderAuthAuthority(
+        {
+          request: {
+            headers: { "x-entitlement": "entitled" },
+            auth: { mode: "header" as const, headerName: "x-session", value: "new-token" },
+          },
+        },
+        () => {
+          if (!credentialCurrent) {
+            throw retired;
+          }
+        },
+      ),
+    );
+    const request = getModelProviderRequestTransport(prepared);
+    expect(request).toMatchObject({
+      auth: { mode: "header", headerName: "x-session", value: "new-token" },
+      proxy: { mode: "env-proxy" },
+      tls: { ca: "fixture-ca" },
+      allowPrivateNetwork: false,
     });
+    expect(request?.headers).toEqual(prepared.headers);
+    expect(request?.headers).toEqual({
+      "x-tenant": "tenant",
+      "x-entitlement": "entitled",
+      "x-session": "new-token",
+    });
+    assertProviderAuthAuthority(prepared);
+    credentialCurrent = false;
+    expect(() => assertProviderAuthAuthority(prepared)).toThrow(retired);
   });
 
   it("merges discovered, provider, and model headers in precedence order", () => {
-    // Later scopes override earlier scopes: discovery < provider < model.
-    const resolved = resolveProviderRequestConfig({
-      provider: "custom-openai",
+    const resolved = requestConfig({
       api: "openai-responses",
-      baseUrl: "https://proxy.example.com/v1",
-      discoveredHeaders: {
-        "X-Discovered": "1",
-        "X-Shared": "discovered",
-      },
-      providerHeaders: {
-        "X-Provider": "2",
-        "X-Shared": "provider",
-      },
-      modelHeaders: {
-        "X-Model": "3",
-        "X-Shared": "model",
-      },
-      capability: "llm",
-      transport: "stream",
+      discoveredHeaders: { "X-Discovered": "1", "X-Shared": "discovered" },
+      providerHeaders: { "X-Provider": "2", "X-Shared": "provider" },
+      modelHeaders: { "X-Model": "3", "X-Shared": "model" },
+      ...streaming,
     });
 
     expect(resolved.headers).toEqual({
@@ -140,8 +185,7 @@ describe("provider request config", () => {
       api: "google-generative-ai",
       baseUrl: "https://generativelanguage.googleapis.com/v1beta",
       authHeader: true,
-      capability: "llm",
-      transport: "stream",
+      ...streaming,
     });
 
     expect(resolved.auth).toEqual({
@@ -153,98 +197,49 @@ describe("provider request config", () => {
   });
 
   it("drops legacy Authorization when a custom auth header override is configured", () => {
-    // Custom auth headers replace stale Authorization to avoid double auth.
-    const resolved = resolveProviderRequestConfig({
-      provider: "custom-openai",
+    const resolved = requestConfig({
       api: "openai-responses",
-      baseUrl: "https://proxy.example.com/v1",
-      providerHeaders: {
-        Authorization: "Bearer stale-token",
-        "X-Tenant": "acme",
-      },
-      request: {
-        auth: {
-          mode: "header",
-          headerName: "api-key",
-          value: "secret",
-        },
-      },
-      capability: "llm",
-      transport: "stream",
+      providerHeaders: { Authorization: "Bearer stale-token", "X-Tenant": "acme" },
+      request: { auth: { mode: "header", headerName: "api-key", value: "secret" } },
+      ...streaming,
     });
 
-    expect(resolved.headers).toEqual({
-      "X-Tenant": "acme",
-      "api-key": "secret",
-    });
+    expect(resolved.headers).toEqual({ "X-Tenant": "acme", "api-key": "secret" });
   });
 
   it("builds explicit proxy dispatcher policy from normalized transport config", () => {
-    const resolved = resolveProviderRequestConfig({
-      provider: "custom-openai",
-      baseUrl: "https://proxy.example.com/v1",
+    const resolved = requestConfig({
       request: {
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-          tls: {
-            ca: "proxy-ca",
-          },
-        },
-        tls: {
-          cert: "client-cert",
-          key: "client-key",
-        },
+        proxy,
+        tls: { cert: "client-cert", key: "client-key" },
       },
     });
 
     expect(buildProviderRequestDispatcherPolicy(resolved)).toEqual({
       mode: "explicit-proxy",
       proxyUrl: "http://proxy.internal:8443",
-      proxyTls: {
-        ca: "proxy-ca",
-      },
+      proxyTls: { ca: "proxy-ca" },
     });
   });
 
   it("does not copy target TLS into env proxy TLS", () => {
-    const resolved = resolveProviderRequestConfig({
-      provider: "custom-openai",
-      baseUrl: "https://proxy.example.com/v1",
+    const resolved = requestConfig({
       request: {
-        proxy: {
-          mode: "env-proxy",
-        },
-        tls: {
-          cert: "client-cert",
-          key: "client-key",
-          serverName: "gateway.internal",
-        },
+        proxy: { mode: "env-proxy" },
+        tls: clientTls,
       },
     });
 
     expect(buildProviderRequestDispatcherPolicy(resolved)).toEqual({
       mode: "env-proxy",
-      connect: {
-        cert: "client-cert",
-        key: "client-key",
-        servername: "gateway.internal",
-      },
+      connect: { cert: "client-cert", key: "client-key", servername: "gateway.internal" },
     });
   });
 
   it("rejects insecure TLS transport overrides", () => {
-    expect(() =>
-      resolveProviderRequestConfig({
-        provider: "custom-openai",
-        baseUrl: "https://proxy.example.com/v1",
-        request: {
-          tls: {
-            insecureSkipVerify: true,
-          },
-        },
-      }),
-    ).toThrow(/insecureskipverify/i);
+    expect(() => requestConfig({ request: { tls: { insecureSkipVerify: true } } })).toThrow(
+      /insecureskipverify/i,
+    );
   });
 
   it("rejects proxy and tls runtime auth overrides", () => {
@@ -252,12 +247,7 @@ describe("provider request config", () => {
       applyPreparedRuntimeAuthToModel(
         { provider: "custom-openai" },
         {
-          request: {
-            proxy: {
-              mode: "explicit-proxy",
-              url: "http://proxy.internal:8443",
-            },
-          },
+          request: { proxy: { mode: "explicit-proxy", url: "http://proxy.internal:8443" } },
         },
       ),
     ).toThrow(/runtime auth request overrides do not allow proxy or tls/i);
@@ -272,79 +262,31 @@ describe("provider request config", () => {
   });
 
   it("sanitizes configured request overrides into runtime transport overrides", () => {
-    expect(
-      sanitizeConfiguredProviderRequest({
-        headers: {
-          "X-Tenant": "acme",
-        },
-        auth: {
-          mode: "authorization-bearer",
-          token: "secret",
-        },
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-          tls: {
-            ca: "proxy-ca",
-          },
-        },
-        tls: {
-          cert: "client-cert",
-          key: "client-key",
-          serverName: "gateway.internal",
-        },
-      }),
-    ).toEqual({
-      headers: {
-        "X-Tenant": "acme",
-      },
-      auth: {
-        mode: "authorization-bearer",
-        token: "secret",
-      },
+    const configured: ConfiguredProviderRequest = {
+      headers: { "X-Tenant": "acme" },
+      auth: { mode: "authorization-bearer", token: "secret" },
+      proxy: { ...proxy, tls: { ...proxy.tls } },
+      tls: { ...clientTls },
+    };
+    expect(sanitizeConfiguredProviderRequest(configured)).toEqual({
+      headers: { "X-Tenant": "acme" },
+      auth: { mode: "authorization-bearer", token: "secret" },
       proxy: {
         mode: "explicit-proxy",
         url: "http://proxy.internal:8443",
-        tls: {
-          ca: "proxy-ca",
-        },
+        tls: { ca: "proxy-ca" },
       },
-      tls: {
-        cert: "client-cert",
-        key: "client-key",
-        serverName: "gateway.internal",
-      },
+      tls: { cert: "client-cert", key: "client-key", serverName: "gateway.internal" },
     });
   });
 
   it("fails fast when configured request overrides still contain unresolved SecretRefs", () => {
-    const tenantRef: SecretRef = {
-      source: "env",
-      provider: "default",
-      id: "MEDIA_AUDIO_TENANT",
-    };
-    const tokenRef: SecretRef = {
-      source: "env",
-      provider: "default",
-      id: "MEDIA_AUDIO_TOKEN",
-    };
-    const certRef: SecretRef = {
-      source: "env",
-      provider: "default",
-      id: "MEDIA_AUDIO_CERT",
-    };
+    const ref = (id: string): SecretRef => ({ source: "env", provider: "default", id });
     expect(() =>
       sanitizeConfiguredProviderRequest({
-        headers: {
-          "X-Tenant": tenantRef,
-        },
-        auth: {
-          mode: "authorization-bearer",
-          token: tokenRef,
-        },
-        tls: {
-          cert: certRef,
-        },
+        headers: { "X-Tenant": ref("MEDIA_AUDIO_TENANT") },
+        auth: { mode: "authorization-bearer", token: ref("MEDIA_AUDIO_TOKEN") },
+        tls: { cert: ref("MEDIA_AUDIO_CERT") },
       }),
     ).toThrow(/request\.(headers\.X-Tenant|auth\.token|tls\.cert): unresolved SecretRef/i);
   });
@@ -352,22 +294,12 @@ describe("provider request config", () => {
   it("keeps model-provider transport overrides once the llm path can carry them", () => {
     expect(
       sanitizeConfiguredModelProviderRequest({
-        headers: {
-          "X-Tenant": "acme",
-        },
-        proxy: {
-          mode: "explicit-proxy",
-          url: "http://proxy.internal:8443",
-        },
+        headers: { "X-Tenant": "acme" },
+        proxy: { mode: "explicit-proxy", url: "http://proxy.internal:8443" },
       }),
     ).toEqual({
-      headers: {
-        "X-Tenant": "acme",
-      },
-      proxy: {
-        mode: "explicit-proxy",
-        url: "http://proxy.internal:8443",
-      },
+      headers: { "X-Tenant": "acme" },
+      proxy: { mode: "explicit-proxy", url: "http://proxy.internal:8443" },
     });
   });
 
@@ -379,9 +311,7 @@ describe("provider request config", () => {
       allowPrivateNetwork: false,
     });
     expect(
-      sanitizeConfiguredProviderRequest({
-        allowPrivateNetwork: true,
-      } as ConfiguredProviderRequest),
+      sanitizeConfiguredProviderRequest({ allowPrivateNetwork: true } as ConfiguredProviderRequest),
     ).toBeUndefined();
   });
 
@@ -404,38 +334,17 @@ describe("provider request config", () => {
     expect(
       mergeModelProviderRequestOverrides(
         {
-          headers: {
-            "X-Provider": "1",
-            "X-Shared": "provider",
-          },
-          auth: {
-            mode: "authorization-bearer",
-            token: "provider-token",
-          },
+          headers: { "X-Provider": "1", "X-Shared": "provider" },
+          auth: { mode: "authorization-bearer", token: "provider-token" },
         },
         {
-          headers: {
-            "X-Entry": "2",
-            "X-Shared": "entry",
-          },
-          auth: {
-            mode: "header",
-            headerName: "api-key",
-            value: "entry-key",
-          },
+          headers: { "X-Entry": "2", "X-Shared": "entry" },
+          auth: { mode: "header", headerName: "api-key", value: "entry-key" },
         },
       ),
     ).toEqual({
-      headers: {
-        "X-Provider": "1",
-        "X-Shared": "entry",
-        "X-Entry": "2",
-      },
-      auth: {
-        mode: "header",
-        headerName: "api-key",
-        value: "entry-key",
-      },
+      headers: { "X-Provider": "1", "X-Shared": "entry", "X-Entry": "2" },
+      auth: { mode: "header", headerName: "api-key", value: "entry-key" },
     });
   });
 
@@ -443,12 +352,8 @@ describe("provider request config", () => {
     const resolved = resolveProviderRequestHeaders({
       provider: "openrouter",
       api: "openai-completions",
-      capability: "llm",
-      transport: "stream",
-      callerHeaders: {
-        "HTTP-Referer": "https://example.com",
-        "X-Custom": "1",
-      },
+      ...streaming,
+      callerHeaders: { "HTTP-Referer": "https://example.com", "X-Custom": "1" },
       precedence: "caller-wins",
     });
 
@@ -460,31 +365,20 @@ describe("provider request config", () => {
     });
   });
 
-  it.each([
-    {
-      label: "native OpenCode Go",
-      provider: "opencode-go",
-      api: "openai-completions" as const,
-      baseUrl: "https://opencode.ai/zen/go/v1",
-      expectedUserAgent: /^openclaw\//,
-    },
-  ])("merges $label User-Agent headers case-insensitively", (testCase) => {
+  it("merges native OpenCode Go User-Agent headers case-insensitively", () => {
     const resolved = resolveProviderRequestHeaders({
-      provider: testCase.provider,
-      api: testCase.api,
-      baseUrl: testCase.baseUrl,
-      capability: "llm",
-      transport: "stream",
-      callerHeaders: {
-        "user-agent": "custom-agent/1.0",
-      },
+      provider: "opencode-go",
+      api: "openai-completions",
+      baseUrl: "https://opencode.ai/zen/go/v1",
+      ...streaming,
+      callerHeaders: { "user-agent": "custom-agent/1.0" },
       precedence: "caller-wins",
     });
 
     expect(
       Object.keys(resolved ?? {}).filter((key) => key.toLowerCase() === "user-agent"),
     ).toHaveLength(1);
-    expect(new Headers(resolved).get("user-agent")).toMatch(testCase.expectedUserAgent);
+    expect(new Headers(resolved).get("user-agent")).toMatch(/^openclaw\//);
   });
 
   it("drops forbidden header keys while merging", () => {
@@ -495,14 +389,10 @@ describe("provider request config", () => {
         constructor: "polluted",
         "X-Custom": "1",
       } as Record<string, string>,
-      defaultHeaders: {
-        prototype: "polluted",
-      } as Record<string, string>,
+      defaultHeaders: { prototype: "polluted" } as Record<string, string>,
     });
 
-    expect(resolved).toEqual({
-      "X-Custom": "1",
-    });
+    expect(resolved).toEqual({ "X-Custom": "1" });
     expect(Object.getPrototypeOf(resolved ?? {})).toBeNull();
   });
 
@@ -512,130 +402,102 @@ describe("provider request config", () => {
       api: "openai-responses",
       baseUrl: "https://api.openai.com/v1/",
       defaultBaseUrl: "https://fallback.example/v1/",
-      callerHeaders: {
-        "User-Agent": "custom-agent/1.0",
-        "X-Custom": "1",
-      },
-      providerHeaders: {
-        authorization: "Bearer test-key",
-      },
-      compat: {
-        supportsStore: true,
-      },
-      capability: "llm",
-      transport: "stream",
+      callerHeaders: { "User-Agent": "custom-agent/1.0", "X-Custom": "1" },
+      providerHeaders: { authorization: "Bearer test-key" },
+      compat: { supportsStore: true },
+      ...streaming,
       precedence: "defaults-win",
     });
 
-    expect(resolved.baseUrl).toBe("https://api.openai.com/v1");
-    expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.trustConfiguredBaseUrlOrigin).toBe(false);
-    expect(resolved.capabilities.endpointClass).toBe("openai-public");
-    expect(resolved.capabilities.allowsResponsesStore).toBe(true);
-    expect(resolved.headers?.authorization).toBe("Bearer test-key");
-    expect(resolved.headers?.originator).toBe("openclaw");
+    expect(resolved).toMatchObject({
+      baseUrl: "https://api.openai.com/v1",
+      allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: false,
+      capabilities: { endpointClass: "openai-public", allowsResponsesStore: true },
+      headers: {
+        authorization: "Bearer test-key",
+        originator: "openclaw",
+        "User-Agent": expect.stringMatching(/^openclaw\//),
+        "X-Custom": "1",
+      },
+    });
     expect(typeof resolved.headers?.version).toBe("string");
-    expect(resolved.headers?.["User-Agent"]).toMatch(/^openclaw\//);
-    expect(resolved.headers?.["X-Custom"]).toBe("1");
   });
 
   it.each([
-    {
-      name: "OpenAI core",
-      provider: "openai",
-      api: "openai-responses" as const,
-      baseUrl: "https://prepared-openai.example/v1",
-      owners: buildProviderMetadataOwners([
-        { endpointClass: "openai-public", hosts: ["prepared-openai.example"] },
-      ]),
-    },
-    {
-      name: "Anthropic core",
-      provider: "anthropic",
-      api: "anthropic-messages" as const,
-      baseUrl: "https://prepared-anthropic.example/v1",
-      owners: buildProviderMetadataOwners([
-        { endpointClass: "anthropic-public", hosts: ["prepared-anthropic.example"] },
-      ]),
-    },
-    {
-      name: "plugin provider",
-      provider: "acme-plugin",
-      api: "openai-completions" as const,
-      baseUrl: "https://inference.acme.example/v1",
-      owners: buildProviderMetadataOwners(
-        [{ endpointClass: "nvidia-native", hosts: ["inference.acme.example"] }],
-        new Map([["acme-plugin", { family: "acme-family" }]]),
-      ),
-    },
-  ])("keeps $name outbound headers and SSRF policy byte-identical", (testCase) => {
-    const model = makeProviderModelFixture({
-      provider: testCase.provider,
-      api: testCase.api,
-      baseUrl: testCase.baseUrl,
-      id: `${testCase.provider}-model`,
-    });
-    const preparedModel = attachModelProviderRequestRouteFacts(model, testCase.owners);
-    const common = {
-      provider: testCase.provider,
-      api: testCase.api,
-      baseUrl: testCase.baseUrl,
-      capability: "llm" as const,
-      transport: "stream" as const,
-      callerHeaders: { "X-Caller": "same" },
-      providerHeaders: { Authorization: "Bearer redacted" },
-    };
-    const before = resolveProviderRequestPolicyConfig({
-      ...common,
-      ...(testCase.owners ? { providerMetadataOwners: testCase.owners } : {}),
-    });
-    const after = resolveProviderRequestPolicyConfig({
-      ...common,
-      routeFacts: getModelProviderRequestRouteFacts(preparedModel),
-    });
-    const ssrfPolicy = (resolved: typeof before) =>
-      resolveProviderTransportSsrFPolicy({
-        baseUrl: testCase.baseUrl,
-        url: `${testCase.baseUrl}/responses`,
-        allowPrivateNetwork: resolved.allowPrivateNetwork,
-        trustConfiguredBaseUrlOrigin: resolved.trustConfiguredBaseUrlOrigin,
+    ["openai", "openai-responses", "openai-public", "prepared-openai.example", undefined],
+    [
+      "anthropic",
+      "anthropic-messages",
+      "anthropic-public",
+      "prepared-anthropic.example",
+      undefined,
+    ],
+    ["acme-plugin", "openai-completions", "nvidia-native", "inference.acme.example", "acme-family"],
+  ] as const)(
+    "keeps %s outbound headers and SSRF policy byte-identical",
+    (provider, api, endpointClass, host, family) => {
+      const owners = buildProviderMetadataOwners(
+        [{ endpointClass, hosts: [host] }],
+        family ? new Map([[provider, { family }]]) : undefined,
+      );
+      const route = { provider, api, baseUrl: `https://${host}/v1` };
+      const model = makeProviderModelFixture({ ...route, id: `${provider}-model` });
+      const preparedModel = attachModelProviderRequestRouteFacts(model, owners);
+      const common = {
+        ...route,
+        ...streaming,
+        callerHeaders: { "X-Caller": "same" },
+        providerHeaders: { Authorization: "Bearer redacted" },
+      };
+      const before = resolveProviderRequestPolicyConfig({
+        ...common,
+        providerMetadataOwners: owners,
       });
+      const after = resolveProviderRequestPolicyConfig({
+        ...common,
+        routeFacts: getModelProviderRequestRouteFacts(preparedModel),
+      });
+      const ssrfPolicy = (resolved: typeof before) =>
+        resolveProviderTransportSsrFPolicy({
+          baseUrl: route.baseUrl,
+          url: `${route.baseUrl}/responses`,
+          allowPrivateNetwork: resolved.allowPrivateNetwork,
+          trustConfiguredBaseUrlOrigin: resolved.trustConfiguredBaseUrlOrigin,
+        });
 
-    expect(JSON.stringify(after.headers)).toBe(JSON.stringify(before.headers));
-    expect(JSON.stringify(ssrfPolicy(after))).toBe(JSON.stringify(ssrfPolicy(before)));
-  });
+      expect(JSON.stringify(after.headers)).toBe(JSON.stringify(before.headers));
+      expect(JSON.stringify(ssrfPolicy(after))).toBe(JSON.stringify(ssrfPolicy(before)));
+    },
+  );
 
   it("keeps explicit private-network denial for loopback model requests", () => {
     const resolved = resolveProviderRequestPolicyConfig({
       provider: "local-agent-proxy",
       api: "openai-completions",
       baseUrl: "http://127.0.0.1:3000/v1",
-      capability: "llm",
-      transport: "stream",
+      ...streaming,
       request: { allowPrivateNetwork: false },
     });
 
-    expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.trustConfiguredBaseUrlOrigin).toBe(false);
+    expect(resolved).toMatchObject({
+      allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: false,
+    });
   });
 
-  it.each([
-    {
-      provider: "vllm",
-      baseUrl: "http://192.168.1.20:8000/v1",
-      expectedEndpointClass: "custom",
-    },
-  ])("classifies $provider configured baseUrl as exact-origin trusted endpoint class", (entry) => {
+  it("classifies vllm configured baseUrl as exact-origin trusted endpoint class", () => {
     const resolved = resolveProviderRequestPolicyConfig({
-      provider: entry.provider,
+      provider: "vllm",
       api: "openai-completions",
-      baseUrl: entry.baseUrl,
-      capability: "llm",
-      transport: "stream",
+      baseUrl: "http://192.168.1.20:8000/v1",
+      ...streaming,
     });
 
-    expect(resolved.capabilities.endpointClass).toBe(entry.expectedEndpointClass);
-    expect(resolved.allowPrivateNetwork).toBe(false);
-    expect(resolved.trustConfiguredBaseUrlOrigin).toBe(true);
+    expect(resolved).toMatchObject({
+      capabilities: { endpointClass: "custom" },
+      allowPrivateNetwork: false,
+      trustConfiguredBaseUrlOrigin: true,
+    });
   });
 });

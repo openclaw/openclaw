@@ -1,3 +1,4 @@
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   ControlUiDisposer,
   ControlUiHost,
@@ -119,11 +120,18 @@ export function createControlUiPluginHost(
     request: (method, params = {}) => call(() => owner.client.request(method, params)),
     onEvent(event, listener) {
       return retain(
-        current().gateway.subscribeEvents((frame) => {
-          if (runtime.isCurrent(owner) && frame.event === event) {
-            listener(frame.payload);
-          }
-        }),
+        current().gateway.subscribeEvents(
+          (frame) => {
+            if (
+              runtime.isCurrent(owner) &&
+              frame.event === event &&
+              (event !== "session.message" || asOptionalRecord(frame.payload)?.message != null)
+            ) {
+              listener(frame.payload);
+            }
+          },
+          { includeMessageBodies: event === "session.message" },
+        ),
       );
     },
     subscribe(listener) {

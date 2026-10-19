@@ -134,29 +134,23 @@ suite.define(() => {
             .toBe(true);
           await page.goto(`${suite.server.baseUrl}settings/agents/main/overview#token=test-token`);
           const name = page.locator(".agent-identity-editor__fields input").first();
-          const save = page
-            .locator(".agent-identity-editor__actions")
-            .getByRole("button", { name: /^(Save|Saving…)$/u });
-          await name.fill("Lunar museum guide");
           const before = (await gateway.getRequests(heldMethod)).length;
           await gateway.deferNext(heldMethod);
-          await save.click();
+          await name.fill("Lunar museum guide");
           await gateway.waitForRequest(heldMethod, { after: before });
-          await expect.poll(() => save.textContent()).toContain("Saving");
+          const beforeRetry = (await gateway.getRequests("agents.update")).length;
           await reconnectMockGateway(page, gateway);
           await page.screenshot({
             path: path.join(artifacts, "reconnected.png"),
             animations: "disabled",
           });
-          expect(await name.inputValue()).toBe("Lunar museum guide");
+          const retried = await gateway.waitForRequest("agents.update", { after: beforeRetry });
+          expect(retried.params).toMatchObject({ agentId: "main", name: "Lunar museum guide" });
           await expect.poll(() => name.isEnabled()).toBe(true);
-          await expect.poll(() => save.isEnabled()).toBe(true);
-          await name.fill("Lunar museum curator");
           const updates = (await gateway.getRequests("agents.update")).length;
-          await save.click();
+          await name.fill("Lunar museum curator");
           const request = await gateway.waitForRequest("agents.update", { after: updates });
           expect(request.params).toMatchObject({ agentId: "main", name: "Lunar museum curator" });
-          await expect.poll(() => save.textContent()).toContain("Save");
           await expect.poll(() => name.isEnabled()).toBe(true);
         },
       );

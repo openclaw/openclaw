@@ -25,6 +25,10 @@ import type {
 } from "../plugins/session-catalog-upstream.types.js";
 import type { DB as OpenClawStateKyselyDatabase } from "../state/openclaw-state-db.generated.js";
 import type { WorkerOperationHandlers } from "../state/worker-operation-registry.js";
+import {
+  sessionUpstreamPresenceKey,
+  sessionUpstreamPresencePublication,
+} from "./session-upstream-links-publication.js";
 
 type SessionUpstreamLinkRow = Selectable<OpenClawStateKyselyDatabase["session_upstream_links"]>;
 
@@ -240,6 +244,9 @@ export function upsertSessionUpstreamLinkInDatabase(
     ).numAffectedRows === 1n;
   if (changed) {
     publishSqliteDatabaseAdmission(db, emptyWatchedSessionUpstreamLinksAdmission, undefined);
+    sessionUpstreamPresencePublication.stagePostimages(db, [
+      [sessionUpstreamPresenceKey(input.sessionKey, input.agentId), true],
+    ]);
   }
   return changed;
 }
@@ -266,6 +273,9 @@ export function deleteSessionUpstreamLinkInDatabase(
       .where("session_key", "=", sessionKey)
       .where("agent_id", "=", agentId),
   );
+  sessionUpstreamPresencePublication.stageDeletions(db, [
+    sessionUpstreamPresenceKey(sessionKey, agentId),
+  ]);
   return "deleted";
 }
 

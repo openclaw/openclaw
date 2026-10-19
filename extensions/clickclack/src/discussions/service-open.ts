@@ -259,24 +259,16 @@ export async function openClickClackDiscussionBinding(
   const config = runtime.config.current() as CoreConfig;
   const agentId = resolveSessionAgentIdStrict({ config, sessionKey });
   const fallback = fallbackDiscussionLabel(sessionKey, agentId);
-  const describeChannel = (
-    session: Parameters<typeof resolveDiscussionLabel>[0] & { category?: string },
-  ) => {
-    const label = resolveDiscussionLabel(session, sessionKey, agentId);
-    return {
-      label,
-      displayTitle: label === fallback ? "" : truncateDiscussionDisplayTitle(label),
-      section: session.category?.trim() || account.discussions.section,
-      externalUrl: controlSessionUrl(
-        account.discussions.controlUrlBase,
-        sessionKey,
-        account.agentId ?? agentId,
-        config.session?.mainKey,
-        label,
-      ),
-    };
-  };
-  const { label, displayTitle, section, externalUrl } = describeChannel(entry);
+  const label = resolveDiscussionLabel(entry, sessionKey, agentId);
+  const displayTitle = label === fallback ? "" : truncateDiscussionDisplayTitle(label);
+  const section = entry.category?.trim() || account.discussions.section;
+  const externalUrl = controlSessionUrl(
+    account.discussions.controlUrlBase,
+    sessionKey,
+    account.agentId ?? agentId,
+    config.session?.mainKey,
+    label,
+  );
   const assertCurrentAuthority = () => {
     // SAFETY: account resolution only reads the SDK's deep-readonly, schema-validated config.
     const currentAccounts = discussionAccounts(runtime.config.current() as CoreConfig);

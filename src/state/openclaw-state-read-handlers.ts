@@ -56,7 +56,7 @@ import { readExecApprovalsConfigRow } from "../infra/exec-approvals-sqlite.js";
 import { inspectCurrentConversationBindingRecordInDatabase } from "../infra/outbound/current-conversation-bindings.kernel.js";
 import { readOutboundDeliveriesInDatabase } from "../infra/outbound/delivery-queue-storage.kernel.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import {
   readInterruptedUpdateCandidate,
   readUpdateRunStatusInDatabase,
@@ -96,7 +96,7 @@ import {
   readStateDiagnosticCommand,
 } from "./openclaw-state-read-diagnostics.js";
 import { readMcpOAuthStateCommand } from "./openclaw-state-read-mcp-oauth.js";
-import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
+import type { RegisteredStateReadCommand } from "./openclaw-state-read-operation-registry.js";
 import { readStateRegistryCommand } from "./openclaw-state-read-registry.js";
 import { readSessionRowsSharedFacts } from "./openclaw-state-read-session-rows.worker.js";
 import { readStateStream } from "./openclaw-state-read-stream.js";
@@ -116,7 +116,6 @@ export {
   loadSubagentSessionListRunsFromSqlite,
   readRegisteredAgentDatabaseRows,
   readStateStream,
-  stateReadRegistry,
 };
 
 /** Non-metadata query owners load only when the shared worker receives one of their commands. */
@@ -125,16 +124,17 @@ export function readOpenClawStateDatabaseCommand(
   input: OpenClawStateReadRequest,
   command: Exclude<
     OpenClawStateReadRequest["command"],
-    {
-      type:
-        | "admit"
-        | "plugins.metadata.read"
-        | "subagents.restore"
-        | "meetingTranscripts.export"
-        | "gatewayOwnerLease.read"
-        | "agentDatabaseRegistry.read"
-        | "subagents.sessionList";
-    }
+    | RegisteredStateReadCommand
+    | {
+        type:
+          | "admit"
+          | "plugins.metadata.read"
+          | "subagents.restore"
+          | "meetingTranscripts.export"
+          | "gatewayOwnerLease.read"
+          | "agentDatabaseRegistry.read"
+          | "subagents.sessionList";
+      }
   >,
   metadataRead: ReturnType<typeof prepareAcpSessionMetadataRead> | undefined,
 ): OpenClawStateReadResult {
@@ -184,9 +184,6 @@ export function readOpenClawStateDatabaseCommand(
   }
   if (isChannelIngressReadCommand(command)) {
     return readChannelIngressInDatabase(db, command);
-  }
-  if ("input" in command && stateReadRegistry.has(command)) {
-    return stateReadRegistry.execute(command, db);
   }
   if (command.type === "subagents.runs") {
     return readSubagentRunsInWorker(db, command);
@@ -286,13 +283,13 @@ export function readOpenClawStateDatabaseCommand(
   if (command.type === "updateRuns.status") {
     return {
       type: command.type,
-      status: runSqliteDeferredTransactionSync(db, () => readUpdateRunStatusInDatabase(db)),
+      status: runSqliteReadSnapshotSync(db, () => readUpdateRunStatusInDatabase(db)),
     };
   }
   if (command.type === "updateRuns.historyStatus") {
     return {
       type: command.type,
-      status: runSqliteDeferredTransactionSync(db, () => readUpdateRunHistoryStatusInDatabase(db)),
+      status: runSqliteReadSnapshotSync(db, () => readUpdateRunHistoryStatusInDatabase(db)),
     };
   }
   if (command.type === "updateRuns.interruptedCandidate") {
@@ -405,8 +402,6 @@ export function readOpenClawStateDatabaseCommand(
     };
   }
   if (
-    command.type === "userProfiles.authority.resolve" ||
-    command.type === "userProfiles.aliases.resolve" ||
     command.type === "userProfiles.catalogIdentity" ||
     command.type === "userProfiles.githubIdentity.cached" ||
     command.type === "userProfiles.githubAttribution.resolve" ||
@@ -415,8 +410,7 @@ export function readOpenClawStateDatabaseCommand(
     command.type === "userProfiles.reconcile" ||
     command.type === "userProfiles.catalog" ||
     command.type === "userProfiles.avatar.inspect" ||
-    command.type === "userProfiles.avatar.read" ||
-    command.type === "userProfiles.email.resolve"
+    command.type === "userProfiles.avatar.read"
   ) {
     return readUserProfileCommand(db, command);
   }
@@ -432,7 +426,7 @@ export function readOpenClawStateDatabaseCommand(
   if (command.type === "userPreferences.read") {
     return {
       type: command.type,
-      preferences: runSqliteDeferredTransactionSync(db, () => {
+      preferences: runSqliteReadSnapshotSync(db, () => {
         const profile = tableExists(db, "user_profiles")
           ? selectResolvedUserProfileMetadataById(db, command.profileId)
           : undefined;
@@ -459,7 +453,7 @@ export function readOpenClawStateDatabaseCommand(
   if (command.type === "sessionRepositoryWorkspaces.find") {
     return {
       type: command.type,
-      workspaces: runSqliteDeferredTransactionSync(db, () =>
+      workspaces: runSqliteReadSnapshotSync(db, () =>
         command.owners.flatMap((owner) => {
           const workspace = findSessionRepositoryWorkspaceInDatabase(db, owner);
           return workspace ? [workspace] : [];

@@ -1,8 +1,15 @@
 import { describe, expect, it } from "vitest";
 import { makeTextToolResult } from "../../../../test/helpers/text-tool-result.js";
-import type { Model } from "../types.js";
-import { buildOpenAICompletionsParams } from "./openai-completions-params.js";
+import { preparedRequestSuffix } from "../provider-options.js";
+import type { Context, Model } from "../types.js";
+import { createZeroUsage } from "../usage.test-support.js";
+import { resolveOpenAICompletionsCompat } from "./openai-completions-compat.js";
 import {
+  buildOpenAICompletionsRequest,
+  buildOpenAICompletionsParams,
+} from "./openai-completions-params.js";
+import {
+  makeCompletionsModel,
   openRouterModel,
   openRouterAnthropicModel,
   openRouterXaiModel,
@@ -19,6 +26,126 @@ import {
   buildReplayParams,
 } from "./openai-completions.test-support.js";
 import { getCompat } from "./openai-transport-params.js";
+
+describe("Chat Completions historical tools", () => {
+  const replayTool = {
+    name: "lookup_weather",
+    description: "Get forecast",
+    parameters: { type: "object" },
+  };
+  it.each(["direct", "managed"] as const)(
+    "projects undeclared history against the outgoing catalog without changing the transcript (%s)",
+    (mode) => {
+      const model = makeCompletionsModel({
+        provider: "strict-provider",
+        baseUrl: "https://strict.example/v1",
+        reasoning: false,
+        compat: { requiresAssistantAfterToolResult: true },
+      });
+      const policy =
+        mode === "direct"
+          ? { mode, compat: resolveOpenAICompletionsCompat(model), cacheRetention: "none" as const }
+          : { mode };
+      for (const unavailable of ["session_status", "unusable"]) {
+        const calls = [
+          { name: "lookup_weather", id: "call:0|fc_item" },
+          { name: unavailable, id: "call_bad" },
+          { name: "lookup_weather", id: "call_2" },
+        ];
+        const context: Context = {
+          tools: [
+            replayTool,
+            { name: "unusable", description: "Rejected schema", parameters: { default: 1n } },
+          ],
+          messages: [
+            {
+              role: "assistant",
+              api: model.api,
+              provider: model.provider,
+              model: model.id,
+              content: calls.map(({ name, id }) => ({
+                type: "toolCall",
+                id,
+                name,
+                arguments: {},
+              })),
+              usage: createZeroUsage(),
+              stopReason: "toolUse",
+              timestamp: 1,
+            },
+            ...calls.map(({ name, id }, i) =>
+              makeTextToolResult(
+                id,
+                "stale_metadata",
+                i === 1 ? `Tool ${name} not found` : "sunny",
+                i === 1,
+                2,
+              ),
+            ),
+            { role: "user", content: "Continue", timestamp: 3 },
+          ],
+        };
+        const original = structuredClone(context);
+        const params = buildOpenAICompletionsRequest(model, context, undefined, policy);
+        expect(params.tools?.map((entry) => entry.function.name)).toEqual(["lookup_weather"]);
+        expect(params.messages).toEqual([
+          {
+            role: "assistant",
+            content: `[tool call id=call_bad name=${unavailable}] {}`,
+            tool_calls: [
+              {
+                id: "call:0|fc_item",
+                type: "function",
+                function: { name: "lookup_weather", arguments: "{}" },
+              },
+              {
+                id: "call_2",
+                type: "function",
+                function: { name: "lookup_weather", arguments: "{}" },
+              },
+            ],
+          },
+          { role: "tool", tool_call_id: "call:0|fc_item", content: "sunny" },
+          { role: "tool", tool_call_id: "call_2", content: "sunny" },
+          {
+            role: "assistant",
+            content: `[tool result id=call_bad name=stale_metadata] Tool ${unavailable} not found`,
+          },
+          { role: "user", content: "Continue" },
+        ]);
+        expect(context).toEqual(original);
+        const next = buildOpenAICompletionsRequest(
+          model,
+          {
+            ...context,
+            messages: [...context.messages, { role: "user", content: "Again", timestamp: 4 }],
+          },
+          undefined,
+          policy,
+        );
+        expect(next.messages.slice(0, -1)).toEqual(params.messages);
+      }
+    },
+  );
+
+  it("keeps captured-prefix native result IDs and projects unavailable suffix results as text", () => {
+    const context: Context = {
+      tools: [replayTool],
+      messages: [
+        makeTextToolResult("call:0|fc_item", "stale_metadata", "sunny", false, 1),
+        makeTextToolResult("call_bad", "session_status", "Tool session_status not found", true, 2),
+      ],
+    };
+    preparedRequestSuffix.mark(context, new Set(["call_0"]));
+    expect(buildOpenAICompletionsParams(openAIModel, context, undefined).messages).toEqual([
+      { role: "tool", tool_call_id: "call_0", content: "sunny" },
+      {
+        role: "assistant",
+        content: "[tool result id=call_bad name=session_status] Tool session_status not found",
+      },
+    ]);
+  });
+});
 
 describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () => {
   it.each(["reasoning_text"])(
@@ -224,7 +351,7 @@ describe("buildOpenAICompletionsParams sanitizes reasoning replay fields", () =>
           makeTextToolResult("call_1", "lookup", "sunny", false, 1),
           { role: "user", content: "answer" },
         ],
-        tools: [],
+        tools: [{ name: "lookup", description: "Lookup", parameters: { type: "object" } }],
       } as never,
       undefined,
     ) as { messages: unknown };

@@ -1,11 +1,12 @@
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as sleep } from "node:timers/promises";
 import { raceWithTimeout } from "openclaw/plugin-sdk/time-runtime";
-import type { FetchLike } from "../../../docker-runtime.js";
+import { fetchHealthUrl, type FetchLike } from "../../../docker-runtime.js";
 
 const MATRIX_QA_DEFAULT_IMAGE =
-  "ghcr.io/matrix-construct/tuwunel:v1.8.3@sha256:699fa9971c174e01c884abad8d1a3cfb2fe518e1a71f1fa16ea9dedf11873d74";
+  "ghcr.io/matrix-construct/tuwunel:v1.9.3@sha256:678b7f5350e06a41614444497c587da9dddf66767e4068a27480402f3c1367d0";
 const MATRIX_QA_DEFAULT_SERVER_NAME = "matrix-qa.test";
 export const MATRIX_QA_INTERNAL_PORT = 8008;
 export const MATRIX_QA_SERVICE = "matrix-qa-homeserver";
@@ -27,13 +28,12 @@ export function buildVersionsUrl(baseUrl: string) {
 
 export async function isMatrixVersionsReachable(
   baseUrl: string,
-  fetchImpl: FetchLike,
   timeoutSignal = AbortSignal.timeout(MATRIX_QA_HEALTH_REQUEST_TIMEOUT_MS),
   signal?: AbortSignal,
 ) {
   let response: Awaited<ReturnType<FetchLike>> | undefined;
   try {
-    response = await fetchImpl(buildVersionsUrl(baseUrl), {
+    response = await fetchHealthUrl(buildVersionsUrl(baseUrl), {
       signal: signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal,
     });
     return response.ok;
@@ -59,9 +59,7 @@ export async function withMatrixQaHarnessTimeout<T>(
 export async function waitForReachableMatrixBaseUrl(params: {
   composeFile: string;
   containerBaseUrl: string | null;
-  fetchImpl: FetchLike;
   hostBaseUrl: string;
-  sleepImpl: (ms: number) => Promise<unknown>;
   timeoutMs?: number;
   pollMs?: number;
 }) {
@@ -88,7 +86,6 @@ export async function waitForReachableMatrixBaseUrl(params: {
           if (
             await isMatrixVersionsReachable(
               baseUrl,
-              params.fetchImpl,
               AbortSignal.timeout(Math.max(1, requestTimeoutMs)),
               probeController.signal,
             )
@@ -107,7 +104,7 @@ export async function waitForReachableMatrixBaseUrl(params: {
     }
     const remainingSleepMs = deadline - Date.now();
     if (remainingSleepMs > 0) {
-      await params.sleepImpl(Math.min(pollMs, remainingSleepMs));
+      await sleep(Math.min(pollMs, remainingSleepMs));
     }
   }
 

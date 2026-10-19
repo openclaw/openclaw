@@ -21,6 +21,7 @@ import { bindStreamLlmRuntime } from "../../../llm/model-runtime-binding.js";
 import { makeEmptyPluginMetadataOwners } from "../../../plugins/current-plugin-metadata.test-support.js";
 import type { getGlobalHookRunner } from "../../../plugins/hook-runner-global.js";
 import type { PluginMetadataSnapshot } from "../../../plugins/plugin-metadata-snapshot.js";
+import { withSessionTurn } from "../../../sessions/session-controller.admission.js";
 import { createLazyPromise } from "../../../shared/lazy-runtime.js";
 import { prepareSystemAgentRunAdmission } from "../../admitted-run-context.js";
 import type { EmbeddedContextFile } from "../../embedded-agent-helpers/context-file.js";
@@ -187,6 +188,7 @@ const hoisted = vi.hoisted((): AttemptBaseMocks => {
     getHeader: vi.fn(() => ({ version: 3 })),
     getLeafId: vi.fn<() => string | null>(() => null),
     getLeafEntry: vi.fn(() => null),
+    hasLoadedTranscriptTail: () => true,
     getEntry: vi.fn(() => undefined),
     getEntries: vi.fn(() => []),
     getBranch,
@@ -376,7 +378,8 @@ vi.mock("../../subagents/spawn/subagent-spawn.js", () => ({
   spawnSubagentDirect: (...args: unknown[]) => hoisted.spawnSubagentDirectMock(...args),
 }));
 
-vi.mock("../../sandbox.js", () => ({
+vi.mock("../../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../../sandbox/context.js")>("../../sandbox/context.js")),
   resolveSandboxContext: (...args: unknown[]) => hoisted.resolveSandboxContextMock(...args),
 }));
 
@@ -1217,10 +1220,27 @@ export async function createContextEngineAttemptRunner(params: {
       ...params.attemptOverrides,
     };
     const admittedRunContext = params.attemptOverrides?.admittedRunContext;
+    const runAttempt = async (context: NonNullable<typeof admittedRunContext>) => {
+      if (attempt.replyOperation) {
+        return await (
+          await loadRunEmbeddedAttempt()
+        )({ ...attempt, admittedRunContext: context });
+      }
+      return await withSessionTurn(
+        {
+          sessionKey: attempt.sessionKey,
+          sessionId: attempt.sessionId,
+          agentId: attempt.agentId,
+          sessionTarget: attempt.sessionTarget,
+        },
+        async (replyOperation) =>
+          await (
+            await loadRunEmbeddedAttempt()
+          )({ ...attempt, admittedRunContext: context, replyOperation }),
+      );
+    };
     if (admittedRunContext) {
-      return await (
-        await loadRunEmbeddedAttempt()
-      )({ ...attempt, admittedRunContext });
+      return await runAttempt(admittedRunContext);
     }
     const admission = prepareSystemAgentRunAdmission(
       attempt.config ?? {},
@@ -1229,9 +1249,7 @@ export async function createContextEngineAttemptRunner(params: {
       "embedded-attempt-test",
     );
     try {
-      return await (
-        await loadRunEmbeddedAttempt()
-      )({ ...attempt, admittedRunContext: await admission.admit("embedded") });
+      return await runAttempt(await admission.admit("embedded"));
     } finally {
       admission.close();
     }

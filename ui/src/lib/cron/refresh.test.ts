@@ -2,8 +2,8 @@
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
-import { createInitialCronState, loadCronStatus } from "./index.ts";
 import { getCronRunsViewState, loadCronRuns, loadMoreCronRuns } from "./runs.ts";
+import { createInitialCronState, loadCronStatus } from "./state.ts";
 import type { CronState } from "./types.ts";
 
 function createRefreshHarness(method: "cron.status" | "cron.runs") {

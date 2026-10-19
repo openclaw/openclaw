@@ -1,4 +1,3 @@
-/** Doctor analysis helpers for config schema cleanup and ambiguous model fallback shapes. */
 import path from "node:path";
 import { resolvePrimaryStringValue } from "@openclaw/normalization-core/string-coerce";
 import { note } from "../../packages/terminal-core/src/note.js";
@@ -184,18 +183,15 @@ function resolveConfigPathTarget(root: unknown, pathLocal: Array<string | number
 /**
  * Removes unknown config keys reported by schema validation.
  *
- * Doctor skips this while an update is in progress so partially written upgrade state is not
- * stripped before its migration can finish.
+ * Runs after migrations; retained plugin inputs must survive until their owner can finish.
  */
-export function stripUnknownConfigKeys(config: OpenClawConfig): {
+export function stripUnknownConfigKeys(
+  config: OpenClawConfig,
+  preservedPaths: readonly (readonly string[])[] = [],
+): {
   config: OpenClawConfig;
   removed: string[];
 } {
-  const updating = process.env.OPENCLAW_UPDATE_IN_PROGRESS;
-  if (updating === "1" || updating === "true") {
-    return { config, removed: [] };
-  }
-
   const parsed = OpenClawSchema.safeParse(config);
   if (parsed.success) {
     return { config, removed: [] };
@@ -219,6 +215,14 @@ export function stripUnknownConfigKeys(config: OpenClawConfig): {
       // $include is authored parser syntax at every object depth, not a schema field.
       // Doctor validates raw source, so stripping it would destroy include-owned config.
       if (key === INCLUDE_KEY) {
+        continue;
+      }
+      const keyPath = [...issuePath, key].map(String);
+      if (
+        preservedPaths.some((retained) =>
+          retained.slice(0, keyPath.length).every((part, index) => keyPath[index] === part),
+        )
+      ) {
         continue;
       }
       delete target[key];

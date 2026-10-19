@@ -187,7 +187,6 @@ it("joins captured input before drainage returns and refuses stale handoff", asy
   const dispatch = vi.fn(() => Promise.resolve());
   expect(() => prepared.handoff(dispatch)).toThrow(expect.objectContaining({ code: "closed" }));
   expect(dispatch).not.toHaveBeenCalled();
-  prepared.release();
   await closing;
   const recovered = broker.reserveInputPreparation(64 * MIB);
   recovered.release();

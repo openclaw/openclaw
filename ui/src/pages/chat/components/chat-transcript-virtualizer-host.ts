@@ -1,10 +1,11 @@
 import type { JSX } from "@solidjs/web";
 // Per-session virtualizer host: scroll anchoring, measurement, and row sync
-// for one transcript. Owned and swapped by ChatTranscriptController.
+// for one transcript. Owned and swapped by the chat transcript owner.
 import { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";
-import { McpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
+import { createMcpAppUnmountGate } from "../../../components/mcp-app-unmount.ts";
 import type { PresentationValue } from "../../../lib/presentation.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { resolveScrollBehavior } from "../../../lib/scroll-behavior.ts";
 import type { AssistantMessageExpansionState } from "../chat-message-recovery.ts";
 import type { ChatSessionScrollPosition, ChatScrollToEndOptions } from "../scroll.ts";
@@ -30,6 +31,7 @@ import {
 import { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import { ChatTranscriptRenderer } from "./chat-transcript-layout-solid.tsx";
 import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
+import { createTranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 import {
   isTranscriptMaintenanceScroll,
   isTranscriptProgrammaticScroll,
@@ -65,6 +67,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private readonly renderer = new ChatTranscriptRenderer();
   private readonly offsetState = new TranscriptOffsetState();
   readonly entryAnimations = new ChatMessageEntryAnimations();
+  readonly messageElements = createTranscriptMessageElements(this.entryAnimations.refFor);
   expandedAssistantMessages = new Map<string, AssistantMessageExpansionState>();
   private readonly positionRail: ReturnType<typeof createPositionRailGutter>;
   private readonly virtualizer: Virtualizer<HTMLDivElement, HTMLElement>;
@@ -157,15 +160,16 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   private renderPreviousRows: (() => HTMLDivElement) | null = null;
   private focusedRowKey: string | null = null;
   private readonly announcement = new TranscriptAnnouncementState();
-  private readonly mcpAppUnmountGate: McpAppUnmountGate;
+  private readonly mcpAppUnmountGate: ReturnType<typeof createMcpAppUnmountGate>;
 
   constructor(
+    // Native geometry and touch-held history must commit before paint.
     private readonly invalidate: () => void,
     initialOffset: number | null = null,
     onInitialOffsetSettled?: (position: ChatSessionScrollPosition) => void,
     private readonly callbacks: TranscriptCallbacks = {},
   ) {
-    this.mcpAppUnmountGate = new McpAppUnmountGate({ requestUpdate: invalidate });
+    this.mcpAppUnmountGate = createMcpAppUnmountGate(invalidate);
     this.positionRail = createPositionRailGutter(
       () => this.scrollElement,
       () => this.threadInnerElement,
@@ -178,10 +182,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       measureConnectedRows: () => this.presentation.measureRows(),
       queueRowMeasure: () => this.presentation.queueRowMeasure(),
       onViewportResize: () => this.callbacks.onViewportResize?.(),
-      requestUpdate: invalidate,
+      invalidate,
     });
     this.virtualizer = new Virtualizer({
-      // Every geometry notification must commit before paint, including non-sync measurements.
       onChange: invalidate,
       count: 0,
       getScrollElement: () => this.scrollElement,
@@ -205,7 +208,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
             isProgrammaticScroll: () => this.isProgrammaticScroll,
             cancelScroll: () => this.cancelScroll(),
             onLayoutCorrection: this.recordEndLayoutCorrection,
-            requestUpdate: invalidate,
+            invalidate,
             onOffset: () => this.endAnchor.recordViewport(this.scrollElement),
             onComposerLayout: (changed) => this.commitComposerResize(changed),
             onReaderScroll: (towardEnd) => {
@@ -276,6 +279,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     return this.announcement.text;
   }
 
+  private stopGeometry?: () => void;
+
   connect(): void {
     if (this.connected) {
       return;
@@ -283,7 +288,9 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     this.connected = true;
     this.renderer.connect();
     const target = this.callbacks.geometryEventTarget;
-    target?.addEventListener(SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
+    this.stopGeometry = target
+      ? listen(target, SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit)
+      : undefined;
     // Virtual-core exposes its lifecycle hooks as bound arrow functions.
     const { _didMount: mountVirtualizer } = this.virtualizer;
     this.cleanupVirtualizer = mountVirtualizer();
@@ -386,8 +393,8 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
       return;
     }
     this.connected = false;
-    const target = this.callbacks.geometryEventTarget;
-    target?.removeEventListener(SIDEBAR_GEOMETRY_COMMIT_EVENT, this.handleGeometryCommit);
+    this.stopGeometry?.();
+    this.stopGeometry = undefined;
     this.positionRail.disconnect();
     this.cleanupVirtualizer?.();
     this.cleanupVirtualizer = undefined;
@@ -397,6 +404,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
   dispose(): void {
     this.disconnect();
     this.renderer.dispose();
+    this.messageElements.dispose();
     this.rowRefs.clear();
     this.rowKeys = [];
     this.rowIndexesByKey.clear();
@@ -500,6 +508,7 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
         this.announcement.sync(announcement, announce);
         return this.renderer.render({
           applicationContext: snapshot.applicationContext,
+          messageElements: this.messageElements,
           layout: this.layout,
           headerHeight: this.headerHeight,
           presented: snapshot.presented,
@@ -587,16 +596,22 @@ export class ChatSessionVirtualizerHost implements ChatTranscriptSession {
     if (this.offsetState.scrollCommand === null && !this.offsetState.pendingScrollOffset) {
       return;
     }
-    // Only smooth commands skip row measurements. Replaying ordinary auto
-    // scrolling's overscan sizes can move an already settled end anchor.
-    if (this.offsetState.scrollCommand?.behavior === "smooth") {
-      this.presentation.queueRowMeasure();
-    }
+    const measureSkippedRows = this.offsetState.scrollCommand?.behavior === "smooth";
     this.offsetState.scrollCommand = null;
     this.offsetState.pendingScrollOffset = null;
     if (this.scrollRestoreHost.pendingScrollFrame !== null) {
       cancelAnimationFrame(this.scrollRestoreHost.pendingScrollFrame);
       this.scrollRestoreHost.pendingScrollFrame = null;
+    }
+    // The smooth journey may already be automatic when its skipped sizes settle.
+    if (measureSkippedRows) {
+      const adjustScroll = this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange;
+      this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = () => false;
+      try {
+        this.presentation.measureRows();
+      } finally {
+        this.virtualizer.shouldAdjustScrollPositionOnItemSizeChange = adjustScroll;
+      }
     }
     const element = this.scrollElement;
     if (element) {

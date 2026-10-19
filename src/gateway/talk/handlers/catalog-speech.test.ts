@@ -1,3 +1,4 @@
+import { setImmediate as nextTurn } from "node:timers/promises";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -16,6 +17,42 @@ const registry = vi.hoisted(() => ({
   realtime: [] as RealtimeVoiceProviderPlugin[],
   transcription: [] as RealtimeTranscriptionProviderPlugin[],
 }));
+
+const capabilities = {
+  transports: ["gateway-relay" as const],
+  inputAudioFormats: [],
+  outputAudioFormats: [],
+};
+const unexpectedSession = () => {
+  throw new Error("catalog must not create a session");
+};
+const providerFields = <T>(isConfiguredAsync: T, id = "sample") => ({
+  id,
+  label: id,
+  isConfigured: () => false,
+  isConfiguredAsync,
+});
+const speechProvider = (
+  isConfiguredAsync: NonNullable<SpeechProviderPlugin["isConfiguredAsync"]>,
+  id = "sample",
+): SpeechProviderPlugin => ({
+  ...providerFields(isConfiguredAsync, id),
+  synthesize: unexpectedSession,
+});
+const realtimeProvider = (
+  isConfiguredAsync: NonNullable<RealtimeVoiceProviderPlugin["isConfiguredAsync"]>,
+  id = "sample",
+): RealtimeVoiceProviderPlugin => ({
+  ...providerFields(isConfiguredAsync, id),
+  capabilities,
+  createBridge: () => {
+    throw new Error("catalog must not create a session");
+  },
+});
+
+function expectCatalog(result: unknown, kind: string, catalog: Record<string, unknown>) {
+  expect(result).toMatchObject({ ok: true, response: { [kind]: catalog } });
+}
 
 vi.mock("../../../tts/provider-registry.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../../../tts/provider-registry.js")>()),
@@ -67,6 +104,12 @@ async function callGatewayHandler(...args: Parameters<typeof callGatewayHandlerO
 
 afterEach(() => vi.useRealTimers());
 
+function readCatalog(cfg: OpenClawConfig, params: Record<string, unknown> = {}) {
+  return callGatewayHandler(talkHandlers, "talk.catalog", params, {
+    context: { getRuntimeConfig: () => cfg },
+  });
+}
+
 beforeEach(() => {
   registry.providers = [];
   registry.listSpeechProviders.mockReset().mockImplementation(() => registry.providers);
@@ -88,39 +131,20 @@ it.each([false, true])(
     let available = true;
     registry.providers = [
       {
-        id: "sample",
-        label: "Sample speech",
+        ...speechProvider(
+          async ({ providerConfig }) => available && providerConfig.resolvedKey === expectedKey,
+        ),
         resolveConfig: ({ rawConfig }) => ({
           resolvedKey: asOptionalRecord(asOptionalRecord(rawConfig.providers)?.sample)?.apiKey,
         }),
-        isConfigured: () => false,
-        isConfiguredAsync: async ({ providerConfig }) =>
-          available && providerConfig.resolvedKey === expectedKey,
-        synthesize: async () => {
-          throw new Error("catalog must not synthesize");
-        },
       },
     ];
 
-    const read = () =>
-      callGatewayHandler(
-        talkHandlers,
-        "talk.catalog",
-        {},
-        {
-          context: { getRuntimeConfig: () => cfg },
-        },
-      );
-    expect(await read()).toMatchObject({
-      ok: true,
-      response: { speech: { providers: [{ id: "sample", configured: true }] } },
-    });
+    const read = () => readCatalog(cfg);
+    expectCatalog(await read(), "speech", { providers: [{ id: "sample", configured: true }] });
     available = false;
     const later = await read();
-    expect(later).toMatchObject({
-      ok: true,
-      response: { speech: { providers: [{ id: "sample", configured: false }] } },
-    });
+    expectCatalog(later, "speech", { providers: [{ id: "sample", configured: false }] });
     expect(JSON.stringify(later.response)).not.toContain("synthetic-speech-key");
     expect(JSON.stringify(later.response)).not.toContain("synthetic-talk-key");
   },
@@ -136,66 +160,41 @@ it("prepares the selected realtime catalog once per request and refreshes availa
   const readAvailability = vi.fn(async () => available);
   registry.realtime = [
     {
-      id: "sample",
-      label: "Sample realtime",
+      ...realtimeProvider(readAvailability),
       resolveConfigAsync: async ({ rawConfig }) => ({
         ...rawConfig,
         model: rawConfig.model ?? (await readDefault()),
       }),
-      isConfigured: () => false,
-      isConfiguredAsync: readAvailability,
-      capabilities: {
-        transports: ["gateway-relay"],
-        inputAudioFormats: [],
-        outputAudioFormats: [],
-        supportsToolCalls: false,
-      },
-      createBridge: () => {
-        throw new Error("catalog must not create a session");
-      },
+      capabilities: { ...capabilities, supportsToolCalls: false },
     },
   ];
-  const read = (params: Record<string, unknown> = {}) =>
-    callGatewayHandler(talkHandlers, "talk.catalog", params, {
-      context: { getRuntimeConfig: () => cfg },
-    });
+  const read = (params: Record<string, unknown> = {}) => readCatalog(cfg, params);
 
-  expect(await read()).toMatchObject({
-    ok: true,
-    response: {
-      realtime: {
-        ready: true,
-        activeProvider: "sample",
-        providers: [
-          {
-            id: "sample",
-            configured: true,
-            defaultModel: "discovery-model",
-            brains: ["none"],
-            transports: ["gateway-relay"],
-          },
-        ],
+  expectCatalog(await read(), "realtime", {
+    ready: true,
+    activeProvider: "sample",
+    providers: [
+      {
+        id: "sample",
+        configured: true,
+        defaultModel: "discovery-model",
+        brains: ["none"],
+        transports: ["gateway-relay"],
       },
-    },
+    ],
   });
   expect(readDefault).toHaveBeenCalledTimes(1);
   expect(readAvailability).toHaveBeenCalledTimes(1);
 
   // The launch override must not replace the discovery default in the picker.
-  expect(await read({ model: "explicit-model" })).toMatchObject({
-    ok: true,
-    response: {
-      realtime: { providers: [{ configured: true, defaultModel: "discovery-model" }] },
-    },
+  expectCatalog(await read({ model: "explicit-model" }), "realtime", {
+    providers: [{ configured: true, defaultModel: "discovery-model" }],
   });
   expect(readDefault).toHaveBeenCalledTimes(2);
   expect(readAvailability).toHaveBeenCalledTimes(2);
 
   available = false;
-  expect(await read()).toMatchObject({
-    ok: true,
-    response: { realtime: { ready: false, providers: [{ configured: false }] } },
-  });
+  expectCatalog(await read(), "realtime", { ready: false, providers: [{ configured: false }] });
 });
 
 it("reuses selected transcription readiness and refreshes it on the next catalog request", async () => {
@@ -210,41 +209,24 @@ it("reuses selected transcription readiness and refreshes it on the next catalog
   const resolveConfig = vi.fn(({ rawConfig }) => rawConfig);
   registry.transcription = [
     {
-      id: "sample",
+      ...providerFields(readAvailability),
       label: "Sample transcription",
       resolveConfig,
-      isConfigured: () => false,
-      isConfiguredAsync: readAvailability,
-      createSession: () => {
-        throw new Error("catalog must not create a session");
-      },
+      createSession: unexpectedSession,
     },
   ];
-  const read = () =>
-    callGatewayHandler(
-      talkHandlers,
-      "talk.catalog",
-      {},
-      {
-        context: { getRuntimeConfig: () => cfg },
-      },
-    );
-  expect(await read()).toMatchObject({
-    ok: true,
-    response: {
-      transcription: {
-        ready: true,
-        activeProvider: "sample",
-        providers: [{ id: "sample", configured: true }],
-      },
-    },
+  const read = () => readCatalog(cfg);
+  expectCatalog(await read(), "transcription", {
+    ready: true,
+    activeProvider: "sample",
+    providers: [{ id: "sample", configured: true }],
   });
   expect(readAvailability).toHaveBeenCalledTimes(1);
   expect(resolveConfig).toHaveBeenCalledTimes(1);
   available = false;
-  expect(await read()).toMatchObject({
-    ok: true,
-    response: { transcription: { ready: false, providers: [{ configured: false }] } },
+  expectCatalog(await read(), "transcription", {
+    ready: false,
+    providers: [{ configured: false }],
   });
 });
 
@@ -257,22 +239,7 @@ it("publishes the first catalog after a slow cold refresh without starting concu
   const context = { getRuntimeConfig: () => cfg };
   const readiness = createDeferred<boolean>();
   const readAvailability = vi.fn(() => readiness.promise);
-  registry.realtime = [
-    {
-      id: "slow",
-      label: "Slow realtime",
-      isConfigured: () => false,
-      isConfiguredAsync: readAvailability,
-      capabilities: {
-        transports: ["gateway-relay"],
-        inputAudioFormats: [],
-        outputAudioFormats: [],
-      },
-      createBridge: () => {
-        throw new Error("catalog must not create a session");
-      },
-    },
-  ];
+  registry.realtime = [realtimeProvider(readAvailability, "slow")];
   const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
   expect(await read()).toMatchObject({
     ok: false,
@@ -284,9 +251,9 @@ it("publishes the first catalog after a slow cold refresh without starting concu
   expect(readAvailability).toHaveBeenCalledTimes(1);
   readiness.resolve(true);
   await vi.advanceTimersByTimeAsync(0);
-  expect(await read()).toMatchObject({
-    ok: true,
-    response: { realtime: { ready: true, providers: [{ id: "slow", configured: true }] } },
+  expectCatalog(await read(), "realtime", {
+    ready: true,
+    providers: [{ id: "slow", configured: true }],
   });
   expect(readAvailability).toHaveBeenCalledTimes(1);
 });
@@ -295,19 +262,9 @@ it("serves the last catalog during one slow refresh and retains it after the dea
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
   const cfg: OpenClawConfig = { plugins: { enabled: false } };
   const context = { getRuntimeConfig: () => cfg, logGateway: { warn: vi.fn() } };
-  let finish: ((value: boolean) => void) | undefined;
+  const pending = createDeferred<boolean>();
   const readiness = vi.fn(async () => true);
-  registry.providers = [
-    {
-      id: "slow",
-      label: "Slow fixture",
-      isConfigured: () => false,
-      isConfiguredAsync: readiness,
-      synthesize: async () => {
-        throw new Error("must not synthesize");
-      },
-    },
-  ];
+  registry.providers = [speechProvider(readiness, "slow")];
   const read = () =>
     callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context: context as never });
   expect(await read()).toMatchObject({
@@ -316,16 +273,8 @@ it("serves the last catalog during one slow refresh and retains it after the dea
   });
   await vi.advanceTimersByTimeAsync(0);
   const first = await read();
-  expect(first).toMatchObject({
-    ok: true,
-    response: { speech: { providers: [{ configured: true }] } },
-  });
-  readiness.mockImplementation(
-    () =>
-      new Promise<boolean>((resolve) => {
-        finish = resolve;
-      }),
-  );
+  expectCatalog(first, "speech", { providers: [{ configured: true }] });
+  readiness.mockReturnValue(pending.promise);
   await vi.advanceTimersByTimeAsync(30_000);
   const burst = await Promise.all(Array.from({ length: 20 }, read));
   expect(burst.every((result) => result.response === first.response)).toBe(true);
@@ -336,49 +285,27 @@ it("serves the last catalog during one slow refresh and retains it after the dea
   expect(readiness).toHaveBeenCalledTimes(2);
   expect(context.logGateway.warn).toHaveBeenCalledTimes(1);
   expect(context.logGateway.warn).toHaveBeenCalledWith(expect.stringContaining("waiting=speech"));
-  finish?.(false);
+  pending.resolve(false);
   await vi.advanceTimersByTimeAsync(0);
   readiness.mockResolvedValue(false);
   expect((await read()).response).toBe(first.response);
   await vi.advanceTimersByTimeAsync(0);
-  expect(await read()).toMatchObject({
-    ok: true,
-    response: { speech: { providers: [{ configured: false }] } },
-  });
+  expectCatalog(await read(), "speech", { providers: [{ configured: false }] });
 });
 
 it("isolates catalog owners and model overrides while a cold provider is pending", async () => {
   const cfg: OpenClawConfig = { plugins: { enabled: false } };
   const context = { getRuntimeConfig: () => cfg };
-  let finish: (() => void) | undefined;
-  const readiness = vi.fn(
-    () =>
-      new Promise<boolean>((resolve) => {
-        finish = () => resolve(true);
-      }),
-  );
-  registry.providers = [
-    {
-      id: "slow",
-      label: "Slow",
-      isConfigured: () => false,
-      isConfiguredAsync: readiness,
-      synthesize: async () => {
-        throw new Error("must not synthesize");
-      },
-    },
-  ];
+  const pending = createDeferred<boolean>();
+  const readiness = vi.fn(() => pending.promise);
+  registry.providers = [speechProvider(readiness, "slow")];
   const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
   const results = await Promise.all(Array.from({ length: 20 }, read));
   expect(results.every((result) => result.ok === false)).toBe(true);
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  await nextTurn();
   expect(readiness).toHaveBeenCalledTimes(1);
-  finish?.();
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+  pending.resolve(true);
+  await nextTurn();
   expect((await read()).ok).toBe(true);
   const otherOwner = { getRuntimeConfig: () => cfg };
   readiness.mockResolvedValue(true);
@@ -388,50 +315,7 @@ it("isolates catalog owners and model overrides while a cold provider is pending
   expect(
     await callGatewayHandlerOnce(talkHandlers, "talk.catalog", { model: "other" }, { context }),
   ).toMatchObject({ ok: false });
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-});
-
-it("retains successful readiness after a provider failure and refreshes on config publication", async () => {
-  let cfg: OpenClawConfig = { plugins: { enabled: false } };
-  const context = { getRuntimeConfig: () => cfg };
-  const readiness = vi.fn(async () => true);
-  registry.providers = [
-    {
-      id: "sample",
-      label: "Sample",
-      isConfigured: () => false,
-      isConfiguredAsync: readiness,
-      synthesize: async () => {
-        throw new Error("must not synthesize");
-      },
-    },
-  ];
-  const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
-  await read();
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-  const first = await read();
-  expect(first.ok).toBe(true);
-  readiness.mockRejectedValue(new Error("synthetic provider unavailable"));
-  cfg = { ...cfg };
-  expect((await read()).response).toBe(first.response);
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-  expect((await read()).response).toBe(first.response);
-  readiness.mockResolvedValue(false);
-  cfg = { ...cfg };
-  expect((await read()).response).toBe(first.response);
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
-  expect(await read()).toMatchObject({
-    ok: true,
-    response: { speech: { providers: [{ configured: false }] } },
-  });
+  await nextTurn();
 });
 
 it("retries failed cold discovery before the client's warming window expires", async () => {
@@ -442,27 +326,14 @@ it("retries failed cold discovery before the client's warming window expires", a
   registry.listSpeechProviders.mockImplementationOnce(() => {
     throw new Error("temporary discovery failure");
   });
-  registry.providers = [
-    {
-      id: "sample",
-      label: "Sample",
-      isConfigured: () => false,
-      isConfiguredAsync: readiness,
-      synthesize: async () => {
-        throw new Error("must not synthesize");
-      },
-    },
-  ];
+  registry.providers = [speechProvider(readiness, "sample")];
   const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
   expect((await read()).ok).toBe(false);
   await vi.advanceTimersByTimeAsync(0);
   await vi.advanceTimersByTimeAsync(1_000);
   expect((await read()).ok).toBe(false);
   await vi.advanceTimersByTimeAsync(0);
-  expect(await read()).toMatchObject({
-    ok: true,
-    response: { speech: { providers: [{ configured: true }] } },
-  });
+  expectCatalog(await read(), "speech", { providers: [{ configured: true }] });
   expect(readiness).toHaveBeenCalledTimes(1);
 });
 
@@ -481,73 +352,50 @@ it.each(["speech", "realtime", "transcription"] as const)(
       throw new Error("synthetic provider unavailable");
     });
     for (const id of ["healthy", "broken"]) {
-      const provider = {
-        id,
-        label: id,
-        isConfigured: () => false,
-        isConfiguredAsync: id === "broken" ? brokenReadiness : async () => true,
-      };
+      const provider = providerFields(id === "broken" ? brokenReadiness : async () => true, id);
       if (kind === "speech") {
         registry.providers.push({
           ...provider,
-          synthesize: async () => {
-            throw new Error("catalog must not synthesize");
-          },
+          synthesize: unexpectedSession,
         });
       } else if (kind === "realtime") {
-        registry.realtime.push({
-          ...provider,
-          capabilities: {
-            transports: ["gateway-relay"],
-            inputAudioFormats: [],
-            outputAudioFormats: [],
-          },
-          createBridge: () => {
-            throw new Error("catalog must not create a session");
-          },
-        });
+        registry.realtime.push(realtimeProvider(provider.isConfiguredAsync, id));
       } else {
         registry.transcription.push({
           ...provider,
-          createSession: () => {
-            throw new Error("catalog must not create a session");
-          },
+          createSession: unexpectedSession,
         });
       }
     }
     const read = () => callGatewayHandlerOnce(talkHandlers, "talk.catalog", {}, { context });
     expect((await read()).ok).toBe(false);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
-    expect(await read()).toMatchObject({
-      ok: true,
-      response: {
-        [kind]: {
-          providers: [
-            { id: "healthy", configured: true },
-            { id: "broken", configured: false },
-          ],
-        },
-      },
+    await nextTurn();
+    expectCatalog(await read(), kind, {
+      providers: [
+        { id: "healthy", configured: true },
+        { id: "broken", configured: false },
+      ],
     });
     brokenReadiness.mockResolvedValue(true);
     cfg = { ...cfg };
     await read();
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
     const recovered = await read();
-    expect(recovered).toMatchObject({
-      ok: true,
-      response: { [kind]: { providers: [{ configured: true }, { configured: true }] } },
-    });
+    expectCatalog(recovered, kind, { providers: [{ configured: true }, { configured: true }] });
     brokenReadiness.mockRejectedValue(new Error("provider unavailable again"));
     cfg = { ...cfg };
     expect((await read()).response).toBe(recovered.response);
-    await new Promise<void>((resolve) => {
-      setImmediate(resolve);
-    });
+    await nextTurn();
     expect((await read()).response).toBe(recovered.response);
+    brokenReadiness.mockResolvedValue(false);
+    cfg = { ...cfg };
+    expect((await read()).response).toBe(recovered.response);
+    await nextTurn();
+    expectCatalog(await read(), kind, {
+      providers: [
+        { id: "healthy", configured: true },
+        { id: "broken", configured: false },
+      ],
+    });
   },
 );

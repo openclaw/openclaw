@@ -1,9 +1,7 @@
+import path from "node:path";
 import { resolveStateDir } from "../config/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import {
-  assertHomogeneousDatabaseEngines,
-  resolveDatabaseFamilyEngines,
-} from "./database-engine/registry.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import { UpdatePreMutationError } from "./update-pre-mutation-error.js";
 
 /** Refuse a downgrade that would strand an installed PostgreSQL store. */
@@ -14,19 +12,6 @@ export async function assertUpdateDatabaseEngineContexts(
 ): Promise<void> {
   const supportsPostgres = Array.isArray(targetEngines) && targetEngines.includes("postgres");
   for (const { config } of contexts) {
-    try {
-      assertHomogeneousDatabaseEngines(config, "update");
-      if (config.database?.families) {
-        throw new Error(
-          "Update with database.families overrides is not supported yet; use a matching database.engine default without family overrides, or wait for family-aware update support. Preserve the effective engines when changing configuration.",
-        );
-      }
-    } catch (error) {
-      if (error instanceof Error) {
-        throw new UpdatePreMutationError("database-engine-preflight", error.message);
-      }
-      throw error;
-    }
     if (
       !supportsPostgres &&
       Object.values(resolveDatabaseFamilyEngines(config)).includes("postgres")
@@ -42,6 +27,8 @@ export async function assertUpdateDatabaseEngineContexts(
   const { discoverBackupDatabasePaths } = await import("./backup-sqlite-snapshot.js");
   const { readBackupEngine, readPostgresBackupFamily } =
     await import("../snapshot/database-backup.js");
+  const { readUpdateStateDatabaseInventory } = await import("./update-candidate-state.js");
+  const { updateStateDatabaseExists } = await import("./update-candidate-state.sizes.js");
   for (const context of contexts) {
     const required = new Set(
       listDatabaseEngineStores()
@@ -49,14 +36,32 @@ export async function assertUpdateDatabaseEngineContexts(
         .map((store) => store.id),
     );
     // Preserve the SQLite path: a PostgreSQL-capable target needs no source copies.
-    if (supportsPostgres && required.size === 0) {
+    if (supportsPostgres && required.size === 0 && !context.config.database?.families) {
       continue;
     }
+    const stateDir = resolveStateDir(context.env);
     const paths = await discoverBackupDatabasePaths({
       ...context,
-      stateDir: resolveStateDir(context.env),
+      stateDir,
+      agentRegistry: [],
     });
     const postgres = paths.filter((pathname) => readBackupEngine(pathname).engine === "postgres");
+    if (
+      postgres.length === 0 &&
+      (await updateStateDatabaseExists(path.join(stateDir, "state", "openclaw.sqlite")))
+    ) {
+      const inventory = await readUpdateStateDatabaseInventory({ ...context, stateDir });
+      const known = new Set(paths);
+      for (const file of [...inventory.values()].flatMap((entry) => entry.spellings)) {
+        if (known.has(file) || !(await updateStateDatabaseExists(file))) {
+          continue;
+        }
+        known.add(file);
+        if (readBackupEngine(file).engine === "postgres") {
+          postgres.push(file);
+        }
+      }
+    }
     if (postgres.length === 0 && required.size === 0) {
       continue;
     }

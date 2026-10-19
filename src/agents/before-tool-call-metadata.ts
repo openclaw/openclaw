@@ -72,7 +72,6 @@ export function clearBeforeToolCallWrappedMarker(tool: BeforeToolCallMetadataToo
   delete tool[BEFORE_TOOL_CALL_WRAPPED];
 }
 
-/** Return true when a tool already carries the before_tool_call wrapper state. */
 export function isToolWrappedWithBeforeToolCallHook(tool: AnyAgentTool): boolean {
   return getBeforeToolCallMetadata(tool) !== undefined;
 }

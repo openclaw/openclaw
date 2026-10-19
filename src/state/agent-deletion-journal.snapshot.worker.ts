@@ -1,6 +1,6 @@
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { readRetainedAgentDeletionsFromDatabase } from "./agent-deletion-journal.read.js";
 import type {
   AgentDatabaseDeletionWorkerSnapshot,
@@ -16,7 +16,7 @@ export function readAgentDatabaseDeletionWorkerSnapshot(
   statePath: string,
   purpose: AgentDeletionJournalPurpose,
 ): AgentDatabaseDeletionWorkerSnapshot {
-  return runSqliteDeferredTransactionSync(
+  return runSqliteReadSnapshotSync(
     database,
     () => ({
       retainedDeletions: readRetainedAgentDeletionsFromDatabase(database, statePath, purpose),

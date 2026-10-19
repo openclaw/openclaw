@@ -55,6 +55,27 @@ describe("native SQLite schema snapshots and callbacks", () => {
     );
   });
 
+  it("observes a sibling commit while a new reader adopts retained schema facts", async () => {
+    const databaseAdmission = await import("./sqlite-database-admission.js");
+    const filename = path.join(tempDirs.make("sqlite-adoption-publication-"), "state.sqlite");
+    const writer = openDatabase(undefined, true, filename);
+    const readAdmission = databaseAdmission.getSqliteDatabaseAdmission;
+    const adoption = vi.spyOn(databaseAdmission, "getSqliteDatabaseAdmission");
+    adoption.mockImplementationOnce((database, key, options) => {
+      const captured = readAdmission(database, key, options);
+      // A worker can publish after the old catalog is read but before adoption returns.
+      writer.exec("CREATE TABLE newly_committed (value); INSERT INTO newly_committed VALUES (42)");
+      return captured;
+    });
+    try {
+      const reader = openDatabase("", true, filename);
+      expect(reader.prepare("SELECT value FROM newly_committed").all()).toEqual([{ value: 42 }]);
+      expect(tableExists(reader, "newly_committed")).toBe(true);
+    } finally {
+      adoption.mockRestore();
+    }
+  });
+
   it("publishes the next write after cold writer discovery throws", () => {
     const filename = path.join(tempDirs.make("sqlite-custody-recovery-"), "agent.sqlite");
     {
@@ -302,6 +323,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
     const receipts = createSqliteDatabaseWriteReceipts({
       admission: () => sender.records.get(snapshot!.identity),
       pathAdmission: () => sender.records.get(snapshot!.identity),
+      retain: () => {},
+      release: () => {},
       writeListeners: new WeakMap(),
       readRevision: () => 0,
       writer: () => sender.records.get(snapshot!.identity),
@@ -498,13 +521,14 @@ describe("native SQLite schema snapshots and callbacks", () => {
   });
 
   it.for([
-    "SAVEPOINT s; SELECT * FROM original",
-    "BEGIN; SELECT * FROM original; SELECT * FROM missing",
-  ])("qualifies the historical snapshot left by a raw control batch: %s", (sql) => {
+    { sql: "SAVEPOINT s; SELECT * FROM original", admitted: true },
+    { sql: "BEGIN; SELECT * FROM original; SELECT * FROM missing", admitted: true },
+    { sql: "BEGIN; SELECT * FROM original", admitted: false },
+  ])("qualifies the raw control batch $sql (admitted=$admitted)", ({ sql, admitted }) => {
     const filename = path.join(tempDirs.make("openclaw-schema-control-batch-"), "state.sqlite");
     const reader = openDatabase(
       "PRAGMA journal_mode=WAL; CREATE TABLE original(id); INSERT INTO original VALUES(1); PRAGMA user_version=1",
-      true,
+      admitted,
       filename,
     );
     const writer = openDatabase("", true, filename);
@@ -516,6 +540,8 @@ describe("native SQLite schema snapshots and callbacks", () => {
     expect(reader.isTransaction).toBe(true);
     writer.exec("CREATE TABLE committed_sibling(id); PRAGMA user_version=2");
     const committed = getAdmittedSqliteSchemaFacts(writer);
+    expect(reader.prepare("SELECT id FROM original").all()).toEqual([{ id: 1 }]);
+    admitSqliteSchema(reader);
     expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(1);
     expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(1);
     expect(tableExists(reader, "committed_sibling")).toBe(false);
@@ -956,24 +982,41 @@ describe("native SQLite schema snapshots and callbacks", () => {
     },
   );
 
-  it("qualifies managed snapshots at their first native read", () => {
+  it.each([
+    { read: "SELECT id FROM original", version: 1, followup: "none" },
+    { read: "SELECT 1", version: 2, followup: "none" },
+    { read: "PRAGMA busy_timeout", version: 2, followup: "none" },
+    { read: "PRAGMA query_only", version: 2, followup: "none" },
+    { read: "SELECT id FROM original", version: 1, followup: "pinned" },
+  ])("qualifies read=$read, followup=$followup", ({ read, version, followup }) => {
     const filename = path.join(tempDirs.make("openclaw-schema-managed-snapshot-"), "state.sqlite");
     const reader = openDatabase(undefined, true, filename);
     reader.exec("PRAGMA journal_mode=WAL");
     const writer = openDatabase("", true, filename);
     reader.exec("BEGIN");
     runSqliteReadOperationSync(reader, () => {
-      reader.prepare("SELECT id FROM original").all();
+      reader.prepare(read).all();
       writer.exec("CREATE TABLE committed_sibling (id); PRAGMA user_version=2");
+      if (followup === "pinned") {
+        runSqliteSchemaReadSnapshotSync(reader, () =>
+          reader.prepare("SELECT id FROM original").all(),
+        );
+      }
       const observation = observeSqliteReadSql(StatementSync.prototype);
       try {
-        expect(getAdmittedSqliteSchemaFacts(reader)?.userVersion).toBe(1);
-        expect(getAdmittedSqliteSchemaFacts(reader)?.tables.has("committed_sibling")).toBe(false);
-        expect(observation.queries).toEqual([]);
+        const qualified = getAdmittedSqliteSchemaFacts(reader);
+        expect(qualified?.userVersion).toBe(version);
+        expect(qualified?.tables.has("committed_sibling")).toBe(version === 2);
+        const qualificationQueries = [...observation.queries];
+        expect(
+          qualificationQueries.filter((query) => query.includes("sqlite_schema")),
+        ).toHaveLength(1);
+        expect(getAdmittedSqliteSchemaFacts(reader)).toBe(qualified);
+        expect(observation.queries).toEqual(qualificationQueries);
       } finally {
         observation.restore();
       }
-      expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(1);
+      expect(reader.prepare("PRAGMA user_version").get()?.user_version).toBe(version);
     });
     reader.exec("ROLLBACK");
     runSqliteSchemaReadSnapshotSync(reader, () => {

@@ -1,5 +1,5 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
-import { createEffect, createSignal, onCleanup } from "solid-js";
+import { createSignal, onCleanup, onSettled } from "solid-js";
 import { splitTrailingAuthProfile } from "../../../../src/agents/model-ref-profile.js";
 import type {
   ModelAuthStatusResult,
@@ -59,7 +59,8 @@ export function createModelProviderLogin(options: LoginOptions) {
     | null = null;
   let inventoryRequest: AbortController | undefined;
   let searchInput: HTMLInputElement | undefined;
-  let methodChoice: HTMLButtonElement | undefined;
+  let methodChoices: HTMLDivElement | undefined;
+  let apiKeyChoice: HTMLButtonElement | undefined;
   let focusPicker: "search" | "method" | null = null;
   let generation = 0;
   let mutationActive = false;
@@ -246,7 +247,7 @@ export function createModelProviderLogin(options: LoginOptions) {
       return;
     }
     const scope = options.getScope();
-    const { client, hello } = scope.context.gateway.snapshot;
+    const { client } = scope.context.gateway.snapshot;
     if (!client || !scope.agentId) {
       return;
     }
@@ -258,7 +259,6 @@ export function createModelProviderLogin(options: LoginOptions) {
       return (
         currentGeneration === generation &&
         current.context.gateway.snapshot.client === client &&
-        current.context.gateway.snapshot.hello === hello &&
         current.agentId === scope.agentId &&
         options.canContinue()
       );
@@ -277,7 +277,7 @@ export function createModelProviderLogin(options: LoginOptions) {
           agentId: scope.agentId,
           signal: controller.signal,
         }));
-      if (isCurrent()) {
+      if (inventoryRequest === controller && isCurrent()) {
         const available = loginProviders(providers, authStatus, allowSetup);
         const provider = providers && available.length === 1 ? available[0] : undefined;
         currentPicker = {
@@ -292,7 +292,7 @@ export function createModelProviderLogin(options: LoginOptions) {
         }
       }
     } catch (error) {
-      if (isCurrent()) {
+      if (inventoryRequest === controller && isCurrent()) {
         currentPicker = {
           ...picker,
           phase: "error",
@@ -300,13 +300,26 @@ export function createModelProviderLogin(options: LoginOptions) {
         };
       }
     } finally {
-      if (currentGeneration === generation) {
+      if (inventoryRequest === controller && currentGeneration === generation) {
         inventoryRequest = undefined;
         if (!isCurrent()) {
           currentPicker = null;
         }
         notify();
+        onSettled(focusPickerTarget);
       }
+    }
+  }
+
+  function invalidateInventory(): void {
+    inventoryRequest?.abort();
+    inventoryRequest = undefined;
+    if (currentPicker?.phase === "loading") {
+      currentPicker = {
+        ...currentPicker,
+        phase: "error",
+        message: t("modelProviders.requestFailed"),
+      };
     }
   }
 
@@ -317,7 +330,8 @@ export function createModelProviderLogin(options: LoginOptions) {
     currentPicker = null;
     focusPicker = null;
     searchInput = undefined;
-    methodChoice = undefined;
+    methodChoices = undefined;
+    apiKeyChoice = undefined;
     mutationActive = false;
     refreshWarning = null;
     message = undefined;
@@ -335,32 +349,21 @@ export function createModelProviderLogin(options: LoginOptions) {
 
   function focusPickerTarget() {
     if (focusPicker && currentPicker) {
-      const target = focusPicker === "search" ? searchInput : methodChoice;
-      if (target) {
+      // The method group contains only current choice buttons; quick-key-only groups use the fallback.
+      const target =
+        focusPicker === "search" ? searchInput : (methodChoices?.firstElementChild ?? apiKeyChoice);
+      if (target instanceof HTMLElement) {
         focusPicker = null;
         target.focus({ preventScroll: true });
       }
     }
   }
-  createEffect(
-    () => ({ revision: view.revision(), provider: providerSelection() }),
-    focusPickerTarget,
-  );
   onCleanup(() => {
     listeners.clear();
     generation += 1;
     inventoryRequest?.abort();
     completionCatalog.clear();
   });
-
-  function setSearchInput(element: HTMLInputElement): void {
-    searchInput = element;
-  }
-
-  function setMethodChoice(element: HTMLButtonElement): void {
-    methodChoice = element;
-    focusPickerTarget();
-  }
 
   function wizardViewProps() {
     view.read();
@@ -453,10 +456,10 @@ export function createModelProviderLogin(options: LoginOptions) {
         if (!canSelect()) {
           return;
         }
-        methodChoice = undefined;
         setProvider(providerId);
         focusPicker = "method";
         notify();
+        onSettled(focusPickerTarget);
       },
       onChoice: (selected: (typeof groups)[number]["choices"][number]) => {
         if (!canSelect()) {
@@ -508,6 +511,7 @@ export function createModelProviderLogin(options: LoginOptions) {
         setProvider("");
         focusPicker = "search";
         notify();
+        onSettled(focusPickerTarget);
       },
     };
   }
@@ -709,10 +713,18 @@ export function createModelProviderLogin(options: LoginOptions) {
     },
     recoveryView,
     pickerView,
-    setSearchInput,
-    setMethodChoice,
+    setSearchInput(element: HTMLInputElement) {
+      searchInput = element;
+    },
+    setMethodChoices(element: HTMLDivElement) {
+      methodChoices = element;
+    },
+    setApiKeyChoice(element: HTMLButtonElement) {
+      apiKeyChoice = element;
+    },
     connectProvider,
     open,
+    invalidateInventory,
     reset,
   };
 }

@@ -8,8 +8,10 @@ import {
   externalHttpLinkFromEvent,
   shouldHandleNavigationClick,
 } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { hasNativeBrowserBridge } from "./native-browser-host.ts";
 import { webKitHostWindow, type WebKitHostMessages } from "./native-webkit-bridge.ts";
+import type { ApplicationOverlays } from "./overlays-types.ts";
 
 type NativeLinkPoster = (message: WebKitHostMessages["openclawLink"]) => void;
 
@@ -29,6 +31,25 @@ type NativeLinkRoutingOptions = {
   shouldOpenExternally?: () => boolean;
   canPresentBrowserPanel?: () => boolean;
 };
+
+export function prepareNativeUpdateFallback(
+  overlays: Pick<ApplicationOverlays, "snapshot" | "captureUpdateTarget" | "runUpdate">,
+) {
+  return {
+    isCurrent: overlays.captureUpdateTarget(),
+    run: () => {
+      const snapshot = overlays.snapshot;
+      const campaign = snapshot.updateSchedule?.campaign;
+      const busy =
+        snapshot.updateRunning ||
+        snapshot.updateReconciliationPending ||
+        campaign?.state === "applying";
+      if ((snapshot.updateAvailable || campaign) && !busy && !snapshot.controlUiRefreshRequired) {
+        void overlays.runUpdate();
+      }
+    },
+  };
+}
 
 function getNativeLinkPoster(): NativeLinkPoster | undefined {
   // Native hosts install this handler before navigation; its absence preserves browser behavior.
@@ -231,26 +252,25 @@ export function startNativeLinkRouting(options: NativeLinkRoutingOptions = {}): 
   };
 
   // Run after target/document handlers so cancelled application actions remain authoritative.
-  window.addEventListener("click", handleClick);
-  window.addEventListener("auxclick", handleClick);
-  window.addEventListener(NATIVE_UPDATE_POSTED_EVENT, handleNativeUpdatePosted);
-  window.addEventListener(NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined);
+  const stops = [
+    listen(window, "click", handleClick),
+    listen(window, "auxclick", handleClick),
+    listen(window, NATIVE_UPDATE_POSTED_EVENT, handleNativeUpdatePosted),
+    listen(window, NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined),
+  ];
   // Capture keeps message-level context menus from replacing native link actions.
   if (postMessage) {
-    document.addEventListener("contextmenu", handleContextMenu, true);
+    stops.push(listen(document, "contextmenu", handleContextMenu, true));
   }
 
   const dispose = () => {
     disposed = true;
     nativeUpdatePending = undefined;
-    options.signal?.removeEventListener("abort", dispose);
-    window.removeEventListener("click", handleClick);
-    window.removeEventListener("auxclick", handleClick);
-    window.removeEventListener(NATIVE_UPDATE_POSTED_EVENT, handleNativeUpdatePosted);
-    window.removeEventListener(NATIVE_UPDATE_DECLINED_EVENT, handleNativeUpdateDeclined);
-    document.removeEventListener("contextmenu", handleContextMenu, true);
+    stops.forEach((stop) => stop());
     closeMenu();
   };
-  options.signal?.addEventListener("abort", dispose, { once: true });
+  if (options.signal) {
+    stops.push(listen(options.signal, "abort", dispose, { once: true }));
+  }
   return { dispose };
 }

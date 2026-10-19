@@ -17,7 +17,7 @@ export type ContextEngineAssemblySnapshot = AssemblyTarget & {
   tokenBudget?: number;
 };
 
-type AssemblyAttempt = { active: boolean; snapshot?: ContextEngineAssemblySnapshot };
+type AssemblyAttempt = { snapshot?: ContextEngineAssemblySnapshot };
 // Core selection and SDK assembly can load in different runtime chunks. Share the
 // scope carrier, never a last-budget value or settings across attempts.
 const assemblyAttempt = resolveGlobalSingleton(
@@ -27,27 +27,21 @@ const assemblyAttempt = resolveGlobalSingleton(
 
 /** Each concrete retry owns its assembly facts; rejected and concurrent attempts share none. */
 export async function runWithContextEngineAssemblyAttempt<T>(run: () => Promise<T>) {
-  const attempt: AssemblyAttempt = { active: true };
-  try {
-    const result = await assemblyAttempt.run(attempt, run);
-    return { result, assembly: attempt.snapshot };
-  } finally {
-    // Detached plugin work cannot change the accepted attempt after it settles.
-    attempt.active = false;
-    attempt.snapshot = undefined;
-  }
+  const attempt: AssemblyAttempt = {};
+  const result = await assemblyAttempt.run(attempt, run);
+  return { result, assembly: attempt.snapshot };
 }
 
 export function clearContextEngineAssemblySnapshot(): void {
   const attempt = assemblyAttempt.getStore();
-  if (attempt?.active) {
+  if (attempt) {
     attempt.snapshot = undefined;
   }
 }
 
 export function recordContextEngineAssemblySnapshot(snapshot: ContextEngineAssemblySnapshot): void {
   const attempt = assemblyAttempt.getStore();
-  if (attempt?.active) {
+  if (attempt) {
     attempt.snapshot = snapshot;
   }
 }
@@ -65,7 +59,7 @@ export function readContextEngineAssemblyBudget(
   ) {
     return undefined;
   }
-  return snapshot.tokenBudget ?? undefined;
+  return snapshot.tokenBudget;
 }
 
 export function resolveContextEngineCompletionRuntimeContext(

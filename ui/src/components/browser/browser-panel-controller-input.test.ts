@@ -19,12 +19,11 @@ import {
   TestBrowserPanelHost,
   type BrowserRequestEnvelope,
 } from "./browser-panel-controller-test-support.ts";
-import { BrowserPanelController } from "./browser-panel-controller.ts";
 import { BrowserPanelChrome } from "./browser-panel-render.tsx";
 
 setupBrowserPanelTestCleanup();
 
-describe("BrowserPanelController capture and input ownership", () => {
+describe("BrowserPanel capture and input ownership", () => {
   it("restores the prior selected screenshot when tab focus is rejected", async () => {
     const previousCapture = createDeferred<unknown>();
     const focus = createDeferred<unknown>();
@@ -295,7 +294,7 @@ describe("BrowserPanelController capture and input ownership", () => {
       }
       throw new Error(`Unexpected browser route: ${envelope.method} ${envelope.path}`);
     });
-    const controller = new BrowserPanelController(new TestBrowserPanelHost(client));
+    const controller = new TestBrowserPanelHost(client).createPanel();
     controller.activeTargetId = "active-tab";
     const activeView = createView("active-tab", activeUrl);
     controller.view = activeView;
@@ -923,10 +922,10 @@ describe("BrowserPanelController capture and input ownership", () => {
     });
     const controller = createBrowserPanelTestController(client, "tab-a");
 
-    controller.handleWheel(
+    controller.input.handleWheel(
       new WheelEvent("wheel", { deltaY: 60, clientX: 30, clientY: 40, cancelable: true }),
     );
-    controller.handleWheel(
+    controller.input.handleWheel(
       new WheelEvent("wheel", { deltaY: 40, clientX: 32, clientY: 44, cancelable: true }),
     );
     await vi.advanceTimersByTimeAsync(150);
@@ -955,7 +954,7 @@ describe("BrowserPanelController capture and input ownership", () => {
     });
     const controller = createBrowserPanelTestController(client, "tab-a");
 
-    controller.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
+    controller.input.handleWheel(new WheelEvent("wheel", { deltaY: 60, cancelable: true }));
     void controller.selectTab("tab-b");
     await vi.advanceTimersByTimeAsync(150);
 
@@ -994,7 +993,7 @@ describe("BrowserPanelController capture and input ownership", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const host = new TestBrowserPanelHost(client);
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     controller.activeTargetId = "tab-a";
 
     const oldRefresh = controller.refreshAll();
@@ -1045,7 +1044,7 @@ describe("BrowserPanelController capture and input ownership", () => {
       throw new Error(`Unexpected browser route: ${envelope.path}`);
     });
     const host = new TestBrowserPanelHost(client);
-    const controller = new BrowserPanelController(host);
+    const controller = host.createPanel();
     controller.activeTargetId = "tab-a";
 
     await controller.refreshAll();

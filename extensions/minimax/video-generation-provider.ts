@@ -1,4 +1,4 @@
-import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveImageSourceUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -19,7 +19,6 @@ import {
   normalizeVideoGenerationDuration,
   type GeneratedVideoAsset,
   type VideoGenerationProvider,
-  type VideoGenerationRequest,
 } from "openclaw/plugin-sdk/video-generation";
 import {
   assertMinimaxBaseResp,
@@ -66,21 +65,6 @@ type MinimaxFileRetrieveResponse = {
   base_resp?: MinimaxBaseResp;
 };
 
-function resolveFirstFrameImage(req: VideoGenerationRequest): string | undefined {
-  const input = req.inputImages?.[0];
-  if (!input) {
-    return undefined;
-  }
-  const inputUrl = normalizeOptionalString(input.url);
-  if (inputUrl) {
-    return inputUrl;
-  }
-  if (!input.buffer) {
-    throw new Error("MiniMax image-to-video input is missing image data.");
-  }
-  return toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" });
-}
-
 function resolveDurationSeconds(params: {
   model: string;
   durationSeconds: number | undefined;
@@ -89,7 +73,9 @@ function resolveDurationSeconds(params: {
   if (rounded === undefined) {
     return undefined;
   }
-  const allowed = MINIMAX_MODEL_ALLOWED_DURATIONS[params.model];
+  const allowed = Object.hasOwn(MINIMAX_MODEL_ALLOWED_DURATIONS, params.model)
+    ? MINIMAX_MODEL_ALLOWED_DURATIONS[params.model]
+    : undefined;
   if (!allowed || allowed.length === 0) {
     return rounded;
   }
@@ -106,7 +92,9 @@ function resolveResolution(params: {
   if (!requested) {
     return undefined;
   }
-  const allowed = MINIMAX_MODEL_ALLOWED_RESOLUTIONS[params.model];
+  const allowed = Object.hasOwn(MINIMAX_MODEL_ALLOWED_RESOLUTIONS, params.model)
+    ? MINIMAX_MODEL_ALLOWED_RESOLUTIONS[params.model]
+    : undefined;
   if (!allowed || allowed.length === 0 || allowed.includes(requested)) {
     return requested;
   }
@@ -293,7 +281,10 @@ export function buildMinimaxVideoGenerationProvider(
         model,
         prompt: req.prompt,
       };
-      const firstFrameImage = resolveFirstFrameImage(req);
+      const firstFrameImage = resolveImageSourceUrl(
+        req.inputImages?.[0],
+        "MiniMax image-to-video input is missing image data.",
+      );
       if (firstFrameImage) {
         body.first_frame_image = firstFrameImage;
       }

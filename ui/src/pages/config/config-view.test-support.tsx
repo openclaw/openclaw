@@ -131,7 +131,6 @@ export const baseProps = () => ({
   customThemeImportBusy: false,
   customThemeImportMessage: null,
   customThemeImportExpanded: false,
-  customThemeImportFocusToken: 0,
   onCustomThemeImportUrlChange: vi.fn(),
   onImportCustomTheme: vi.fn(),
   onClearCustomTheme: vi.fn(),

@@ -41,6 +41,7 @@ export function AppsPage(props: AppsPageProps) {
     ownedWrite: true,
   });
   const [retry, setRetry] = createSignal(0);
+  // Load the lazy chat custom element for this route; retire import-error feedback on replacement.
   createEffect(
     () => [appRoute(), retry()] as const,
     ([route]) => {

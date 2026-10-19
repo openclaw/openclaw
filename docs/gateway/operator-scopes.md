@@ -86,6 +86,10 @@ Session grants never authorize deletion or changes to an existing session's
 sharing and visibility.
 Archiving a session does not grant permission to delete it.
 
+Session readers can review changes with `sessions.diff` for conversations they can
+currently read, including their own private sessions. Existing sharing and agent
+access rules still apply; no general Gateway read grant is needed.
+
 Session readers can use `sessions.files.list`, `sessions.files.get`, and
 `sessions.files.assets` for files within a visible session's workspace. Reads
 outside that root also require the session's file tools to allow Gateway-host
@@ -93,8 +97,11 @@ access and the caller to have current permission to start a turn there, includin
 ownership, sharing-role, agent, and sandbox checks. Such previews are read-only.
 `canvas.document.preview` also accepts session read access: it returns the
 caller's HTML and isolated sandbox location without reading session data.
-Stored Canvas documents still require broader read access through
-`canvas.document.view`.
+For saved inline widgets, `canvas.document.view` also accepts session read access
+with `sessionKey`: the Gateway verifies a successful saved `show_widget` result
+for that document in a conversation the caller can currently read. Inaccessible
+conversations and unbound documents remain denied. Broad `operator.read` callers
+retain document-ID-only access.
 
 In the Control UI, session writers can use **New Session**, send messages in
 their own conversations, and stop their own active runs. Their model, effort,

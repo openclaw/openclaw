@@ -1,5 +1,5 @@
 // Render contract between the transcript projection and the per-session
-// virtualizer host owned by ChatTranscriptController.
+// virtualizer host owned by the chat transcript owner.
 import type { JSX } from "@solidjs/web";
 import type { Virtualizer } from "@tanstack/virtual-core";
 import type { ApplicationContext } from "../../../app/context.ts";
@@ -13,6 +13,7 @@ import type { TranscriptAnnouncement } from "./chat-transcript-announcement.ts";
 import { readConnectedTranscriptRows } from "./chat-transcript-geometry.ts";
 import type { TranscriptLayoutOwner } from "./chat-transcript-layout-owner.ts";
 import type { TranscriptContent, TranscriptRow } from "./chat-transcript-layout.ts";
+import type { TranscriptMessageElements } from "./chat-transcript-message-elements.ts";
 
 /** A reader-position restoration that is waiting for measurable transcript geometry. */
 export type ChatTranscriptPendingScrollOffset = {
@@ -33,7 +34,7 @@ export type TranscriptCallbacks = {
 };
 
 export const CHAT_TRANSCRIPT_ESTIMATED_ROW_PX = 120;
-export const CHAT_TRANSCRIPT_OVERSCAN = 6;
+export const CHAT_TRANSCRIPT_OVERSCAN = 2;
 // Initial virtual rows can correct their estimates for several frames. Observe
 // the range for ~200ms before accepting a saved offset that remains unreachable.
 export const CHAT_TRANSCRIPT_SCROLL_RESTORE_STABLE_FRAMES = 12;
@@ -50,6 +51,7 @@ export type TranscriptHeader = {
 export type ChatTranscriptSession = {
   readonly layout: Pick<TranscriptLayoutOwner, "viewportResizePending">;
   readonly entryAnimations: ChatMessageEntryAnimations;
+  readonly messageElements: TranscriptMessageElements;
   readonly expandedAssistantMessages: Map<string, AssistantMessageExpansionState>;
   readonly liveAnnouncementText: string;
   readonly scrollElementRef: (element?: Element) => void;

@@ -81,8 +81,10 @@ export function DeviceInventory(props: DevicesProps) {
       {stale().length > 0 ? (
         <button
           class="btn btn--sm danger"
-          title={props.canManagePairing ? "" : t("devices.readOnly.pairingRequired")}
-          disabled={!props.canManagePairing}
+          title={
+            props.connected && !props.canManagePairing ? t("devices.readOnly.pairingRequired") : ""
+          }
+          disabled={!props.connected || !props.canManagePairing}
           onClick={() => props.onInventoryCleanup(stale().map(toRemovalRequest))}
         >
           <Icon name="trash" />{" "}
@@ -91,8 +93,8 @@ export function DeviceInventory(props: DevicesProps) {
       ) : undefined}
       <button
         class="btn"
-        title={props.canPairDevice ? "" : t("devices.pairing.adminRequired")}
-        disabled={!props.canPairDevice}
+        title={props.connected && !props.canPairDevice ? t("devices.pairing.adminRequired") : ""}
+        disabled={!props.connected || !props.canPairDevice}
         onClick={() => props.onDevicePairSetupOpen()}
       >
         <Icon name="plus" /> {t("devices.pairing.button")}
@@ -111,7 +113,7 @@ export function DeviceInventory(props: DevicesProps) {
       </Show>
       {loading() && groups().length === 0 ? (
         <SettingsLoadingSkeleton />
-      ) : empty() ? (
+      ) : empty() && (props.connected || props.devicesList) ? (
         <SettingsEmpty message={t("devices.inventory.empty")} />
       ) : (
         <For each={groups()} keyed={(group) => group.key}>
@@ -572,7 +574,7 @@ function TokenRow(props: {
         <div class="device-entry__token-actions">
           <button
             class="btn btn--sm"
-            disabled={!props.devices.canManagePairing}
+            disabled={!props.devices.connected || !props.devices.canManagePairing}
             onClick={() =>
               props.devices.onDeviceRotate(
                 props.device,
@@ -586,7 +588,7 @@ function TokenRow(props: {
           {props.tokenSummary.revokedAtMs ? undefined : (
             <button
               class="btn btn--sm danger"
-              disabled={!props.devices.canManagePairing}
+              disabled={!props.devices.connected || !props.devices.canManagePairing}
               onClick={() => props.devices.onDeviceRevoke(props.device.id, props.tokenSummary.role)}
             >
               {t("devices.inventory.revoke")}

@@ -60,6 +60,28 @@ vi.mock("./ws-runtime.js", async (importOriginal) => ({
 }));
 const baseUrl = "http://localhost:8080";
 const account = "+14259798283";
+function buffered(
+  onEvent: Parameters<typeof streamContainerEvents>[0]["onEvent"],
+  timeoutMs?: number,
+) {
+  state.behavior = "buffered";
+  const abort = new AbortController();
+  const remove = vi.spyOn(abort.signal, "removeEventListener");
+  const log = vi.fn(),
+    error = vi.fn(),
+    opened = vi.fn(),
+    finished = vi.fn();
+  const stream = streamContainerEvents({
+    baseUrl,
+    account,
+    timeoutMs,
+    onEvent,
+    onStreamOpen: opened,
+    abortSignal: abort.signal,
+    logger: { log, error },
+  }).then(finished);
+  return { abort, remove, log, error, opened, finished, stream };
+}
 beforeEach(() => {
   vi.useFakeTimers();
   state.behavior = "close";
@@ -109,41 +131,25 @@ describe("container receive lifecycle", () => {
   });
 
   it("drains accepted and socket-buffered events before resolving shutdown", async () => {
-    state.behavior = "buffered";
-    const log = vi.fn();
-    const onStreamOpen = vi.fn();
-    const abort = new AbortController();
-    const remove = vi.spyOn(abort.signal, "removeEventListener");
     const delivery = createDeferred<void>();
     const timestamps: number[] = [];
-    let settled = false;
-    const stream = streamContainerEvents({
-      baseUrl,
-      account,
-      onStreamOpen,
-      logger: { log },
-      abortSignal: abort.signal,
-      timeoutMs: 0,
-      onEvent: async (event) => {
-        timestamps.push(event.envelope?.timestamp ?? 0);
-        if (timestamps.length === 1) {
-          await delivery.promise;
-        }
-      },
-    }).then(() => {
-      settled = true;
-    });
+    const { abort, remove, log, opened, finished, stream } = buffered(async (event) => {
+      timestamps.push(event.envelope?.timestamp ?? 0);
+      if (timestamps.length === 1) {
+        await delivery.promise;
+      }
+    }, 0);
     await vi.advanceTimersByTimeAsync(0);
     expect(timestamps).toEqual([1]);
     abort.abort();
     await vi.advanceTimersByTimeAsync(10);
-    expect(settled).toBe(false);
+    expect(finished).not.toHaveBeenCalled();
     delivery.resolve();
     await stream;
     expect(timestamps).toEqual([1, 2]);
     expect(remove).toHaveBeenCalledWith("abort", expect.any(Function));
     expect(state.terminations).toBe(0);
-    expect(onStreamOpen).toHaveBeenCalledOnce();
+    expect(opened).toHaveBeenCalledOnce();
     expect(log).toHaveBeenCalledWith(
       "[signal-ws] connecting to ws://localhost:8080/v1/receive/<redacted>",
     );
@@ -153,15 +159,9 @@ describe("container receive lifecycle", () => {
     expect(state.options).toEqual([{ maxPayload: 1024 * 1024, handshakeTimeout: 30_000 }]);
   });
   it("propagates a handler failure during shutdown", async () => {
-    state.behavior = "buffered";
-    const abort = new AbortController();
     const delivery = createDeferred<void>();
     const error = new Error("durable append failed during shutdown");
-    const stream = streamContainerEvents({
-      baseUrl,
-      abortSignal: abort.signal,
-      onEvent: () => delivery.promise,
-    });
+    const { abort, stream } = buffered(() => delivery.promise);
     await vi.advanceTimersByTimeAsync(0);
     abort.abort();
     const rejected = expect(stream).rejects.toBe(error);
@@ -170,23 +170,11 @@ describe("container receive lifecycle", () => {
     expect(state.terminations).toBe(0);
   });
   it("bounds a stalled drain and reports accepted-message loss risk", async () => {
-    state.behavior = "buffered";
-    const abort = new AbortController();
-    const error = vi.fn();
-    let settled = false;
-    const stream = streamContainerEvents({
-      baseUrl,
-      abortSignal: abort.signal,
-      timeoutMs: 0,
-      onEvent: () => new Promise<void>(() => {}),
-      logger: { error },
-    }).then(() => {
-      settled = true;
-    });
+    const { abort, error, finished, stream } = buffered(() => new Promise<void>(() => {}), 0);
     await vi.advanceTimersByTimeAsync(0);
     abort.abort();
     await vi.advanceTimersByTimeAsync(1_499);
-    expect(settled).toBe(false);
+    expect(finished).not.toHaveBeenCalled();
     expect(error).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     await stream;

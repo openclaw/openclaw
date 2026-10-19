@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import type { GatewaySessionRow } from "../../api/types.ts";
+import type { ChatGoalDraftMode } from "../../lib/chat/chat-types.ts";
 import { createComposerContainer } from "./chat-composer.test-support.ts";
 import { resetChatViewState } from "./chat-view-state.ts";
 import {
@@ -185,6 +186,7 @@ describe("chat goal status", () => {
 
   it("edits the plain objective and restores the conversation draft on cancellation", () => {
     let draft = "Keep my conversation draft";
+    let goalDraftMode: ChatGoalDraftMode | null = null;
     const container = createComposerContainer();
     const onDraftChange = vi.fn((next: string) => {
       draft = next;
@@ -196,8 +198,12 @@ describe("chat goal status", () => {
         getDraft: () => draft,
         onGoalAction: vi.fn(),
         onGoalSubmit: vi.fn(async () => true),
+        goalDraftMode,
+        onGoalDraftModeChange: (mode) => {
+          goalDraftMode = mode;
+          draw();
+        },
         onDraftChange,
-        onRequestUpdate: draw,
       });
     draw();
 

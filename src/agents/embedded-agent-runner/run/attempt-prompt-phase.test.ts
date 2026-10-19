@@ -1,8 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { Type } from "typebox";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import type { Context, Model, SimpleStreamOptions } from "../../../llm/types.js";
+import type { PluginHookBeforeAgentRunEvent } from "../../../plugins/hook-types.js";
 import { createUserTurnTranscriptRecorder } from "../../../sessions/user-turn-transcript.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../../state/openclaw-agent-db.js";
 import {
@@ -10,6 +12,7 @@ import {
   resolveAdmittedRunActiveAssertion,
 } from "../../admitted-run-context.js";
 import type { AgentRunAttemptTerminal } from "../../agent-run-terminal-outcome.js";
+import { guardSessionManager } from "../../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
   createAssistantResultStream,
@@ -80,104 +83,133 @@ afterEach(() => {
 });
 
 describe("runEmbeddedAttemptPromptPhase", () => {
-  it.each([false, true])(
-    "wires final Decision withdrawal with in-history updates %s",
-    async (inHistorySystemUpdates) => {
-      const f = createFixture();
-      const ownedSession = f.input.prepared.sessionRuntime.agentSession;
-      const session = ownedSession.activeSession;
-      session.agent.state.systemPrompt = "pruned prompt";
-      session.agent.state.tools = [];
-      using promptStateLease = retainEmbeddedSessionPromptState("phase-system-update");
-      if (inHistorySystemUpdates) {
-        const state = promptStateLease.state;
-        const project = (systemPrompt: string) =>
-          prepareSessionSystemPrompt({
-            state,
-            routeKey: "anthropic/claude-opus-5/anthropic-messages",
-            systemPrompt,
-            entries: [],
-          });
-        project("pruned prompt").commit();
-        f.input.prepared.sessionRuntime.prepareSystemPromptUpdate = vi.fn(
-          async (prompt: string, _freshlyRendered?: boolean) => project(prompt),
-        );
+  it("submits an unchanged turn without a registered policy gate", async () => {
+    const fixture = createFixture();
+    const manager = guardSessionManager(SessionManager.inMemory());
+    fixture.input.prepared.sessionRuntime.sessionManager = manager;
+    fixture.input.prepared.sessionRuntime.agentSession.hookRunner = null;
+    const write = vi.spyOn(fixture.input.sessionLock, "withOwnedTranscriptWrite");
+
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    expect(fixture.readState().promptError).toBeNull();
+    expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
+    expect(write).not.toHaveBeenCalled();
+    expect(manager.buildSessionContext().messages).toEqual([]);
+  });
+
+  it("passes cloned prompt context to a policy without mutating a passing turn", async () => {
+    const fixture = createFixture();
+    const { activeSession } = fixture.input.prepared.sessionRuntime.agentSession;
+    activeSession.agent.state.messages = [
+      { role: "user", content: [{ type: "text", text: "original prompt" }], timestamp: 1 },
+    ];
+    Object.assign(fixture.input.attempt, {
+      agentAccountId: "account-1",
+      senderId: "sender-1",
+      senderIsOwner: true,
+    });
+    const context = expectDefined(mocks.preparePromptContext.getMockImplementation(), "context");
+    mocks.preparePromptContext.mockReturnValue({
+      ...context(),
+      hookMessagesForCurrentPrompt: activeSession.messages,
+      promptForModel: "[media attached: /tmp/a.png (image/png)]\ninspect this",
+      systemPromptForHook: "system prompt",
+    });
+    mocks.beforeAgentRun.mockImplementation(async (event: PluginHookBeforeAgentRunEvent) => {
+      const first = event.messages[0];
+      if (!isRecord(first) || first.role !== "user") {
+        throw new Error("expected the fixture user message");
       }
-      let withdrawals = 0;
-      f.input.prepared.promptToolPolicy.prepareForDispatch = (prepare) => {
-        withdrawals++;
-        return prepare();
-      };
-      const refresh = Object.assign(
-        vi.fn((current: string) => current + " / permitted tools"),
+      first.content = "mutated by hook";
+      return { outcome: "pass" as const };
+    });
+    const write = vi.spyOn(fixture.input.sessionLock, "withOwnedTranscriptWrite");
+
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    expect(mocks.beforeAgentRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        prompt: "[media attached: /tmp/a.png (image/png)]\ninspect this",
+        systemPrompt: "system prompt",
+        channelId: undefined,
+        accountId: "account-1",
+        senderId: "sender-1",
+        senderIsOwner: true,
+      }),
+      expect.objectContaining({ runId: "run-1", agentId: "main", sessionId: "session-1" }),
+    );
+    expect(activeSession.messages[0]).toMatchObject({
+      content: [{ type: "text", text: "original prompt" }],
+    });
+    expect(write).not.toHaveBeenCalled();
+    expect(mocks.submitPrompt).toHaveBeenCalledTimes(1);
+  });
+
+  it("persists one redacted blocked turn across prompt retries without submitting it", async () => {
+    const fixture = createFixture();
+    const manager = guardSessionManager(SessionManager.inMemory());
+    fixture.input.prepared.sessionRuntime.sessionManager = manager;
+    mocks.beforeAgentRun.mockResolvedValue({
+      outcome: "block",
+      reason: "unsafe input",
+      message: "Request blocked.",
+    });
+    const write = vi.spyOn(fixture.input.sessionLock, "withOwnedTranscriptWrite");
+
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    expect(fixture.input.state.beforeAgentRunBlockedBy).toBe("policy");
+    expect(fixture.readState().promptError).toBeInstanceOf(Error);
+    expect(fixture.readState().promptError).toHaveProperty(
+      "message",
+      "Your message could not be sent: Request blocked. (blocked by policy)",
+    );
+    expect(mocks.beforeAgentRun).toHaveBeenCalledTimes(2);
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(mocks.submitPrompt).not.toHaveBeenCalled();
+    const messages = manager.buildSessionContext().messages;
+    expect(messages).toHaveLength(1);
+    expect(messages[0]).toMatchObject({
+      role: "user",
+      content: [
         {
-          freshlyRendered: true,
+          type: "text",
+          text: "Your message could not be sent: Request blocked. (blocked by policy)",
         },
-      );
-      const preparePrompt = vi.fn(async () => refresh);
-      f.input.prepared.systemPrompt.prepareToolPrompt = preparePrompt;
-      vi.mocked(ownedSession.setActiveSessionSystemPrompt).mockImplementation((prompt) => {
-        session.agent.state.systemPrompt = prompt;
-        return prompt;
-      });
-      const ordinaryAssembly = expectDefined(
-        mocks.preparePromptAssembly.getMockImplementation(),
-        "prompt assembly fixture implementation",
-      );
-      mocks.preparePromptAssembly.mockImplementation(async (input) => ({
-        ...(await ordinaryAssembly(input)),
-        decisionPrefilter: {
-          shouldPruneTools: true,
-          restrictionApplied: true,
-          status: "proposed",
-          reason: "conversational",
-          isCurrent: () => false,
-        },
-      }));
-      mocks.submitPrompt.mockImplementation(async (input: PromptSubmissionCall) => {
-        const readContext = await expectDefined(
-          input.preparePrimaryModelRequest?.(),
-          "foreground restoration preparation",
-        );
-        const context = readContext();
-        if (inHistorySystemUpdates) {
-          expect(context).toMatchObject({
-            tools: [],
-            systemPrompt: "pruned prompt",
-            promptUpdate: {
-              update: {
-                customType: "openclaw.system-update",
-                content: expect.stringContaining("pruned prompt / permitted tools"),
-              },
-            },
-          });
-          context.promptUpdate?.commit();
-          expect(session.agent.state.systemPrompt).toBe("pruned prompt");
-        } else {
-          expect(context).toEqual({ tools: [], systemPrompt: "pruned prompt / permitted tools" });
-        }
-      });
-      await runEmbeddedAttemptPromptPhase(f.input, f.promptState);
-      expect(f.readState().promptError).toBeNull();
-      expect(withdrawals).toBe(1);
-      expect(preparePrompt).toHaveBeenCalledWith(
-        f.input.prepared.promptToolPolicy.current.effectiveTools,
-      );
-      expect(refresh).toHaveBeenCalledWith("pruned prompt");
-      if (inHistorySystemUpdates) {
-        expect(f.input.prepared.sessionRuntime.prepareSystemPromptUpdate).toHaveBeenCalledWith(
-          "pruned prompt / permitted tools",
-          true,
-        );
-      }
-      const assembly = await mocks.preparePromptAssembly.mock.results[0]!.value;
-      expect(assembly.decisionPrefilter).toMatchObject({
-        restrictionApplied: false,
-        status: "retained",
-        reason: "selection-changed",
-      });
-    },
-  );
+      ],
+      idempotencyKey: "hook-block:before_agent_run:user:run-1",
+      __openclaw: { beforeAgentRunBlocked: { blockedBy: "policy", blockedAt: expect.any(Number) } },
+    });
+    expect(fixture.input.prepared.sessionRuntime.agentSession.activeSession.messages).toEqual(
+      messages,
+    );
+  });
+
+  it("fails closed and persists a safe blocked turn when the policy runner throws", async () => {
+    const fixture = createFixture();
+    const manager = guardSessionManager(SessionManager.inMemory());
+    fixture.input.prepared.sessionRuntime.sessionManager = manager;
+    mocks.beforeAgentRun.mockRejectedValue(new Error("policy unavailable"));
+    const write = vi.spyOn(fixture.input.sessionLock, "withOwnedTranscriptWrite");
+
+    await runEmbeddedAttemptPromptPhase(fixture.input, fixture.promptState);
+
+    expect(fixture.input.state.beforeAgentRunBlockedBy).toBe("before_agent_run");
+    expect(fixture.readState().promptError).toHaveProperty(
+      "message",
+      "Your message could not be sent: blocked by before_agent_run",
+    );
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(mocks.submitPrompt).not.toHaveBeenCalled();
+    expect(manager.buildSessionContext().messages).toEqual([
+      expect.objectContaining({
+        role: "user",
+        idempotencyKey: "hook-block:before_agent_run:user:run-1",
+      }),
+    ]);
+  });
 
   it.each([
     { appendOnlyRuntimeContext: true, queued: false },

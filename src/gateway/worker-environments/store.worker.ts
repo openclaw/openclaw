@@ -22,7 +22,7 @@ import type {
   WorkerEnvironmentMutationInput,
   WorkerEnvironmentMutationMethods,
 } from "./store.types.js";
-import { pruneObservedTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
+import { pruneTerminalWorkerEnvironments } from "./terminal-environment-retention.js";
 
 type Method = keyof WorkerEnvironmentMutationMethods | "initialize";
 type Input<Name extends Method> = {
@@ -199,11 +199,10 @@ export const workerEnvironmentOperations = {
   ),
   "workerEnvironments.pruneTerminalEnvironments": mutation(
     "pruneTerminalEnvironments",
-    ({ input: { approved } }, { db, touch }) => {
-      for (const row of approved) {
-        touch(row.environment_id);
-      }
-      return pruneObservedTerminalWorkerEnvironments(db, approved);
+    ({ input }, { db, touch }) => {
+      const deleted = pruneTerminalWorkerEnvironments(db, input);
+      deleted.forEach(touch);
+      return deleted.length;
     },
   ),
 } satisfies WorkerOperationHandlers;

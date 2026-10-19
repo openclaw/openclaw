@@ -1,8 +1,5 @@
-import { isDeepStrictEqual } from "node:util";
-import { getRuntimeConfig } from "../../../config/io.js";
 import { resolveHostAccountName } from "../../../infra/host-account-name.js";
 import { prepareUserProfileRoleAuthority } from "../../../state/user-channel-identity-operations.js";
-import { prepareUserProfileCatalog } from "../../../state/user-profile-list.js";
 import {
   ensureCanonicalGatewayOwnerProfile,
   ensureCanonicalUserProfileForEmail,
@@ -98,22 +95,21 @@ export function createGatewayConnectProfileLifecycle(
 ) {
   const { handler } = context;
   let client: GatewayWsClient | undefined;
-  const rolesCurrent = () =>
-    isDeepStrictEqual(context.configSnapshot.gateway?.roles, getRuntimeConfig().gateway?.roles);
   const clientCurrent = () =>
     !handler.isClosed() &&
     handler.socket.readyState === WEBSOCKET_OPEN_READY_STATE &&
     (!client || (handler.getClient() === client && !client.invalidated));
   const assertCurrent = () => {
     handler.connectionWork.signal.throwIfAborted();
-    if (!clientCurrent() || resolveGatewayConnectPolicyFailure(context, state) || !rolesCurrent()) {
+    if (!clientCurrent() || resolveGatewayConnectPolicyFailure(context, state)) {
       throw new Error("Gateway profile acquisition authority expired");
     }
   };
   return {
     assertCurrent,
     isCurrent: (prepared: PreparedConnectProfile | undefined) =>
-      (!prepared || prepared.authority.isCurrent()) && rolesCurrent(),
+      (!prepared || prepared.authority.isCurrent()) &&
+      !resolveGatewayConnectPolicyFailure(context, state),
     bind: (registered: GatewayWsClient) => {
       client = registered;
     },
@@ -162,10 +158,6 @@ async function resolveAuthenticatedProfile(
   assertCurrent?: () => void,
 ) {
   assertCurrent?.();
-  if (hasGatewayOperatorAccessPolicies(getRuntimeConfig())) {
-    (await prepareUserProfileCatalog()).release();
-    assertCurrent?.();
-  }
   const authority = await prepareUserProfileRoleAuthority(profileId);
   assertCurrent?.();
   if (!authority?.isCurrent()) {

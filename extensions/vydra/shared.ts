@@ -1,5 +1,8 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { resolveGeneratedMediaMaxBytes } from "openclaw/plugin-sdk/media-generation-runtime";
+import {
+  resolveGeneratedImageDownloadMaxBytes,
+  resolveGeneratedMediaMaxBytes,
+} from "openclaw/plugin-sdk/media-generation-runtime";
 import { extensionForMime, type MediaKind } from "openclaw/plugin-sdk/media-mime";
 import { resolvePositiveTimerTimeoutMs } from "openclaw/plugin-sdk/number-runtime";
 import type { resolveApiKeyForProvider } from "openclaw/plugin-sdk/provider-auth-runtime";
@@ -310,7 +313,10 @@ export async function runVydraGeneration(params: {
         })
       : params.timeoutMs,
     fetchFn,
-    maxBytes: resolveGeneratedMediaMaxBytes(params.cfg, params.kind),
+    maxBytes:
+      params.kind === "image"
+        ? resolveGeneratedImageDownloadMaxBytes(params.cfg)
+        : resolveGeneratedMediaMaxBytes(params.cfg, params.kind),
     requestPolicy,
   });
   const jobId = resolveVydraResponseJobId(completedPayload) ?? resolveVydraResponseJobId(submitted);

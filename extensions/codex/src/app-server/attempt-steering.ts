@@ -78,6 +78,7 @@ export class CodexSteeringAcceptedUnconfirmedError extends Error {
 
 export type CodexSteeringQueueOptions = Pick<
   AgentHarnessQueueMessageOptions,
+  | "currentInboundContext"
   | "debounceMs"
   | "images"
   | "imageOrder"

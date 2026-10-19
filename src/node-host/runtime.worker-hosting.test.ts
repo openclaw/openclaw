@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
+import { mockProcessPlatform } from "../test-utils/vitest-spies.js";
 import type { NodeHostClient } from "./client.js";
 import { NodeWorkerContainerContextMismatchError } from "./node-worker-container-lifecycle.js";
 import { createNodeWorkerSupervisor } from "./node-worker-supervisor.js";
@@ -60,6 +61,7 @@ const client = { request: vi.fn(async () => ({})) } as unknown as NodeHostClient
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockProcessPlatform("linux");
   mocks.checkWorkspaceAdmission.mockReset().mockResolvedValue(undefined);
   mocks.closeWorkerSupervisor.mockReset().mockResolvedValue(undefined);
   mocks.initializeWorkerSupervisor.mockReset().mockResolvedValue(undefined);
@@ -67,6 +69,7 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.useRealTimers();
+  vi.restoreAllMocks();
 });
 
 function prepareWorkerRuntime(
@@ -74,7 +77,6 @@ function prepareWorkerRuntime(
   options: {
     enabled?: boolean;
     forceWorkerRuns?: boolean;
-    platform?: NodeJS.Platform;
     containerImage?: string;
   } = {},
 ) {
@@ -136,7 +138,6 @@ describe("node-host worker manifest", () => {
         },
       },
       env: { PATH: "/usr/bin" },
-      platform: "linux",
     });
     expect(prepared.nativeInferenceEnabled).toBe(true);
 
@@ -175,7 +176,8 @@ describe("node-host worker manifest", () => {
   });
 
   it("disables container-isolated hosting on Windows before probing or advertising an engine", async () => {
-    const prepared = await prepareWorkerRuntime("container", { platform: "win32" });
+    mockProcessPlatform("win32");
+    const prepared = await prepareWorkerRuntime("container");
 
     expect(prepared.workerHostingEnabled).toBe(false);
     expect(prepared.workerHostingDisabledReason).toMatch(/windows.*(?:linux|macos)/iu);

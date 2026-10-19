@@ -1,4 +1,4 @@
-import { getRuntimeConfig } from "../../config/config.js";
+import { getRuntimeConfigSnapshot } from "../../config/config.js";
 import { loadFacadeModuleAtLocationSync } from "../../plugin-sdk/facade-loader.js";
 import { shouldRejectHardlinkedPluginFiles } from "../hardlink-policy.js";
 import { getPluginInstance } from "../plugin-instance-scope.js";
@@ -6,23 +6,13 @@ import { resolvePluginMetadataSnapshot } from "../plugin-metadata-snapshot.js";
 import { resolvePluginRootPublicSurfacePath } from "../public-surface-runtime.js";
 import { getPluginRegistryForContext } from "./gateway-request-scope.js";
 
-function readColdPluginRecords() {
-  let config;
-  try {
-    config = getRuntimeConfig();
-  } catch {
-    config = {};
-  }
-  return resolvePluginMetadataSnapshot({ config }).plugins;
-}
-
 /** Package-root embedding API; runtime instances and cold callers share the public-surface loader. */
 export async function monitorWebChannel(...args: unknown[]): Promise<unknown> {
   const registry = getPluginRegistryForContext();
   // An admitted runtime never falls back to installed bytes after disable or uninstall.
   const records = registry
     ? registry.plugins.filter((record) => record.status === "loaded")
-    : readColdPluginRecords();
+    : resolvePluginMetadataSnapshot({ config: getRuntimeConfigSnapshot() ?? {} }).plugins;
   const matches = records.flatMap((record) => {
     const pluginRoot = record.rootDir;
     if (!pluginRoot) {

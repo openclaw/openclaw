@@ -21,11 +21,7 @@ import {
   loadVitestPerformanceConfig,
 } from "../test/vitest/vitest.performance-config.ts";
 import { createRedactingReporterPlugin } from "../test/vitest/vitest.reporters.ts";
-import {
-  jsdomOptimizedDeps,
-  nonIsolatedRunnerPath,
-  sharedVitestConfig,
-} from "../test/vitest/vitest.shared.config.ts";
+import { nonIsolatedRunnerPath, sharedVitestConfig } from "../test/vitest/vitest.shared.config.ts";
 import { uiIsolatedTestFiles } from "../test/vitest/vitest.ui-isolated-paths.mjs";
 import {
   resolveUiTypeScriptPath,
@@ -76,7 +72,7 @@ const sharedUiTestConfig = {
   testTimeout: 60_000,
   hookTimeout: 60_000,
 } as const;
-const nodeSetupFiles = ["./src/test-helpers/lit-warnings.setup.ts"];
+const nodeSetupFiles = ["./src/test-helpers/dom.setup.ts"];
 const nodeDrivenBrowserLayoutTests = relativizeScopedPatterns(uiNodeDrivenBrowserTestFiles, "ui");
 const timingTests = relativizeScopedPatterns(uiTimingTestFiles, "ui");
 const mockRegistryUnitTests = uiIsolatedTestFiles.map((testFile) => testFile.slice("ui/".length));
@@ -189,8 +185,6 @@ export function createUiBrowserVitestConfig(
         "@codemirror/state",
         "@codemirror/view",
         "@lezer/highlight",
-        "@lit/context",
-        "@lit/task",
         "@noble/ed25519",
         "@noble/hashes/sha2.js",
         "@noble/hashes/utils.js",
@@ -200,7 +194,6 @@ export function createUiBrowserVitestConfig(
         "@panzoom/panzoom",
         "@solidjs/signals",
         "@solidjs/testing-library",
-        "@tanstack/lit-virtual",
         "@tanstack/virtual-core",
         "@zag-js/menu",
         "@zag-js/rect-utils",
@@ -212,22 +205,6 @@ export function createUiBrowserVitestConfig(
         "ipaddr.js",
         "json5",
         "jsonc-parser",
-        "lit",
-        "lit/decorators.js",
-        "lit/async-directive.js",
-        "lit/directive.js",
-        "lit/directive-helpers.js",
-        "lit/directives/guard.js",
-        "lit/directives/if-defined.js",
-        "lit/directives/keyed.js",
-        "lit/directives/live.js",
-        "lit/directives/ref.js",
-        "lit/directives/repeat.js",
-        "lit/directives/style-map.js",
-        "lit/directives/unsafe-html.js",
-        "lit/directives/unsafe-svg.js",
-        "lit/directives/until.js",
-        "lit/static-html.js",
         "markdown-it",
         "markdown-it-cjk-friendly",
         "markdown-it-emoji/lib/data/full.mjs",
@@ -255,7 +232,7 @@ export function createUiBrowserVitestConfig(
       // cannot load in browser mode. Browser files own their own teardown.
       include,
       exclude: [...nodeDrivenBrowserLayoutTests],
-      setupFiles: ["./src/test-helpers/lit-warnings.setup.ts"],
+      setupFiles: ["./src/test-helpers/dom.setup.ts"],
       browser: {
         enabled: true,
         provider,
@@ -335,7 +312,6 @@ export default defineConfig({
         },
         test: {
           ...sharedUiTestConfig,
-          deps: jsdomOptimizedDeps,
           name: "unit",
           // isolate:false shares one worker module graph and jsdom window across
           // files, so the first file to evaluate a component owns it for the rest
@@ -375,7 +351,6 @@ export default defineConfig({
           // Reuse the canonical singleton-sensitive list so the package and
           // root runners isolate the same tests without slowing the main suite.
           isolate: true,
-          deps: jsdomOptimizedDeps,
           name: "unit-mock-registry",
           include: includeUiTests([...mockRegistryUnitTests]),
           environment: "jsdom",
@@ -394,7 +369,6 @@ export default defineConfig({
         },
         test: {
           ...sharedUiTestConfig,
-          deps: jsdomOptimizedDeps,
           name: "unit-node",
           exclude: [...timingTests, ...mockRegistryUnitTests],
           // No cleanup runner: this project also carries the Playwright-driven
@@ -423,7 +397,6 @@ export default defineConfig({
         resolve: { alias: workspaceSourceAliases },
         test: {
           ...sharedUiTestConfig,
-          deps: jsdomOptimizedDeps,
           name: "unit-timing",
           isolate: true,
           // Finish other UI tests before measuring full-render wall time.

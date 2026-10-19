@@ -9,6 +9,7 @@ import {
   captureCronRequesterGrantIssuer,
 } from "../cron-creator-authority-context.js";
 import type { DelegationCapability } from "../delegation-capability.js";
+import { captureRequesterOrigin } from "../requester-origin.js";
 import { SESSION_PERMISSION_BY_EXEC_MODE } from "../session-permission-exec-mode.js";
 import { resolveStoredSessionPermissionPolicy } from "../tool-fs-policy.js";
 import type { RunCliAgentParams } from "./types.js";
@@ -22,6 +23,7 @@ export function finalizeCliMcpGrant(
   nativeAuthorityPending: boolean,
   source: Pick<
     RunCliAgentParams,
+    | "config"
     | "admittedRunContext"
     | "assertCurrent"
     | "messageActionTurnCapability"
@@ -48,6 +50,7 @@ export function finalizeCliMcpGrant(
     ...(cronRequesterGrantIssuer ? { cronRequesterGrantIssuer } : {}),
     ...(cronAuthorityCheck ? { cronAuthorityCheck } : {}),
     admittedRunContext: source.admittedRunContext,
+    toolPolicyConfig: source.config,
     messageActionTurnCapability: source.messageActionTurnCapability,
     abortSignal: source.abortSignal,
     assertCurrent: source.assertCurrent,
@@ -129,8 +132,7 @@ function buildCliMcpChannelContext(
   senderId?: string | null,
 ): McpLoopbackRequestContext["channelContext"] {
   const resolvedSenderId =
-    normalizeOptionalString(senderId ?? undefined) ??
-    normalizeOptionalString(channelContext?.sender?.id);
+    normalizeOptionalString(senderId) ?? normalizeOptionalString(channelContext?.sender?.id);
   const chatId = normalizeOptionalString(channelContext?.chat?.id);
   if (!resolvedSenderId && !chatId) {
     return undefined;
@@ -177,13 +179,13 @@ export function buildCliMcpGrantContext(params: {
   const execOverrides = buildCliMcpExecOverrides(params.run.execOverrides);
   const bashElevated = buildCliMcpBashElevated(params.run.bashElevated);
   const channelContext = buildCliMcpChannelContext(params.run.channelContext, params.run.senderId);
-  const senderName = normalizeOptionalString(params.run.senderName ?? undefined);
-  const senderUsername = normalizeOptionalString(params.run.senderUsername ?? undefined);
-  const senderE164 = normalizeOptionalString(params.run.senderE164 ?? undefined);
-  const groupId = normalizeOptionalString(params.run.groupId ?? undefined);
-  const groupChannel = normalizeOptionalString(params.run.groupChannel ?? undefined);
-  const groupSpace = normalizeOptionalString(params.run.groupSpace ?? undefined);
-  const spawnedBy = normalizeOptionalString(params.run.spawnedBy ?? undefined);
+  const senderName = normalizeOptionalString(params.run.senderName);
+  const senderUsername = normalizeOptionalString(params.run.senderUsername);
+  const senderE164 = normalizeOptionalString(params.run.senderE164);
+  const groupId = normalizeOptionalString(params.run.groupId);
+  const groupChannel = normalizeOptionalString(params.run.groupChannel);
+  const groupSpace = normalizeOptionalString(params.run.groupSpace);
+  const spawnedBy = normalizeOptionalString(params.run.spawnedBy);
   const messageProvider = resolveGatewayMessageChannel(
     params.run.messageChannel ?? params.run.messageProvider,
   );
@@ -200,6 +202,10 @@ export function buildCliMcpGrantContext(params: {
     grantedToolsAllow[0] === "message";
   return {
     sessionKey,
+    requesterOrigin: captureRequesterOrigin({ ...params.run, sessionKey }),
+    operatorProfileId: params.run.operatorProfileId,
+    conversationId: params.run.conversationId,
+    chatType: params.run.chatType,
     ...(sessionPermissionPolicy ? { sessionPermissionPolicy } : {}),
     ...(params.run.conversationToolPolicy
       ? { conversationToolPolicy: structuredClone(params.run.conversationToolPolicy) }
@@ -260,6 +266,9 @@ export function buildCliMcpGrantContext(params: {
     taskSuggestionDeliveryMode: params.run.taskSuggestionDeliveryMode,
     requireExplicitMessageTarget: params.requireExplicitMessageTarget ? true : undefined,
     senderIsOwner: params.run.senderIsOwner === true,
+    ...(params.run.gitContributorProfileId
+      ? { gitContributorProfileId: params.run.gitContributorProfileId }
+      : {}),
     nodeExecAllowed: true,
     ...(execSession ? { execSession } : {}),
     ...(execOverrides ? { execOverrides } : {}),

@@ -25,7 +25,7 @@ export { findAvailableOllamaModelName } from "./model-id.js";
 
 const OLLAMA_CONTEXT_ENRICH_LIMIT = 200;
 const OLLAMA_TOOLS_SCAN_CONCURRENCY = 8;
-export const OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
+const OLLAMA_APP_GUIDED_MIN_CONTEXT_TOKENS = 16_384;
 
 export function normalizeOllamaModelName(value: string | undefined): string | undefined {
   const trimmed = value?.trim();

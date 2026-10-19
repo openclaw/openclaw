@@ -911,6 +911,17 @@ describe("voice-call plugin", () => {
     expect(completedCall[0]).toBe(true);
     expect(completedPayload?.result).toEqual({ success: true, transcript: "gateway hello" });
 
+    const consumedRespond = vi.fn();
+    await result?.({
+      params: { operationId: startPayload?.operationId },
+      respond: consumedRespond,
+    });
+    expect(firstRespondCall(consumedRespond)).toEqual([
+      false,
+      undefined,
+      { code: "INVALID_REQUEST", message: "operation not found" },
+    ]);
+
     runtimeStub.manager.continueCall = vi.fn(async () => ({
       success: false,
       error: "turn failed",

@@ -3,6 +3,7 @@ import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { runCommandWithTimeout, type SpawnResult } from "openclaw/plugin-sdk/process-runtime";
 import { describe, expect, it, vi } from "vitest";
+import * as processRunner from "./crabbox-process.js";
 import { openWarmImageStore } from "./crabbox-state.test-support.js";
 import { stopCrabboxLease, type CrabboxCommandRunner } from "./crabbox-worker-command.js";
 import { commandResult } from "./crabbox-worker-provider.test-support.js";
@@ -40,13 +41,13 @@ describe("Crabbox stop lifetime", () => {
         }),
       )
       .mockResolvedValueOnce(commandResult());
+    vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
 
     await expect(
       stopCrabboxLease({
         binary: "crabbox",
         id: LEASE_ID,
         provider: "azure",
-        runCommand,
         warn: vi.fn(),
       }),
     ).resolves.toBeUndefined();
@@ -78,12 +79,12 @@ describe("Crabbox stop lifetime", () => {
           });
         })
         .mockResolvedValue(commandResult());
+      vi.spyOn(processRunner, "runCrabboxProcess").mockImplementation(runCommand);
       try {
         const stopped = stopCrabboxLease({
           binary: "crabbox",
           id: LEASE_ID,
           provider: "azure",
-          runCommand,
           warn: vi.fn(),
         });
         if (elapsedMs < CRABBOX_STOP_TIMEOUT_MS) {

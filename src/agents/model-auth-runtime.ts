@@ -4,6 +4,10 @@ import { getRuntimeConfigSnapshot } from "../config/config.js";
 import { resolveMergedModelProviderConfig } from "../config/model-provider-config.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
+  pluginProviderAuthUnavailable,
+  resolveProviderAuthScope,
+} from "../plugins/provider-auth-scope.js";
+import {
   prepareProviderSyntheticAuthWithPlugin,
   resolveProviderSyntheticAuthWithPlugin,
 } from "../plugins/provider-runtime.js";
@@ -147,6 +151,9 @@ function resolveRuntimeAvailableProviderAuth<T>(
   resolveSyntheticAuth: (provider: string) => T,
 ): boolean | T {
   const provider = normalizeProviderId(params.provider);
+  if (resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin") {
+    return params.allowPluginSyntheticAuth === false ? false : resolveSyntheticAuth(provider);
+  }
   const authOverride = authConfig.resolveProviderAuthOverride(params.cfg, provider);
   if (authOverride === "aws-sdk") {
     return true;
@@ -324,6 +331,9 @@ function resolveProviderSyntheticRuntimeAuth(
   resolveFromConfig: ResolveSyntheticProviderAuth = (config) =>
     resolveProviderSyntheticAuthWithPlugin(syntheticAuthLookup(params, config)),
 ): SyntheticProviderAuthResolution {
+  if (resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin") {
+    return { auth: resolveFromConfig(params.cfg) };
+  }
   const managedLocalAuth = resolveManagedLocalProviderAuth(params, resolveFromConfig);
   if (managedLocalAuth) {
     return { auth: managedLocalAuth };
@@ -370,6 +380,11 @@ function resolveProviderSyntheticRuntimeAuth(
 export async function prepareSyntheticLocalProviderAuth(
   params: SyntheticProviderAuthParams & { signal?: AbortSignal },
 ): Promise<ResolvedProviderAuth | null> {
+  params.signal?.throwIfAborted();
+  // Static credential ownership wins over agent config, including explicit no-auth.
+  if (resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin") {
+    return resolveSyntheticLocalProviderAuth(params);
+  }
   const noAuth = resolveExplicitProviderNoAuth({
     provider: params.provider,
     providerConfig: resolveMergedModelProviderConfig(params.cfg, params.provider),
@@ -409,6 +424,15 @@ function resolveSyntheticLocalProviderAuth(
   params: SyntheticProviderAuthParams,
   resolveFromConfig?: ResolveSyntheticProviderAuth,
 ): ResolvedProviderAuth | null {
+  if (
+    params.allowPluginSyntheticAuth === false &&
+    resolveProviderAuthScope({ ...params, config: params.cfg }) === "plugin"
+  ) {
+    throw pluginProviderAuthUnavailable(
+      params.provider,
+      "prepared route excludes plugin credentials",
+    );
+  }
   // Direct attempts can read pure/captured markers, but cannot prepare external
   // auth or replace an explicit SecretRef with a synthetic credential.
   if (

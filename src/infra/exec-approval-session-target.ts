@@ -1,4 +1,3 @@
-// Resolves approval delivery targets from sessions and turn sources.
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveSessionConversationRef } from "../channels/plugins/session-conversation.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -226,7 +225,7 @@ function warnLegacyTarget(name: string): void {
   });
 }
 
-/** @deprecated Use resolveExecApprovalSessionTargetAsync; final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveExecApprovalSessionTargetAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveExecApprovalSessionTarget(
   params: Parameters<typeof resolveExecApprovalSessionTargetFromDelivery>[0],
 ): ExecApprovalSessionTarget | null {
@@ -247,7 +246,7 @@ export async function resolveExecApprovalSessionTargetAsync(
   );
 }
 
-/** @deprecated Use resolveApprovalRequestSessionTargetAsync; final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveApprovalRequestSessionTargetAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveApprovalRequestSessionTarget(
   params: Parameters<typeof resolveApprovalRequestSessionTargetFromDelivery>[0],
 ): ExecApprovalSessionTarget | null {
@@ -268,7 +267,7 @@ export async function resolveApprovalRequestSessionTargetAsync(
   );
 }
 
-/** @deprecated Use resolveApprovalRequestOriginTargetAsync; final compatibility day: 2026-12-31. */
+/** @deprecated Use resolveApprovalRequestOriginTargetAsync; final compatibility day: 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveApprovalRequestOriginTarget<TTarget>(
   params: ApprovalRequestOriginTargetResolver<TTarget>,
 ): TTarget | null {

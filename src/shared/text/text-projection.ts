@@ -15,6 +15,7 @@ type CheckpointTransform = (text: string, settleBefore: number) => TextCheckpoin
 export type TextFilter = {
   transform: (text: string) => string;
   checkpoint?: CheckpointTransform;
+  boundaryWhitespaceOnly?: true;
 } & ({ activationTokens: readonly string[] } | { create: () => TextProjector });
 
 /** Preserve append provenance while a probe proves that the canonical transform is identity. */
@@ -23,23 +24,29 @@ export function createConditionalTextProjector(
   shouldTransform: (input: TextProjection) => boolean,
   checkpoint?: CheckpointTransform,
 ): TextProjector {
-  const project = checkpoint ? createCheckpointTransform(checkpoint) : transform;
+  const project = checkpoint ? createCheckpointTransform(checkpoint) : undefined;
   let previous = "";
   let identity = true;
   return (input) => {
     if (input.delta === "") {
       return identity ? input : { text: previous, delta: "" };
     }
-    const text = shouldTransform(input) ? project(input.text) : input.text;
+    const shouldProject = shouldTransform(input);
+    const checkpointResult = shouldProject
+      ? project?.(input.text, input.delta, previous)
+      : undefined;
+    const text = checkpointResult?.text ?? (shouldProject ? transform(input.text) : input.text);
     const nextIdentity = text === input.text;
     const delta =
       input.delta === null
         ? null
-        : identity && nextIdentity
-          ? input.delta
-          : text.startsWith(previous)
-            ? text.slice(previous.length)
-            : null;
+        : checkpointResult
+          ? checkpointResult.delta
+          : identity && nextIdentity
+            ? input.delta
+            : text.startsWith(previous)
+              ? text.slice(previous.length)
+              : null;
     previous = text;
     identity = nextIdentity;
     return nextIdentity && delta === input.delta ? input : { text, delta };
@@ -104,24 +111,53 @@ function findTextCheckpoint(
   return { offset: closedFence ? cursor : lastLineStart, context: "" };
 }
 
-function createCheckpointTransform(project: CheckpointTransform): (text: string) => string {
+function createCheckpointTransform(
+  project: CheckpointTransform,
+): (source: string, delta: string | null, previous: string) => TextProjection {
   let sourceLength = 0;
   let pending = "";
   let settled = "";
+  let previousTail = "";
   let context = "";
   let references = "";
   const definitions = new Set<string>();
-  return (source) => {
-    pending += source.slice(sourceLength);
+  let previousVisible: string | undefined;
+  return (source, inputDelta, previousOutput) => {
+    // A validated append delta already names the appended suffix; slicing the cumulative
+    // source would flatten the growing reply on every delta once checkpoints are active.
+    pending +=
+      inputDelta !== null && source.length === sourceLength + inputDelta.length
+        ? inputDelta
+        : source.slice(sourceLength);
     sourceLength = source.length;
     const contextLength = references.length + context.length;
     const text = references + context + pending;
     const boundary = findTextCheckpoint(text, references.length);
     const result = project(text, boundary.offset);
-    const visible = settled + result.text.slice(contextLength);
+    const window = result.text.slice(contextLength);
+    const visible = settled + window;
+    // `settled` only grows, so while the stage kept emitting this transform's output the
+    // delta extends the previous visible text exactly when it extends the previous tail.
+    // A stream that skipped this transform (activation just flipped, or an upstream
+    // passthrough) still compares against the stage's previous output in full.
+    const delta =
+      inputDelta === null
+        ? null
+        : previousOutput === previousVisible
+          ? window.length >= previousTail.length && window.startsWith(previousTail)
+            ? window.slice(previousTail.length)
+            : null
+          : visible === source
+            ? inputDelta
+            : visible.startsWith(previousOutput)
+              ? visible.slice(previousOutput.length)
+              : null;
+    previousVisible = visible;
     // A provisional tool call can retain text before the Markdown checkpoint.
+    let retain = 0;
     if (boundary.offset > contextLength && result.retainStart === boundary.offset) {
       settled += result.text.slice(contextLength, result.retainedOutputStart);
+      retain = Math.max(0, result.retainedOutputStart - contextLength);
       for (const definition of boundary.definitions ?? []) {
         if (definition.end <= boundary.offset && !definitions.has(definition.identifier)) {
           definitions.add(definition.identifier);
@@ -132,7 +168,8 @@ function createCheckpointTransform(project: CheckpointTransform): (text: string)
       pending = text.slice(boundary.offset);
       context = boundary.context;
     }
-    return visible;
+    previousTail = window.slice(retain);
+    return { text: visible, delta };
   };
 }
 
@@ -171,7 +208,13 @@ export function createTextProjection(filters: readonly TextFilter[]) {
   }));
   let source = "";
   let text = "";
+  let trimStart = 0;
+  let trimEnd = 0;
+  let onlyBoundaryWhitespaceChanged = true;
+  let matchesTrimmedSource: boolean | undefined;
   const project = (value: TextProjection) => {
+    onlyBoundaryWhitespaceChanged = true;
+    matchesTrimmedSource = undefined;
     let input = value;
     for (const stage of stages) {
       // Replacements can expose earlier syntax, so every downstream probe starts fresh.
@@ -179,7 +222,11 @@ export function createTextProjection(filters: readonly TextFilter[]) {
         stage.projector =
           "create" in stage.filter ? stage.filter.create() : createActivatedProjector(stage.filter);
       }
-      input = stage.projector(input);
+      const next = stage.projector(input);
+      if (!stage.filter.boundaryWhitespaceOnly && next !== input && next.text !== input.text) {
+        onlyBoundaryWhitespaceChanged = false;
+      }
+      input = next;
     }
     return input;
   };
@@ -190,7 +237,21 @@ export function createTextProjection(filters: readonly TextFilter[]) {
     get text() {
       return text;
     },
+    get matchesTrimmedSource(): boolean {
+      // Padding-only stages preserve the source span. Real transforms still need
+      // an exact comparison when their output happens to have the same length.
+      return (matchesTrimmedSource ??=
+        text.length === Math.max(0, trimEnd - trimStart) &&
+        (onlyBoundaryWhitespaceChanged || source.startsWith(text, trimStart)));
+    },
     append(delta: string, preparedSource?: string): TextProjection {
+      if (trimEnd === 0) {
+        trimStart += delta.length - delta.trimStart().length;
+      }
+      const contentLength = delta.trimEnd().length;
+      if (contentLength > 0) {
+        trimEnd = source.length + contentLength;
+      }
       // A validated cumulative snapshot already owns these bytes; rebuilding its
       // rope would copy the growing reply again when a consumer reads it.
       source = preparedSource ?? source + delta;
@@ -204,6 +265,8 @@ export function createTextProjection(filters: readonly TextFilter[]) {
     },
     replace(value: string): TextProjection {
       source = value;
+      trimStart = value.length - value.trimStart().length;
+      trimEnd = value.trimEnd().length;
       const next = project({ text: source, delta: null });
       next.delta = null;
       text = next.text;
@@ -246,6 +309,7 @@ export function trimTextFilter(
   options?: { preserveCodeIndentation?: boolean },
 ): TextFilter {
   return {
+    boundaryWhitespaceOnly: true,
     transform: (text) =>
       mode === "none"
         ? text

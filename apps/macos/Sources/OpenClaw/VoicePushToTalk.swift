@@ -33,7 +33,7 @@ final class VoicePushToTalkHotkey {
     }
 
     private func reconcile() {
-        if self.enabled, !self.talkSuppressed, voiceWakeSupported {
+        if self.enabled, !self.talkSuppressed {
             self.startMonitoring()
         } else {
             self.stopMonitoring()
@@ -142,7 +142,7 @@ final class VoicePushToTalk {
     }
 
     func begin() {
-        guard self.permissions.supported(), self.state() != nil, self.holdID == nil else { return }
+        guard self.state() != nil, self.holdID == nil else { return }
         let snapshot = self.sessions.snapshot()
         // Retire the old capture, but retain its overlay and wake lease until admission
         // commits or cancels. Dismissing here would animate out the replacement overlay.
@@ -192,9 +192,8 @@ final class VoicePushToTalk {
         }
         self.activeConfig = config
         self.isCapturing = true
-        self.logger.info("ptt begin adopted_prefix_len=\(self.adoptedPrefix.count, privacy: .public)")
         if config.triggerChime != .none {
-            VoiceWakeChimePlayer.play(config.triggerChime, reason: "ptt.trigger")
+            VoiceWakeChimePlayer.play(config.triggerChime)
         }
         let adoptedPrefix = self.adoptedPrefix
         let adoptedAttributed: NSAttributedString? = adoptedPrefix.isEmpty ? nil : VoiceOverlayTextFormatting
@@ -219,7 +218,7 @@ final class VoicePushToTalk {
             }
         } catch {
             self.logger.debug("push-to-talk failed to start: \(error.localizedDescription, privacy: .public)")
-            self.finalize(transcriptOverride: nil, reason: "startFailed", forward: false)
+            self.finalize(transcriptOverride: nil, forward: false)
         }
     }
 
@@ -228,7 +227,7 @@ final class VoicePushToTalk {
         self.holdID = nil
         SimpleTaskSupport.stop(task: &self.startupTask)
         if cancelled || wasStarting {
-            self.finalize(transcriptOverride: nil, reason: "cancelled", forward: false)
+            self.finalize(transcriptOverride: nil, forward: false)
             return
         }
         guard self.isCapturing else { return }
@@ -241,14 +240,14 @@ final class VoicePushToTalk {
 
         // If we captured nothing, dismiss immediately when the user lets go.
         if self.committed.isEmpty, self.volatile.isEmpty, self.adoptedPrefix.isEmpty {
-            self.finalize(transcriptOverride: "", reason: "emptyOnRelease")
+            self.finalize(transcriptOverride: "")
             return
         }
 
         // Otherwise, give Speech a brief window to deliver the final result; then fall back.
         SimpleTaskSupport.schedule(task: &self.timeoutTask, delay: 1.5) { [weak self] in
             guard let self, self.sessionID == sessionID else { return }
-            self.finalize(transcriptOverride: nil, reason: "timeout")
+            self.finalize(transcriptOverride: nil)
         }
     }
 
@@ -256,7 +255,6 @@ final class VoicePushToTalk {
 
     private func handle(transcript: String?, isFinal: Bool, sessionID: UUID) {
         guard !self.finalized, sessionID == self.sessionID else {
-            self.logger.debug("push-to-talk drop transcript for stale session")
             return
         }
         guard let transcript else { return }
@@ -280,7 +278,6 @@ final class VoicePushToTalk {
 
     private func finalize(
         transcriptOverride: String?,
-        reason: String,
         forward: Bool = true)
     {
         if self.finalized { return }
@@ -299,7 +296,6 @@ final class VoicePushToTalk {
         self.adoptedPrefix = ""
 
         // All old audio and mutable session state are retired before UI callbacks or awaited cleanup.
-        self.logger.info("ptt finalize reason=\(reason, privacy: .public) len=\(finalText.count, privacy: .public)")
         if let token {
             if forward {
                 self.sessions.finalize(

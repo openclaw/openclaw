@@ -1,5 +1,13 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, createSignal, merge, onCleanup, onSettled } from "solid-js";
+import {
+  createMemo,
+  createProjection,
+  createSignal,
+  flush,
+  merge,
+  onCleanup,
+  onSettled,
+} from "solid-js";
 import type { UiSettings } from "../../../app/settings.ts";
 import { BoardGrantedCapabilities } from "../../../components/board/board-widget-capabilities.solid.tsx";
 import type { BoardWidgetPageMenu } from "../../../components/board/board-widget-cell-options.ts";
@@ -16,6 +24,7 @@ import {
   type CompactSessionMenuView,
 } from "../../../components/session-menu-compact.ts";
 import { useSessionMenuEntries } from "../../../components/session-menu-view.tsx";
+import { createSessionOwnerMenu } from "../../../components/session-owner-menu.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
 import {
   Menu,
@@ -24,10 +33,12 @@ import {
   type MenuHandle,
 } from "../../../components/solid/menu.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
+import { createParkedProjection } from "../../../lib/reactive/parked-projection.ts";
 import type { SessionCreatedActor } from "../../../lib/session-owner.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../../../lit/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { isChatBubbleMode, setChatBubbleMode } from "../chat-bubble-mode.ts";
-import { chatQuickActionEntry, type HeaderMenuSessionAction } from "./chat-quick-action.tsx";
+import { useChatQuickActionEntries, type HeaderMenuSessionAction } from "./chat-quick-action.tsx";
 import {
   canManageChatSessionSharing,
   useChatSessionSharingMenu,
@@ -50,6 +61,7 @@ type HeaderMenuProps = {
   onboarding: boolean;
   preferencesBrowserOnly: boolean;
   compact: boolean;
+  prewarm?: boolean;
   bubbleModeEnabled: boolean;
   mainKey: string;
   copyMarkdownAllowed: boolean;
@@ -96,24 +108,42 @@ const openMenus = new WeakMap<HTMLElement, () => boolean>();
 let nextMenuId = 0;
 
 function ChatHeaderSessionMenuContent(
-  props: HeaderMenuProps,
+  liveProps: HeaderMenuProps,
   host: SolidBridgeElement<HeaderMenuProps, HeaderMenuMethods>,
 ) {
   const menuId = `chat-header-session-${++nextMenuId}`;
   const [compactView, setCompactView] = createSignal<CompactMenuView>("root");
+  const [open, setOpen] = createSignal(false);
+  const preparation = () => liveProps.prewarm;
+  const presentation = createParkedProjection(() => ({ ...liveProps }), open, preparation);
+  const props = createProjection(presentation, {}, { key: "id" });
   let menu: MenuHandle | undefined;
+  let stopShortcut: (() => void) | undefined;
+  const quickActions = useChatQuickActionEntries(() => props.sessionActions, false, "quick:");
   const state = merge(props, { selectionCount: 1, navigationAllowed: true, disabled: false });
   const readState = () => state;
   const close = () => {
     menu?.close();
   };
   const actions = new SessionMenuActions(
-    host,
+    {
+      get updateComplete() {
+        return host.updateComplete;
+      },
+      focusCurrentView() {
+        if (compactView() === "icon") {
+          view.appearance.focusFirst();
+        } else {
+          menu?.focusFirst();
+        }
+      },
+    },
     readState,
     (action) => props.onAction(action),
     close,
+    createSessionOwnerMenu(open, preparation),
   );
-  const view = useSessionMenuEntries(host, actions, readState, {
+  const view = useSessionMenuEntries(actions, readState, {
     openInExtra: () => [
       {
         id: "continue-in-terminal",
@@ -150,7 +180,7 @@ function ChatHeaderSessionMenuContent(
   };
   onCleanup(() => {
     openMenus.delete(host);
-    menu?.overlay.surface.removeEventListener("keydown", shortcut, true);
+    stopShortcut?.();
   });
   const content = (id: string, value: JSX.Element): MenuEntry => ({
     kind: "content",
@@ -306,36 +336,39 @@ function ChatHeaderSessionMenuContent(
       ...view.primary(),
       primaryDivider,
       ...view.organization(),
-      ...props.sessionActions.map((action) => chatQuickActionEntry(action, `quick:${action.id}`)),
+      ...quickActions(),
       organizationDivider,
       ...view.advanced(),
     ];
   }
   const backDivider = separator("back-divider");
-  const items = createMemo((): MenuEntry[] => {
-    const current = compactView();
-    if (!props.compact || current === "root") {
-      return root();
-    }
-    if (current !== "sharing" && current !== "view") {
-      return view.compact(current);
-    }
-    return [
-      {
-        id: "compact:back",
-        label: t("common.back"),
-        class: "session-menu__item session-menu__back",
-        icon: (
-          <span class="session-menu__icon" aria-hidden="true">
-            <Icon name="arrowLeft" />
-          </span>
-        ),
-        closeOnSelect: false,
-      },
-      backDivider,
-      ...(current === "sharing" && props.sharing ? sharing.items() : viewOptions()),
-    ];
-  });
+  const items = createMemo(
+    (): MenuEntry[] => {
+      const current = compactView();
+      if (!props.compact || current === "root") {
+        return root();
+      }
+      if (current !== "sharing" && current !== "view") {
+        return view.compact(current);
+      }
+      return [
+        {
+          id: "compact:back",
+          label: t("common.back"),
+          class: "session-menu__item session-menu__back",
+          icon: (
+            <span class="session-menu__icon" aria-hidden="true">
+              <Icon name="arrowLeft" />
+            </span>
+          ),
+          closeOnSelect: false,
+        },
+        backDivider,
+        ...(current === "sharing" && props.sharing ? sharing.items() : viewOptions()),
+      ];
+    },
+    { lazy: true },
+  );
   function select(item: MenuItem, event: CustomEvent<MenuItem>) {
     const value = item.id;
     if (value.startsWith("board-widget:")) {
@@ -427,12 +460,19 @@ function ChatHeaderSessionMenuContent(
       props.onAction({ kind: value });
     }
   }
-  const label = () => t("chat.sidebar.sessionMenu", { session: props.session.label });
+  const label = () => t("chat.sidebar.sessionMenu", { session: liveProps.session.label });
   return (
     <Menu
       id={menuId}
       lazy
-      class={`session-menu chat-header-session-menu${props.compact ? " session-menu--compact chat-header-session-menu--compact" : ""}${props.compact && compactView() === "sharing" ? " chat-header-session-menu--compact-sharing" : ""}`}
+      prewarm={liveProps.prewarm && !liveProps.compact}
+      class={[
+        "session-menu chat-header-session-menu",
+        {
+          "session-menu--compact chat-header-session-menu--compact": props.compact,
+          "chat-header-session-menu--compact-sharing": props.compact && compactView() === "sharing",
+        },
+      ]}
       panelClass="chat-header-session-menu__panel"
       placement="bottom-end"
       label={label()}
@@ -442,11 +482,17 @@ function ChatHeaderSessionMenuContent(
       onSelect={select}
       ref={(handle) => {
         menu = handle;
-        handle.overlay.surface.addEventListener("keydown", shortcut, true);
+        stopShortcut = listen(handle.overlay.surface, "keydown", shortcut, true);
       }}
       onEscape={(event) => actions.handleKeydown(event, view.appearance)}
-      onOpenChange={(open) => {
-        if (open) {
+      onBeforeShow={() => {
+        setOpen(true);
+        // Native opening reads the prepared items for validation and initial focus synchronously.
+        flush();
+      }}
+      onOpenChange={(isOpen) => {
+        setOpen(isOpen);
+        if (isOpen) {
           actions.loadOwners();
           props.onOpen();
         } else {
@@ -469,6 +515,7 @@ defineSolidBridge<HeaderMenuProps, HeaderMenuMethods>(
       onboarding: { default: false, attribute: false },
       preferencesBrowserOnly: { default: false, attribute: false },
       compact: { default: false, attribute: false },
+      prewarm: { default: false, attribute: false },
       bubbleModeEnabled: { default: false, attribute: false },
       mainKey: { default: "main", attribute: false },
       copyMarkdownAllowed: { default: false, attribute: false },

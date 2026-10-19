@@ -7,7 +7,7 @@ import {
   createChannelDeliveryAccumulator,
   type LivePreviewDeliveryResult,
 } from "openclaw/plugin-sdk/channel-outbound";
-import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import type { ReplyToMode, OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import type { ReplyPayload } from "openclaw/plugin-sdk/reply-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
@@ -84,7 +84,7 @@ export async function deliverMatrixReplies(params: {
   roomId: string;
   client: MatrixClient;
   runtime: RuntimeEnv;
-  replyToMode: "off" | "first" | "all" | "batched";
+  replyToMode: ReplyToMode;
   hasRepliedRef?: { value: boolean };
   threadId?: string;
   replyToId?: string;

@@ -170,7 +170,7 @@ async function tryTerminateExecutionViaCdp(opts: {
       id?: string;
       webSocketDebuggerUrl?: string;
     }>
-  >(listUrl, 2000, undefined, cdpControlPolicy).catch(() => null);
+  >(listUrl, 2000, undefined, cdpControlPolicy);
   if (!pages || pages.length === 0 || !opts.isCurrent()) {
     return;
   }
@@ -195,27 +195,23 @@ async function tryTerminateExecutionViaCdp(opts: {
     wsUrl,
     async (send) => {
       let sessionId: string | undefined;
-      try {
-        if (needsAttach) {
-          const attached = (await send("Target.attachToTarget", {
-            targetId: opts.targetId,
-            flatten: true,
-          })) as { sessionId?: unknown };
-          sessionId = normalizeOptionalString(attached?.sessionId);
-        }
-        if (opts.isCurrent()) {
-          await send("Runtime.terminateExecution", undefined, sessionId);
-        }
-        if (sessionId) {
-          // Best-effort cleanup; not required for termination to take effect.
-          void send("Target.detachFromTarget", { sessionId }).catch(() => {});
-        }
-      } catch {
-        // Best-effort; ignore
+      if (needsAttach) {
+        const attached = (await send("Target.attachToTarget", {
+          targetId: opts.targetId,
+          flatten: true,
+        })) as { sessionId?: unknown };
+        sessionId = normalizeOptionalString(attached?.sessionId);
+      }
+      if (opts.isCurrent()) {
+        await send("Runtime.terminateExecution", undefined, sessionId);
+      }
+      if (sessionId) {
+        // Best-effort cleanup; not required for termination to take effect.
+        void send("Target.detachFromTarget", { sessionId }).catch(() => {});
       }
     },
     { handshakeTimeoutMs: 2000, commandTimeoutMs: 1500, lookup: wsPin?.lookup },
-  ).catch(() => {});
+  );
 }
 
 // Closing Playwright's shared Connection would prevent later reconnects. Retire

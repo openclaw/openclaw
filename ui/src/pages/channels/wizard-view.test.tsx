@@ -1,202 +1,123 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
-import { i18n } from "../../i18n/index.ts";
-import { renderChannelView, disposeChannelViews } from "./view.test-support.ts";
-import { ChannelWizard } from "./wizard-view.tsx";
+import { describe, expect, it } from "vitest";
+import {
+  renderWizard,
+  setupWizardTests,
+  wizardInput,
+  wizardStep,
+} from "./wizard-view.test-support.ts";
 
-type WizardProps = Parameters<typeof ChannelWizard>[0];
-
-function wizardProps(
-  wizard: WizardProps["wizard"],
-  overrides: Partial<WizardProps> = {},
-): WizardProps {
-  return {
-    wizard,
-    channelLabel: (channelId) => channelId,
-    multiselectValues: [],
-    onToggleMultiselect: vi.fn(),
-    textValue: "",
-    secretVisible: false,
-    onTextInput: vi.fn(),
-    onToggleSecretVisibility: vi.fn(),
-    onAnswer: vi.fn(),
-    onClose: vi.fn(),
-    whatsappQrDataUrl: null,
-    whatsappMessage: null,
-    whatsappConnected: null,
-    whatsappBusy: false,
-    onWhatsAppStart: vi.fn(),
-    onWhatsAppWait: vi.fn(),
-    ...overrides,
-  };
-}
+setupWizardTests();
 
 describe("ChannelWizard", () => {
-  beforeEach(async () => {
-    await i18n.setLocale("en");
-  });
-
-  afterEach(async () => {
-    await i18n.setLocale("en");
-    disposeChannelViews();
-    document.body.replaceChildren();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
   it.each([
     { sensitive: false, expectedType: "text" },
     { sensitive: true, expectedType: "password" },
   ])(
     "labels a $expectedType input and associates validation errors until recovery",
     ({ sensitive, expectedType }) => {
-      const container = document.createElement("div");
-      document.body.append(container);
-      const renderStep = (validationError: string | null) =>
-        renderChannelView(
-          ChannelWizard,
-          wizardProps({
-            phase: "step",
-            channel: "matrix",
-            step: {
-              id: "account-id",
-              type: "text",
-              message: "New Matrix account id",
-              sensitive,
-            },
-            busy: false,
-            validationError,
-          }),
-          container,
-        );
-      renderStep(null);
-
-      const input = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
-      const label = container.querySelector<HTMLLabelElement>(
-        'label[for="channel-wizard-text-input"]',
+      const wizard = wizardStep(
+        {
+          id: "account-id",
+          type: "text",
+          message: "New Matrix account id",
+          sensitive,
+        },
+        { channel: "matrix", busy: false },
       );
+      const { container, update } = renderWizard(wizard);
+      const input = wizardInput(container);
+      const label = container.querySelector('label[for="channel-wizard-text-input"]');
       expect(label?.textContent).toBe("New Matrix account id");
       expect(input?.type).toBe(expectedType);
       expect(input?.labels).toContain(label);
-      if (sensitive) {
-        expect(container.querySelector(".oc-sensitive-toggle")).not.toBeNull();
-      } else {
-        expect(container.querySelector(".oc-sensitive-toggle")).toBeNull();
-      }
-      renderStep("That account id is not valid.");
+      expect(container.querySelector(".oc-sensitive-toggle") !== null).toBe(sensitive);
+      update({ wizard: { ...wizard, validationError: "That account id is not valid." } });
       const errorId = input?.getAttribute("aria-describedby");
       expect(input?.getAttribute("aria-invalid")).toBe("true");
       expect(document.getElementById(errorId ?? "")?.textContent).toContain(
         "That account id is not valid.",
       );
-      renderStep(null);
-      expect(input?.hasAttribute("aria-invalid")).toBe(false);
-      expect(input?.hasAttribute("aria-describedby")).toBe(false);
+      update({ wizard });
+      expect([
+        input?.hasAttribute("aria-invalid"),
+        input?.hasAttribute("aria-describedby"),
+      ]).toEqual([false, false]);
     },
   );
 
   it("reveals only the replacement value entered in a sensitive step", () => {
-    const container = document.createElement("div");
-    const onTextInput = vi.fn();
-    const onToggleSecretVisibility = vi.fn();
-    document.body.append(container);
-    const renderSensitiveStep = (secretVisible: boolean, textValue: string) =>
-      renderChannelView(
-        ChannelWizard,
-        wizardProps(
-          {
-            phase: "step",
-            channel: "twitch",
-            step: {
-              id: "client-secret",
-              type: "text",
-              message: "Twitch Client Secret",
-              sensitive: true,
-            },
-            busy: false,
-            validationError: null,
-          },
-          { textValue, secretVisible, onTextInput, onToggleSecretVisibility },
-        ),
-        container,
-      );
-
-    renderSensitiveStep(false, "");
-    const hiddenInput = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
-    const toggle = container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
-    expect(hiddenInput?.type).toBe("password");
-    expect(hiddenInput?.value).toBe("");
+    const view = renderWizard(
+      wizardStep(
+        {
+          id: "client-secret",
+          type: "text",
+          message: "Twitch Client Secret",
+          sensitive: true,
+        },
+        { channel: "twitch", busy: false },
+      ),
+    );
+    const input = wizardInput(view.container);
+    const toggle = view.container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
+    expect(input).toMatchObject({ type: "password", value: "" });
     expect(toggle?.getAttribute("aria-label")).toBe("Reveal value");
-    expect(toggle?.dataset.sensitiveIcon).toBe("eye");
-    if (hiddenInput) {
-      hiddenInput.value = "new-secret";
-      hiddenInput.dispatchEvent(new Event("input", { bubbles: true }));
+    expect(toggle?.dataset).toMatchObject({ sensitiveIcon: "eye" });
+    if (input) {
+      input.value = "new-secret";
+      input.dispatchEvent(new Event("input", { bubbles: true }));
     }
     toggle?.click();
-    expect(onTextInput).toHaveBeenCalledWith("new-secret");
-    expect(onToggleSecretVisibility).toHaveBeenCalledOnce();
+    expect(view.onTextInput).toHaveBeenCalledWith("new-secret");
+    expect(view.onToggleSecretVisibility).toHaveBeenCalledOnce();
 
-    renderSensitiveStep(true, "new-secret");
-    const revealedInput = container.querySelector<HTMLInputElement>("#channel-wizard-text-input");
-    const hideToggle = container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
-    expect(revealedInput?.type).toBe("text");
-    expect(revealedInput?.value).toBe("new-secret");
-    expect(hideToggle?.getAttribute("aria-label")).toBe("Hide value");
-    expect(hideToggle?.getAttribute("aria-pressed")).toBe("true");
-    expect(hideToggle?.dataset.sensitiveIcon).toBe("eye-off");
+    view.update({ secretVisible: true, textValue: "new-secret" });
+    expect(wizardInput(view.container)).toMatchObject({ type: "text", value: "new-secret" });
+    const hidden = view.container.querySelector<HTMLButtonElement>(".oc-sensitive-toggle");
+    expect([hidden?.getAttribute("aria-label"), hidden?.getAttribute("aria-pressed")]).toEqual([
+      "Hide value",
+      "true",
+    ]);
+    expect(hidden).toMatchObject({
+      dataset: { sensitiveIcon: "eye-off" },
+    });
   });
 
   it("renders informational setup output as unpadded plain text", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    renderChannelView(
-      ChannelWizard,
-      wizardProps(
+    const message = "iMessage — Local iMessage/SMS through the imsg bridge.";
+    const { container } = renderWizard(
+      wizardStep(
         {
-          phase: "step",
-          channel: "imessage",
-          step: {
-            id: "selected-channels",
-            type: "note",
-            title: "Selected channels",
-            message: "iMessage — Local iMessage/SMS through the imsg bridge.",
-          },
-          busy: false,
-          validationError: null,
+          id: "selected-channels",
+          type: "note",
+          title: "Selected channels",
+          message,
         },
-        { channelLabel: () => "iMessage" },
+        { channel: "imessage", busy: false },
       ),
-      container,
+      { channelLabel: () => "iMessage" },
     );
-
-    const output = container.querySelector(".channels-wizard__output");
-    expect(output?.textContent).toBe("iMessage — Local iMessage/SMS through the imsg bridge.");
+    expect(container.querySelector(".channels-wizard__output")?.textContent).toBe(message);
     expect(container.querySelector(".channels-wizard__note")).toBeNull();
     expect(container.querySelector(".channels-wizard__links button")).toBeNull();
   });
 
   it("links channel docs from the setup subtitle without static helper links", () => {
-    const container = document.createElement("div");
-    document.body.append(container);
-    renderChannelView(
-      ChannelWizard,
-      wizardProps(
-        {
-          phase: "error",
-          channel: "slack",
-          message: "Setup failed",
-        },
-        { channelLabel: () => "Slack" },
-      ),
-      container,
+    const { container } = renderWizard(
+      {
+        phase: "error",
+        channel: "slack",
+        message: "Setup failed",
+      },
+      { channelLabel: () => "Slack" },
     );
-
     const subtitle = container.querySelector(".channels-wizard__subtitle");
-    const docs = subtitle?.querySelector<HTMLAnchorElement>(".channels-wizard__link");
     expect(subtitle?.textContent?.replace(/\s+/gu, " ").trim()).toBe(
       "Guided channel setup View docs",
     );
-    expect(docs?.href).toBe("https://docs.openclaw.ai/channels/slack");
+    expect(subtitle?.querySelector<HTMLAnchorElement>(".channels-wizard__link")?.href).toBe(
+      "https://docs.openclaw.ai/channels/slack",
+    );
     expect(container.querySelector(".channels-wizard__links")).toBeNull();
   });
 });

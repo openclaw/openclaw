@@ -1,5 +1,6 @@
 import { createComponent } from "solid-js";
 import { afterEach, describe, expect, it } from "vitest";
+import { extractQueryTerms } from "../../../src/shared/usage-query.js";
 import { registerUsageEnglish } from "../i18n/locales/en-usage.ts";
 import { registerEnglishCatalog } from "../lib/reactive/i18n.ts";
 import { RunsSection } from "../pages/cron/view-runs.tsx";
@@ -94,6 +95,7 @@ describe.skipIf(!hasBrowserLayout)("menu selection check alignment", () => {
                 label: "Provider",
                 options: ["Alpha", "Beta"],
                 queryDraft: "provider:Alpha",
+                queryTerms: extractQueryTerms("provider:Alpha"),
                 onQueryDraftChange: () => {},
               }),
             );

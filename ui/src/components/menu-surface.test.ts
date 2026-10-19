@@ -36,6 +36,31 @@ describe("openclaw-menu-surface", () => {
 });
 
 describe("native overlay occlusion for menus", () => {
+  it("follows the live positioned children of a zero-sized menu host", async () => {
+    bridge.available = true;
+    const changes = vi.fn();
+    unsubscribe = subscribeNativeOverlayOcclusion(changes, () => new DOMRect(0, 0, 100, 100));
+    const surface = document.createElement("openclaw-menu-surface");
+    surface.showPopover = vi.fn();
+    surface.getBoundingClientRect = () => new DOMRect(0, 0, 0, 0);
+    const menu = document.createElement("section");
+    menu.getBoundingClientRect = () => new DOMRect(20, 20, 50, 50);
+    surface.append(menu);
+    document.body.append(surface);
+    await new Promise(requestAnimationFrame);
+    expect(changes.mock.calls).toEqual([[false], [true]]);
+
+    const replacement = document.createElement("section");
+    replacement.getBoundingClientRect = () => new DOMRect(200, 20, 50, 50);
+    surface.replaceChildren(replacement);
+    await new Promise(requestAnimationFrame);
+    expect(changes.mock.calls).toEqual([[false], [true], [false]]);
+
+    replacement.getBoundingClientRect = () => new DOMRect(20, 20, 50, 50);
+    await new Promise(requestAnimationFrame);
+    expect(changes.mock.calls).toEqual([[false], [true], [false], [true]]);
+  });
+
   it("keeps overlapping surfaces occluded until their close or removal, including shadow roots", async () => {
     bridge.available = true;
     const changes = vi.fn();
@@ -49,10 +74,10 @@ describe("native overlay occlusion for menus", () => {
     second.getBoundingClientRect = () => new DOMRect(20, 20, 100, 100);
     root.append(first, second);
     first.showPopover = vi.fn();
-    promoteToPopoverTopLayer(first);
-    promoteToPopoverTopLayer(first);
+    promoteToPopoverTopLayer(first, () => [first]);
+    promoteToPopoverTopLayer(first, () => [first]);
     // Native webviews also cover top-layer menus.
-    promoteToPopoverTopLayer(second);
+    promoteToPopoverTopLayer(second, () => [second]);
     await new Promise(requestAnimationFrame);
     expect(changes.mock.calls).toEqual([[false], [true]]);
 
@@ -64,7 +89,7 @@ describe("native overlay occlusion for menus", () => {
     await Promise.resolve();
     expect(changes.mock.calls).toEqual([[false], [true], [false]]);
 
-    promoteToPopoverTopLayer(first);
+    promoteToPopoverTopLayer(first, () => [first]);
     await new Promise(requestAnimationFrame);
     host.remove();
     await Promise.resolve();

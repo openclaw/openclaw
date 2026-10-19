@@ -67,6 +67,9 @@
       "source": "official",
       "kind": "plugin",
       "openclaw": {
+        "build": {
+          "bundledDist": true
+        },
         "plugin": {
           "id": "cloudflare",
           "label": "Cloudflare"
@@ -794,6 +797,24 @@
           "npmSpec": "@openclaw/slack-huddles",
           "defaultChoice": "npm",
           "minHostVersion": ">=2026.9.8"
+        }
+      }
+    },
+    {
+      "name": "@openclaw/subq",
+      "description": "OpenClaw SubQ Snap decision provider",
+      "source": "official",
+      "kind": "plugin",
+      "openclaw": {
+        "plugin": {
+          "id": "subq",
+          "label": "SubQ"
+        },
+        "install": {
+          "clawhubSpec": "clawhub:@openclaw/subq",
+          "npmSpec": "@openclaw/subq",
+          "defaultChoice": "npm",
+          "minHostVersion": ">=2026.10.3"
         }
       }
     },

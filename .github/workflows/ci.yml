@@ -23,7 +23,7 @@ on:
         type: choice
         options: [default, main]
       test_runtime_policy:
-        description: Opt-in Linux test runtime trial (bun-all or dual-all); empty preserves the current event policy.
+        description: Linux test runtime override (node, bun-all, or dual-all); empty uses Bun for daily CI and both runtimes for full validation.
         required: false
         default: ""
         type: string
@@ -112,6 +112,9 @@ env:
   IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
   IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"
   NODE_VERSION: "24.21.0"
+  # Type check with tsrs, except full release validation, which re-checks every
+  # type graph with tsgo (scripts/lib/local-check-runtime.mts).
+  OPENCLAW_TYPECHECKER: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && 'tsgo' || '' }}
 
 jobs:
   preflight:
@@ -140,6 +143,7 @@ jobs:
       hybrid_hosted_total_rows: ${{ steps.manifest.outputs.hybrid_hosted_total_rows }}
       diff_base_revision: &diff_base ${{ steps.diff_base.outputs.sha }}
       diff_head_revision: ${{ steps.diff_base.outputs.head_sha }}
+      checkout_base_revision: ${{ steps.checkout_base.outputs.sha }}
       docs_only: ${{ steps.manifest.outputs.docs_only }}
       docs_changed: ${{ steps.manifest.outputs.docs_changed }}
       run_docs_content: ${{ steps.manifest.outputs.run_docs_content }}
@@ -1222,6 +1226,35 @@ jobs:
           echo "sha=$base_sha" >> "$GITHUB_OUTPUT"
           echo "head_sha=$head_sha" >> "$GITHUB_OUTPUT"
 
+      - name: Resolve checkout comparison base
+        id: checkout_base
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BASE_SHA: *diff_base
+          DIFF_HEAD_SHA: ${{ steps.diff_base.outputs.head_sha }}
+          CHECKOUT_SHA: *target_sha
+        run: |
+          set -euo pipefail
+          for sha in "$BASE_SHA" "$DIFF_HEAD_SHA" "$CHECKOUT_SHA"; do
+            if [[ ! "$sha" =~ ^[0-9a-f]{40}$ ]]; then
+              echo "Checkout comparison requires immutable base and head commits." >&2
+              exit 1
+            fi
+          done
+          comparison_base="$BASE_SHA"
+          # Release-gate planning uses the merge tree, but lint executes the
+          # candidate. Its grandfathered source belongs to the actual fork.
+          if [[ "$CHECKOUT_SHA" != "$DIFF_HEAD_SHA" ]]; then
+            comparison_base="$(gh api --method GET \
+              "repos/${GITHUB_REPOSITORY}/compare/${BASE_SHA}...${CHECKOUT_SHA}" \
+              --jq '.merge_base_commit.sha')"
+          fi
+          if [[ ! "$comparison_base" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "Could not resolve the checkout comparison ancestor." >&2
+            exit 1
+          fi
+          echo "sha=$comparison_base" >> "$GITHUB_OUTPUT"
+
       - name: Validate historical release target
         id: historical_target
         if: inputs.historical_target_tag != ''
@@ -1739,12 +1772,13 @@ jobs:
         run: |
           set -euo pipefail
           source .ci-harness/scripts/ci-collect-checks.sh
-          run_check max-lines pnpm check:max-lines-ratchet --base "$BASE_SHA"
-          run_check assertion-safety pnpm check:assertion-safety --base "$BASE_SHA"
-          run_check database-worker pnpm check:database-worker-ratchet --base "$BASE_SHA"
-          run_check database-dialect pnpm check:database-dialect-ratchet --base "$BASE_SHA"
-          run_check timeout-race pnpm check:test-timeout-race-ratchet --base "$BASE_SHA"
-          run_check mock-exports pnpm check:test-mock-exports --base "$BASE_SHA"
+          prepare_ratchet_base_args "$BASE_SHA"
+          run_check max-lines pnpm check:max-lines-ratchet "${ratchet_base_args[@]}"
+          run_check assertion-safety pnpm check:assertion-safety "${ratchet_base_args[@]}"
+          run_check database-worker pnpm check:database-worker-ratchet "${ratchet_base_args[@]}"
+          run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
+          run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
+          run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
           run_check protocol-additions node --import ./scripts/tsx.mjs scripts/check-protocol-since.mts
           finish_checks
 
@@ -2316,7 +2350,7 @@ jobs:
 
       - name: Setup pinned Bun test runtime
         id: ui_bun
-        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && contains(fromJSON('["bun-compatible","dual","bun-all","dual-all"]'), needs.preflight.outputs.ui_test_runtime_policy) }}
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && contains(fromJSON('["bun-all","dual-all"]'), needs.preflight.outputs.ui_test_runtime_policy) }}
         uses: ./.ci-harness/.github/actions/setup-test-bun
 
       - name: Lint Control UI window.open usage
@@ -2833,15 +2867,16 @@ jobs:
             fi
           fi
           source .ci-harness/scripts/ci-collect-checks.sh
-          run_check max-lines pnpm check:max-lines-ratchet --base "$base_ref"
+          prepare_ratchet_base_args "$base_ref"
+          run_check max-lines pnpm check:max-lines-ratchet "${ratchet_base_args[@]}"
           if [[ -n "${RATCHET_PR_HEAD_SHA:-}" ]]; then
-            run_check line-cap pnpm check:line-cap-ratchet --base "$base_ref"
+            run_check line-cap pnpm check:line-cap-ratchet "${ratchet_base_args[@]}"
           fi
-          run_check assertion-safety pnpm check:assertion-safety --base "$base_ref"
-          run_check database-worker pnpm check:database-worker-ratchet --base "$base_ref"
-          run_check database-dialect pnpm check:database-dialect-ratchet --base "$base_ref"
-          run_check timeout-race pnpm check:test-timeout-race-ratchet --base "$base_ref"
-          run_check mock-exports pnpm check:test-mock-exports --base "$base_ref"
+          run_check assertion-safety pnpm check:assertion-safety "${ratchet_base_args[@]}"
+          run_check database-worker pnpm check:database-worker-ratchet "${ratchet_base_args[@]}"
+          run_check database-dialect pnpm check:database-dialect-ratchet "${ratchet_base_args[@]}"
+          run_check timeout-race pnpm check:test-timeout-race-ratchet "${ratchet_base_args[@]}"
+          run_check mock-exports pnpm check:test-mock-exports "${ratchet_base_args[@]}"
           run_check config-docs pnpm config:docs:check
           run_check plugin-inventory pnpm plugins:inventory:check
           finish_checks
@@ -3468,7 +3503,7 @@ jobs:
         if: matrix.requires_sandbox_image == true && runner.os == 'Linux'
         shell: bash
         run: |
-          if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+          if ! docker image inspect openclaw-sandbox:trixie-slim >/dev/null 2>&1; then
             scripts/sandbox-setup.sh
           fi
 
@@ -3610,7 +3645,6 @@ jobs:
         id: plan
         env:
           OPENCLAW_CI_CHECK_PLAN_INPUT_JSON: ${{ needs.preflight.outputs.check_plan_input_json }}
-          OPENCLAW_CI_TYPE_PLAN_SERIAL: ${{ github.event_name == 'pull_request' && vars.OPENCLAW_CI_RUNNER_BACKEND == 'hybrid' && github.event.pull_request.head.repo.full_name == github.repository && github.run_attempt == 1 && needs.preflight.outputs.frozen_target != 'true' && '1' || vars.OPENCLAW_CI_TYPE_PLAN_SERIAL }}
         run: node scripts/ci-check-plan.mts
 
       - name: Check narrow PR global guards
@@ -3631,7 +3665,7 @@ jobs:
     runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && ((needs.preflight.outputs.hybrid_hosted_checks == 'true' && matrix.task == 'dependencies') || (needs.preflight.outputs.hybrid_hosted_main_checks == 'true' && (matrix.task == 'lint' || matrix.task == 'test-types')))) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.repository == 'openclaw/openclaw' && (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && !inputs.release_gate && startsWith(inputs.dispatch_id, 'full-release-validation-') && needs.preflight.outputs.frozen_target == 'true' && matrix.task == 'lint') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || github.run_attempt > 1 || (matrix.task != 'lint' && matrix.task != 'test-types' && matrix.task != 'dependencies'))) && 'ubuntu-24.04' || (((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && inputs.release_gate) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')))) || ((contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.run_attempt == 1 && ((needs.preflight.outputs.hybrid_hosted_checks == 'true' && matrix.task == 'dependencies') || (needs.preflight.outputs.hybrid_hosted_main_checks == 'true' && (matrix.task == 'lint' || matrix.task == 'test-types')))) && 'ubuntu-24.04' || (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' && 'ubuntu-24.04' || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && github.repository == 'openclaw/openclaw' && (github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && !inputs.release_gate && startsWith(inputs.dispatch_id, 'full-release-validation-') && needs.preflight.outputs.frozen_target == 'true' && matrix.task == 'lint') && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || (contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND)) && ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || github.run_attempt > 1 || (matrix.task != 'lint' && matrix.task != 'test-types' && matrix.task != 'dependencies'))) && 'ubuntu-24.04' || (((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) && inputs.release_gate) || (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name != github.repository && github.run_attempt > 1)) && 'ubuntu-24.04' || (github.repository == 'openclaw/openclaw' && (matrix.runner || 'blacksmith-4vcpu-ubuntu-2404') || 'ubuntu-24.04')) }}
     timeout-minutes: 20
     env:
-      CHECKOUT_BASE_SHA: ${{ (matrix.task == 'lint' || (matrix.task == 'guards' && (github.event_name == 'pull_request' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true'))) || (matrix.task == 'npm-lock' && (github.event_name != 'workflow_dispatch' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true')))) && needs.preflight.outputs.diff_base_revision || '' }}
+      CHECKOUT_BASE_SHA: ${{ matrix.task == 'lint' && needs.preflight.outputs.checkout_base_revision || ((matrix.task == 'guards' && (github.event_name == 'pull_request' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true'))) || (matrix.task == 'npm-lock' && (github.event_name != 'workflow_dispatch' || (needs.preflight.outputs.node_runner_backend == 'runson' || needs.preflight.outputs.ci_qualification == 'true')))) && needs.preflight.outputs.diff_base_revision || '' }}
     strategy:
       fail-fast: false
       max-parallel: 12
@@ -4476,11 +4510,16 @@ jobs:
   postgres-conformance:
     permissions:
       contents: read
-    name: PostgreSQL conformance
+    name: PostgreSQL conformance (${{ matrix.shard }})
     needs: [preflight]
     if: needs.preflight.outputs.run_postgres_conformance == 'true'
     runs-on: *ubuntu_linux_runner
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard: [1/3, 2/3, 3/3]
     steps:
       - *linux_node_checkout_step
       - *linux_node_setup_step
@@ -4495,7 +4534,7 @@ jobs:
           docker exec openclaw-postgres psql -U postgres -v ON_ERROR_STOP=1 -c \
             'CREATE EXTENSION unaccent WITH SCHEMA public; CREATE EXTENSION pg_trgm WITH SCHEMA public; CREATE EXTENSION vector WITH SCHEMA public;'
       - name: Run PostgreSQL conformance
-        run: node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres
+        run: node scripts/test-database-conformance.mjs --engine postgres --connection postgresql://postgres@127.0.0.1:5432/postgres --shard ${{ matrix.shard }}
       - name: Stop PostgreSQL service
         if: always()
         run: docker rm --force openclaw-postgres
@@ -4515,6 +4554,14 @@ jobs:
       - name: Check formatting
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
         run: pnpm format:check
+
+      - name: Check AGENTS.md bootstrap size
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
+        run: |
+          # Historical release targets predate this guard.
+          if node -e 'process.exit(require("./package.json").scripts?.["check:agents-md-size"] ? 0 : 1)'; then
+            pnpm check:agents-md-size
+          fi
 
       - name: Check config docs baseline
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
@@ -4724,7 +4771,12 @@ jobs:
     name: ${{ matrix.check_name || 'macos-node' }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_macos_node == 'true' }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'macos-15' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || github.run_attempt > 1) && 'macos-15' || (github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-15' || 'macos-15')))) || (((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'macos-15' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || github.run_attempt > 1) && 'macos-15' || (github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-15' || 'macos-15')) }}
+    runs-on: &hosted_xcode_runner >-
+      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
+      'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
+      startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
+      '')), toJSON('xcode-27'))) || ('xcode-27') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -4769,12 +4821,7 @@ jobs:
       max-parallel: 2
       matrix:
         phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
-    runs-on: &hosted_xcode_runner >-
-      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
-      'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
-      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
-      startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
-      '')), toJSON('xcode-27'))) || ('xcode-27') }}
+    runs-on: *hosted_xcode_runner
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && 75 || 30 }}
     env:
       HISTORICAL_TARGET: *historical_target
@@ -5797,7 +5844,7 @@ jobs:
       - *platform_checkout_step
 
       - name: Setup Ruby
-        uses: ruby/setup-ruby@14594264cd68ce8a2345dd349bc3d138a4ef85c8 # v1.327.0
+        uses: ruby/setup-ruby@651ff0d62c5c79bed6d53ec518387aae20e72c1a # v1.329.0
         with:
           ruby-version: "3.4.11"
           bundler: "4.0.22"

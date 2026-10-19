@@ -1,9 +1,11 @@
 import assert from "node:assert/strict";
+import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { resourceBytes, runtimeTarget, stageWindowsRuntime } from "./stage-runtime.mjs";
 
 test("uses the requested target rather than the staging host", () => {
@@ -36,6 +38,50 @@ test("leaves macOS and FreeBSD Tauri runtime behavior unchanged", () => {
 });
 
 const hash = (bytes) => createHash("sha256").update(bytes).digest("hex");
+
+test("runtime-only fixture staging preserves Bun without building the disposable package", { skip: process.platform === "win32" }, (t) => {
+  // openclaw-temp-dir: allow exercises the real staging CLI without downloading or building a package
+  const root = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), "runtime-staging-")));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const scripts = path.join(root, "apps/linux/scripts");
+  const destination = path.join(root, "apps/linux/src-tauri/target/desktop-runtime");
+  fs.mkdirSync(scripts, { recursive: true });
+  fs.mkdirSync(destination, { recursive: true });
+  fs.mkdirSync(path.join(root, "scripts/lib"), { recursive: true });
+  fs.copyFileSync(fileURLToPath(new URL("./stage-runtime.mjs", import.meta.url)), path.join(scripts, "stage-runtime.mjs"));
+  fs.symlinkSync(fileURLToPath(new URL("./stage-package.mjs", import.meta.url)), path.join(scripts, "stage-package.mjs"));
+  const pin = { tag: "test-pin", commit: "a".repeat(40), revision: "test-revision" };
+  fs.writeFileSync(path.join(root, "scripts/lib/openclaw-bun.json"), JSON.stringify(pin));
+  fs.writeFileSync(path.join(root, "scripts/stage-openclaw-bun.sh"), '#!/bin/sh\nmkdir -p "$1/bin"\nprintf "synthetic Bun" > "$1/bin/bun"\nprintf "{}" > "$1/bun-manifest.json"\n', { mode: 0o755 });
+  fs.writeFileSync(path.join(root, "package.json"), '{"version":"0.0.0"}');
+  fs.writeFileSync(path.join(root, "scripts/package-openclaw-for-docker.mjs"), 'import fs from "node:fs"; fs.writeFileSync("package-build-started", "yes"); throw new Error("package build refused by fixture");');
+  const env = { ...process.env, TAURI_ENV_TARGET_TRIPLE: "x86_64-unknown-linux-gnu" };
+  delete env.RELEASE_TAG;
+  delete env.RELEASE_SHA;
+  execFileSync("git", ["init", "-q", root], { env });
+  execFileSync("git", ["-C", root, "-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture", "--allow-empty"], { env });
+  const stage = (...args) => spawnSync(process.execPath, [path.join(scripts, "stage-runtime.mjs"), ...args], { cwd: root, env, encoding: "utf8" });
+
+  fs.writeFileSync(path.join(destination, "old-resource"), "preserved on failure");
+  const full = stage();
+  assert.notEqual(full.status, 0);
+  assert.match(full.stderr, /package build refused by fixture/);
+  assert.equal(fs.readFileSync(path.join(root, "package-build-started"), "utf8"), "yes");
+  assert.equal(fs.readFileSync(path.join(destination, "old-resource"), "utf8"), "preserved on failure");
+  fs.rmSync(path.join(root, "package-build-started"));
+
+  const fixture = stage("--runtime-only");
+  assert.equal(fixture.status, 0, fixture.stderr);
+  assert.equal(fs.existsSync(path.join(root, "package-build-started")), false);
+  const bun = Buffer.from("synthetic Bun");
+  assert.deepEqual(fs.readFileSync(path.join(destination, "bin/bun")), Buffer.concat([Buffer.from("OPENCLAW-BUN-RUNTIME-V1\n"), bun]));
+  assert.deepEqual(JSON.parse(fs.readFileSync(path.join(destination, "manifest.json"), "utf8")), {
+    ...pin, platform: "linux", arch: "x64", files: { "bin/bun": hash(bun) },
+  });
+  assert.deepEqual(fs.readdirSync(destination).toSorted(), ["bin", "manifest.json"]);
+  assert.deepEqual(fs.readdirSync(path.dirname(destination)), ["desktop-runtime"]);
+});
+
 const signerSubject = "CN=OpenClaw Foundation, O=OpenClaw Foundation, L=Mill Valley, S=California, C=US";
 // Synthetic PE header in a stored ZIP; no executable code or real runtime is included.
 const archive = Buffer.from("UEsDBBQAAAAAALiRS12hAcWLYAAAAGAAAAAXAAAAYnVuLXdpbmRvd3MteDY0L2J1bi5leGVNWgAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABAAAAAUEUAAGSGAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAABQSwECFAMUAAAAAAC4kUtdoQHFi2AAAABgAAAAFwAAAAAAAAAAAAAAgAEAAAAAYnVuLXdpbmRvd3MteDY0L2J1bi5leGVQSwUGAAAAAAEAAQBFAAAAlQAAAAAA", "base64");

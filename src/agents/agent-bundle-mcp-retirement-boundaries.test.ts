@@ -10,13 +10,13 @@ import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-cloc
 import {
   acquireSessionMcpRuntime,
   disposeAllSessionMcpRuntimes,
-  getSessionMcpRuntimeManagerForTesting,
   peekSessionMcpRuntime,
   reloadSessionMcpRuntimes,
   retireSessionMcpRuntime,
   setSessionMcpRuntimeScheduler,
 } from "./agent-bundle-mcp-manager-api.js";
 import { releaseSessionMcpRuntime } from "./agent-bundle-mcp-manager-cleanup.js";
+import { getSessionMcpRuntimeTestManager } from "./agent-bundle-mcp-manager.test-support.js";
 import { materializeBundleMcpToolsForRun } from "./agent-bundle-mcp-materialize.js";
 import { prepareCliBundleMcpConfig } from "./cli-runner/bundle-mcp.js";
 import { resolveConversationCapabilityProfile } from "./conversation-capability-profile.js";
@@ -153,7 +153,7 @@ it("retains an empty runtime until its live materialized handle releases", async
       await handle.dispose();
     }
     expect(peekSessionMcpRuntime({ sessionKey })).toBeUndefined();
-    expect(getSessionMcpRuntimeManagerForTesting().listRuntimeKeys()).toEqual([]);
+    expect(getSessionMcpRuntimeTestManager().listRuntimeKeys()).toEqual([]);
   });
 });
 
@@ -191,9 +191,7 @@ it("preserves a newer session binding while old empty cleanup drains", async () 
       });
       deletion.release.resolve();
       await Promise.all([reloading, retiring]);
-      expect(getSessionMcpRuntimeManagerForTesting().resolveSessionId(sessionKey)).toBe(
-        "new-binding",
-      );
+      expect(getSessionMcpRuntimeTestManager().resolveSessionId(sessionKey)).toBe("new-binding");
       expect(peekSessionMcpRuntime({ sessionKey })).toBe(next.runtime);
       expect(peekSessionMcpRuntime({ sessionId: "old-binding" })).toBeUndefined();
       await expect(next.runtime.callTool("probe", "read", {})).resolves.toMatchObject({

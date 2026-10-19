@@ -31,6 +31,7 @@ const delivery = vi.hoisted(() => ({
   afterResult: undefined as (() => void) | undefined,
   settlement: undefined as Promise<SqliteWorkerOperationSettlement> | undefined,
   hideCommit: false,
+  appendCalls: 0,
 }));
 vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("../state/openclaw-agent-execution.js")>();
@@ -67,6 +68,7 @@ vi.mock("../state/openclaw-agent-execution.js", async (importOriginal) => {
               operation({
                 execute: async (command, commandOptions) => {
                   if (command.type === "trajectory.events.append") {
+                    delivery.appendCalls += 1;
                     const before = delivery.beforeAppend;
                     delivery.beforeAppend = undefined;
                     await before?.();
@@ -143,6 +145,7 @@ afterEach(() => {
   delivery.afterResult = undefined;
   delivery.settlement = undefined;
   delivery.hideCommit = false;
+  delivery.appendCalls = 0;
   vi.restoreAllMocks();
 });
 
@@ -183,6 +186,50 @@ it("persists repeated events and retains the worker owner without a main-thread 
     expect(await loadSqliteTrajectoryRuntimeEvents(target)).toEqual([event, event, event]);
     expect(getOpenClawAgentDatabaseIfOpen(databaseOptions)).toBeUndefined();
     expect(retention.reads).toBe(1);
+  });
+});
+
+it("keeps a large eight-event turn in one append across writer yields", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const target = {
+      agentId: "main",
+      sessionId: "trajectory-large-turn",
+      sessionKey: "agent:main:trajectory-large-turn",
+      storePath: state.statePath("agents", "main", "agent.sqlite"),
+    };
+    await replaceSessionEntry(target, { sessionId: target.sessionId, updatedAt: 1 });
+    const sink = await createSqliteTrajectoryRuntimeSink({
+      env: state.env,
+      sessionId: target.sessionId,
+      sessionTarget: target,
+      maxRuntimeFileBytes: 1024 * 1024,
+    });
+    assert(sink);
+    const events = Array.from({ length: 8 }, (_, index) =>
+      createTrajectoryEvent({
+        type: index === 7 ? "session.ended" : "context.compiled",
+        sessionId: target.sessionId,
+        seq: index,
+        payloadSize: 54_000,
+      }),
+    );
+    const lines = events.map((event) => JSON.stringify(event));
+    for (const [index, event] of events.entries()) {
+      sink.write(event, lines[index]!);
+      if (index === 5) {
+        // Let any early background append settle before the turn's terminal events.
+        await runOpenClawAgentWriteAdmission(
+          { agentId: target.agentId, path: target.storePath, env: state.env },
+          () => {},
+        );
+      }
+    }
+    await sink.flush();
+    expect(delivery.appendCalls).toBe(1);
+    expect(
+      (await loadSqliteTrajectoryRuntimeEvents(target)).map((event) => JSON.stringify(event)),
+    ).toEqual(lines);
+    expect(sink.describeFlushState()).toBeUndefined();
   });
 });
 

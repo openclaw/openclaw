@@ -10,23 +10,25 @@ export type { CodeModeNamespaceDescriptor } from "./code-mode-namespaces.js";
 export const MAX_CODE_MODE_PENDING_TOOL_CALLS = 128;
 export const CODE_MODE_WORKER_WATCHDOG_GRACE_MS = 2_000;
 
-type CodeModeBridgeMethod =
-  | "search"
-  | "describe"
-  | "callValue"
-  | "resultSave"
-  | "resultLoad"
-  | "resultDelete"
-  | "nodes"
-  | "yield"
-  | "namespace"
-  | "agentSpawn"
-  | "agentWait"
-  | "skillsList"
-  | "skillsSearch"
-  | "skillsRead"
-  | "sleep"
-  | "swarmNote";
+export const CODE_MODE_BRIDGE_METHODS = [
+  "search",
+  "describe",
+  "callValue",
+  "resultSave",
+  "resultLoad",
+  "resultDelete",
+  "nodes",
+  "yield",
+  "namespace",
+  "agentSpawn",
+  "agentWait",
+  "skillsList",
+  "skillsSearch",
+  "skillsRead",
+  "sleep",
+  "swarmNote",
+] as const;
+type CodeModeBridgeMethod = (typeof CODE_MODE_BRIDGE_METHODS)[number];
 
 export type CodeModeConfig = {
   timeoutMs: number;

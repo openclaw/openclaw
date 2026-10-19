@@ -31,7 +31,7 @@ import {
   retainAgentDatabase,
 } from "./openclaw-agent-db-lifecycle.js";
 import {
-  captureAgentDatabaseCloseFence,
+  isAgentDatabaseClosing,
   registerOpenClawAgentDatabaseAsyncResource,
   revokeAgentDatabaseResources,
 } from "./openclaw-agent-db-resources.js";
@@ -395,7 +395,7 @@ it("records a clean sibling receipt while an admitted worker publication still o
       expect(readLeases(heldPath)).toHaveLength(2);
       expect(readSqliteDatabaseCleanClose(heldPath)).toBe(false);
       expect(closed).toBe(false);
-      expect(captureAgentDatabaseCloseFence(healthy)).toBeDefined();
+      expect(isAgentDatabaseClosing(healthy)).toBe(true);
       const later = { agentId: "late", path: path.join(root, "late.sqlite") };
       expect(() => openOpenClawAgentDatabase(later)).toThrow("resources are closing");
       await expect(withOpenClawAgentDatabaseAsync(later, (database) => database)).rejects.toThrow(
@@ -425,7 +425,7 @@ it("records a clean sibling receipt while an admitted worker publication still o
       expect(db.isOpen).toBe(false);
       expect(readLeases(heldPath)).toEqual([]);
       expect(readSqliteDatabaseCleanClose(heldPath)).toBe(true);
-      expect(captureAgentDatabaseCloseFence(healthy)).toBeUndefined();
+      expect(isAgentDatabaseClosing(healthy)).toBe(false);
       expect(openOpenClawAgentDatabase(later).db.isOpen).toBe(true);
     } finally {
       release.resolve();

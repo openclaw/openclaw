@@ -16,13 +16,15 @@ afterAll(() => parser.close());
 const CODE_EXTENSIONS = new Set([".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs"]);
 const IGNORED_DIRS = new Set([".cache", ".git", "build", "coverage", "dist", "node_modules"]);
 const ROOTS = ["src", "extensions", "scripts", "ui"] as const;
+// Match the generated-source exclusions in the oxlint handwritten-code ratchets.
+const GENERATED_SOURCE_PATH =
+  /(?:^|\/)(?:__generated__|generated|[^/]+\.generated|protocol-gen|dist)(?:\/|$)|\.generated\.[^/]+$/u;
 
 type SuppressionEntry = {
   file: string;
   rule: string;
 };
 
-let productionLintSuppressionsCache: SuppressionEntry[] | null = null;
 let productionCodeFilesCache: string[] | null = null;
 
 function collectFileSuppressions(file: string, source: string): SuppressionEntry[] {
@@ -32,81 +34,28 @@ function collectFileSuppressions(file: string, source: string): SuppressionEntry
 }
 
 function isProductionCodeFile(relativePath: string): boolean {
-  const basename = path.posix.basename(relativePath);
-  if (!CODE_EXTENSIONS.has(path.extname(relativePath))) {
-    return false;
-  }
-  if (basename.startsWith("__rootdir_boundary_canary__.")) {
-    return false;
-  }
-  return !(
-    relativePath.includes("/test/") ||
-    relativePath.endsWith(".test.ts") ||
-    relativePath.endsWith(".test.tsx") ||
-    relativePath.endsWith(".spec.ts") ||
-    relativePath.endsWith(".spec.tsx")
-  );
-}
-
-function listGitCodeFiles(root: string): string[] | null {
   return (
-    listGitTrackedFiles({ repoRoot, pathspecs: root })
-      ?.filter(isProductionCodeFile)
-      .filter((relativePath) => fs.existsSync(path.join(repoRoot, relativePath))) ?? null
+    CODE_EXTENSIONS.has(path.extname(relativePath)) &&
+    !GENERATED_SOURCE_PATH.test(relativePath) &&
+    !path.posix.basename(relativePath).startsWith("__rootdir_boundary_canary__.") &&
+    !(relativePath.includes("/test/") || /\.(?:test|spec)\.tsx?$/.test(relativePath))
   );
 }
 
-function walkCodeFiles(dir: string, files: string[] = []): string[] {
-  const relativeRoot = toRepoRelativePath(repoRoot, dir);
-  if (relativeRoot && !relativeRoot.startsWith("..") && !path.isAbsolute(relativeRoot)) {
-    const gitFiles = listGitCodeFiles(relativeRoot);
-    if (gitFiles) {
-      files.push(...gitFiles);
-      return files;
-    }
-  }
-
+function walkCodeFiles(dir: string): string[] {
   if (!fs.existsSync(dir)) {
-    return files;
+    return [];
   }
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+  return fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => {
     const fullPath = path.join(dir, entry.name);
     if (entry.isDirectory()) {
-      if (IGNORED_DIRS.has(entry.name)) {
-        continue;
-      }
-      walkCodeFiles(fullPath, files);
-      continue;
+      return IGNORED_DIRS.has(entry.name) ? [] : walkCodeFiles(fullPath);
     }
-    const relativePath = toRepoRelativePath(repoRoot, fullPath);
-    if (!isProductionCodeFile(relativePath)) {
-      continue;
-    }
-    files.push(relativePath);
-  }
-  return files;
+    return [toRepoRelativePath(repoRoot, fullPath)];
+  });
 }
 
-function collectProductionLintSuppressions(): SuppressionEntry[] {
-  if (productionLintSuppressionsCache) {
-    return [...productionLintSuppressionsCache];
-  }
-  const gitEntries = collectProductionLintSuppressionsFromGit();
-  if (gitEntries) {
-    productionLintSuppressionsCache = gitEntries;
-    return [...gitEntries];
-  }
-  const entries: SuppressionEntry[] = [];
-  const files = listProductionCodeFiles();
-  for (const relativePath of files) {
-    const source = fs.readFileSync(path.join(repoRoot, relativePath), "utf8");
-    entries.push(...collectFileSuppressions(relativePath, source));
-  }
-  productionLintSuppressionsCache = entries;
-  return [...entries];
-}
-
-function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
+function listSuppressionFiles(): string[] {
   const result = spawnSync(
     "git",
     ["grep", "-z", "-l", "-e", "oxlint-disable", "-e", "eslint-disable", "--", ...ROOTS],
@@ -121,60 +70,55 @@ function collectProductionLintSuppressionsFromGit(): SuppressionEntry[] | null {
     return [];
   }
   if (result.status !== 0) {
-    return null;
+    return listProductionCodeFiles();
   }
-  const entries: SuppressionEntry[] = [];
-  for (const file of result.stdout.split("\0").filter(Boolean)) {
-    if (!isProductionCodeFile(file) || !fs.existsSync(path.join(repoRoot, file))) {
-      continue;
-    }
-    entries.push(
-      ...collectFileSuppressions(file, fs.readFileSync(path.join(repoRoot, file), "utf8")),
-    );
-  }
-  return entries;
+  return result.stdout.split("\0").filter(isProductionCodeFile);
 }
 
 function listProductionCodeFiles(): string[] {
-  productionCodeFilesCache ??= ROOTS.flatMap((root) =>
-    walkCodeFiles(path.join(repoRoot, root)),
-  ).toSorted();
-  return [...productionCodeFilesCache];
+  return (productionCodeFilesCache ??= (
+    listGitTrackedFiles({ repoRoot, pathspecs: ROOTS }) ??
+    ROOTS.flatMap((root) => walkCodeFiles(path.join(repoRoot, root)))
+  )
+    .filter(isProductionCodeFile)
+    .toSorted());
 }
 
 function summarizeSuppressions(entries: readonly SuppressionEntry[]): string[] {
   const counts = new Map<string, number>();
-  for (const entry of entries) {
-    const key = `${entry.file}|${entry.rule}`;
+  for (const { file, rule } of entries) {
+    const key = `${file}|${rule}`;
     counts.set(key, (counts.get(key) ?? 0) + 1);
   }
-  return [...counts.entries()].map(([key, count]) => `${key}|${count}`).toSorted();
+  return [...counts].map(([key, count]) => `${key}|${count}`).toSorted();
 }
 
-function filterExpectedSuppressionsForPresentFiles(entries: readonly string[]): string[] {
-  return entries.filter((entry) => {
-    const [file] = entry.split("|", 1);
-    return file !== undefined && fs.existsSync(path.join(repoRoot, file));
-  });
-}
-
-collectProductionLintSuppressions();
+const productionLintSuppressions = listSuppressionFiles().flatMap((file) =>
+  collectFileSuppressions(file, fs.readFileSync(path.join(repoRoot, file), "utf8")),
+);
 
 describe("production lint suppressions", () => {
-  it("keeps companion rules visible beside max-lines suppressions", () => {
-    expect(
-      collectFileSuppressions(
-        "src/example.ts",
-        "/* oxlint-disable\nmax-lines, no-console\n-- TODO: split this file. */",
-      ),
-    ).toEqual([{ file: "src/example.ts", rule: "no-console" }]);
-    expect(
-      collectFileSuppressions(
-        "src/example.ts",
-        "/* oxlint-disable eslint/max-lines, no-debugger */",
-      ),
-    ).toEqual([{ file: "src/example.ts", rule: "no-debugger" }]);
-    expect(collectFileSuppressions("src/example.ts", "/* oxlint-disable - reason */")).toEqual([]);
+  it.each([
+    ["ui/src/lib/protocol-validators.generated/approvals.js", false],
+    ["src/schema.generated.ts", false],
+    ["src/__generated__/schema.ts", false],
+    ["src/generated/schema.ts", false],
+    ["extensions/demo/protocol-gen/schema.ts", false],
+    ["extensions/demo/dist/index.js", false],
+    ["scripts/generate-schema.ts", true],
+    ["ui/src/lib/protocol-validators.generated-reader.ts", true],
+    ["src/agents/blobster-renderer.ts", true],
+  ])("classifies handwritten suppression scope for %s", (file, handwritten) => {
+    expect(isProductionCodeFile(file)).toBe(handwritten);
+  });
+
+  it.each([
+    ["/* oxlint-disable\nmax-lines, no-console\n-- TODO: split this file. */", ["no-console"]],
+    ["/* oxlint-disable eslint/max-lines, no-debugger */", ["no-debugger"]],
+    ["/* oxlint-disable - reason */", []],
+  ] as const)("keeps companion rules visible in %s", (source, rules) => {
+    const file = "src/example.ts";
+    expect(collectFileSuppressions(file, source)).toEqual(rules.map((rule) => ({ file, rule })));
   });
 
   it("lists production files from git without walking source roots", () => {
@@ -187,8 +131,8 @@ describe("production lint suppressions", () => {
   });
 
   it("keeps the intentional production suppression tail on an explicit allowlist", () => {
-    expect(summarizeSuppressions(collectProductionLintSuppressions())).toEqual(
-      filterExpectedSuppressionsForPresentFiles([
+    expect(summarizeSuppressions(productionLintSuppressions)).toEqual(
+      [
         "extensions/browser/src/browser/pw-tools-core.activity.ts|unicorn/prefer-dom-node-text-content|1",
         "extensions/browser/src/browser/pw-tools-core.interactions.actions.ts|@typescript-eslint/no-implied-eval|2",
         "extensions/browser/src/browser/pw-tools-core.interactions.content.ts|@typescript-eslint/no-implied-eval|1",
@@ -225,8 +169,8 @@ describe("production lint suppressions", () => {
         "src/cli/plugins-cli-test-helpers.ts|typescript/no-unnecessary-type-parameters|1",
         "src/cli/program/openclaw-command.ts|eslint/no-underscore-dangle|1",
         "src/cli/test-runtime-capture.ts|typescript/no-unnecessary-type-parameters|1",
-        "src/commands/backup-restore.ts|preserve-caught-error|1",
-        // Probes retain raw prototype methods for restoration; Reflect.apply supplies the live receiver.
+        // Both restore cleanup paths retain the primary and cleanup failures in AggregateError.errors.
+        "src/commands/backup-restore.ts|preserve-caught-error|2",
         "src/config/sessions/session-accessor.sqlite-schema-probes.test-support.ts|typescript/unbound-method|2",
         "src/config/sessions/session-accessor.sqlite-worker-request.ts|no-warning-comments|1",
         "src/config/sessions/session-transcript-reconcile.close-failure.test-support.mjs|typescript/unbound-method|1",
@@ -243,14 +187,13 @@ describe("production lint suppressions", () => {
         "src/infra/outbound/sanitize-text.ts|eslint/no-control-regex|1",
         "src/infra/outbound/send-deps.ts|typescript/no-unnecessary-type-parameters|1",
         "src/infra/sqlite-database-admission.worker.test-support.ts|typescript/unbound-method|1",
-        // Iterator wrappers capture native next/return and invoke them with the caller's receiver.
         "src/infra/sqlite-native-observer.ts|typescript/unbound-method|2",
-        // The Bun transfer probe calls the captured native method with its Worker receiver.
         "src/infra/sqlite-worker-input.bun.test-support.ts|typescript/unbound-method|1",
-        // The dispatch observer captures postMessage before mocking and supplies its worker receiver.
         "src/infra/sqlite-worker-shared-state-admission.test-support.ts|typescript/unbound-method|1",
-        // Worker hooks preserve custom methods and later prototype instrumentation with .call(this).
         "src/infra/worker-cpu.ts|typescript/unbound-method|4",
+        // MCP owns callback properties; Node worker messages have no browser target origin.
+        "src/mcp/tools-stdio-server.lifecycle.fixture.mjs|unicorn/prefer-add-event-listener|1",
+        "src/mcp/tools-stdio-server.lifecycle.fixture.mjs|unicorn/require-post-message-target-origin|1",
         "src/node-host/invoke-payload.ts|typescript/no-unnecessary-type-parameters|1",
         "src/node-host/mcp.ts|unicorn/prefer-add-event-listener|1",
         "src/plugin-sdk/channel-config-helpers.ts|typescript/no-unnecessary-type-parameters|1",
@@ -284,7 +227,6 @@ describe("production lint suppressions", () => {
         "src/state/config-machine-state.ts|typescript/no-unnecessary-type-parameters|1",
         // JSON string scanning must detect and reject unescaped control characters.
         "src/state/json-predicate-fields.ts|no-control-regex|1",
-        // Native statement methods are captured before proxy forwarding restores their receiver.
         "src/state/openclaw-agent-canonical-validation-receipt.test-support.ts|typescript/unbound-method|1",
         // Node worker BroadcastChannel.postMessage accepts only a message, not a browser targetOrigin.
         "src/state/openclaw-agent-worker-store.test-support.ts|unicorn/require-post-message-target-origin|1",
@@ -293,6 +235,7 @@ describe("production lint suppressions", () => {
         "src/utils.ts|typescript/no-unnecessary-type-parameters|1",
         "src/utils/run-with-concurrency.ts|typescript/prefer-promise-reject-errors|1",
         // Native host bridges are not EventTargets or Window.postMessage endpoints.
+        "ui/src/app/native-bridge.ts|unicorn/require-post-message-target-origin|1",
         "ui/src/app/native-gateway-auth.ts|unicorn/prefer-add-event-listener|1",
         "ui/src/app/native-gateway-auth.ts|unicorn/require-post-message-target-origin|2",
         "ui/src/components/mascot-canvas.ts|unicorn/no-array-fill-with-reference-type|1",
@@ -303,7 +246,7 @@ describe("production lint suppressions", () => {
         // PanelRefreshStatus keeps its shared className prop across rendering callers.
         "ui/src/pages/custodian/custodian-surface.tsx|solid/no-react-specific-props|1",
         "ui/src/pages/logs/view.tsx|solid/no-react-specific-props|1",
-      ]),
+      ].filter((entry) => fs.existsSync(path.join(repoRoot, entry.split("|", 1)[0]!))),
     );
   });
 });

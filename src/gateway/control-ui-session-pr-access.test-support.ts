@@ -8,6 +8,7 @@ import {
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import { linkEmail, setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import {
@@ -15,8 +16,12 @@ import {
   createTestGatewayScheduler,
 } from "../test-utils/gateway-scheduler-clock.js";
 import type { ControlUiSessionPullRequests } from "./control-ui-contract.js";
-import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
+import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
+import {
+  spyOnSessionPrLoader,
+  type SessionPrLoader,
+} from "./control-ui-session-pr-subscriptions.test-support.js";
 import { prepareGatewayRecipientProfile } from "./expected-profile.js";
 import type { OperatorScope } from "./operator-scopes.js";
 import { createGatewayConnectionState } from "./server-connection-state.js";
@@ -49,9 +54,11 @@ export const readerChanges = [
   "grant",
   "replacement grant",
 ] as const;
-export type Load = NonNullable<
-  Parameters<typeof createControlUiSessionPullRequestSubscriptions>[0]["load"]
->;
+export type Load = SessionPrLoader;
+
+function authority(access = new AbortController()) {
+  return { signal: access.signal, assertCurrent: () => access.signal.throwIfAborted() };
+}
 
 let fixtureSequence = 0;
 
@@ -68,19 +75,9 @@ export async function createFixture(
   const other = ensureProfileForEmail(`publication-owner-${fixtureId}@example.test`);
   const seeded = new Set<string>();
   const sessionId = `${sessionKey}-${fixtureId}`;
+  const readerRole = { agents: ["main"], sessions: { others: "view" as const }, scopes: [scope] };
   const cfg: OpenClawConfig = {
-    gateway: {
-      roles: {
-        default: "reader",
-        definitions: {
-          reader: {
-            agents: ["main"],
-            sessions: { others: "view" },
-            scopes: [scope],
-          },
-        },
-      },
-    },
+    gateway: { roles: { default: "reader", definitions: { reader: readerRole } } },
   };
   setUserProfileRole(profile.id, "reader");
   setRuntimeConfigSnapshot(cfg);
@@ -113,10 +110,7 @@ export async function createFixture(
     const access = new AbortController();
     client.internal = {
       ...client.internal,
-      operatorAccessAuthority: {
-        signal: access.signal,
-        assertCurrent: () => access.signal.throwIfAborted(),
-      },
+      operatorAccessAuthority: authority(access),
     };
     client.authenticatedUserProfile = {
       profileId: profile.id,
@@ -130,6 +124,9 @@ export async function createFixture(
     return { client, socket, access };
   };
   const load = vi.fn<Load>(async () => snapshot);
+  if (!useDefaultLoader) {
+    spyOnSessionPrLoader(load);
+  }
   const subscriptions = createControlUiSessionPullRequestSubscriptions({
     scheduler,
     getSessionRowProjection: () => getSessionRowProjection(context),
@@ -138,7 +135,7 @@ export async function createFixture(
     prepareRead: async (connId, session) => {
       const client = connections.clients.getByConnectionId(connId);
       return client
-        ? await prepareControlUiSessionPrRead({
+        ? createControlUiSessionPrRead({
             client,
             ...session,
             getRuntimeConfig,
@@ -147,7 +144,6 @@ export async function createFixture(
           })
         : undefined;
     },
-    ...(useDefaultLoader ? {} : { load }),
   });
   const context = createGatewayRequestContext(makeContextParams(connections));
   context.getRuntimeConfig = getRuntimeConfig;
@@ -173,20 +169,9 @@ export async function createFixture(
     context,
     async changeReader(change: (typeof readerChanges)[number], key = sessionKey) {
       if (change === "role") {
-        const roles = cfg.gateway!.roles!;
-        setRuntimeConfigSnapshot({
-          ...cfg,
-          gateway: {
-            ...cfg.gateway,
-            roles: {
-              ...roles,
-              definitions: {
-                ...roles.definitions,
-                reader: { ...roles.definitions.reader!, scopes: [] },
-              },
-            },
-          },
-        });
+        const revoked = structuredClone(cfg);
+        revoked.gateway!.roles!.definitions!.reader!.scopes = [];
+        setRuntimeConfigSnapshot(revoked);
       } else if (change === "connection") {
         reader.client.invalidated = true;
       } else if (change === "profile") {
@@ -196,25 +181,32 @@ export async function createFixture(
       } else if (change === "grant") {
         reader.access.abort(new Error("Original access retired"));
       } else if (change === "replacement grant") {
-        const replacement = new AbortController();
         reader.client.internal = {
           ...reader.client.internal,
-          operatorAccessAuthority: {
-            signal: replacement.signal,
-            assertCurrent: () => replacement.signal.throwIfAborted(),
-          },
+          operatorAccessAuthority: authority(),
         };
       }
+    },
+    async seedRepository(
+      key = sessionKey,
+      repo = "publication",
+      patch: Partial<SessionEntry> = {},
+      repoBranch = "guest-change",
+    ) {
+      const repository = await getSessionRepositoryWorkspaceStore().create({
+        agentId: "main",
+        sessionKey: key,
+        url: `https://github.com/synthetic/${repo}`,
+        branch: repoBranch,
+        assertCurrent: () => {},
+      });
+      await seed(key, profile.id, { ...patch, repositoryWorkspaceId: repository.workspaceId });
+      return repository;
     },
     async subscribe(keys = [sessionKey], client = reader.client) {
       const respond = vi.fn();
       await handleGatewayRequest({
-        req: {
-          type: "req",
-          id: "guest-publication-watch",
-          method: METHOD,
-          params: { sessionKeys: keys },
-        },
+        req: { type: "req", id: "watch", method: METHOD, params: { sessionKeys: keys } },
         client,
         context,
         isWebchatConnect: () => false,

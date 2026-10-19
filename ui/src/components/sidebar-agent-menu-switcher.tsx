@@ -11,7 +11,6 @@ export const AGENT_VALUE_PREFIX = "agent:";
 export type SidebarAgentMenuSwitcherParams = {
   activeId: string;
   allAgentsScope: boolean;
-  query: string;
   openMode: "hover" | "click";
   agents: readonly GatewayAgentRow[];
   identities: ReadonlyMap<string, AgentIdentityResult>;
@@ -21,24 +20,13 @@ export type SidebarAgentMenuSwitcherParams = {
   avatarErrorHandler: (url: string) => () => void;
   agentUnreadCount: (agentId: string) => number;
 };
-function sidebarAgentMenuRows(params: {
-  agents: readonly GatewayAgentRow[];
-  pinnedAgentIds: readonly string[];
-}) {
-  const { agents } = params;
-  const pinnedIds = new Set(params.pinnedAgentIds.map(normalizeAgentId));
-  return agents.toSorted((a, b) => {
-    const aPinned = pinnedIds.has(normalizeAgentId(a.id)) ? 0 : 1;
-    const bPinned = pinnedIds.has(normalizeAgentId(b.id)) ? 0 : 1;
-    return aPinned - bPinned;
-  });
-}
 function renderAgentAvatar(
   readAgent: () => GatewayAgentRow,
   params: SidebarAgentMenuSwitcherParams,
 ) {
-  const agentId = createMemo(() => normalizeAgentId(readAgent().id));
-  const identity = createMemo(() => params.identities.get(agentId()) ?? null);
+  const identity = createMemo(
+    () => params.identities.get(normalizeAgentId(readAgent().id)) ?? null,
+  );
   const avatarUrl = createMemo(() => resolveAgentAvatarUrl(readAgent(), identity()));
   return (
     <AgentIdentityAvatar
@@ -68,23 +56,28 @@ function renderAgentGroupAvatar(
   agents: readonly GatewayAgentRow[],
   params: SidebarAgentMenuSwitcherParams,
 ) {
-  const visibleAgents = createMemo(() => agents.slice(0, agents.length > 4 ? 3 : 4));
-  const remaining = createMemo(() => agents.length - visibleAgents().length);
+  const visibleAgents = agents.slice(0, agents.length > 4 ? 3 : 4);
   return (
     <span
-      class={`sidebar-agent-menu__agent-avatar sidebar-agent-menu__avatar-group ${agents.length === 2 ? "sidebar-agent-menu__avatar-group--pair" : agents.length === 3 ? "sidebar-agent-menu__avatar-group--triple" : ""}`}
+      class={[
+        "sidebar-agent-menu__agent-avatar sidebar-agent-menu__avatar-group",
+        {
+          "sidebar-agent-menu__avatar-group--pair": agents.length === 2,
+          "sidebar-agent-menu__avatar-group--triple": agents.length === 3,
+        },
+      ]}
       aria-hidden="true"
     >
-      <For each={visibleAgents()}>
+      <For each={visibleAgents}>
         {(agent) => (
           <span class="sidebar-agent-menu__group-item">
             {renderAgentAvatar(() => agent, params)}
           </span>
         )}
       </For>
-      {remaining() > 0 ? (
+      {agents.length > 4 ? (
         <span class="sidebar-agent-menu__group-item sidebar-agent-menu__group-count">
-          {remaining()}+
+          {agents.length - visibleAgents.length}+
         </span>
       ) : undefined}
     </span>
@@ -95,6 +88,7 @@ function renderAgentRow(
   params: SidebarAgentMenuSwitcherParams,
   readAutofocus: () => boolean,
   readDuplicateName: () => boolean,
+  pinButtons: Map<string, HTMLButtonElement>,
 ) {
   const agentId = createMemo(() => normalizeAgentId(readAgent().id));
   const identity = createMemo(() => params.identities.get(agentId()) ?? null);
@@ -107,25 +101,20 @@ function renderAgentRow(
   const unread = createMemo(() =>
     agentId() === params.activeId ? 0 : params.agentUnreadCount(agentId()),
   );
-  const option = createMemo(() => ({
-    value: agentId(),
-    label: label(),
-    agent: readAgent(),
-    description: readDuplicateName() ? agentId() : undefined,
-  }));
-  const rowLabel = createMemo(() =>
-    [label(), option().description, unread() > 0 ? t("sessionsView.unread") : null]
-      .filter(Boolean)
-      .join(" "),
-  );
+  const description = () => (readDuplicateName() ? agentId() : undefined);
   return {
     as: "div",
     id: `${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId())}`,
     get label() {
-      return rowLabel();
+      return [label(), description(), unread() > 0 ? t("sessionsView.unread") : null]
+        .filter(Boolean)
+        .join(" ");
     },
     get class() {
-      return `sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option ${active() ? "sidebar-agent-menu__agent-switch--active" : ""}`;
+      return [
+        "sidebar-customize-menu__item sidebar-agent-menu__agent-switch agent-select__option",
+        { "sidebar-agent-menu__agent-switch--active": active() },
+      ];
     },
     get attributes() {
       return {
@@ -143,13 +132,14 @@ function renderAgentRow(
           <span class="agent-select__option-heading">
             <span class="agent-select__option-label">{label()}</span>
           </span>
-          {option().description ? (
-            <span class="agent-select__option-description">{option().description}</span>
+          {description() ? (
+            <span class="agent-select__option-description">{description()}</span>
           ) : undefined}
         </span>
         <span class="sidebar-agent-menu__agent-status">
           {params.agents.length > 3 ? (
             <button
+              ref={(button) => pinButtons.set(agentId(), button)}
               type="button"
               class="sidebar-agent-menu__pin"
               aria-label={`${pinLabel()}: ${label()}`}
@@ -164,15 +154,13 @@ function renderAgentRow(
                 const button = event.currentTarget;
                 // Moving a keyed row into pinned-first order can drop native focus.
                 const focused = button === document.activeElement;
-                const menu = button.closest('[role="menu"]');
-                const value = `${AGENT_VALUE_PREFIX}${encodeURIComponent(agentId())}`;
-                void params.onTogglePinnedAgent(agentId()).then(() => {
+                const id = agentId();
+                void params.onTogglePinnedAgent(id).then(() => {
                   if (focused) {
-                    menu
-                      ?.querySelector<HTMLElement>(
-                        `[data-value="${CSS.escape(value)}"] .sidebar-agent-menu__pin`,
-                      )
-                      ?.focus({ preventScroll: true });
+                    const currentButton = pinButtons.get(id);
+                    if (currentButton?.isConnected) {
+                      currentButton.focus({ preventScroll: true });
+                    }
                   }
                 });
               }}
@@ -188,9 +176,18 @@ function renderAgentRow(
     ),
   } satisfies MenuItem;
 }
-export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherParams) {
-  const agents = createMemo(() => sidebarAgentMenuRows(params));
-  const query = createMemo(() => params.query.trim().toLocaleLowerCase());
+export function renderSidebarAgentMenuSwitcher(
+  params: SidebarAgentMenuSwitcherParams,
+  pinButtons = new Map<string, HTMLButtonElement>(),
+) {
+  const agents = createMemo(() => {
+    const pinnedIds = new Set(params.pinnedAgentIds.map(normalizeAgentId));
+    return params.agents.toSorted(
+      (a, b) =>
+        Number(pinnedIds.has(normalizeAgentId(b.id))) -
+        Number(pinnedIds.has(normalizeAgentId(a.id))),
+    );
+  });
   const nameCounts = createMemo(() => {
     const counts = new Map<string, number>();
     for (const agent of agents()) {
@@ -199,16 +196,6 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
     }
     return counts;
   });
-  const visibleAgents = createMemo(() =>
-    agents().filter((agent) => {
-      const label = normalizeAgentLabel(agent, params.identities.get(normalizeAgentId(agent.id)));
-      return (
-        !query() ||
-        label.toLocaleLowerCase().includes(query()) ||
-        agent.id.toLocaleLowerCase().includes(query())
-      );
-    }),
-  );
   const autofocusAll = createMemo(
     () => params.openMode === "click" && params.allAgentsScope && agents().length > 1,
   );
@@ -221,11 +208,14 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
   if (params.agents.length === 0) {
     return entries;
   }
-  if (params.agents.length > 1 && !query()) {
+  if (params.agents.length > 1) {
     entries.push({
       id: "scope:all",
       label: t("agentChip.showAll"),
-      class: `sidebar-customize-menu__item sidebar-agent-menu__agent-switch ${params.allAgentsScope ? "sidebar-agent-menu__agent-switch--active" : ""}`,
+      class: [
+        "sidebar-customize-menu__item sidebar-agent-menu__agent-switch",
+        { "sidebar-agent-menu__agent-switch--active": params.allAgentsScope },
+      ],
       attributes: {
         "aria-current": params.allAgentsScope ? "true" : undefined,
         "data-initial-focus": autofocusAll() ? "" : undefined,
@@ -240,7 +230,7 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
       ),
     });
   }
-  for (const agent of visibleAgents()) {
+  for (const agent of agents()) {
     entries.push(
       renderAgentRow(
         () => agent,
@@ -250,19 +240,9 @@ export function renderSidebarAgentMenuSwitcher(params: SidebarAgentMenuSwitcherP
           (nameCounts().get(
             normalizeAgentLabel(agent, params.identities.get(normalizeAgentId(agent.id))),
           ) ?? 0) > 1,
+        pinButtons,
       ),
     );
-  }
-  if (visibleAgents().length === 0) {
-    entries.push({
-      kind: "content",
-      id: "empty",
-      content: (
-        <div class="sidebar-agent-menu__empty" role="status">
-          {t("agentChip.noMatches")}
-        </div>
-      ),
-    });
   }
   return entries;
 }

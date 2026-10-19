@@ -73,7 +73,6 @@ function resolveLifecycleOptions(cmdOpts: DaemonLifecycleOptions, command?: Comm
   };
 }
 
-/** Attach Gateway service status/install/lifecycle subcommands to a parent command. */
 export function addGatewayServiceCommands(parent: Command, opts?: { statusDescription?: string }) {
   parent
     .command("status")

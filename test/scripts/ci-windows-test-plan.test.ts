@@ -28,8 +28,9 @@ describe("Windows CI whole-file placement", () => {
     expect(shards.flatMap((shard) => shard.targets).toSorted(compareFiles)).toEqual(
       inventory.toSorted(compareFiles),
     );
-    // The Windows long-path identity regression (#162332) rounds every shard to 428s; retain the approved tiny budget bump.
-    expect(shards.every((shard) => shard.predicted_seconds < 429)).toBe(true);
+    // The managed-handoff regression adds one unmeasured 3s fallback envelope to the
+    // previous 428s maximum; 431s bounds placement, not measured runtime or a timeout.
+    expect(shards.every((shard) => shard.predicted_seconds < 432)).toBe(true);
     expect(
       shards.filter(
         (shard) =>

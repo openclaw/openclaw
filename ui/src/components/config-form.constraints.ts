@@ -1,4 +1,3 @@
-// Control UI helpers derive native constraints and safe initial values from config schemas.
 import {
   isJsonSchemaValueValid as isSupportedConfigValueValid,
   jsonSchemaValuesEqual as configValuesEqual,
@@ -500,14 +499,7 @@ function validatedDefaultCandidate(schema: JsonSchema, candidate: unknown): unkn
   if (candidate === NO_SAFE_DEFAULT || !isSupportedConfigValueValid(schema, candidate)) {
     return NO_SAFE_DEFAULT;
   }
-  if (!candidate || typeof candidate !== "object") {
-    return candidate;
-  }
-  try {
-    return structuredClone(candidate);
-  } catch {
-    return NO_SAFE_DEFAULT;
-  }
+  return candidate;
 }
 
 export function defaultValue(schema?: JsonSchema, depth = 0): unknown {

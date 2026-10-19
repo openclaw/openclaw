@@ -183,7 +183,10 @@ test("keeps runtime phase parents explicit when observations arrive under anothe
   }
 });
 
-test.each([{ traces: false, metricsEnabled: true }])(
+test.each([
+  { traces: false, metricsEnabled: true },
+  { traces: true, metricsEnabled: false },
+])(
   "honors preloaded signal toggles (traces=$traces metrics=$metricsEnabled)",
   async ({ traces, metricsEnabled }) => {
     const reader = new PeriodicExportingMetricReader({
@@ -194,6 +197,8 @@ test.each([{ traces: false, metricsEnabled: true }])(
       metrics.disable();
       expect(metrics.setGlobalMeterProvider(meterProvider)).toBe(true);
       let deliveredPhases = 0;
+      let deliveredWebSocketMetrics = 0;
+      let deliveredRetentionMetrics = 0;
       await startOtelService({
         traces,
         metrics: metricsEnabled,
@@ -205,6 +210,12 @@ test.each([{ traces: false, metricsEnabled: true }])(
               return bridge.onEvent((event, metadata, privateData) => {
                 if (event.type === "diagnostic.phase.completed") {
                   deliveredPhases++;
+                }
+                if (event.type === "gateway.ws.event" || event.type === "gateway.ws.connections") {
+                  deliveredWebSocketMetrics++;
+                }
+                if (event.type === "sessions.list.retention") {
+                  deliveredRetentionMetrics++;
                 }
                 listener(event, metadata, privateData);
               }, filter);
@@ -219,6 +230,9 @@ test.each([{ traces: false, metricsEnabled: true }])(
         outcome: "ok",
         durationMs: 10,
       });
+      emit({ type: "gateway.ws.event", event: "chat", count: 1, bytes: 128 });
+      emit({ type: "gateway.ws.connections", operators: 1 });
+      emit({ type: "sessions.list.retention", views: 3, refs: 17, estimatedBytes: 3_504 });
       emit({
         type: "model.usage",
         provider: "openai",
@@ -234,6 +248,8 @@ test.each([{ traces: false, metricsEnabled: true }])(
       await waitForDiagnosticEventsDrained();
 
       expect(deliveredPhases).toBe(traces ? 1 : 0);
+      expect(deliveredWebSocketMetrics).toBe(metricsEnabled ? 2 : 0);
+      expect(deliveredRetentionMetrics).toBe(metricsEnabled ? 1 : 0);
       for (const name of [
         "openclaw.gateway.rpc.response",
         "openclaw.model.usage",

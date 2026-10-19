@@ -1,7 +1,6 @@
 import { readPositiveIntegerParam } from "openclaw/plugin-sdk/param-readers";
 import type { OpenClawPluginApi } from "../runtime-api.js";
 import { assertFeishuApiSuccess } from "./api-response.js";
-import { createFeishuToolClient } from "./tool-account.js";
 import { registerFeishuTool } from "./tool-registration.js";
 import { feishuExternalToolResult as jsonResult, unknownToolActionResult } from "./tool-result.js";
 import { FeishuWikiSchema } from "./wiki-schema.js";
@@ -51,16 +50,9 @@ export function registerFeishuWikiTools(api: OpenClawPluginApi) {
     description:
       "Feishu knowledge base operations. Actions: spaces, nodes, get, create, move, rename",
     parameters: FeishuWikiSchema,
-    createExecute(ctx, cfg) {
-      const defaultAccountId = ctx.agentAccountId;
+    createExecute(_ctx, _cfg, createToolClient) {
       return async (p) => {
-        const createClient = () =>
-          createFeishuToolClient({
-            cfg,
-            executeParams: p,
-            defaultAccountId,
-            requiredTool: { family: "wiki", label: "Wiki" },
-          });
+        const createClient = () => createToolClient(p, "Wiki");
         switch (p.action) {
           case "spaces": {
             const pageToken = p.page_token;

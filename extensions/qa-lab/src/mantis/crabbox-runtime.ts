@@ -4,6 +4,7 @@ import {
   resolveCrabboxBinary,
 } from "@openclaw/crabbox-provider/cli-runtime-api.js";
 import { normalizeOptionalString as trimToValue } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { shellEscapeBackslash as shellQuote } from "openclaw/plugin-sdk/string-normalization-runtime";
 import { isTruthyOptIn } from "../mantis-options.runtime.js";
 
 export type MantisCrabboxLeaseOptions = {
@@ -170,9 +171,7 @@ function extractLeaseId(output: string) {
   return output.match(/\b(?:cbx_[a-f0-9]+|tbx_[A-Za-z0-9_-]+)\b/u)?.[0];
 }
 
-export function shellQuote(value: string) {
-  return `'${value.replaceAll("'", "'\\''")}'`;
-}
+export { shellQuote };
 
 export async function createMantisCrabboxSession(
   opts: MantisCrabboxLeaseOptions & { crabboxBin?: string; commandRunner?: CommandRunner },

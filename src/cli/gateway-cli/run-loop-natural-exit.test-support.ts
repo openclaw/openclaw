@@ -1,5 +1,6 @@
 import { expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
+import { formatGatewayPendingCloseSteps } from "../../gateway/restart-trace.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { gatewayWorkAdmissionActual, runLoopFixture as f } from "./run-loop-mocks.test-support.js";
 import {
@@ -119,7 +120,7 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
     });
   });
 
-  it("owns output failure without a stdin lifeline until Gateway cleanup joins", async () => {
+  it("joins Gateway cleanup without feeding broken output back into shutdown", async () => {
     const previousCode = process.exitCode;
     const { exitAfterSignalExitBarriers, registerSignalExitOwner } =
       await import("../signal-exit-barrier.js");
@@ -127,18 +128,31 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
     try {
       await f.withRunningGateway(async ({ close, runtime, exited }) => {
         close.mockImplementationOnce(closeGate.wait);
-        exitAfterSignalExitBarriers(7);
+        let outputFailures = 0;
+        let feedbackLoop = false;
+        f.gatewayLog.info.mockImplementation(() => {
+          // A closed pipe reports another failure for each attempted shutdown log.
+          // Bound the fixture so the original feedback loop can finish and fail.
+          if (++outputFailures > 20) {
+            feedbackLoop = true;
+            return;
+          }
+          exitAfterSignalExitBarriers(7);
+        });
+        exitAfterSignalExitBarriers(0);
         await closeGate.entered;
         expect(f.gatewayLog.info).toHaveBeenCalledWith("received process exit; shutting down");
         expect(runtime.exit).not.toHaveBeenCalled();
         expect(process.exitCode).toBe(previousCode);
         closeGate.release();
         await expect(exited).resolves.toBe(7);
+        expect(feedbackLoop).toBe(false);
         expect(close).toHaveBeenCalledOnce();
         const release = registerSignalExitOwner(() => {});
         release();
       }, true);
     } finally {
+      f.gatewayLog.info.mockReset();
       closeGate.release();
       process.exitCode = previousCode;
     }
@@ -247,6 +261,7 @@ export function registerNaturalExitTests(waitForLoopTurn: () => Promise<void>) {
                 await cancelGate.entered;
               }
               expect(runtime.exit).not.toHaveBeenCalled();
+              expect(formatGatewayPendingCloseSteps()).toContain("restart.close.watchdog=");
               if (failed) {
                 cancelGate.reject(failure);
               } else {

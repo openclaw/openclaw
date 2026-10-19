@@ -3,6 +3,7 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { promisify } from "node:util";
+import { openOpenClawAgentDatabaseReadOnly } from "openclaw/plugin-sdk/memory-core-host-engine-storage";
 import {
   resolveRuntimeWorkerArgv,
   resolveRuntimeWorkerUrl,
@@ -14,6 +15,7 @@ import {
 import {
   requireNativeSqliteDatabase,
   closeOpenClawAgentDatabasesAsync,
+  observeHostDataSql,
 } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { withOpenClawTestState } from "openclaw/plugin-sdk/test-state";
 import { expect, it } from "vitest";
@@ -29,6 +31,27 @@ const state = {
   vector: { enabled: true, available: true },
 };
 
+function expectRetainedAgentAdmission(databasePath: string) {
+  const queries: string[] = [];
+  const observed = observeHostDataSql((sql) => queries.push(sql));
+  try {
+    const reader = openOpenClawAgentDatabaseReadOnly({ agentId: "main", path: databasePath });
+    expect(reader.found).toBe(true);
+    if (reader.found) {
+      reader.database.close();
+    }
+    expect
+      .soft(
+        queries.filter((sql) =>
+          /sqlite_(?:schema|master)|pragma_table|FROM\s+"?schema_meta/i.test(sql),
+        ),
+      )
+      .toEqual([]);
+  } finally {
+    observed.restore();
+  }
+}
+
 async function admit(
   db: DatabaseSync,
   databasePath: string,
@@ -40,6 +63,9 @@ async function admit(
     admit: () => {},
   });
   expect(backend.execute({ type: "schema.admit", input: schema })).toMatchObject({ ok: true });
+  if ("kind" in connection) {
+    expectRetainedAgentAdmission(databasePath);
+  }
   const prepare = { type: "vector.prepare", input: { state } } as const;
   await backend.prepare?.(prepare);
   expect(backend.execute(prepare)).toMatchObject({ ok: true });
@@ -92,6 +118,7 @@ it.each(["clean", "unclean"])(
             },
           }),
         ).toMatchObject({ ok: true });
+        expectRetainedAgentAdmission(target.path);
         expect(
           target.db
             .prepare(

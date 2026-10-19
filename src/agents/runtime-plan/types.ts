@@ -1,3 +1,4 @@
+import type { ModelThinkingLevel } from "@openclaw/llm-core/types";
 import type { TSchema } from "typebox";
 import type {
   ModelApi,
@@ -15,15 +16,7 @@ import type { TranscriptPolicy } from "../transcript-policy.types.js";
 
 export type AgentRuntimeTransport = "sse" | "websocket" | "websocket-cached" | "auto";
 
-type AgentRuntimeThinkLevel =
-  | "off"
-  | "minimal"
-  | "low"
-  | "medium"
-  | "high"
-  | "xhigh"
-  | "adaptive"
-  | "max";
+type AgentRuntimeThinkLevel = ModelThinkingLevel | "adaptive";
 
 type AgentRuntimePromptMode = "full" | "minimal" | "none";
 

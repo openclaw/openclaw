@@ -122,7 +122,6 @@ function readConversationsAsync(
   scope: ConversationRegistryScope,
   query: ConversationReadQuery,
 ): Promise<ConversationRecord[]> {
-  const capturedQuery = structuredClone(query);
   const selected = captureSessionActorStorageOwner(
     {
       agentId: scope.databaseAgentId ?? scope.agentId,
@@ -132,6 +131,7 @@ function readConversationsAsync(
     conversationAuthority,
   );
   if (selected) {
+    const capturedQuery = structuredClone(query);
     if (
       selected.binding &&
       selected.agentId === selected.binding.agentId &&
@@ -150,7 +150,7 @@ function readConversationsAsync(
     );
   }
   return withConversationRead(scope, ({ reader, database }) =>
-    reader.readConversations({ query: capturedQuery, env: database.env }),
+    reader.readConversations({ query, env: database.env }),
   );
 }
 
@@ -252,11 +252,7 @@ export async function registerConversationAddresses(
       await binding.actor.storage!.mutate(
         {
           type: "session.conversation.register",
-          input: {
-            identities: structuredClone(identities),
-            discoveredAt,
-            query: query && structuredClone(query),
-          },
+          input: { identities, discoveredAt, query },
         },
         {
           ...memory.authority,
@@ -274,9 +270,9 @@ export async function registerConversationAddresses(
   }
   const { options } = pinConversationDatabaseScope(scope);
   const input = {
-    identities: structuredClone(identities),
+    identities,
     discoveredAt,
-    query: query && structuredClone(query),
+    query,
   };
   const selectCurrent = () => {
     const selected = selectEligible(input.identities);
@@ -293,29 +289,18 @@ export async function registerConversationAddresses(
   const source: AgentDatabaseRequestExecutionSource = {
     assertCurrent() {},
     createAdmission(binding) {
-      return withConversationPublication(
-        () => ({
-          nativeLocations: binding.nativeLocations,
-          admission: createSqliteWorkerOperationAdmission((request, grant) => {
-            binding.authorize(request);
-            if (request.stage === "transaction" || request.stage === "commit") {
-              assertCurrent();
-            }
-            if (!grant()) {
-              throw new Error("Conversation registration authority expired");
-            }
-          }, binding.attachment),
-        }),
-        () => binding.assertCurrent(),
-        () => execution.captureGenerationClaim(),
-        () => [
-          ...new Set(
-            input.identities.map((identity) =>
-              JSON.stringify(["catalogue", identity.conversationRef]),
-            ),
-          ),
-        ],
-      );
+      return () => ({
+        nativeLocations: binding.nativeLocations,
+        admission: createSqliteWorkerOperationAdmission((request, grant) => {
+          binding.authorize(request);
+          if (request.stage === "transaction" || request.stage === "commit") {
+            assertCurrent();
+          }
+          if (!grant()) {
+            throw new Error("Conversation registration authority expired");
+          }
+        }, binding.attachment),
+      });
     },
   };
   const execution = captureOpenClawAgentDatabaseExecution(options);
@@ -330,8 +315,26 @@ export async function registerConversationAddresses(
       if (!execution.capturePreparedGenerationClaim()) {
         await execution.prepare(source);
       }
-      return await execution.runExisting(source, (worker) =>
-        worker.execute({ type: "conversation.register", input }),
+      return await execution.runExisting(
+        {
+          ...source,
+          createAdmission(binding) {
+            // Preparation commits schema facts before a catalogue generation can be claimed.
+            return withConversationPublication(
+              source.createAdmission(binding),
+              () => binding.assertCurrent(),
+              () => execution.captureGenerationClaim(),
+              () => [
+                ...new Set(
+                  input.identities.map((identity) =>
+                    JSON.stringify(["catalogue", identity.conversationRef]),
+                  ),
+                ),
+              ],
+            );
+          },
+        },
+        (worker) => worker.execute({ type: "conversation.register", input }),
       );
     });
   } finally {
@@ -375,7 +378,6 @@ export async function withConversationAuthority<T>(
     return await select(facts)();
   }
   const { options } = pinConversationDatabaseScope(scope);
-  const input = structuredClone(query);
   const execution = captureOpenClawAgentDatabaseExecution(options);
   let consumed: Promise<{ ok: true; value: T } | { ok: false; error: unknown }> | undefined;
   try {
@@ -420,7 +422,7 @@ export async function withConversationAuthority<T>(
               });
             },
           },
-          (worker) => worker.execute({ type: "conversation.authority", input }),
+          (worker) => worker.execute({ type: "conversation.authority", input: query }),
         );
         if (!consumed && settled !== undefined) {
           throw new Error("Conversation authority omitted its transaction grant");

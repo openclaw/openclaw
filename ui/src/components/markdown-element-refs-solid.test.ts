@@ -8,7 +8,7 @@ import { linkReaderPrefetchRef, markdownBlocksRef } from "./markdown-element-ref
 
 afterEach(() => vi.unstubAllGlobals());
 
-it("parks native thread work on hide and releases it when the Solid owner unmounts", async () => {
+it("parks native thread work on hide and releases replaced roots and unmounted owners", async () => {
   const observed = new Set<Element>();
   vi.stubGlobal(
     "ResizeObserver",
@@ -49,14 +49,17 @@ it("parks native thread work on hide and releases it when the Solid owner unmoun
   let visible = true;
   const binding = { owner: presentationOwner, isPresented: () => visible };
   let updatePresentation!: (value: PresentationValue) => void;
+  let replaceRoot!: (element: HTMLElement) => void;
   const view = renderSolidRef(
     () => {
       const [presented, setPresented] = createSignal<PresentationValue>(binding);
       updatePresentation = (value) => setPresented(() => value);
-      return [
+      const refs = [
         markdownBlocksRef(presented),
         linkReaderPrefetchRef(() => ["session", presented(), true]),
       ];
+      replaceRoot = (element) => refs.forEach((ref) => ref(element));
+      return refs;
     },
     { targetElement: root },
   );
@@ -85,6 +88,34 @@ it("parks native thread work on hide and releases it when the Solid owner unmoun
     updatePresentation({ ...binding });
     await waitForSolid(() => {
       expect(observed.has(code)).toBe(true);
+      expect(idleScans.size).toBe(1);
+    });
+    const nextOwner = new EventTarget();
+    let nextVisible = true;
+    updatePresentation({ owner: nextOwner, isPresented: () => nextVisible });
+    await waitForSolid(() => expect(observed.has(code)).toBe(true));
+    visible = false;
+    presentationOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expect(observed.has(code)).toBe(true);
+    expect(idleScans.size).toBe(1);
+    nextVisible = false;
+    nextOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expect(observed.size).toBe(0);
+    expect(idleScans.size).toBe(0);
+    updatePresentation(true);
+    await waitForSolid(() => expect(observed.has(code)).toBe(true));
+    nextOwner.dispatchEvent(new Event(PRESENTATION_CHANGED_EVENT));
+    expect(observed.has(code)).toBe(true);
+    expect(idleScans.size).toBe(1);
+
+    const nextRoot = document.createElement("div");
+    nextRoot.className = root.className;
+    nextRoot.innerHTML = root.innerHTML;
+    root.replaceWith(nextRoot);
+    replaceRoot(nextRoot);
+    await waitForSolid(() => {
+      expect(observed.has(code)).toBe(false);
+      expect(observed.has(nextRoot.querySelector("code")!)).toBe(true);
       expect(idleScans.size).toBe(1);
     });
     view.unmount();

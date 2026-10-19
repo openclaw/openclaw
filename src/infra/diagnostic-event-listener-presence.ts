@@ -15,7 +15,6 @@ type DiagnosticEventListenerPresence = {
   untrustedInterest: DiagnosticEventInterestCounts;
   trustedInterest: DiagnosticEventInterestCounts;
   interestListeners: Map<string, Set<() => void>>;
-  marker: symbol;
   internalCount: number;
   trustedCount: number;
 };
@@ -26,7 +25,6 @@ const listenerPresence = resolveGlobalSingleton<DiagnosticEventListenerPresence>
     untrustedInterest: { broadInterestCount: 0, eventInterestDeltas: new Map() },
     trustedInterest: { broadInterestCount: 0, eventInterestDeltas: new Map() },
     interestListeners: new Map(),
-    marker: DIAGNOSTIC_EVENT_LISTENER_PRESENCE_KEY,
     internalCount: 0,
     trustedCount: 0,
   }),

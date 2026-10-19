@@ -1,4 +1,4 @@
-import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
+import type { Agent, AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { expect } from "vitest";
 import { castAgentMessage } from "../test-helpers/agent-message-fixtures.js";
 import { installToolResultContextGuard } from "./tool-result-context-guard.js";
@@ -84,17 +84,12 @@ export function getToolResultText(msg: AgentMessage): string {
   return typeof block?.text === "string" ? block.text : "";
 }
 
-export function makeGuardableAgent(
-  transformContext?: (
-    messages: AgentMessage[],
-    signal: AbortSignal,
-  ) => AgentMessage[] | Promise<AgentMessage[]>,
-) {
+export function makeGuardableAgent(transformContext?: Agent["transformContext"]) {
   return { transformContext };
 }
 
 export async function applyGuardToContext(
-  agent: { transformContext?: (messages: AgentMessage[], signal: AbortSignal) => unknown },
+  agent: Pick<Agent, "transformContext">,
   contextForNextCall: AgentMessage[],
   contextWindowTokens = 1_000,
 ) {

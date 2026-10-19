@@ -1,4 +1,3 @@
-import type { Result } from "@openclaw/normalization-core/result";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   ErrorCodes,
@@ -16,8 +15,14 @@ import {
   isSubagentRunQueued,
 } from "../../agents/subagents/registry/subagent-registry-read.js";
 import { isAgentEventLifecycleGenerationCurrent } from "../../infra/agent-events.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  getRpcSourceLifecycleGeneration,
+  getRpcSourceProjectSessionActive,
+  isRpcSourceRegistered,
+} from "../../sessions/session-controller.rpc-sources.js";
 import { captureWorkerInferenceForSession, createChatAbortOps } from "../chat-abort-ops.js";
-import { isChatAbortControllerEntryAbortable } from "../chat-abort.js";
 import { resolveChatRunOwnerAgentId } from "../chat-run-owner.js";
 import { errorShapeFromError } from "../error-shape.js";
 import { getSessionRowProjection } from "../session-row-projection-access.js";
@@ -37,8 +42,10 @@ import {
   type ChatAbortSessionSnapshot,
 } from "./chat-aborted-partial.js";
 
-/** Queued collectors retain scheduler ownership while Gateway admission is still pending. */
-export function abortQueuedCollectorSession(
+export { abortControlledSubagents, descendantAbortError } from "./chat-abort-descendants.js";
+
+/** Stops registry-owned work that has no active executor to reach through ordinary abort. */
+export function abortDormantSubagentSession(
   initialParams: Omit<ChatSessionAbortParams, "ops">,
   prepareSession?: () => Promise<ChatAbortSessionSnapshot>,
 ): Promise<QueuedCollectorAbortOutcome> | undefined {
@@ -48,16 +55,28 @@ export function abortQueuedCollectorSession(
     undefined,
     params.agentId,
   );
-  if (!entry || !isSubagentRunQueued(entry) || (params.runId && entry.runId !== params.runId)) {
+  if (
+    !entry ||
+    (!isSubagentRunQueued(entry) && entry.pauseReason !== "sessions_yield") ||
+    (params.runId && entry.runId !== params.runId)
+  ) {
     return undefined;
   }
-  let workerCancellation = captureWorkerInferenceForSession({
-    context: params.context,
-    sessionId: params.sessionId,
-  });
-  const cfg = params.session?.ok ? params.session.value.cfg : params.context.getRuntimeConfig();
+  const cfg = params.session?.ok
+    ? params.session.value.cfg
+    : (params.context.getRuntimeConfig() ?? {});
+  // The dormant child does not grant cancellation authority. Capture its live
+  // parent source and carry that exact requester claim through the awaited kill.
   const parentRunId = entry.requesterTurnRunId;
-  const parentRun = parentRunId ? params.context.chatAbortControllers.get(parentRunId) : undefined;
+  const capturedParent = parentRunId
+    ? getRpcSourceForGateway(parentRunId, params.context.resolveGatewayContext)
+    : undefined;
+  const parentSource =
+    capturedParent &&
+    (entry.requesterStorePath === undefined ||
+      capturedParent.input.target?.storeScope === entry.requesterStorePath)
+      ? capturedParent
+      : undefined;
   const parentKey = entry.controllerSessionKey?.trim() || entry.requesterSessionKey;
   const controller = {
     controllerSessionKey: parentKey,
@@ -66,13 +85,13 @@ export function abortQueuedCollectorSession(
       defaultAgentId: entry.requesterAgentId,
     }),
   };
-  // Preserve the actual parent admission's authority through awaited kill work;
-  // visibility and operator.write alone do not own an unstarted child.
   const assertCurrent = () => {
     params.assertCurrent?.();
+    // Registry generation and controller scope protect the child obligation;
+    // the source checks below independently protect its parent requester.
     const current = getCurrentSubagentRunOwner(subagentRuns, entry);
     if (!current || (current.execution.status === "queued" && !isSubagentRunQueued(current))) {
-      throw new Error("Queued collector reservation changed; retry Stop.");
+      throw new Error("Dormant subagent obligation changed; retry Stop.");
     }
     const ownershipError = ensureSubagentControllerOwnsRun({ cfg, controller, entry: current });
     if (ownershipError) {
@@ -81,37 +100,45 @@ export function abortQueuedCollectorSession(
     if (params.requester.isAdmin) {
       return;
     }
+    const parentIdentity = parentSource && getRpcSourceIdentity(parentSource);
+    const parentLifecycleGeneration = parentSource && getRpcSourceLifecycleGeneration(parentSource);
     if (
       !parentRunId ||
-      !parentRun ||
-      params.context.chatAbortControllers.get(parentRunId) !== parentRun ||
-      !isChatAbortControllerEntryAbortable(parentRun) ||
-      !parentRun.lifecycleGeneration ||
-      !isAgentEventLifecycleGenerationCurrent(parentRun.lifecycleGeneration) ||
-      parentRun.projectSessionActive === false ||
+      !parentSource ||
+      !parentIdentity ||
+      !isRpcSourceRegistered(parentSource) ||
+      parentSource.input.phase === "consumed" ||
+      parentSource.input.retirementRequested ||
+      parentSource.input.custody.cancellationRetired ||
+      parentSource.input.abortSignal.aborted ||
+      !parentLifecycleGeneration ||
+      !isAgentEventLifecycleGenerationCurrent(parentLifecycleGeneration) ||
+      getRpcSourceProjectSessionActive(parentSource) === false ||
       resolveSessionStoreKey({
         cfg,
-        sessionKey: parentRun.sessionKey,
+        sessionKey: parentIdentity.sessionKey,
         storeAgentId: controller.controllerAgentId,
       }) !== parentKey ||
-      resolveChatRunOwnerAgentId({
-        agentId: parentRun.agentId,
-        sessionKey: parentRun.sessionKey,
-      }) !== controller.controllerAgentId ||
-      !canRequesterAbortChatRun(parentRun, params.requester, { requireOwnerMatch: true })
+      resolveChatRunOwnerAgentId(parentIdentity) !== controller.controllerAgentId ||
+      !canRequesterAbortChatRun(
+        { ...parentIdentity, requester: parentSource.adapter.requester },
+        params.requester,
+        { requireOwnerMatch: true },
+      )
     ) {
       throw new Error(
-        "Unauthorized queued collector Stop; use its active parent requester connection or an administrator.",
+        "Unauthorized dormant subagent Stop; use its active parent requester connection or an administrator.",
       );
     }
   };
   return (async () => {
-    let sessionAbort: Result<ReturnType<typeof prepareChatSessionAbort>, ErrorShape> | undefined;
+    let plan: ReturnType<typeof prepareChatSessionAbort> | undefined;
+    let blocked: ErrorShape | undefined;
     let outcome: QueuedCollectorAbortOutcome = {
       ok: false,
       error: errorShape(
         ErrorCodes.UNAVAILABLE,
-        "Queued collector cancellation was not published; retry Stop.",
+        "Dormant subagent cancellation was not published; retry Stop.",
       ),
     };
     let failure: { error: unknown } | undefined;
@@ -123,7 +150,6 @@ export function abortQueuedCollectorSession(
           await projection.ensureMaterialized();
         } while (projection.needsMaterialization);
       }
-      assertCurrent();
       const publication = createQueuedCollectorPublication({
         context: params.context,
         sessionKey: params.sessionKey,
@@ -134,10 +160,7 @@ export function abortQueuedCollectorSession(
         defaultAgentId: params.defaultAgentId,
         projection,
         canPublish: () =>
-          !sessionAbort ||
-          (sessionAbort.ok &&
-            !sessionAbort.value.result.unauthorized &&
-            sessionAbort.value.canCascade),
+          blocked === undefined && (!plan || (!plan.result.unauthorized && plan.canCascade)),
       });
       let prepared = prepareSession === undefined;
       let preparation: Promise<void> | undefined;
@@ -151,12 +174,11 @@ export function abortQueuedCollectorSession(
           expectedOwnerKey: entry.requesterSessionKey,
           onResult: (result) => {
             publication.publishSnapshot(result, true);
-            if (sessionAbort && !sessionAbort.ok) {
-              outcome = sessionAbort;
+            if (blocked) {
+              outcome = { ok: false, error: blocked };
               return;
             }
-            const selected = sessionAbort?.value;
-            if (selected?.result.unauthorized) {
+            if (plan?.result.unauthorized) {
               outcome = {
                 ok: false,
                 error: errorShape(ErrorCodes.INVALID_REQUEST, "unauthorized"),
@@ -167,26 +189,24 @@ export function abortQueuedCollectorSession(
               outcome = { ok: false, error: errorShape(ErrorCodes.UNAVAILABLE, result.error) };
               return;
             }
-            if (selected && !selected.canCascade) {
-              // Other owned runs may have stopped, but this collector remains eligible.
+            if (plan && !plan.canCascade) {
               outcome = {
                 ok: false,
                 error: errorShape(
                   ErrorCodes.UNAVAILABLE,
-                  "Queued collector was not stopped; other session work was preserved. Wait for it to finish or cancel it through its owner, then retry.",
+                  "Dormant subagent was not stopped; other session work was preserved. Wait for it to finish or cancel it through its owner, then retry.",
                 ),
               };
               return;
             }
             const cancelledRunId = getQueuedCollectorCancellationRunId(result);
-            const aborted = cancelledRunId !== undefined;
             outcome = {
               ok: true,
               value: {
-                aborted: aborted || selected?.result.aborted === true,
+                aborted: cancelledRunId !== undefined || plan?.result.aborted === true,
                 runIds: uniqueStrings([
-                  ...(aborted ? [cancelledRunId] : []),
-                  ...(selected?.result.runIds ?? []),
+                  ...(cancelledRunId ? [cancelledRunId] : []),
+                  ...(plan?.result.runIds ?? []),
                 ]),
               },
             };
@@ -194,6 +214,7 @@ export function abortQueuedCollectorSession(
         },
         {
           assertCurrent,
+          requiredSessionId: params.requiredSessionId,
           prepareRead: () => {
             if (prepared || !prepareSession) {
               return undefined;
@@ -204,7 +225,6 @@ export function abortQueuedCollectorSession(
                 session,
                 sessionId: session.ok ? session.value.entry?.sessionId : params.sessionId,
               };
-              workerCancellation = captureWorkerInferenceForSession(params);
               prepared = true;
             }));
           },
@@ -212,32 +232,26 @@ export function abortQueuedCollectorSession(
           beforeSessionKill: async () => {
             await params.beforeAbort?.();
             assertCurrent();
-            // Resolve Gateway owners under the kill runtime's session fence.
-            // Signal them only after this collector's FIFO reservation is held.
-            const plan = prepareChatSessionAbort(
+            plan = prepareChatSessionAbort(
               {
                 ...params,
                 ops: createChatAbortOps(params.context),
                 cascadeDescendants: true,
                 includeProtectedRuns: params.runId ? true : params.includeProtectedRuns,
               },
-              workerCancellation,
+              captureWorkerInferenceForSession({
+                context: params.context,
+                sessionId: params.sessionId,
+              }),
               entry.runId,
             );
             if (params.runId && plan.hasOtherWork) {
-              sessionAbort = {
-                ok: false,
-                error: errorShape(
-                  ErrorCodes.UNAVAILABLE,
-                  "Other work is active in this child session; use a full-session Stop without runId.",
-                ),
-              };
+              blocked = errorShape(
+                ErrorCodes.UNAVAILABLE,
+                "Other work is active in this child session; use a full-session Stop.",
+              );
               return false;
             }
-            sessionAbort = {
-              ok: true,
-              value: plan,
-            };
             plan.abort();
             return plan.canCascade;
           },
@@ -245,16 +259,11 @@ export function abortQueuedCollectorSession(
       );
     } catch (error) {
       failure = { error };
-      outcome = {
-        ok: false,
-        error: errorShapeFromError(ErrorCodes.INVALID_REQUEST, error),
-      };
+      outcome = { ok: false, error: errorShapeFromError(ErrorCodes.INVALID_REQUEST, error) };
     }
-    // Gateway cancellation already consumed these buffers. Preserve their snapshots
-    // after later owner failures; the transcript writer still fences the session.
-    if (sessionAbort?.ok) {
+    if (plan) {
       try {
-        const warning = await sessionAbort.value.finish();
+        const warning = await plan.finish();
         if (warning) {
           outcome = withQueuedCollectorWarning(outcome, warning);
         }
@@ -264,7 +273,7 @@ export function abortQueuedCollectorSession(
         }
         throw new AggregateError(
           [failure?.error ?? outcome.error, error],
-          "Queued collector cancellation and persistence failed",
+          "Dormant subagent cancellation and persistence failed",
           { cause: error },
         );
       }
@@ -279,9 +288,9 @@ export async function abortChatRunsForSessionKeyWithPartials(
 ): Promise<ChatSessionAbortResult> {
   let params = initialParams;
   if (params.cascadeDescendants) {
-    const queuedAbort = abortQueuedCollectorSession(params, prepareSession);
-    if (queuedAbort) {
-      const result = await queuedAbort;
+    const dormantAbort = abortDormantSubagentSession(params, prepareSession);
+    if (dormantAbort) {
+      const result = await dormantAbort;
       return result.ok
         ? { ...result.value, unauthorized: false }
         : { aborted: false, runIds: [], unauthorized: false, error: result.error };
@@ -321,6 +330,8 @@ export async function abortChatRunsForSessionKeyWithPartials(
         beforeKill: async () => {
           await params.beforeAbort?.();
           plan.abort();
+          // Parent cancellation observers can replace the conversation before child effects.
+          await params.beforeAbort?.();
           return plan.canCascade;
         },
       });
@@ -332,6 +343,8 @@ export async function abortChatRunsForSessionKeyWithPartials(
       plan.abort();
     }
     if (!result.unauthorized && !result.error) {
+      // Observe child-triggered changes before persisting this Stop's own partial output.
+      await params.beforeAbort?.();
       params.assertCurrent?.();
       params.onCancellationStarted?.();
     }

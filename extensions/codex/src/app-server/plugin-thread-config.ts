@@ -2,6 +2,7 @@ import { codexAppIdentityKey } from "./app-identity.js";
 import { defaultCodexAppInventoryCache, CodexAppInventoryCache } from "./app-inventory-cache.js";
 import { fingerprintCodexPolicy } from "./config-policy-json.js";
 import {
+  readCodexPluginConfig,
   resolveCodexPluginsPolicy,
   type CodexPluginDestructiveApprovalMode,
   type ResolvedCodexPluginPolicy,
@@ -81,7 +82,7 @@ const CODEX_PLUGIN_THREAD_CONFIG_INPUT_FINGERPRINT_VERSION = 15;
 const CODEX_PLUGIN_THREAD_CONFIG_FINGERPRINT_VERSION = 2;
 
 export function shouldBuildCodexPluginThreadConfig(pluginConfig?: unknown): boolean {
-  return resolveCodexPluginsPolicy(pluginConfig).configured;
+  return resolveCodexPluginsPolicy(readCodexPluginConfig(pluginConfig)).configured;
 }
 
 /** Fingerprints policy and app-cache identity before runtime inventory is read. */
@@ -123,7 +124,8 @@ export async function buildCodexPluginThreadConfig(
 ): Promise<CodexPluginThreadConfig> {
   const appCache = params.appCache ?? defaultCodexAppInventoryCache;
   const threadAppCacheKey = resolveCodexPluginThreadAppCacheKey(params);
-  const policy = params.policy ?? resolveCodexPluginsPolicy(params.pluginConfig);
+  const policy =
+    params.policy ?? resolveCodexPluginsPolicy(readCodexPluginConfig(params.pluginConfig));
   const inputFingerprint = buildCodexPluginThreadConfigInputFingerprint({
     policy,
     appCacheKey: params.appCacheKey,

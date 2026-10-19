@@ -21,18 +21,12 @@ export type ChatEffortPickerParams = {
   thinkingDisabled: boolean;
   thinking: ChatThinkingSelectState;
   onFastModeSelect: (value: ChatFastModeSelectValue, sessionKey: string) => Promise<unknown>;
-  onRequestUpdate?: () => void;
   onThinkingSelect: (value: string, sessionKey: string) => Promise<unknown>;
   reserved?: boolean;
 };
 
 function formatEffortLabel(label: string): string {
   return label.replace(/^Inherited:\s*/u, "");
-}
-
-function refreshAfterSelection(pending: Promise<unknown>, requestUpdate?: () => void) {
-  void pending.finally(() => requestUpdate?.());
-  requestUpdate?.();
 }
 
 export function ChatEffortPicker(props: ChatEffortPickerParams) {
@@ -210,10 +204,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     if (props.thinkingDisabled || !stop || stop.value === view().selectedThinkingValue) {
       return;
     }
-    refreshAfterSelection(
-      props.onThinkingSelect(stop.value, props.sessionKey),
-      props.onRequestUpdate,
-    );
+    void props.onThinkingSelect(stop.value, props.sessionKey);
   };
   return (
     <Show when={visible()}>
@@ -222,7 +213,9 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
         const pickerOverlay = createChatPickerOverlay((details) => setOpen(details.open));
         return (
           <details
-            ref={pickerOverlay}
+            ref={pickerOverlay.details}
+            onClick={pickerOverlay.onClick}
+            onToggle={pickerOverlay.onToggle}
             class={[
               "chat-controls__inline-select chat-controls__effort-picker",
               {
@@ -233,6 +226,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
             inert={props.reserved === true}
           >
             <summary
+              ref={pickerOverlay.trigger}
               class={[
                 "chat-controls__inline-select-trigger chat-controls__effort-trigger",
                 {
@@ -307,7 +301,12 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                 <Icon name="chevronUp" />
               </span>
             </summary>
-            <div class="oc-overlay chat-picker-overlay" data-anchored-overlay popover="manual">
+            <div
+              ref={pickerOverlay.surface}
+              class="oc-overlay chat-picker-overlay"
+              data-anchored-overlay
+              popover="manual"
+            >
               <Show when={open()}>
                 <div
                   class="chat-controls__inline-select-menu chat-controls__effort-menu"
@@ -424,10 +423,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                             }
                             const stop = view().onlyStop;
                             if (stop) {
-                              refreshAfterSelection(
-                                props.onThinkingSelect(stop.value, props.sessionKey),
-                                props.onRequestUpdate,
-                              );
+                              void props.onThinkingSelect(stop.value, props.sessionKey);
                             }
                           }}
                         >
@@ -471,10 +467,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                                   !option().disabled &&
                                   option().value !== props.fastMode.persistedOverride
                                 ) {
-                                  refreshAfterSelection(
-                                    props.onFastModeSelect(option().value, props.sessionKey),
-                                    props.onRequestUpdate,
-                                  );
+                                  void props.onFastModeSelect(option().value, props.sessionKey);
                                 }
                               }}
                             >

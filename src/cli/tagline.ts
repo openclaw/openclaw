@@ -2,7 +2,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { parseStrictNonNegativeInteger } from "@openclaw/normalization-core/number-coercion";
 
 const DEFAULT_TAGLINE = "All your chats, one OpenClaw.";
-export type TaglineMode = "random" | "default" | "off";
+type TaglineMode = "random" | "default" | "off";
 
 const HOLIDAY_TAGLINES = {
   newYear:

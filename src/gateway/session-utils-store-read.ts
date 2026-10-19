@@ -1,10 +1,8 @@
-import { expectDefined } from "@openclaw/normalization-core";
 import { ok, type Result } from "@openclaw/normalization-core/result";
 import {
   listSessionEntriesCore as listAccessorSessionEntries,
   listSessionEntriesReadOnly as listAccessorSessionEntriesReadOnly,
   loadExactSessionEntryCandidates,
-  loadExactSessionEntryCandidatesReadOnlyBatch,
 } from "../config/sessions/session-accessor.js";
 import type { SessionEntryReadScope } from "../config/sessions/session-accessor.types.js";
 import type {
@@ -82,34 +80,6 @@ export function readGatewaySessionStore(
     throw read.result.error;
   }
   return read.result.value;
-}
-
-/** Populate exact logical lookups without materializing unrelated store entries. */
-export function loadGatewaySessionStoreReads(reads: readonly GatewaySessionStoreRead[]): void {
-  const pending = reads.filter((read) => read.result === undefined);
-  const results = loadExactSessionEntryCandidatesReadOnlyBatch(
-    pending.map((read) => ({
-      agentId: read.agentId,
-      env: read.options.env,
-      storePath: read.storePath,
-      projection: read.options.projection,
-      clone: false,
-      sessionKeys: expectDefined(read.options.exactKeys, "exact batch lookup keys"),
-      onReadSource: (source) => {
-        read.readSource = source;
-      },
-    })),
-  );
-  for (const [index, read] of pending.entries()) {
-    const result = expectDefined(results[index], "exact batch lookup result");
-    // Consume failures per logical target so prepared callers retain independent results.
-    read.result = result.ok
-      ? ok(Object.fromEntries(result.value.map(({ sessionKey, entry }) => [sessionKey, entry])))
-      : result;
-    if (!result.ok) {
-      read.readSource = undefined;
-    }
-  }
 }
 
 function loadGatewaySessionLookupStore({

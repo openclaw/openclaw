@@ -56,7 +56,7 @@ import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
@@ -294,10 +294,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ReplyThreading: replyThreading,
       },
     });
-
-    if (shouldLogVerbose()) {
-      logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length}`);
-    }
 
     const statusReactionTimestamp = resolveSignalStatusReactionTimestamp(entry);
     const statusReactionsConfig = cfg.messages?.statusReactions;
@@ -746,11 +742,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return false;
     }
     if (params.reaction.isRemove) {
-      return true; // Ignore reaction removals
+      return true;
     }
     const emojiLabel = normalizeOptionalString(params.reaction.emoji) ?? "emoji";
     const senderName = params.envelope.sourceName ?? params.senderDisplay;
-    logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
     const groupId = params.reaction.groupInfo?.groupId ?? undefined;
     const groupName = params.reaction.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);

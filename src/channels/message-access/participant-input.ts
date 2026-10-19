@@ -139,6 +139,8 @@ export function bindChannelParticipantInput(params: {
       ...commandOwner,
       operatorAuthority: captureChannelOperatorRunAuthority({
         ...authority.operatorProfile,
+        recoveryReference:
+          authority.recoveryReference?.version === 1 ? authority.recoveryReference : undefined,
         getRuntimeConfig: () => gateway.getRuntimeConfig(),
         assertCurrent,
         signal: authority.signal,

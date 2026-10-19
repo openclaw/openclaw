@@ -10,6 +10,7 @@ import { createContext, createGateway, createSessions } from "../../test-helpers
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid as mountDashboards } from "../../test-helpers/mount-solid.ts";
 import { createSolidApplicationContextProvider } from "../../test-helpers/solid-application-context.tsx";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import { loadChatRoute } from "../chat/route-loader.ts";
 import { DashboardsView } from "../dashboards/view.tsx";
 import { mountSolid, props, row } from "./session-activity-view.test-harness.ts";
@@ -25,7 +26,16 @@ function show(input: Parameters<typeof props>[0] = {}, target = container) {
 beforeEach(() => {
   container = document.createElement("div");
   document.body.replaceChildren(container);
+  // Identity and navigation fixtures do not admit viewport-driven media discovery.
+  vi.stubGlobal(
+    "IntersectionObserver",
+    class extends IntersectionObserver {
+      override observe() {}
+    },
+  );
 });
+
+afterEach(() => vi.unstubAllGlobals());
 
 describe("session activity semantics", () => {
   afterEach(() => {
@@ -257,11 +267,14 @@ describe("session activity semantics", () => {
         ...input.context,
         basePath: "/control",
         agents: {
+          ...input.context.agents,
           state: {
+            ...input.context.agents.state,
             agentsList: {
               defaultId: "main",
               mainKey: stale ? "main" : "workspace",
               scope: "per-sender",
+              agents: [],
             },
           },
         },
@@ -334,7 +347,10 @@ describe("session activity semantics", () => {
       });
       input.context = {
         ...input.context,
-        agents: { state: { agentsList: { ...agentsList, agents: [] } } },
+        agents: {
+          ...input.context.agents,
+          state: { ...input.context.agents.state, agentsList: { ...agentsList, agents: [] } },
+        },
         gateway: {
           ...input.context.gateway,
           snapshot: {
@@ -402,7 +418,7 @@ describe("session activity semantics", () => {
 
   it("renders agent-owned sessions and profile pictures without making agents or channels people", async () => {
     setAvatarGatewayOrigin("https://gateway.example.test");
-    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+    const fetchAvatar = vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
       const url = input instanceof Request ? input.url : input.toString();
       return new Response(new Uint8Array([1, 2, 3]), {
         headers: {
@@ -443,12 +459,32 @@ describe("session activity semantics", () => {
         createdActor: undefined,
         agentId: "research",
       }),
-      row("Channel session", channel, Date.now() - 3, {
+      row("No avatar session", agent, Date.now() - 3, {
+        owner: undefined,
+        createdActor: undefined,
+        agentId: "codex",
+      }),
+      row("Channel session", channel, Date.now() - 4, {
         owner: { actor: channel },
         createdActor: channel,
       }),
     ];
-    show({
+    const context = createContext(
+      createGateway(createTestGatewayClient(vi.fn(async () => ({})))),
+      createSessions("main", []),
+      {
+        defaultId: "main",
+        mainKey: "main",
+        scope: "per-sender",
+        agents: [
+          { id: "main" },
+          { id: "research", identity: { avatarUrl: "/avatar/research" } },
+          { id: "codex" },
+        ],
+      },
+    );
+    const input = props({
+      context,
       rows,
       result: {
         ts: 1,
@@ -466,24 +502,44 @@ describe("session activity semantics", () => {
         ],
       },
     });
-    await vi.waitFor(() => {
+    const { container: avatarContainer } = mountDashboards(
+      () => createComponent(renderSessionActivityView, input),
+      {
+        wrapper: createSolidApplicationContextProvider(context).wrapper,
+      },
+    );
+    await waitForSolid(() => {
       expect(
-        container.querySelector('[data-activity-session="Human session"] img')?.getAttribute("src"),
+        avatarContainer
+          .querySelector('[data-activity-session="Human session"] img')
+          ?.getAttribute("src"),
       ).toBe("blob:human");
       expect(
-        container.querySelector('[data-activity-session="Agent session"] img')?.getAttribute("src"),
+        avatarContainer
+          .querySelector('[data-activity-session="Agent session"] img')
+          ?.getAttribute("src"),
       ).toBe("blob:agent");
       expect(
-        container.querySelector('[data-activity-person="person"] img')?.getAttribute("src"),
+        avatarContainer.querySelector('[data-activity-person="person"] img')?.getAttribute("src"),
       ).toBe("blob:human");
-      expect(container.querySelector('[data-activity-person="research"]')).toBeNull();
-      expect(container.querySelector('[data-activity-session="Channel session"] img')).toBeNull();
+      expect(avatarContainer.querySelector('[data-activity-person="research"]')).toBeNull();
       expect(
-        container
-          .querySelector('[data-activity-session="Unattributed session"] img')
+        avatarContainer.querySelector('[data-activity-session="Channel session"] img'),
+      ).toBeNull();
+      expect(
+        avatarContainer
+          .querySelector(
+            '[data-activity-session="Unattributed session"] openclaw-viewer-avatar img',
+          )
           ?.getAttribute("src"),
       ).toBe("blob:agent");
     });
+    const unattributed = avatarContainer.querySelector(
+      '[data-activity-session="No avatar session"]',
+    );
+    expect(unattributed?.querySelector("img")).toBeNull();
+    expect(unattributed?.querySelector(".viewer-avatar__initials")?.textContent).toBe("C");
+    expect(fetchAvatar).toHaveBeenCalledTimes(2);
   });
 
   it("keeps human attribution beside the session agent's configured avatar and name", async () => {

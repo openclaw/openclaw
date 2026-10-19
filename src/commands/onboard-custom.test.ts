@@ -38,33 +38,20 @@ vi.mock("../plugins/provider-auth-input.js", () => ({
   ),
 }));
 
-function createTestPrompter(params: { text: string[]; select?: string[]; confirm?: boolean[] }): {
-  text: ReturnType<typeof vi.fn>;
-  select: ReturnType<typeof vi.fn>;
-  confirm: ReturnType<typeof vi.fn>;
-  note: ReturnType<typeof vi.fn>;
-  progress: ReturnType<typeof vi.fn>;
-} {
-  const text = vi.fn();
-  for (const answer of params.text) {
-    text.mockResolvedValueOnce(answer);
+function queuedAnswers<T>(answers: T[] = [], fallback?: T) {
+  const mock = vi.fn().mockResolvedValue(fallback);
+  for (const answer of answers) {
+    mock.mockResolvedValueOnce(answer);
   }
-  const select = vi.fn();
-  for (const answer of params.select ?? []) {
-    select.mockResolvedValueOnce(answer);
-  }
-  const confirm = vi.fn(async () => false);
-  for (const answer of params.confirm ?? []) {
-    confirm.mockResolvedValueOnce(answer);
-  }
+  return mock;
+}
+
+function createTestPrompter(params: { text: string[]; select?: string[]; confirm?: boolean[] }) {
   return {
-    text,
-    progress: vi.fn(() => ({
-      update: vi.fn(),
-      stop: vi.fn(),
-    })),
-    select,
-    confirm,
+    text: queuedAnswers(params.text),
+    progress: vi.fn(() => ({ update: vi.fn(), stop: vi.fn() })),
+    select: queuedAnswers(params.select ?? ["plaintext", "openai"]),
+    confirm: queuedAnswers(params.confirm, false),
     note: vi.fn(),
   };
 }
@@ -87,15 +74,17 @@ function stubFetchSequence(
 
 async function runPromptCustomApi(
   prompter: ReturnType<typeof createTestPrompter>,
-  config: object = {},
-  target?: Parameters<typeof promptCustomApiConfig>[0]["target"],
-  setup?: Pick<Parameters<typeof promptCustomApiConfig>[0], "verification" | "setAsPrimary">,
+  setup: Partial<
+    Pick<
+      Parameters<typeof promptCustomApiConfig>[0],
+      "config" | "target" | "verification" | "setAsPrimary"
+    >
+  > = {},
 ) {
   return promptCustomApiConfig({
     prompter: prompter as unknown as Parameters<typeof promptCustomApiConfig>[0]["prompter"],
     runtime: { log: vi.fn() } as unknown as Parameters<typeof promptCustomApiConfig>[0]["runtime"],
-    config,
-    ...(target ? { target } : {}),
+    config: {},
     ...setup,
   });
 }
@@ -120,7 +109,6 @@ describe("promptCustomApiConfig", () => {
   it("validates HTTP endpoints before asking for credentials", async () => {
     const prompter = createTestPrompter({
       text: [],
-      select: ["plaintext", "openai"],
       confirm: [true],
     });
     prompter.text.mockImplementationOnce(({ validate }) => {
@@ -136,20 +124,17 @@ describe("promptCustomApiConfig", () => {
       prompter.text.mockResolvedValueOnce(answer);
     }
 
-    await runPromptCustomApi(prompter, {}, undefined, { verification: "deferred" });
+    await runPromptCustomApi(prompter, { verification: "deferred" });
   });
 
   it("offers no-auth mode when the API key is left blank", async () => {
     const prompter = createTestPrompter({
       text: ["https://studio.example.ts.net/v1", "", "qwen3.8", "custom", ""],
-      select: ["plaintext", "openai"],
       confirm: [true],
     });
     stubFetchSequence([]);
 
-    const result = await runPromptCustomApi(prompter, {}, undefined, {
-      verification: "deferred",
-    });
+    const result = await runPromptCustomApi(prompter, { verification: "deferred" });
 
     expect(prompter.confirm).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("no-auth") }),
@@ -166,9 +151,7 @@ describe("promptCustomApiConfig", () => {
     });
     stubFetchSequence([]);
 
-    const result = await runPromptCustomApi(prompter, {}, undefined, {
-      verification: "deferred",
-    });
+    const result = await runPromptCustomApi(prompter, { verification: "deferred" });
 
     expect(result.config.models?.providers?.custom?.apiKey).toBe("real-key");
     expect(result.config.models?.providers?.custom?.auth).toBeUndefined();
@@ -179,22 +162,13 @@ describe("promptCustomApiConfig", () => {
     { baseUrl: "https://resource.openai.azure.com", compatibility: "openai" },
   ])("requires a key for the effective adapter at $baseUrl", async ({ baseUrl, compatibility }) => {
     const prompter = createTestPrompter({
-      text: [
-        baseUrl,
-        "",
-        "qwen3.8",
-        "custom",
-        "",
-        "placeholder-key", // pragma: allowlist secret
-      ],
+      text: [baseUrl, "", "qwen3.8", "custom", "", "placeholder-key"], // pragma: allowlist secret
       select: ["plaintext", compatibility, "plaintext"],
       confirm: [true, true],
     });
     stubFetchSequence([]);
 
-    const result = await runPromptCustomApi(prompter, {}, undefined, {
-      verification: "deferred",
-    });
+    const result = await runPromptCustomApi(prompter, { verification: "deferred" });
 
     expect(result.config.models?.providers?.custom?.apiKey).toBe("placeholder-key"); // pragma: allowlist secret
     expect(result.config.models?.providers?.custom?.auth).toBeUndefined();
@@ -208,7 +182,8 @@ describe("promptCustomApiConfig", () => {
     const fetchMock = stubFetchSequence([]);
     const config = {};
 
-    const result = await runPromptCustomApi(prompter, config, undefined, {
+    const result = await runPromptCustomApi(prompter, {
+      config,
       verification: "deferred",
       setAsPrimary: false,
     });
@@ -233,9 +208,7 @@ describe("promptCustomApiConfig", () => {
       select: ["plaintext", "openai", "local-large"],
     });
 
-    const result = await runPromptCustomApi(prompter, {}, undefined, {
-      verification: "deferred",
-    });
+    const result = await runPromptCustomApi(prompter, { verification: "deferred" });
 
     expect(result.modelId).toBe("local-large");
     expect(result.config.models?.providers?.custom?.models.map((model) => model.id)).toEqual([
@@ -268,9 +241,7 @@ describe("promptCustomApiConfig", () => {
       text: ["http://localhost:1234/v1", "", "unlisted-model", "custom", ""],
       select: ["plaintext", "openai-responses", ""],
     });
-    const result = await runPromptCustomApi(prompter, {}, undefined, {
-      verification: "deferred",
-    });
+    const result = await runPromptCustomApi(prompter, { verification: "deferred" });
     expect(result.modelId).toBe("unlisted-model");
     expect(discoveryFetch).toHaveBeenCalledOnce();
     expect(prompter.select).toHaveBeenCalledWith(
@@ -302,11 +273,8 @@ describe("promptCustomApiConfig", () => {
       });
       const prompter = createTestPrompter({
         text: ["http://localhost:1234/v1", "", "manual-model", "custom", ""],
-        select: ["plaintext", "openai"],
       });
-      const result = await runPromptCustomApi(prompter, {}, undefined, {
-        verification: "deferred",
-      });
+      const result = await runPromptCustomApi(prompter, { verification: "deferred" });
       expect(result.modelId).toBe("manual-model");
       expect(prompter.note).toHaveBeenCalledWith(
         expect.stringContaining("enter a model ID manually"),
@@ -320,9 +288,7 @@ describe("promptCustomApiConfig", () => {
       text: ["https://provider.example", "fixture-key", "claude-model", "custom", ""],
       select: ["plaintext", "anthropic"],
     });
-    const result = await runPromptCustomApi(prompter, {}, undefined, {
-      verification: "deferred",
-    });
+    const result = await runPromptCustomApi(prompter, { verification: "deferred" });
     expect(result.modelId).toBe("claude-model");
     expect(discoveryFetch).not.toHaveBeenCalled();
   });
@@ -330,21 +296,19 @@ describe("promptCustomApiConfig", () => {
   it("rejects aliases already used only by the selected agent", async () => {
     const prompter = createTestPrompter({
       text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
-      select: ["plaintext", "openai"],
     });
     stubFetchSequence([{ ok: true }]);
 
-    await runPromptCustomApi(
-      prompter,
-      {
+    await runPromptCustomApi(prompter, {
+      config: {
         agents: {
           ownership: "explicit",
           defaults: { systemAgent: { agentId: "ops" } },
           entries: { ops: { models: { "openai/ops": { alias: "Operations" } } } },
         },
       },
-      { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
-    );
+      target: { agentId: "ops", agentDir: "/tmp/ops-agent", workspaceDir: "/tmp/ops-workspace" },
+    });
 
     const aliasPrompt = prompter.text.mock.calls.find(
       ([options]) => options.message === "Model alias (optional)",
@@ -357,21 +321,12 @@ describe("promptCustomApiConfig", () => {
   it("threads one workspace-scoped manifest snapshot through alias validation", async () => {
     const preparedPlugins = [
       {
-        modelIdNormalization: {
-          providers: {
-            custom: {
-              aliases: {
-                latest: "modern-model",
-              },
-            },
-          },
-        },
+        modelIdNormalization: { providers: { custom: { aliases: { latest: "modern-model" } } } },
       },
     ];
     loadManifestMetadataSnapshot.mockReturnValueOnce({ plugins: preparedPlugins } as never);
     const prompter = createTestPrompter({
       text: ["http://localhost:11434/v1", "", "modern-model", "custom", "Legacy"],
-      select: ["plaintext", "openai"],
     });
     stubFetchSequence([{ ok: true }]);
     const config = {
@@ -389,7 +344,7 @@ describe("promptCustomApiConfig", () => {
       workspaceDir: "/tmp/ops-workspace",
     };
 
-    const result = await runPromptCustomApi(prompter, config, target);
+    const result = await runPromptCustomApi(prompter, { config, target });
 
     expect(loadManifestMetadataSnapshot).toHaveBeenCalledExactlyOnceWith({
       config,
@@ -405,7 +360,6 @@ describe("promptCustomApiConfig", () => {
   it("cancels custom provider verification response bodies", async () => {
     const prompter = createTestPrompter({
       text: ["http://localhost:11434/v1", "", "llama3", "custom", ""],
-      select: ["plaintext", "openai"],
     });
     const cancel = vi.fn(async () => undefined);
     vi.stubGlobal(

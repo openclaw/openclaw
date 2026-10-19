@@ -4,6 +4,11 @@ import { Type } from "typebox";
 import { beforeEach, expect, it, vi } from "vitest";
 import type { OpenClawToolsOptions } from "../agents/openclaw-tools.types.js";
 import type { AnyAgentTool } from "../agents/tools/common.js";
+import { captureRuntimeConfigAsyncReader } from "../config/io.runtime.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import type { GatewayMethodRegistry } from "./methods/registry.js";
 import type { GatewayContextResolver } from "./server-methods/types.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -11,6 +16,16 @@ import { makeContextParams } from "./server-request-context.test-support.js";
 import type { handleToolsInvokeHttpRequest } from "./tools-invoke-http.js";
 
 let useRealSessionSpawnTool = false;
+
+export function withToolsInvokeTestState<T>(
+  options: Parameters<typeof withOpenClawTestState>[0],
+  run: (state: OpenClawTestState) => Promise<T>,
+): Promise<T> {
+  return withOpenClawTestState(options, async (state) => {
+    await captureRuntimeConfigAsyncReader()();
+    return await run(state);
+  });
+}
 
 export async function createToolsInvokeSessionSpawnFixture(
   options: OpenClawToolsOptions,

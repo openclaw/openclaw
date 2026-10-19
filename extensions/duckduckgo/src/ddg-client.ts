@@ -7,7 +7,7 @@ import {
   DEFAULT_CACHE_TTL_MINUTES,
   DEFAULT_SEARCH_COUNT,
   normalizeCacheKey,
-  readCache,
+  readCachedSearchPayload,
   readResponseText,
   resolveCacheTtlMs,
   resolveSearchCount,
@@ -15,7 +15,7 @@ import {
   resolveTimeoutSeconds,
   withTrustedWebSearchEndpoint,
   wrapWebContent,
-  writeCache,
+  writeCachedSearchPayload,
 } from "openclaw/plugin-sdk/provider-web-search";
 import { resolveDdgRegion, resolveDdgSafeSearch, type DdgSafeSearch } from "./config.js";
 
@@ -39,11 +39,6 @@ const DDG_SAFE_SEARCH_PARAM: Record<DdgSafeSearch, string> = {
   moderate: "-1",
   off: "-2",
 };
-
-const DDG_SEARCH_CACHE = new Map<
-  string,
-  { value: Record<string, unknown>; insertedAt: number; expiresAt: number }
->();
 
 type DuckDuckGoResult = {
   title: string;
@@ -146,9 +141,9 @@ export async function runDuckDuckGoSearch(params: {
       safeSearch,
     }),
   );
-  const cached = readCache(DDG_SEARCH_CACHE, cacheKey, cacheTtlMs);
+  const cached = readCachedSearchPayload(cacheKey, cacheTtlMs);
   if (cached) {
-    return { ...cached.value, cached: true };
+    return cached;
   }
 
   const url = new URL(DDG_HTML_ENDPOINT);
@@ -208,6 +203,6 @@ export async function runDuckDuckGoSearch(params: {
     })),
   } satisfies Record<string, unknown>;
 
-  writeCache(DDG_SEARCH_CACHE, cacheKey, payload, cacheTtlMs);
+  writeCachedSearchPayload(cacheKey, payload, cacheTtlMs);
   return payload;
 }

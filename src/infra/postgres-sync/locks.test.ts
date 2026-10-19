@@ -19,24 +19,26 @@ import { postgresLockTestEntrypoint } from "./locks-runtime.test-support.js";
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
-type Event = "ready" | "admission" | "statement" | "done";
-type Message = { event: Event; before?: string; after?: string; error?: string };
+type Event = "ready" | "admission" | "statement" | "read" | "done";
+type Message = { event: Event; before?: string; after?: string; value?: number; error?: string };
 
 function launch(options: {
   path: string;
   schema: string;
   storeId: string;
   id: string;
-  mode: "single" | "worker";
+  mode: "single" | "worker" | "deferred";
   admissions: SqliteDatabaseAdmissions;
   holdAdmission?: boolean;
   holdStatement?: boolean;
+  holdRead?: boolean;
 }) {
-  const gates = new Int32Array(new SharedArrayBuffer(12));
+  const gates = new Int32Array(new SharedArrayBuffer(16));
   const events = {
     ready: Promise.withResolvers<Message>(),
     admission: Promise.withResolvers<Message>(),
     statement: Promise.withResolvers<Message>(),
+    read: Promise.withResolvers<Message>(),
     done: Promise.withResolvers<Message>(),
   };
   const url = resolveRuntimeWorkerUrl(postgresLockTestEntrypoint);
@@ -94,7 +96,7 @@ describe.skipIf(!connection)("PostgreSQL transaction lock ordering", () => {
     await admin.query("SELECT pg_advisory_unlock_all()");
     const closing = workers.splice(0);
     for (const worker of closing) {
-      for (const index of [0, 1, 2]) {
+      for (const index of [0, 1, 2, 3]) {
         worker.release(index);
       }
     }
@@ -196,5 +198,44 @@ describe.skipIf(!connection)("PostgreSQL transaction lock ordering", () => {
     expect(
       (await admin.query(`SELECT count(*)::int AS count FROM "${identity.schema}".events`)).rows,
     ).toEqual([{ count: 2 }]);
+  });
+
+  it("locks deferred transactions before reading so concurrent increments cannot lose updates", async () => {
+    const identity = await fixture();
+    await admin.query(
+      `CREATE TABLE "${identity.schema}".counter (value INTEGER); INSERT INTO "${identity.schema}".counter VALUES (0)`,
+    );
+    const first = launch({
+      ...identity,
+      mode: "deferred",
+      id: "first",
+      holdStatement: true,
+      holdRead: true,
+    });
+    const second = launch({ ...identity, mode: "deferred", id: "second" });
+    workers.push(first, second);
+    await Promise.all([first.events.ready.promise, second.events.ready.promise]);
+    first.release(0);
+    await first.events.statement.promise;
+    const lock = await admin.query<{ acquired: boolean }>(
+      "SELECT pg_try_advisory_lock($1::bigint) AS acquired",
+      [identity.key],
+    );
+    const lockedBeforeRead = lock.rows[0]?.acquired === false;
+    if (!lockedBeforeRead) {
+      await admin.query("SELECT pg_advisory_unlock($1::bigint)", [identity.key]);
+    }
+    first.release(2);
+    const firstRead = await first.events.read.promise;
+    second.release(0);
+    await second.events.admission.promise;
+    first.release(3);
+    await Promise.all([first.events.done.promise, second.events.done.promise]);
+    expect(lockedBeforeRead).toBe(true);
+    expect(firstRead.value).toBe(0);
+    expect((await second.events.read.promise).value).toBe(1);
+    expect((await admin.query(`SELECT value FROM "${identity.schema}".counter`)).rows).toEqual([
+      { value: 2 },
+    ]);
   });
 });

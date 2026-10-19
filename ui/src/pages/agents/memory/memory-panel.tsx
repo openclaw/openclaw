@@ -8,6 +8,7 @@ type AgentMemoryPanelProps = { agentId: string };
 
 export function AgentMemoryPanel(props: AgentMemoryPanelProps) {
   const state = createAgentMemory(useApplication());
+  // Changing agents retires the memory owner's old Gateway reads before loading that agent.
   createEffect(() => props.agentId, state.setAgentId);
   return (
     <openclaw-agent-memory-panel>

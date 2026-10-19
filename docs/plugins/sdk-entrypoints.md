@@ -355,6 +355,12 @@ Open databases and load mutation-capable runtime state only inside `runLocal`;
 its scope supplies the admitted config, environment, abort signal, and current
 owner assertion. Close plugin-owned stores before the callback returns.
 
+Commands that use configured database families set `databaseEngine: "configured"`.
+The helper resolves the selected config's engines after acquiring offline ownership,
+before runtime config can write state, and retains that selection through resource
+settlement. Commands routed to a running Gateway use its engines and do not need
+the PostgreSQL credentials in the CLI process.
+
 The helper routes to the local Gateway with its expected owner ID, or retains
 exclusive offline ownership through resource settlement. It never replays an
 uncertain Gateway mutation locally. Use `onForeignOwner: "refuse"` for commands

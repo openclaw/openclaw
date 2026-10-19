@@ -1,104 +1,95 @@
 /* @vitest-environment jsdom */
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { GatewayRequestError } from "../../api/gateway.ts";
 import type { WizardNextResult } from "../../api/types.ts";
-import { i18n } from "../../i18n/index.ts";
-import { createStorageMock } from "../../test-helpers/storage.ts";
 import { waitForFast } from "../../test-helpers/wait-for.ts";
 import { readFirstRunActivationReceipt } from "./first-run-activation-receipt.ts";
 import {
+  waitForText,
+  waitForElement,
+  runningStep,
+  authButton,
+  pageButton,
+  authOption,
+  activated,
+  mockRequests,
+  useFirstRunFixtures,
+  pendingReceipt,
+  modalButton,
   candidate,
   clickCandidate,
   createFirstRunContext,
   detection,
-  mountPage,
+  mountDetection,
+  reconnectGateway,
   waitForModelSetupDetection,
 } from "./model-setup-first-run.test-support.ts";
 import { MODEL_SETUP_VERIFY_TIMEOUT_MS } from "./state.ts";
 import { unmountModelSetupPage } from "./test-helpers/solid-page.test-support.tsx";
 
+async function interruptedActivation() {
+  const original = createFirstRunContext();
+  original.request.mockResolvedValue(
+    activated("openai/relaunch", { gatewayRestartRequired: true }),
+  );
+  const { page, provider } = await mountDetection(original.context, original.client, {
+    candidates: [candidate("openai-api-key", "openai/relaunch", true)],
+  });
+  expect(original.request).not.toHaveBeenCalled();
+  await clickCandidate(page, "openai-api-key");
+  await waitForText(page, "The Gateway is restarting");
+  unmountModelSetupPage(page);
+  provider.remove();
+
+  return original;
+}
+
 describe("ModelSetupPage first-run application recovery", () => {
-  beforeEach(async () => {
-    vi.stubGlobal("localStorage", createStorageMock());
-    localStorage.setItem(
-      "openclaw-device-identity-v1",
-      JSON.stringify({ version: 1, privateKey: "durable-device-private-key-for-testing" }),
-    );
-    await i18n.setLocale("en");
-  });
-
-  afterEach(() => {
-    document.body.replaceChildren();
-    vi.useRealTimers();
-    vi.restoreAllMocks();
-    vi.unstubAllGlobals();
-  });
-
+  useFirstRunFixtures("durable-device-private-key-for-testing", true);
   it("reconciles a missing restored wizard after detection recovers", async () => {
     const original = createFirstRunContext();
     const result = {
       ...detection,
-      authOptions: [
-        {
-          id: "custom-api-key",
-          label: "Custom provider",
-          kind: "custom" as const,
-          featured: true,
-        },
-      ],
+      authOptions: [authOption("custom-api-key", "Custom provider", "custom")],
     };
-    const question = {
-      done: false,
-      status: "running",
-      step: { id: "provider-url", type: "text", message: "API Base URL" },
-    };
+    const question = runningStep({ id: "provider-url", type: "text", message: "API Base URL" });
     let sessionId: string | undefined;
-    original.request.mockImplementation(async (method, params) => {
-      if (method === "openclaw.setup.auth.start") {
+    mockRequests(original.request, {
+      "openclaw.setup.auth.start": (params) => {
         sessionId = (params as { sessionId: string }).sessionId;
         return { sessionId, done: false, status: "running" };
-      }
-      if (method === "wizard.next") {
-        return question;
-      }
-      throw new Error("Original connection closed");
+      },
+      "wizard.next": () => question,
     });
-    const { page: previous, provider } = await mountPage(original.context, {
-      state: { phase: "ready", result },
-      client: original.client,
-      firstRun: true,
-    });
-    previous
-      .querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
-      .click();
-    await waitForFast(() => expect(previous.textContent).toContain("API Base URL"));
+    const { page: previous, provider } = await mountDetection(
+      original.context,
+      original.client,
+      result,
+    );
+    authButton(previous, "custom-api-key")!.click();
+    await waitForText(previous, "API Base URL");
     unmountModelSetupPage(previous);
     provider.remove();
 
     const relaunched = createFirstRunContext();
     let failDetection = true;
-    relaunched.request.mockImplementation(async (method) => {
-      if (method === "wizard.next") {
+    mockRequests(relaunched.request, {
+      "wizard.next": () => {
         throw new GatewayRequestError({
           code: "INVALID_REQUEST",
           message: "wizard not found",
           details: { code: "WIZARD_NOT_FOUND" },
         });
-      }
-      if (method === "openclaw.setup.detect") {
+      },
+      "openclaw.setup.detect": () => {
         if (failDetection) {
           throw new Error("Setup detection is unavailable");
         }
         return result;
-      }
-      throw new Error(`Unexpected method ${method}`);
+      },
     });
-    const { page } = await mountPage(relaunched.context, {
-      state: { phase: "ready", result },
-      client: relaunched.client,
-      firstRun: true,
-    });
+    const { page } = await mountDetection(relaunched.context, relaunched.client, result);
     await waitForFast(() =>
       expect(relaunched.request).toHaveBeenCalledWith(
         "wizard.next",
@@ -106,21 +97,14 @@ describe("ModelSetupPage first-run application recovery", () => {
         { timeoutMs: null, signal: expect.any(AbortSignal) },
       ),
     );
-    await waitForFast(() =>
-      expect(page.textContent).toContain("Gateway no longer has this setup session"),
-    );
+    await waitForText(page, "Gateway no longer has this setup session");
     await waitForFast(() => {
-      expect(
-        page.querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
-          .disabled,
-      ).toBe(true);
+      expect(authButton(page, "custom-api-key")!.disabled).toBe(true);
       expect(readFirstRunActivationReceipt(relaunched.context)).not.toBeNull();
     });
     if (failDetection) {
-      await waitForFast(() => expect(page.textContent).toContain("Setup detection is unavailable"));
-      const close = [
-        ...page.querySelectorAll<HTMLButtonElement>("openclaw-modal-dialog button"),
-      ].find((button) => button.textContent?.trim() === "Close")!;
+      await waitForText(page, "Setup detection is unavailable");
+      const close = modalButton(page, "Close")!;
       close.click();
       failDetection = false;
       const retry = [
@@ -129,10 +113,7 @@ describe("ModelSetupPage first-run application recovery", () => {
       retry.click();
       await waitForFast(() => {
         expect(readFirstRunActivationReceipt(relaunched.context)).toBeNull();
-        expect(
-          page.querySelector<HTMLButtonElement>('[data-auth-choice="custom-api-key"] button')!
-            .disabled,
-        ).toBe(false);
+        expect(authButton(page, "custom-api-key")!.disabled).toBe(false);
       });
     }
     expect(
@@ -147,39 +128,14 @@ describe("ModelSetupPage first-run application recovery", () => {
   });
 
   it("rejects restored verification after its receipt expires", async () => {
-    const original = createFirstRunContext();
-    original.request.mockResolvedValue({
-      done: true,
-      status: "done",
-      modelActivation: { modelRef: "openai/relaunch", gatewayRestartRequired: true },
-    });
-    const { page, provider } = await mountPage(original.context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [candidate("openai-api-key", "openai/relaunch", true)],
-        },
-      },
-      client: original.client,
-      firstRun: true,
-    });
-    expect(original.request).not.toHaveBeenCalled();
-    await clickCandidate(page, "openai-api-key");
-    await waitForFast(() => expect(page.textContent).toContain("The Gateway is restarting"));
-    unmountModelSetupPage(page);
-    provider.remove();
+    const original = await interruptedActivation();
 
     const relaunched = createFirstRunContext();
     const verification = createDeferred<unknown>();
     relaunched.request.mockReturnValue(verification.promise);
-    const { page: restored } = await mountPage(relaunched.context, {
-      state: {
-        phase: "ready",
-        result: { ...detection, configuredModel: "openai/relaunch", setupComplete: true },
-      },
-      client: relaunched.client,
-      firstRun: true,
+    const { page: restored } = await mountDetection(relaunched.context, relaunched.client, {
+      configuredModel: "openai/relaunch",
+      setupComplete: true,
     });
 
     await waitForFast(() => expect(relaunched.request).toHaveBeenCalledOnce());
@@ -202,60 +158,26 @@ describe("ModelSetupPage first-run application recovery", () => {
   });
 
   it("never repeats an ambiguous activation after app recreation until explicitly retried", async () => {
-    const original = createFirstRunContext();
-    original.request.mockResolvedValue({
-      done: true,
-      status: "done",
-      modelActivation: { modelRef: "openai/relaunch", gatewayRestartRequired: true },
-    });
-    const { page: previous, provider } = await mountPage(original.context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [candidate("openai-api-key", "openai/relaunch", true)],
-        },
-      },
-      client: original.client,
-      firstRun: true,
-    });
-    expect(original.request).not.toHaveBeenCalled();
-    await clickCandidate(previous, "openai-api-key");
-    await waitForFast(() => expect(previous.textContent).toContain("The Gateway is restarting"));
-    unmountModelSetupPage(previous);
-    provider.remove();
+    const original = await interruptedActivation();
 
     const relaunched = createFirstRunContext();
-    relaunched.request.mockImplementation(async (method) => {
-      if (method === "openclaw.setup.detect") {
-        return {
-          ...detection,
-          candidates: [candidate("openai-api-key", "openai/relaunch", true)],
-        };
-      }
-      if (method === "openclaw.setup.activate.start") {
-        return { done: true, status: "done", modelActivation: { modelRef: "openai/relaunch" } };
-      }
-      throw new Error(`Unexpected method ${method}`);
+    mockRequests(relaunched.request, {
+      "openclaw.setup.detect": () => ({
+        ...detection,
+        candidates: [candidate("openai-api-key", "openai/relaunch", true)],
+      }),
+      "openclaw.setup.activate.start": () => activated("openai/relaunch"),
     });
-    const { page } = await mountPage(relaunched.context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [candidate("openai-api-key", "openai/relaunch", true)],
-        },
-      },
-      client: relaunched.client,
-      firstRun: true,
+    const { page } = await mountDetection(relaunched.context, relaunched.client, {
+      candidates: [candidate("openai-api-key", "openai/relaunch", true)],
     });
 
     await waitForFast(() => {
       expect(page.textContent).toContain("previous activation is unresolved");
       expect(page.textContent).toContain("Check again");
-      expect(page.querySelector<HTMLButtonElement>("[data-models-connect]")?.disabled).toBe(true);
+      expect(pageButton(page, "[data-models-connect]")?.disabled).toBe(true);
     });
-    page.querySelector<HTMLButtonElement>("[data-models-connect]")?.click();
+    pageButton(page, "[data-models-connect]")?.click();
     expect(relaunched.request).not.toHaveBeenCalled();
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 500_000);
     [...page.querySelectorAll<HTMLButtonElement>(".model-setup__intro .btn")]
@@ -283,51 +205,30 @@ describe("ModelSetupPage first-run application recovery", () => {
     const { context, client, request, snapshot, publishGatewaySnapshot } = createFirstRunContext();
     let resolveFirstActivation: ((result: WizardNextResult) => void) | undefined;
     let activationCount = 0;
-    request.mockImplementation(async (method) => {
-      if (method === "openclaw.setup.activate.start") {
+    mockRequests(request, {
+      "openclaw.setup.activate.start": async () => {
         activationCount += 1;
         if (activationCount === 1) {
           return await new Promise<WizardNextResult>((resolve) => {
             resolveFirstActivation = resolve;
           });
         }
-        return { done: true, status: "done", modelActivation: { modelRef: "openai/new" } };
-      }
-      if (method === "openclaw.setup.detect") {
-        return {
-          ...detection,
-          candidates: [candidate("openai-api-key", "openai/new", true)],
-        };
-      }
-      throw new Error(`Unexpected method ${method}`);
+        return activated("openai/new");
+      },
+      "openclaw.setup.detect": () => ({
+        ...detection,
+        candidates: [candidate("openai-api-key", "openai/new", true)],
+      }),
     });
 
-    const { page } = await mountPage(context, {
-      state: {
-        phase: "ready",
-        result: {
-          ...detection,
-          candidates: [candidate("openai-api-key", "openai/new", true)],
-        },
-      },
-      client,
-      firstRun: true,
+    const { page } = await mountDetection(context, client, {
+      candidates: [candidate("openai-api-key", "openai/new", true)],
     });
     expect(request).not.toHaveBeenCalled();
     await clickCandidate(page, "openai-api-key");
     await waitForFast(() => expect(resolveFirstActivation).toBeTypeOf("function"));
 
-    publishGatewaySnapshot({
-      ...context.gateway.snapshot,
-      phase: "reconnecting",
-      hello: null,
-    });
-    await page.updateComplete;
-    publishGatewaySnapshot({
-      ...snapshot,
-      phase: "connected",
-      hello: { ...snapshot.hello },
-    });
+    await reconnectGateway(page, snapshot, publishGatewaySnapshot);
 
     await waitForFast(() => {
       expect(page.textContent).toContain("previous activation is unresolved");
@@ -336,19 +237,15 @@ describe("ModelSetupPage first-run application recovery", () => {
     expect(activationCount).toBe(1);
     expect(context.navigate).not.toHaveBeenCalled();
 
-    await waitForFast(() =>
-      expect(page.querySelector(".model-setup__recovery .btn")).not.toBeNull(),
-    );
+    await waitForElement(page, ".model-setup__recovery .btn");
     await waitForModelSetupDetection(page);
-    const retry = page.querySelector<HTMLButtonElement>(".model-setup__recovery .btn")!;
+    const retry = pageButton(page, ".model-setup__recovery .btn")!;
     expect(retry.disabled).toBe(false);
-    expect(
-      JSON.parse(localStorage.getItem("openclaw.modelSetup.pendingActivation.v1")!).deadlineMs,
-    ).toBeGreaterThan(Date.now());
+    expect(JSON.parse(pendingReceipt()!).deadlineMs).toBeGreaterThan(Date.now());
     retry.click();
     await page.updateComplete;
     expect(activationCount).toBe(1);
-    await waitForFast(() => expect(page.textContent).toContain("may still be running"));
+    await waitForText(page, "may still be running");
     await waitForModelSetupDetection(page);
     vi.spyOn(Date, "now").mockReturnValue(Date.now() + 500_000);
     retry.click();
@@ -360,10 +257,6 @@ describe("ModelSetupPage first-run application recovery", () => {
       expect(activationCount).toBe(2);
       expect(context.navigate).toHaveBeenCalledWith("custodian", { search: "?onboarding=1" });
     });
-    resolveFirstActivation?.({
-      done: true,
-      status: "done",
-      modelActivation: { modelRef: "openai/new", gatewayRestartRequired: true },
-    });
+    resolveFirstActivation?.(activated("openai/new", { gatewayRestartRequired: true }));
   });
 });

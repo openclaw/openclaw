@@ -2,6 +2,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { makeAgentAssistantMessage } from "../agents/test-helpers/agent-message-fixtures.js";
 import { createDeferredCore } from "../shared/deferred.js";
+import { expectObjectFields as expectFields } from "../test-utils/mock-call-assertions.js";
 import {
   buildAnthropicReplayPolicyForModel,
   buildGoogleGeminiReplayPolicy,
@@ -14,16 +15,6 @@ import {
   sanitizeGoogleGeminiReplayHistoryAsync,
   buildStrictAnthropicReplayPolicy,
 } from "./provider-replay-helpers.js";
-
-function expectFields(actual: unknown, expected: Record<string, unknown>): void {
-  if (!actual || typeof actual !== "object") {
-    throw new Error("Expected record");
-  }
-  const record = actual as Record<string, unknown>;
-  for (const [key, value] of Object.entries(expected)) {
-    expect(record[key]).toEqual(value);
-  }
-}
 
 describe("provider replay helpers", () => {
   it("builds strict openai-completions replay policy", () => {

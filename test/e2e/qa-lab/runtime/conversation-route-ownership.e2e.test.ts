@@ -1,4 +1,5 @@
 import { randomUUID } from "node:crypto";
+import { setTimeout as delay } from "node:timers/promises";
 import { GatewayClientRequestError } from "@openclaw/gateway-client";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it } from "vitest";
@@ -11,20 +12,21 @@ import { createQaLiveLaneGateway } from "../../../../extensions/qa-lab/runtime-a
 import { stopQaGatewayFixture } from "../../../helpers/qa-gateway-cleanup.js";
 
 const CHANNEL_ID = "qa-channel";
-const PRIMARY_AGENT_ID = "main";
-const SIBLING_AGENT_ID = "finance";
-const PRIMARY_ACCOUNT_ID = "default";
-const SIBLING_ACCOUNT_ID = "finance";
-const PRIMARY_PEER_ID = "primary-peer";
-const SIBLING_PEER_ID = "finance-peer";
+const primary = { agentId: "main", accountId: "default", peerId: "primary-peer" };
+const sibling = { agentId: "finance", accountId: "finance", peerId: "finance-peer" };
+type Owner = typeof primary;
 
 type GatewayHarness = Awaited<ReturnType<ReturnType<typeof createQaLiveLaneGateway>["start"]>>;
 
 let gatewayOwner: ReturnType<typeof createQaLiveLaneGateway> | undefined;
-let harness: GatewayHarness | undefined;
 let bus: Awaited<ReturnType<typeof startQaBusServer>> | undefined;
 
-function conversationItems(payload: unknown): Array<Record<string, unknown>> {
+async function listConversations(gateway: GatewayHarness["gateway"], agentId: string) {
+  const payload = await gateway.call("conversations.list", {
+    agentId,
+    channel: CHANNEL_ID,
+    limit: 50,
+  });
   if (!isRecord(payload) || !Array.isArray(payload.conversations)) {
     throw new Error(`conversations.list returned an invalid payload: ${JSON.stringify(payload)}`);
   }
@@ -35,40 +37,19 @@ function conversationItems(payload: unknown): Array<Record<string, unknown>> {
   return items;
 }
 
-function findConversation(
-  items: Array<Record<string, unknown>>,
-  accountId: string,
-  targetIncludes: string,
-) {
+function findConversation(items: Array<Record<string, unknown>>, { accountId, peerId }: Owner) {
   return items.find(
-    (item) =>
-      item.accountId === accountId &&
-      typeof item.target === "string" &&
-      item.target.includes(targetIncludes),
+    ({ accountId: id, target }) =>
+      id === accountId && typeof target === "string" && target.includes(peerId),
   );
 }
 
-async function listConversations(gateway: GatewayHarness["gateway"], agentId: string) {
-  return conversationItems(
-    await gateway.call("conversations.list", {
-      agentId,
-      channel: CHANNEL_ID,
-      limit: 50,
-    }),
-  );
-}
-
-async function waitForConversation(params: {
-  gateway: GatewayHarness["gateway"];
-  agentId: string;
-  accountId: string;
-  targetIncludes: string;
-}) {
+async function waitForConversation(gateway: GatewayHarness["gateway"], owner: Owner) {
   const deadline = Date.now() + 30_000;
   let latest: Array<Record<string, unknown>> = [];
   while (Date.now() < deadline) {
     try {
-      latest = await listConversations(params.gateway, params.agentId);
+      latest = await listConversations(gateway, owner.agentId);
     } catch (error) {
       const cause = error instanceof Error ? error.cause : undefined;
       if (
@@ -81,17 +62,13 @@ async function waitForConversation(params: {
       // Seed binding publications can invalidate this read while ownership is converging.
       latest = [];
     }
-    const match = findConversation(latest, params.accountId, params.targetIncludes);
+    const match = findConversation(latest, owner);
     if (match) {
       return match;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
-    });
+    await delay(100);
   }
-  throw new Error(
-    `timed out waiting for ${params.agentId} to own ${params.accountId}/${params.targetIncludes}: ${JSON.stringify(latest)}`,
-  );
+  throw new Error(`timed out waiting for ${JSON.stringify(owner)}: ${JSON.stringify(latest)}`);
 }
 
 async function waitForAppliedConfig(gateway: GatewayHarness["gateway"], hash: string) {
@@ -105,14 +82,12 @@ async function waitForAppliedConfig(gateway: GatewayHarness["gateway"], hash: st
     ) {
       return;
     }
-    await new Promise<void>((resolve) => {
-      setTimeout(resolve, 100);
-    });
+    await delay(100);
   }
   throw new Error(`Gateway did not apply config revision ${hash}`);
 }
 
-function outboundMessagesWithText(
+function outboundCount(
   state: ReturnType<typeof createQaBusState>,
   accountId: string,
   text: string,
@@ -120,25 +95,13 @@ function outboundMessagesWithText(
   return state
     .getSnapshot()
     .messages.filter(
-      (message) =>
-        message.direction === "outbound" &&
-        message.accountId === accountId &&
-        message.text === text,
-    );
+      ({ direction, accountId: id, text: value }) =>
+        direction === "outbound" && id === accountId && value === text,
+    ).length;
 }
 
-async function sendConversation(params: {
-  gateway: GatewayHarness["gateway"];
-  agentId: string;
-  conversationRef: string;
-  message: string;
-}) {
-  return await params.gateway.call("conversations.send", {
-    agentId: params.agentId,
-    operationId: randomUUID(),
-    conversationRef: params.conversationRef,
-    message: params.message,
-  });
+function route({ agentId, accountId }: Pick<Owner, "agentId" | "accountId">) {
+  return { type: "route" as const, agentId, match: { channel: CHANNEL_ID, accountId } };
 }
 
 afterEach(async () => {
@@ -150,7 +113,6 @@ afterEach(async () => {
   } catch (error) {
     cleanupErrors.push(error);
   } finally {
-    harness = undefined;
     gatewayOwner = undefined;
   }
   try {
@@ -171,101 +133,68 @@ describe("conversation route ownership clean-machine proof", () => {
     { timeout: 120_000 },
     async () => {
       const state = createQaBusState();
-      const transport = createQaChannelTransport(state);
       bus = await startQaBusServer({ state });
       gatewayOwner = createQaLiveLaneGateway();
-      harness = await gatewayOwner.start({
+      const { gateway } = await gatewayOwner.start({
         repoRoot: process.cwd(),
         providerMode: "mock-openai",
         primaryModel: "mock-openai/gpt-5.6-luna",
         alternateModel: "mock-openai/gpt-5.6-luna-alt",
-        transport,
+        transport: createQaChannelTransport(state),
         transportBaseUrl: bus.baseUrl,
         controlUiEnabled: false,
-        mockAuthAgentIds: [PRIMARY_AGENT_ID, SIBLING_AGENT_ID],
-        mutateConfig: (config) => ({
-          ...config,
-          agents: {
+        mockAuthAgentIds: [primary.agentId, sibling.agentId],
+        mutateConfig: (config) => {
+          config.agents = {
             ...config.agents,
             ownership: "explicit",
             entries: {
               ...config.agents?.entries,
-              [PRIMARY_AGENT_ID]: {},
-              [SIBLING_AGENT_ID]: {},
+              [primary.agentId]: {},
+              [sibling.agentId]: {},
             },
-          },
-          bindings: [
-            {
-              type: "route",
-              agentId: PRIMARY_AGENT_ID,
-              match: { channel: CHANNEL_ID, accountId: PRIMARY_ACCOUNT_ID },
-            },
-            {
-              type: "route",
-              agentId: SIBLING_AGENT_ID,
-              match: { channel: CHANNEL_ID, accountId: SIBLING_ACCOUNT_ID },
-            },
-          ],
-          channels: {
-            ...config.channels,
-            [CHANNEL_ID]: {
-              ...config.channels?.[CHANNEL_ID],
-              accounts: {
-                [SIBLING_ACCOUNT_ID]: {
-                  baseUrl: bus?.baseUrl,
-                  enabled: true,
-                  allowFrom: ["*"],
-                  pollTimeoutMs: 250,
-                },
-              },
-            },
-          },
-        }),
+          };
+          config.bindings = [route(primary), route(sibling)];
+          const account = {
+            baseUrl: bus?.baseUrl,
+            enabled: true,
+            allowFrom: ["*"],
+            pollTimeoutMs: 250,
+          };
+          config.channels ??= {};
+          config.channels[CHANNEL_ID] = {
+            ...config.channels[CHANNEL_ID],
+            accounts: { [sibling.accountId]: account },
+          };
+          return config;
+        },
       });
-      const { gateway } = harness;
+      const send = (agentId: string, conversationRef: string, message: string) =>
+        gateway.call("conversations.send", {
+          agentId,
+          operationId: randomUUID(),
+          conversationRef,
+          message,
+        });
 
-      state.addInboundMessage({
-        accountId: PRIMARY_ACCOUNT_ID,
-        conversation: { kind: "direct", id: PRIMARY_PEER_ID },
-        senderId: PRIMARY_PEER_ID,
-        text: "seed primary ownership",
-      });
-      state.addInboundMessage({
-        accountId: SIBLING_ACCOUNT_ID,
-        conversation: { kind: "direct", id: SIBLING_PEER_ID },
-        senderId: SIBLING_PEER_ID,
-        text: "seed sibling ownership",
-      });
-
-      const primaryConversation = await waitForConversation({
-        gateway,
-        agentId: PRIMARY_AGENT_ID,
-        accountId: PRIMARY_ACCOUNT_ID,
-        targetIncludes: PRIMARY_PEER_ID,
-      });
-      const siblingConversation = await waitForConversation({
-        gateway,
-        agentId: SIBLING_AGENT_ID,
-        accountId: SIBLING_ACCOUNT_ID,
-        targetIncludes: SIBLING_PEER_ID,
-      });
-      const primaryList = await listConversations(gateway, PRIMARY_AGENT_ID);
-      const siblingList = await listConversations(gateway, SIBLING_AGENT_ID);
-      expect(findConversation(primaryList, SIBLING_ACCOUNT_ID, SIBLING_PEER_ID)).toBeUndefined();
-      expect(findConversation(siblingList, PRIMARY_ACCOUNT_ID, PRIMARY_PEER_ID)).toBeUndefined();
+      const seed = ({ accountId, peerId }: Owner, text: string) =>
+        state.addInboundMessage({
+          accountId,
+          conversation: { kind: "direct", id: peerId },
+          senderId: peerId,
+          text,
+        });
+      seed(primary, "seed primary ownership");
+      seed(sibling, "seed sibling ownership");
+      const primaryConversation = await waitForConversation(gateway, primary);
+      const siblingConversation = await waitForConversation(gateway, sibling);
+      const primaryList = await listConversations(gateway, primary.agentId);
+      const siblingList = await listConversations(gateway, sibling.agentId);
 
       const primaryConversationRef = String(primaryConversation.conversationRef);
       const siblingConversationRef = String(siblingConversation.conversationRef);
       const initialAllowedText = `ownership-proof-initial-${randomUUID()}`;
-      await sendConversation({
-        gateway,
-        agentId: PRIMARY_AGENT_ID,
-        conversationRef: primaryConversationRef,
-        message: initialAllowedText,
-      });
-      expect(outboundMessagesWithText(state, PRIMARY_ACCOUNT_ID, initialAllowedText)).toHaveLength(
-        1,
-      );
+      await send(primary.agentId, primaryConversationRef, initialAllowedText);
 
       const configBefore = await gateway.call("config.get", {});
       if (!isRecord(configBefore) || typeof configBefore.hash !== "string") {
@@ -274,16 +203,8 @@ describe("conversation route ownership clean-machine proof", () => {
       const patchResult = await gateway.call("config.patch", {
         raw: JSON.stringify({
           bindings: [
-            {
-              type: "route",
-              agentId: SIBLING_AGENT_ID,
-              match: { channel: CHANNEL_ID, accountId: PRIMARY_ACCOUNT_ID },
-            },
-            {
-              type: "route",
-              agentId: SIBLING_AGENT_ID,
-              match: { channel: CHANNEL_ID, accountId: SIBLING_ACCOUNT_ID },
-            },
+            route({ agentId: sibling.agentId, accountId: primary.accountId }),
+            route(sibling),
           ],
         }),
         baseHash: configBefore.hash,
@@ -296,65 +217,51 @@ describe("conversation route ownership clean-machine proof", () => {
       await waitForAppliedConfig(gateway, patchResult.hash);
 
       const staleSendText = `ownership-proof-stale-send-${randomUUID()}`;
-      let staleSendDenied = false;
-      try {
-        await sendConversation({
-          gateway,
-          agentId: PRIMARY_AGENT_ID,
-          conversationRef: primaryConversationRef,
-          message: staleSendText,
-        });
-      } catch {
-        staleSendDenied = true;
-      }
-      expect(staleSendDenied).toBe(true);
-      expect(outboundMessagesWithText(state, PRIMARY_ACCOUNT_ID, staleSendText)).toHaveLength(0);
+      const denied = (request: Promise<unknown>) =>
+        request.then(
+          () => false,
+          () => true,
+        );
+      const staleSendDenied = await denied(
+        send(primary.agentId, primaryConversationRef, staleSendText),
+      );
 
       const staleTurnText = `ownership-proof-stale-turn-${randomUUID()}`;
-      let staleTurnDenied = false;
-      try {
-        await gateway.call("conversations.turn", {
-          agentId: PRIMARY_AGENT_ID,
+      const staleTurnDenied = await denied(
+        gateway.call("conversations.turn", {
+          agentId: primary.agentId,
           turnId: randomUUID(),
           conversationRef: primaryConversationRef,
           message: staleTurnText,
           timeoutMs: 1_000,
-        });
-      } catch {
-        staleTurnDenied = true;
-      }
-      expect(staleTurnDenied).toBe(true);
-      expect(outboundMessagesWithText(state, PRIMARY_ACCOUNT_ID, staleTurnText)).toHaveLength(0);
+        }),
+      );
 
       const siblingAllowedText = `ownership-proof-sibling-${randomUUID()}`;
-      await sendConversation({
-        gateway,
-        agentId: SIBLING_AGENT_ID,
-        conversationRef: siblingConversationRef,
-        message: siblingAllowedText,
-      });
-      expect(outboundMessagesWithText(state, SIBLING_ACCOUNT_ID, siblingAllowedText)).toHaveLength(
-        1,
-      );
+      await send(sibling.agentId, siblingConversationRef, siblingAllowedText);
 
       const verdict = {
         ok: true,
-        siblingAccountHiddenFromPrimaryAgent:
-          findConversation(primaryList, SIBLING_ACCOUNT_ID, SIBLING_PEER_ID) === undefined,
-        primaryAccountHiddenFromSiblingAgent:
-          findConversation(siblingList, PRIMARY_ACCOUNT_ID, PRIMARY_PEER_ID) === undefined,
+        siblingAccountHiddenFromPrimaryAgent: findConversation(primaryList, sibling) === undefined,
+        primaryAccountHiddenFromSiblingAgent: findConversation(siblingList, primary) === undefined,
         initialOwnerDeliveredExactlyOnce:
-          outboundMessagesWithText(state, PRIMARY_ACCOUNT_ID, initialAllowedText).length === 1,
+          outboundCount(state, primary.accountId, initialAllowedText) === 1,
         staleSendDeniedWithoutProviderIo:
-          staleSendDenied &&
-          outboundMessagesWithText(state, PRIMARY_ACCOUNT_ID, staleSendText).length === 0,
+          staleSendDenied && outboundCount(state, primary.accountId, staleSendText) === 0,
         staleTurnDeniedWithoutProviderIo:
-          staleTurnDenied &&
-          outboundMessagesWithText(state, PRIMARY_ACCOUNT_ID, staleTurnText).length === 0,
+          staleTurnDenied && outboundCount(state, primary.accountId, staleTurnText) === 0,
         siblingOwnerDeliveredExactlyOnce:
-          outboundMessagesWithText(state, SIBLING_ACCOUNT_ID, siblingAllowedText).length === 1,
+          outboundCount(state, sibling.accountId, siblingAllowedText) === 1,
       };
-      expect(Object.values(verdict).every(Boolean)).toBe(true);
+      expect(verdict).toEqual({
+        ok: true,
+        siblingAccountHiddenFromPrimaryAgent: true,
+        primaryAccountHiddenFromSiblingAgent: true,
+        initialOwnerDeliveredExactlyOnce: true,
+        staleSendDeniedWithoutProviderIo: true,
+        staleTurnDeniedWithoutProviderIo: true,
+        siblingOwnerDeliveredExactlyOnce: true,
+      });
       console.log(`CONVERSATION_ROUTE_OWNERSHIP_PROOF=${JSON.stringify(verdict)}`);
     },
   );

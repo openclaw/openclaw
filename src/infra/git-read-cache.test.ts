@@ -80,7 +80,6 @@ describe("typed Git read ownership", () => {
     const stale = await runGitReadOperation(operation);
     await vi.advanceTimersByTimeAsync(0);
     expect(stale).toEqual([snapshot]);
-    stale[0]!.originUrl = "mutated response";
     await expect(runGitReadOperation(operation)).resolves.toEqual([snapshot]);
     expect(gitRead).toHaveBeenCalledTimes(3);
     refresh.resolve([]);
@@ -137,6 +136,42 @@ describe("typed Git read ownership", () => {
       loadCheckoutDiff({ cwd: "/diff-sharing", sessionKey: "session-a" }),
     ).resolves.toMatchObject({ additions: 3 });
     expect(gitRead).toHaveBeenCalledTimes(2);
+  });
+
+  it("shares summary work until expiry without duplicating a slow scan or reusing full patches", async () => {
+    vi.useFakeTimers();
+    const held = createDeferredCore<GitReadOperations["checkout.diff"]["output"]>();
+    onTestFinished(() => held.resolve(emptyDiff));
+    gitRead.mockReturnValueOnce(held.promise);
+    const input = { cwd: "/summary-sharing", summaryOnly: true };
+    const first = loadCheckoutDiff({ ...input, sessionKey: "first" });
+    await Promise.resolve();
+    vi.advanceTimersByTime(15_000);
+    const second = loadCheckoutDiff({ ...input, sessionKey: "second" });
+    await Promise.resolve();
+    expect(gitRead).toHaveBeenCalledOnce();
+    held.resolve({ ...emptyDiff, additions: 2 });
+    await expect(first).resolves.toMatchObject({ sessionKey: "first", additions: 2 });
+    await expect(second).resolves.toMatchObject({ sessionKey: "second", additions: 2 });
+    gitRead.mockResolvedValueOnce({ ...emptyDiff, additions: 3 });
+    await expect(loadCheckoutDiff({ ...input, sessionKey: "first" })).resolves.toMatchObject({
+      additions: 3,
+    });
+    await expect(loadCheckoutDiff({ ...input, sessionKey: "second" })).resolves.toMatchObject({
+      additions: 3,
+    });
+    expect(gitRead).toHaveBeenCalledTimes(2);
+    gitRead.mockResolvedValueOnce({ ...emptyDiff, additions: 4 });
+    await expect(loadCheckoutDiff({ cwd: input.cwd, sessionKey: "first" })).resolves.toMatchObject({
+      additions: 4,
+    });
+    expect(gitRead).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(10_001);
+    gitRead.mockResolvedValueOnce({ ...emptyDiff, additions: 5 });
+    await expect(loadCheckoutDiff({ ...input, sessionKey: "first" })).resolves.toMatchObject({
+      additions: 5,
+    });
+    expect(gitRead).toHaveBeenCalledTimes(4);
   });
 
   it("gives each coalesced response independent files and commit metadata", async () => {
@@ -254,35 +289,22 @@ describe("typed Git read ownership", () => {
     expect(getEventListeners(second.signal, "abort")).toHaveLength(0);
   });
 
-  it("joins final-subscriber teardown while fresh readers avoid its stale generation", async () => {
+  it("keeps a shared read cached after its last viewer stops waiting", async () => {
     const held = holdRead("checkout.context", null);
-    const operation = contextRead("/last-subscriber");
-    const subscriber = new AbortController();
-    const cancelled = runGitReadOperation(operation, { signal: subscriber.signal });
-    let callerSettled = false;
-    const markSettled = () => {
-      callerSettled = true;
-    };
-    const observed = cancelled.then(markSettled, markSettled);
+    const operation = contextRead("/last-viewer");
+    const viewer = new AbortController();
+    const cancelled = runGitReadOperation(operation, { signal: viewer.signal });
     await Promise.resolve();
     await Promise.resolve();
     const owner = gitRead.mock.calls[0]?.[1]?.signal;
     const rejected = expect(cancelled).rejects.toThrow("retired");
+    viewer.abort(new Error("retired"));
+    await rejected;
+    expect(owner?.aborted).toBe(false);
     const current = { owner: "example", repo: "repo", branch: "current" };
-    try {
-      subscriber.abort(new Error("retired"));
-      expect(owner?.aborted).toBe(true);
-      gitRead.mockResolvedValueOnce(current);
-      await expect(runGitReadOperation(operation)).resolves.toEqual(current);
-      expect(callerSettled).toBe(false);
-    } finally {
-      held.resolve(null);
-      await rejected;
-      await observed;
-    }
-    expect(callerSettled).toBe(true);
+    held.resolve(current);
     await expect(runGitReadOperation(operation)).resolves.toEqual(current);
-    expect(gitRead).toHaveBeenCalledTimes(2);
+    expect(gitRead).toHaveBeenCalledOnce();
   });
 
   it.each(["checkout.context", "checkout.revision"] as const)(

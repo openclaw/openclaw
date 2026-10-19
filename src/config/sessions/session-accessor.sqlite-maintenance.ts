@@ -107,9 +107,6 @@ export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
       ageChanges: pending.changes,
     },
   });
-  if (result.kind !== "maintenance-age" && result.kind !== "maintenance-plan-stale") {
-    throw new Error("SQLite automatic maintenance returned another age result");
-  }
   pending.acknowledge();
   return result;
 }
@@ -233,18 +230,16 @@ function buildSessionMaintenanceBatches(params: {
     }
   }
 
-  const groupsByRoot = new Map<number, SessionMaintenanceBatch & { order: number }>();
+  const groupsByRoot = new Map<number, SessionMaintenanceBatch>();
   for (const [index, removal] of params.entryRemovals.entries()) {
     const root = find(index);
     const group = groupsByRoot.get(root) ?? {
       archiveBytes: 0,
       entryRemovals: [],
-      order: index,
       stateDeletePlans: [],
       workItems: 0,
     };
     group.entryRemovals.push(removal);
-    group.order = Math.min(group.order, index);
     groupsByRoot.set(root, group);
   }
 
@@ -254,8 +249,7 @@ function buildSessionMaintenanceBatches(params: {
     plans.push(plan);
     plansBySessionId.set(plan.sessionId, plans);
   }
-  const standaloneGroups: Array<SessionMaintenanceBatch & { order: number }> = [];
-  let standaloneOrder = params.entryRemovals.length;
+  const standaloneGroups: SessionMaintenanceBatch[] = [];
   for (const [sessionId, plans] of plansBySessionId) {
     const removalIndex = removalIndexBySessionId.get(sessionId);
     const removalGroup =
@@ -263,7 +257,6 @@ function buildSessionMaintenanceBatches(params: {
     const group = removalGroup ?? {
       archiveBytes: 0,
       entryRemovals: [],
-      order: standaloneOrder++,
       stateDeletePlans: [],
       workItems: 0,
     };
@@ -276,15 +269,7 @@ function buildSessionMaintenanceBatches(params: {
     }
   }
 
-  const groups = [...groupsByRoot.values(), ...standaloneGroups]
-    .map((group) => {
-      group.workItems = Math.max(
-        group.entryRemovals.length,
-        new Set(group.stateDeletePlans.map((plan) => plan.sessionId)).size,
-      );
-      return group;
-    })
-    .toSorted((left, right) => left.order - right.order);
+  const groups = [...groupsByRoot.values(), ...standaloneGroups];
   const batches: SessionMaintenanceBatch[] = [];
   let batch: SessionMaintenanceBatch = {
     archiveBytes: 0,
@@ -302,6 +287,10 @@ function buildSessionMaintenanceBatches(params: {
   // Limits apply between ownership groups. One inseparable group may exceed them so shared or
   // historical session state is never deleted in a different transaction from its last owner.
   for (const group of groups) {
+    group.workItems = Math.max(
+      group.entryRemovals.length,
+      new Set(group.stateDeletePlans.map((plan) => plan.sessionId)).size,
+    );
     const exceedsEntryLimit =
       batch.workItems > 0 &&
       batch.workItems + group.workItems > MAX_SESSION_MAINTENANCE_BATCH_ENTRIES;
@@ -632,9 +621,6 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
               });
         },
       );
-      if (result.kind !== "maintenance-finalize") {
-        throw new Error("SQLite maintenance returned another operation's result");
-      }
       archivedTranscripts = result.value.archivedTranscripts;
       const committedIndices = new Set(result.value.committedEntryIndices);
       changedEntryRemovals = removalOutcomes.filter((_, index) => !committedIndices.has(index));

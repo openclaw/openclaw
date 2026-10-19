@@ -1,6 +1,6 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
-import { resolveGeneratedMediaMaxBytes } from "../media/configured-max-bytes.js";
+import { resolveGeneratedImageDownloadMaxBytes } from "../media/configured-max-bytes.js";
 import { resolveApiKeyForProvider } from "../plugin-sdk/provider-auth-runtime.js";
 import {
   assertOkOrThrowHttpError,
@@ -230,7 +230,7 @@ export function createOpenAiCompatibleImageGenerationProvider(
           { bodyTimeoutMs: remainingTimeoutMs },
         );
         const maxImages = options.capabilities[mode].maxCount ?? count;
-        const maxBytes = resolveGeneratedMediaMaxBytes(req.cfg, "image");
+        const maxBytes = resolveGeneratedImageDownloadMaxBytes(req.cfg);
         const payload = await readProviderJsonResponse(response, `${options.id}.image-generation`, {
           maxBytes: resolveInlineImageJsonResponseMaxBytes(maxImages, maxBytes),
           timeoutMs: remainingTimeoutMs,

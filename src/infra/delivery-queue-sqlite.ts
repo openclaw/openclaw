@@ -3,6 +3,8 @@ import { withExistingOpenClawStateDatabaseArtifactPreservingReadOnlyAsync } from
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import {
   failedDeliveryQueueHealthAdmission,
+  isDeliveryQueueTombstonePruneDue,
+  nextDeliveryQueueTombstoneExpiryAdmission,
   type FailedDeliveryQueueHealth,
 } from "./delivery-queue-cache.js";
 import type { DeliveryQueueReadMode } from "./delivery-queue-sqlite-bound.js";
@@ -136,7 +138,16 @@ export async function pruneExpiredDeliveryQueueTombstones(
   stateDir?: string,
   context?: DeliveryQueueStateContext,
 ): Promise<void> {
-  await executeDeliveryQueueOperation(context, stateDir, {
+  const captured = context ?? captureDeliveryQueueStateContext(stateDir);
+  const expiry = getOrLoadSqliteDatabaseAdmissionForPath(
+    captured.workerContext.admission.databasePath,
+    nextDeliveryQueueTombstoneExpiryAdmission,
+    () => undefined,
+  );
+  if (!isDeliveryQueueTombstonePruneDue(expiry, Date.now())) {
+    return;
+  }
+  await executeDeliveryQueueOperation(captured, undefined, {
     type: "deliveryQueue.pruneTombstones",
     input: undefined,
   });

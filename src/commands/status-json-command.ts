@@ -1,4 +1,3 @@
-// Shared command runner for `openclaw status --json`.
 // It keeps scan execution separate from JSON payload assembly so CLI variants can reuse the same output path.
 
 import { readUpdateRunStatus } from "../infra/update-run-status.js";

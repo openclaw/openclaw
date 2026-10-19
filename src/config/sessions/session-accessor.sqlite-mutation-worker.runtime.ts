@@ -1,6 +1,5 @@
 import { on, once } from "node:events";
 import type { MessagePort } from "node:worker_threads";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { clearNodeSqliteKyselyCacheForDatabase } from "../../infra/kysely-sync-cache-state.js";
 import { sqlPublicationAnchor, type EngineConnection } from "../../infra/sql-connection.js";
 import { sqliteReaderDatabasePathKey } from "../../infra/sqlite-reader-lifecycle.js";
@@ -447,16 +446,6 @@ export async function runReclamationWorkerPort(
       );
       if (response.type === "closed") {
         port.postMessage(response);
-        if (pooledTask) {
-          const [release]: unknown[] = await once(port, "message");
-          if (
-            !isRecord(release) ||
-            release.type !== "release" ||
-            release.operationId !== operationId
-          ) {
-            throw new Error("Canonical validation task received an invalid close release");
-          }
-        }
         port.close();
         return response;
       }

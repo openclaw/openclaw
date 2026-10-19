@@ -115,6 +115,7 @@ export function assertCurrentAgentSchemaMetadata(
   metadata: ExistingAgentSchemaMeta | null,
   agentId: string,
   pathname: string,
+  expectedVersion = OPENCLAW_AGENT_SCHEMA_VERSION,
 ): void {
   if (!metadata) {
     throw new SqliteSchemaMismatchError(
@@ -122,9 +123,9 @@ export function assertCurrentAgentSchemaMetadata(
     );
   }
   assertExistingAgentSchemaOwner(metadata, agentId, pathname);
-  if (metadata.schemaVersion !== OPENCLAW_AGENT_SCHEMA_VERSION) {
+  if (metadata.schemaVersion !== expectedVersion) {
     throw new SqliteSchemaMismatchError(
-      `OpenClaw agent database ${pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${OPENCLAW_AGENT_SCHEMA_VERSION}; run openclaw doctor --fix before using it.`,
+      `OpenClaw agent database ${pathname} metadata schema version ${metadata.schemaVersion ?? "invalid"} does not match ${expectedVersion}; run openclaw doctor --fix before using it.`,
     );
   }
 }

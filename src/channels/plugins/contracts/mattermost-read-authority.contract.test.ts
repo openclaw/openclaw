@@ -195,13 +195,6 @@ async function withReadFixture(
           runId: operationalRunInstance.runId,
           messageActionTurnCapability: turnCapability,
           ...toolContext,
-          getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-          resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-            resolvedConfig: config,
-            diagnostics: [],
-            targetStatesByPath: {},
-            hadUnresolvedTargets: false,
-          }),
         }),
         {
           agentId: "main",

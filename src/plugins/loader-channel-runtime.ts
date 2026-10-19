@@ -35,7 +35,7 @@ export function loadSetupRuntimeChannelCandidate(params: {
   runtimeCandidateEntry: { source: string; rootDir: string };
   safeSource: string;
   rejectHardlinks: boolean;
-  loadPluginModule: PluginModuleLoader;
+  loadPluginModule: (...args: Parameters<PluginModuleLoader>) => ReturnType<PluginModuleLoader>;
   registryBuilder: PluginRegistryBuilder;
   cfg: OpenClawConfig;
   entry: NormalizedPluginsConfig["entries"][string] | undefined;

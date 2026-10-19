@@ -1,15 +1,23 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import type { SessionSharingIdentity } from "../../packages/gateway-protocol/src/index.js";
+import {
+  controlUiSessionSlug,
+  SESSION_UUID_SUFFIX_RE,
+} from "../../packages/session-url-contract/src/index.js";
 import { isInternalSessionEffectsKey } from "../config/sessions/internal-session-key.js";
 import { memorySessionActorOwners } from "../config/sessions/session-actor-memory-owner.js";
 import { captureSessionActorStorageOwner } from "../config/sessions/session-actor-storage-binding.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   first,
   identity,
+  logicalSessionRowIdentity,
+  physical,
   type Lookup,
   type Query,
   type Row,
 } from "./session-row-projection-record.js";
+import { resolveGatewaySessionDisplayName } from "./session-utils-display.js";
 
 type Contribution = { key: string; storePath: string; actor: SessionSharingIdentity };
 const isSentinel = (key: string) => key === "global" || key === "unknown";
@@ -196,4 +204,71 @@ export function createSessionRowCapabilityReader(owner: {
       ? undefined
       : { entry: row?.storedEntry };
   };
+}
+
+function updateIndex(
+  map: Map<string, Set<string>>,
+  key: string | undefined,
+  id: string,
+  deleting: boolean,
+) {
+  if (!key) {
+    return;
+  }
+  const values = map.get(key);
+  if (deleting) {
+    values?.delete(id);
+    if (values?.size === 0) {
+      map.delete(key);
+    }
+  } else if (values) {
+    values.add(id);
+  } else {
+    map.set(key, new Set([id]));
+  }
+}
+
+export function indexSessionRow(
+  row: Row,
+  indexes: {
+    byStore: Map<string, Set<string>>;
+    byAgent: Map<string, Set<string>>;
+    byKey: Map<string, Set<string>>;
+    byParent: Map<string, Set<string>>;
+  },
+  deleting = false,
+) {
+  const { byStore, byAgent, byKey, byParent } = indexes;
+  const id = identity(row);
+  updateIndex(byStore, row.storeTarget.storePath, id, deleting);
+  updateIndex(byAgent, row.agentId, id, deleting);
+  updateIndex(byKey, `key:${row.key}`, id, deleting);
+  updateIndex(byKey, row.entry && `id:${row.entry.sessionId}`, id, deleting);
+  updateIndex(byKey, logicalSessionRowIdentity(row.agentId, row.key), id, deleting);
+  const uuid = parseAgentSessionKey(row.key)?.rest.match(SESSION_UUID_SUFFIX_RE)?.[1];
+  if (uuid) {
+    // Eight characters is the shortest URL id; the resolver filters longer prefixes and ties.
+    updateIndex(
+      byKey,
+      `url-id:${uuid.toLowerCase().replaceAll("-", "").slice(0, 8)}`,
+      id,
+      deleting,
+    );
+    const entry = row.storedEntry ?? row.entry;
+    if (entry) {
+      updateIndex(
+        byKey,
+        `url-slug:${controlUiSessionSlug(resolveGatewaySessionDisplayName(row.key, entry))}`,
+        id,
+        deleting,
+      );
+    }
+  }
+  // Only raw sentinel parents resolve by physical store; ordinary parents resolve logically.
+  if (row.key === "global" || row.key === "unknown") {
+    updateIndex(byKey, physical(row.storeTarget.storePath, row.key), id, deleting);
+  }
+  for (const parent of row.parents) {
+    updateIndex(byParent, parent, id, deleting);
+  }
 }

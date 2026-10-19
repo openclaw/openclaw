@@ -6,8 +6,8 @@ import {
 } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createDiscordClient, createDiscordRestClient } from "./client.js";
-import type { RequestClient } from "./internal/discord.js";
 import type { GatewayPlugin } from "./internal/gateway.js";
+import type { RequestClient } from "./internal/rest.js";
 import { clearGateways, registerGateway } from "./monitor/gateway-registry.js";
 import { makeDiscordRest } from "./send.test-harness.js";
 

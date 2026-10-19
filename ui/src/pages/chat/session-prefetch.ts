@@ -4,14 +4,15 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { GatewaySessionRow } from "../../api/types.ts";
 import type { ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { AgentCapability } from "../../lib/agents/index.ts";
-import { isSessionRunActive } from "../../lib/session-run-state.ts";
+import { listen } from "../../lib/reactive/listener.ts";
+import { isSessionRunStateActive } from "../../lib/session-run-state.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
 import {
   CHAT_PANE_LIFECYCLE_CHANGED_EVENT,
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "./chat-history-events.ts";
 import { requestChatSessionSnapshot } from "./chat-history-request.ts";
-import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
+import { chatPanesWithin } from "./chat-pane-elements.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
@@ -80,6 +81,7 @@ function sessionActivityAt(row: GatewaySessionRow): number {
   return row.lastActivityAt ?? row.updatedAt ?? 0;
 }
 
+// Synchronous request/cache owner; the page adapter below owns its lifetime.
 class SessionPrefetcher {
   private connected = false;
   private snapshot: SessionPrefetchSnapshot | null = null;
@@ -88,6 +90,7 @@ class SessionPrefetcher {
   private delayDeadline: number | null = null;
   private running = false;
   private rescheduleDelayMs: number | null = null;
+  private stopVisibility: (() => void) | undefined;
 
   constructor(
     private readonly cache: ChatMessageCache,
@@ -99,14 +102,15 @@ class SessionPrefetcher {
       return;
     }
     this.connected = true;
-    document.addEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility = listen(document, "visibilitychange", this.handleVisibilityChange);
     this.schedule();
   }
 
   disconnect(): void {
     this.connected = false;
     this.rescheduleDelayMs = null;
-    document.removeEventListener("visibilitychange", this.handleVisibilityChange);
+    this.stopVisibility?.();
+    this.stopVisibility = undefined;
     this.cancelScheduledWork();
   }
 
@@ -319,7 +323,7 @@ class SessionPrefetcher {
     const row = snapshot.rows?.find((candidate) => candidate.key === snapshot.intentSessionKey);
     // The presented pane owns transient run adoption and replay. Prefetch only
     // warms durable history after navigation intent.
-    if (!row || isSessionRunActive(row)) {
+    if (!row || isSessionRunStateActive(row)) {
       return null;
     }
     const openKeys = new Set(
@@ -428,6 +432,7 @@ export function createSessionPrefetch(
       clearSubscriptions();
       context = next;
       if (context) {
+        // Retire obsolete request scopes on each publication, even while rendering is parked.
         subscriptions = [
           context.gateway.subscribe(syncSnapshot),
           context.sessions.subscribe(syncSnapshot),
@@ -438,7 +443,8 @@ export function createSessionPrefetch(
       return;
     }
     const source = context;
-    const panes = [...paneRoot.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
+    // The shell owns these sibling panes, whose public host properties describe readiness.
+    const panes = chatPanesWithin(paneRoot).filter(
       (pane) => pane.closest("openclaw-app-shell") === paneRoot.closest("openclaw-app-shell"),
     );
     const openSessionKeys = panes.flatMap((pane) => (pane.sessionKey ? [pane.sessionKey] : []));
@@ -493,10 +499,10 @@ export function createSessionPrefetch(
       paneRoot = root;
       paneListeners = new AbortController();
       const options = { signal: paneListeners.signal };
-      paneRoot.addEventListener(CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, syncSnapshot, options);
-      paneRoot.addEventListener(CHAT_PANE_LIFECYCLE_CHANGED_EVENT, syncSnapshot, options);
-      paneRoot.addEventListener("pointerover", handleNavigationIntent, options);
-      paneRoot.addEventListener("focusin", handleNavigationIntent, options);
+      listen(paneRoot, CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT, syncSnapshot, options);
+      listen(paneRoot, CHAT_PANE_LIFECYCLE_CHANGED_EVENT, syncSnapshot, options);
+      listen(paneRoot, "pointerover", handleNavigationIntent, options);
+      listen(paneRoot, "focusin", handleNavigationIntent, options);
     }
     syncSnapshot();
   }

@@ -12,8 +12,7 @@ import {
   loadPluginMetadataSnapshot,
   type PluginMetadataSnapshot,
 } from "../plugins/plugin-metadata-snapshot.js";
-import { loadEmbeddedAgentMcpConfig } from "./embedded-agent-mcp.js";
-import type { SettingsManager } from "./sessions/index.js";
+import type { Settings } from "./sessions/settings-storage.js";
 
 const log = createSubsystemLogger("embedded-agent-settings");
 
@@ -22,7 +21,7 @@ const SANITIZED_PROJECT_AGENT_KEYS = ["shellPath", "shellCommandPrefix"] as cons
 
 type EmbeddedAgentProjectSettingsPolicy = "trusted" | "sanitize" | "ignore";
 
-type AgentSettingsSnapshot = ReturnType<SettingsManager["getGlobalSettings"]> & {
+export type AgentSettingsSnapshot = Settings & {
   mcpServers?: Record<string, BundleMcpServerConfig>;
 };
 
@@ -102,20 +101,6 @@ export function loadEnabledBundleAgentSettingsSnapshot(params: {
           sanitizeAgentSettingsSnapshot(result.raw as AgentSettingsSnapshot),
         ) as AgentSettingsSnapshot;
       }
-    }
-
-    const embeddedAgentMcp = loadEmbeddedAgentMcpConfig({
-      workspaceDir,
-      cfg: config,
-      manifestRegistry: metadataSnapshot.manifestRegistry,
-    });
-    for (const diagnostic of embeddedAgentMcp.diagnostics) {
-      log.warn(`bundle MCP skipped for ${diagnostic.pluginId}: ${diagnostic.message}`);
-    }
-    if (Object.keys(embeddedAgentMcp.mcpServers).length > 0) {
-      snapshot = applyMergePatch(snapshot, {
-        mcpServers: embeddedAgentMcp.mcpServers,
-      }) as AgentSettingsSnapshot;
     }
 
     return snapshot;

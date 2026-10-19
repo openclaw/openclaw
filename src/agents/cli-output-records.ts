@@ -11,7 +11,7 @@ import type {
 } from "./cli-output-contracts.js";
 import { normalizeUsage, type UsageLike } from "./usage.js";
 
-function isClaudeCliProvider(providerId: string): boolean {
+export function isClaudeCliProvider(providerId: string): boolean {
   return normalizeLowercaseStringOrEmpty(providerId) === "claude-cli";
 }
 
@@ -142,11 +142,10 @@ function normalizeCliUsageRecord(raw: unknown): CliUsage | undefined {
     output: usage.output || undefined,
     cacheRead: usage.cacheRead || undefined,
     cacheWrite: usage.cacheWrite || undefined,
+    cacheWrite1h: usage.cacheWrite1h || undefined,
     total: usage.total || undefined,
   };
-  return Object.values(cliUsage).some((value) => typeof value === "number" && value > 0)
-    ? cliUsage
-    : undefined;
+  return Object.values(cliUsage).some((value) => (value ?? 0) > 0) ? cliUsage : undefined;
 }
 
 export function readCliUsage(parsed: Record<string, unknown>): CliUsage | undefined {

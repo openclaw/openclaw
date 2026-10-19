@@ -4,15 +4,81 @@ import { resolveStateDir } from "../config/paths.js";
 import {
   completeUnshippedDaemonRuntimePinMigration,
   type DaemonRuntimePinDatabase,
+  readDaemonRuntimePinMigrationReceipt,
   withDaemonRuntimePinStore,
 } from "../daemon/runtime-pin-store.js";
 import { deleteConfigMachineState } from "../state/config-machine-state-write.js";
+import { isStatePostgres } from "../state/openclaw-state-db-engine.js";
+import { withExistingOpenClawStateDatabaseCurrentReadOnly } from "../state/openclaw-state-db-readonly.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import { executeSqliteQuerySync, getNodeSqliteKysely } from "./kysely-sync.js";
+import {
+  executeSqliteQuerySync,
+  executeSqliteQueryTakeFirstSync,
+  getNodeSqliteKysely,
+} from "./kysely-sync.js";
+import { getAdmittedSqliteSchemaFacts } from "./sqlite-schema-facts.js";
 import { withLegacyMigrationStateLock } from "./state-migrations.lock.js";
 import type { MigrationMessages } from "./state-migrations.types.js";
+
+function writeDaemonRuntimePinMigrationReceipt(
+  db: DatabaseSync,
+  sourceState: string,
+  phase: "copied" | "complete",
+): void {
+  const result = db
+    .prepare(`
+      INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, ?, ?)
+      ON CONFLICT(version) DO UPDATE SET source_state=excluded.source_state,
+        phase=excluded.phase, updated_at=excluded.updated_at
+      WHERE daemon_runtime_pin_migration.phase != 'copied'
+        OR daemon_runtime_pin_migration.source_state = excluded.source_state
+    `)
+    .run(sourceState, phase, Date.now());
+  if (result.changes === 0) {
+    throw new Error(
+      "Runtime pin migration source changed; both stores were retained. Restore the original source and run openclaw doctor.",
+    );
+  }
+}
+
+/** Profile producers can finish the handoff without custody when no legacy pins exist. */
+export function initializeFreshDaemonRuntimePinMigration(env: NodeJS.ProcessEnv): void {
+  if (isStatePostgres()) {
+    return;
+  }
+  // Copied and foreign-source receipts still require Doctor to reconcile their history.
+  if (readDaemonRuntimePinMigrationReceipt(env)) {
+    return;
+  }
+  const legacyPin = withExistingOpenClawStateDatabaseCurrentReadOnly(
+    ({ db }) => {
+      // Released pre-pin schemas have no source table to migrate.
+      if (getAdmittedSqliteSchemaFacts(db)?.tables.has("config_machine_state") === false) {
+        return undefined;
+      }
+      return executeSqliteQueryTakeFirstSync(
+        db,
+        getNodeSqliteKysely<Pick<DB, "config_machine_state">>(db)
+          .selectFrom("config_machine_state")
+          .select("state_key")
+          .where("state_key", "like", "daemon-runtime-pin:%")
+          .limit(1),
+      );
+    },
+    { env, allowNativeRead: true },
+  );
+  if (legacyPin) {
+    return;
+  }
+  withDaemonRuntimePinStore(env, true, (db) =>
+    db
+      .prepare(`INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, 'complete', ?)
+        ON CONFLICT(version) DO NOTHING`)
+      .run(resolveOpenClawStateSqlitePath(env), Date.now()),
+  );
+}
 
 export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<MigrationMessages> {
   if (completeUnshippedDaemonRuntimePinMigration(env)) {
@@ -20,9 +86,7 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
   }
   const sourceState = resolveOpenClawStateSqlitePath(env);
   const migrationComplete = (stateEnv: NodeJS.ProcessEnv) => {
-    const previous = withDaemonRuntimePinStore(stateEnv, false, (db) =>
-      db.prepare("SELECT source_state, phase FROM daemon_runtime_pin_migration").get(),
-    );
+    const previous = readDaemonRuntimePinMigrationReceipt(stateEnv);
     return previous?.phase === "complete" && previous.source_state === sourceState;
   };
   // A completed handoff needs no offline custody, including while the Gateway runs.
@@ -33,22 +97,6 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
   } catch (error) {
     return { changes: [], warnings: [`Failed migrating daemon runtime pins: ${String(error)}`] };
   }
-  const receipt = (db: DatabaseSync, phase: "copied" | "complete") => {
-    const result = db
-      .prepare(`
-      INSERT INTO daemon_runtime_pin_migration VALUES (1, ?, ?, ?)
-      ON CONFLICT(version) DO UPDATE SET source_state=excluded.source_state,
-        phase=excluded.phase, updated_at=excluded.updated_at
-      WHERE daemon_runtime_pin_migration.phase != 'copied'
-        OR daemon_runtime_pin_migration.source_state = excluded.source_state
-    `)
-      .run(sourceState, phase, Date.now());
-    if (result.changes === 0) {
-      throw new Error(
-        "Runtime pin migration source changed; both stores were retained. Restore the original source and run openclaw doctor.",
-      );
-    }
-  };
   return await withLegacyMigrationStateLock({
     env,
     stateDir: resolveStateDir(env),
@@ -78,7 +126,7 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
                 return 0;
               }
               withDaemonRuntimePinStore(lockedEnv, true, (target) => {
-                receipt(target, "copied");
+                writeDaemonRuntimePinMigrationReceipt(target, sourceState, "copied");
                 const targetDb = getNodeSqliteKysely<DaemonRuntimePinDatabase>(target);
                 const existing = executeSqliteQuerySync(
                   target,
@@ -113,7 +161,9 @@ export async function migrateDaemonRuntimePins(env: NodeJS.ProcessEnv): Promise<
             { env: lockedEnv },
             { operationLabel: "state-migration.daemon-runtime-pins" },
           );
-      withDaemonRuntimePinStore(lockedEnv, true, (db) => receipt(db, "complete"));
+      withDaemonRuntimePinStore(lockedEnv, true, (db) =>
+        writeDaemonRuntimePinMigrationReceipt(db, sourceState, "complete"),
+      );
       return {
         changes: moved > 0 ? [`Moved ${moved} daemon runtime pin(s) to local service intent.`] : [],
         warnings: [],

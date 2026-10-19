@@ -10,10 +10,7 @@ import * as registration from "./extension-install-registration.js";
 import type { NativeWindowsContext } from "./extension-windows-contract.js";
 import * as windows from "./extension-windows-host.js";
 import { runWindowsManagement } from "./extension-windows-management.js";
-import {
-  createWindowsNativePlatform,
-  type WindowsNativePlatform,
-} from "./extension-windows-platform.js";
+import { windowsNativePlatform } from "./extension-windows-platform.js";
 
 vi.mock("node:timers/promises", async (importOriginal) => {
   const actual = await importOriginal<typeof import("node:timers/promises")>();
@@ -33,7 +30,7 @@ vi.mock("openclaw/plugin-sdk/state-paths", async (importOriginal) => {
 });
 vi.mock("./extension-windows-platform.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./extension-windows-platform.js")>();
-  return { ...actual, createWindowsNativePlatform: vi.fn(actual.createWindowsNativePlatform) };
+  return { ...actual, windowsNativePlatform: { ...actual.windowsNativePlatform } };
 });
 vi.mock("./extension-windows-management.js", async (importOriginal) => {
   const actual = await importOriginal<typeof import("./extension-windows-management.js")>();
@@ -53,7 +50,7 @@ export type InstallFixture = {
   now?: () => number;
   sleep?: (ms: number) => Promise<void>;
   windowsNative?: {
-    platform?: WindowsNativePlatform;
+    platform?: typeof windowsNativePlatform;
     manage?: typeof runWindowsManagement;
     context?: NativeWindowsContext;
     executable?: string;
@@ -62,6 +59,13 @@ export type InstallFixture = {
 
 function selectFixture(fixture: InstallFixture = {}) {
   const restores: Array<() => void> = [];
+  const setEnv = (key: string, value: string | undefined) => {
+    if (value === undefined) {
+      delete process.env[key];
+    } else {
+      process.env[key] = value;
+    }
+  };
   const property = (name: "platform" | "execPath" | "argv", value: unknown) => {
     const descriptor = Object.getOwnPropertyDescriptor(process, name)!;
     // A data override must not retain an accessor's get/set fields.
@@ -96,18 +100,8 @@ function selectFixture(fixture: InstallFixture = {}) {
     ...Object.keys(env),
   ])) {
     const previous = process.env[key];
-    if (env[key] === undefined) {
-      delete process.env[key];
-    } else {
-      process.env[key] = env[key];
-    }
-    restores.push(() => {
-      if (previous === undefined) {
-        delete process.env[key];
-      } else {
-        process.env[key] = previous;
-      }
-    });
+    setEnv(key, env[key]);
+    restores.push(() => setEnv(key, previous));
   }
   if (fixture.now) {
     const now = vi.spyOn(Date, "now").mockImplementation(fixture.now);
@@ -135,8 +129,9 @@ function selectFixture(fixture: InstallFixture = {}) {
   }
   const native = fixture.windowsNative;
   if (native?.platform) {
-    vi.mocked(createWindowsNativePlatform).mockReturnValue(native.platform);
-    restores.push(() => vi.mocked(createWindowsNativePlatform).mockReset());
+    const previous = { ...windowsNativePlatform };
+    Object.assign(windowsNativePlatform, native.platform);
+    restores.push(() => Object.assign(windowsNativePlatform, previous));
   }
   if (native?.manage) {
     vi.mocked(runWindowsManagement).mockImplementation(native.manage);
@@ -195,129 +190,86 @@ async function inFixture<T>(
   }
 }
 
-export function chromeProductRoots(fixture?: InstallFixture) {
+type FixtureParams = { deps?: InstallFixture };
+
+function withParams<P, R>(
+  run: (params: P) => Promise<R>,
+  map: (params: P & FixtureParams) => P = (params) => params,
+  pluginRoot?: (params: P) => string,
+) {
+  return (params: P & FixtureParams) =>
+    inFixture(params.deps, () => run(map(params)), pluginRoot?.(params));
+}
+
+function nativeExecutable<P extends FixtureParams & { nativeHostExecutable?: string }>(params: P) {
+  return {
+    ...params,
+    nativeHostExecutable: params.nativeHostExecutable ?? params.deps?.windowsNative?.executable,
+  };
+}
+
+function windowsExecutable<P extends FixtureParams & { executable?: string }>(params: P) {
+  return { ...params, executable: params.executable ?? params.deps?.windowsNative?.executable };
+}
+
+function selected<T>(fixture: InstallFixture | undefined, run: () => T): T {
   const restore = selectFixture(fixture);
   try {
-    return layout.chromeProductRoots();
+    return run();
   } finally {
     restore();
   }
 }
-export function stableChromeExtensionDir(fixture?: InstallFixture) {
-  const restore = selectFixture(fixture);
-  try {
-    return layout.stableChromeExtensionDir();
-  } finally {
-    restore();
-  }
-}
-export function installStableChromeExtension(bundledDir: string, fixture?: InstallFixture) {
-  return inFixture(fixture, () => layout.installStableChromeExtension(bundledDir));
-}
-export function resolveChromeExtensionLoadPath(bundledDir: string, fixture?: InstallFixture) {
-  return inFixture(fixture, () => installer.resolveChromeExtensionLoadPath(bundledDir));
-}
-export function discoverChromeExtensionIds(
-  params: Parameters<typeof layout.discoverChromeExtensionIds>[0] & { deps?: InstallFixture },
-) {
-  return inFixture(params.deps, () => layout.discoverChromeExtensionIds(params));
-}
-export function installChromeExtensionBootstrap(
-  params: Parameters<typeof installer.installChromeExtensionBootstrap>[0] & {
-    deps?: InstallFixture;
-  },
-) {
-  return inFixture(
-    params.deps,
-    () =>
-      installer.installChromeExtensionBootstrap({
-        ...params,
-        nativeHostExecutable: params.nativeHostExecutable ?? params.deps?.windowsNative?.executable,
-      }),
-    params.pluginRoot,
-  );
-}
-export function browserExtensionStatus(
-  params: Parameters<typeof installer.browserExtensionStatus>[0] & { deps?: InstallFixture },
-) {
-  return inFixture(params.deps, () =>
-    installer.browserExtensionStatus({
-      ...params,
-      nativeHostExecutable: params.nativeHostExecutable ?? params.deps?.windowsNative?.executable,
-    }),
-  );
-}
-export function installRegistration(
-  params: Parameters<typeof registration.installRegistration>[0] & { deps?: InstallFixture },
-) {
-  return inFixture(params.deps, () => registration.installRegistration(params), params.pluginRoot);
-}
-export function repairChromeExtensionNativeHosts(
-  params: Parameters<typeof installer.repairChromeExtensionNativeHosts>[0] & {
-    deps?: InstallFixture;
-  },
-) {
-  return inFixture(
-    params.deps,
-    () => installer.repairChromeExtensionNativeHosts(params),
-    params.pluginRoot,
-  );
-}
-export function uninstallChromeExtensionNativeHosts(
-  params: NonNullable<Parameters<typeof installer.uninstallChromeExtensionNativeHosts>[0]> & {
-    deps?: InstallFixture;
-  },
-) {
-  return inFixture(params.deps, () =>
-    installer.uninstallChromeExtensionNativeHosts({
-      ...params,
-      nativeHostExecutable: params.nativeHostExecutable ?? params.deps?.windowsNative?.executable,
-    }),
-  );
-}
-export function removeChromeStoreInstallRequests(fixture?: InstallFixture) {
-  return inFixture(fixture, () => installer.removeChromeStoreInstallRequests());
-}
-export function chromeStoreInstallRequests(fixture?: InstallFixture) {
-  return inFixture(fixture, () => readChromeStoreInstallRequests());
-}
-export function installWindowsNativeHost(
-  params: Parameters<typeof windows.installWindowsNativeHost>[0] & { deps?: InstallFixture },
-) {
-  return inFixture(params.deps, () =>
-    windows.installWindowsNativeHost({
-      ...params,
-      executable: params.executable ?? params.deps?.windowsNative?.executable,
-    }),
-  );
-}
-export function inspectWindowsNativeHosts(
-  params: NonNullable<Parameters<typeof windows.inspectWindowsNativeHosts>[0]> & {
-    deps?: InstallFixture;
-  },
-) {
-  return inFixture(params.deps, () =>
-    windows.inspectWindowsNativeHosts({
-      ...params,
-      executable: params.executable ?? params.deps?.windowsNative?.executable,
-    }),
-  );
-}
-export function uninstallWindowsNativeHosts(
-  params: NonNullable<Parameters<typeof windows.uninstallWindowsNativeHosts>[0]> & {
-    deps?: InstallFixture;
-  },
-) {
-  return inFixture(params.deps, () =>
-    windows.uninstallWindowsNativeHosts({
-      ...params,
-      executable: params.executable ?? params.deps?.windowsNative?.executable,
-    }),
-  );
-}
-export function validateWindowsNativeContext(
+
+export const chromeProductRoots = (fixture?: InstallFixture) =>
+  selected(fixture, layout.chromeProductRoots);
+export const stableChromeExtensionDir = (fixture?: InstallFixture) =>
+  selected(fixture, layout.stableChromeExtensionDir);
+export const installStableChromeExtension = (bundledDir: string, fixture?: InstallFixture) =>
+  inFixture(fixture, () => layout.installStableChromeExtension(bundledDir));
+export const resolveChromeExtensionLoadPath = (bundledDir: string, fixture?: InstallFixture) =>
+  inFixture(fixture, () => installer.resolveChromeExtensionLoadPath(bundledDir));
+export const discoverChromeExtensionIds = withParams(layout.discoverChromeExtensionIds);
+export const installChromeExtensionBootstrap = withParams(
+  installer.installChromeExtensionBootstrap,
+  nativeExecutable,
+  (params) => params.pluginRoot,
+);
+export const browserExtensionStatus = withParams(
+  installer.browserExtensionStatus,
+  nativeExecutable,
+);
+export const installRegistration = withParams(
+  registration.installRegistration,
+  undefined,
+  (params) => params.pluginRoot,
+);
+export const repairChromeExtensionNativeHosts = withParams(
+  installer.repairChromeExtensionNativeHosts,
+  undefined,
+  (params) => params.pluginRoot,
+);
+export const uninstallChromeExtensionNativeHosts = withParams(
+  installer.uninstallChromeExtensionNativeHosts,
+  nativeExecutable,
+);
+export const removeChromeStoreInstallRequests = (fixture?: InstallFixture) =>
+  inFixture(fixture, () => installer.removeChromeStoreInstallRequests());
+export const chromeStoreInstallRequests = (fixture?: InstallFixture) =>
+  inFixture(fixture, () => readChromeStoreInstallRequests());
+export const installWindowsNativeHost = withParams(
+  windows.installWindowsNativeHost,
+  windowsExecutable,
+);
+export const inspectWindowsNativeHosts = withParams(
+  windows.inspectWindowsNativeHosts,
+  windowsExecutable,
+);
+export const uninstallWindowsNativeHosts = withParams(
+  windows.uninstallWindowsNativeHosts,
+  windowsExecutable,
+);
+export const validateWindowsNativeContext = (
   params: Parameters<typeof windows.validateWindowsNativeContext>[0],
   fixture?: InstallFixture,
-) {
-  return inFixture(fixture, () => windows.validateWindowsNativeContext(params));
-}
+) => inFixture(fixture, () => windows.validateWindowsNativeContext(params));

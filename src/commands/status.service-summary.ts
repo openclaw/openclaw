@@ -1,6 +1,3 @@
-// Reads service manager state for status reports.
-// Converts gateway/node launchd/systemd state into a compact summary shape.
-
 import { formatGatewayServiceInstallationDrift } from "../cli/daemon-cli/shared.js";
 import { OPENCLAW_WRAPPER_ENV_KEY } from "../daemon/program-args.js";
 import { formatServiceLabel } from "../daemon/runtime-format.js";

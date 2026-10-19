@@ -10,10 +10,7 @@ import type {
   ChannelMessageActionContext,
   ChannelMessageActionName,
 } from "../src/channels/plugins/types.js";
-import { createDefaultDeps } from "../src/cli/deps.js";
-import { createMessageCliHelpers } from "../src/cli/program/message/helpers.js";
-import { registerMessageDiscordAdminCommands } from "../src/cli/program/message/register.discord-admin.js";
-import { messageCommand } from "../src/commands/message.js";
+import { registerMessageCommands } from "../src/cli/program/register.message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../src/gateway/agent-runtime-approval-authority.js";
 import {
@@ -28,9 +25,14 @@ import {
 } from "../src/infra/agent-run-registry.js";
 import { getPluginInstance } from "../src/plugins/plugin-instance-scope.js";
 import { createPluginRegistry } from "../src/plugins/registry.js";
-import { resetPluginRuntimeStateForTest, setActivePluginRegistry } from "../src/plugins/runtime.js";
+import {
+  getActivePluginRegistry,
+  resetPluginRuntimeStateForTest,
+  setActivePluginRegistry,
+} from "../src/plugins/runtime.js";
 import { createPluginRuntime } from "../src/plugins/runtime/index.js";
 import { createPluginRecord } from "../src/plugins/status.test-fixtures.js";
+import { defaultRuntime } from "../src/runtime.js";
 import { closeOpenClawStateDatabaseAsync } from "../src/state/openclaw-state-db.js";
 import { useAutoCleanupTempDirTracker } from "./helpers/temp-dir.js";
 
@@ -378,29 +380,61 @@ describe("Matrix member info CLI", () => {
   it("reads a selected room member without current conversation context", async () => {
     await withHarness("bundled", async (fixture) => {
       setRuntimeConfigSnapshot(fixture.cfg, fixture.cfg);
-      const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-      const command = new Command().name("message").exitOverride();
-      registerMessageDiscordAdminCommands(command, {
-        ...createMessageCliHelpers("matrix"),
-        runMessageAction: async (action, opts) => {
-          await messageCommand({ ...opts, action }, createDefaultDeps(), runtime);
-        },
+      const runtime = { log: vi.fn(), error: vi.fn() };
+      const command = new Command().name("openclaw").exitOverride();
+      registerMessageCommands(command, {
+        programVersion: "test",
+        messageChannelOptions: "matrix",
+        agentChannelOptions: "last|matrix",
       });
-
-      await command.parseAsync(
-        [
-          "member",
-          "info",
-          "--channel",
-          "matrix",
-          "--user-id",
-          memberId,
-          "--channel-id",
-          allowedRoom,
-          "--json",
-        ],
-        { from: "user" },
-      );
+      const registry = getActivePluginRegistry();
+      if (!registry) {
+        throw new Error("expected the Matrix fixture registry");
+      }
+      const [configGuard, channelPluginIds, pluginLoader, oneShotExit] = await Promise.all([
+        import("../src/cli/program/config-guard.js"),
+        import("../src/plugins/channel-plugin-ids.js"),
+        import("../src/plugins/loader.js"),
+        import("../src/cli/one-shot-exit.js"),
+      ]);
+      // The harness owns config and registry admission; production owns parsed action dispatch.
+      const spies = [
+        vi.spyOn(configGuard, "ensureConfigReady").mockResolvedValue(undefined),
+        vi
+          .spyOn(channelPluginIds, "resolveDiscoverableScopedChannelPluginIds")
+          .mockImplementation(({ channelIds }) => [...channelIds]),
+        vi.spyOn(pluginLoader, "loadPluginRegistryHandle").mockReturnValue(registry),
+        vi.spyOn(defaultRuntime, "log").mockImplementation(runtime.log),
+        vi
+          .spyOn(defaultRuntime, "writeJson")
+          .mockImplementation((value) => runtime.log(JSON.stringify(value))),
+        vi.spyOn(defaultRuntime, "error").mockImplementation(runtime.error),
+        vi.spyOn(defaultRuntime, "exit").mockImplementation((code) => {
+          throw new Error(`unexpected CLI exit(${code})`);
+        }),
+        vi.spyOn(oneShotExit, "requestExitAfterOneShotOutput").mockReturnValue(true),
+      ];
+      try {
+        await command.parseAsync(
+          [
+            "message",
+            "member",
+            "info",
+            "--channel",
+            "matrix",
+            "--user-id",
+            memberId,
+            "--channel-id",
+            allowedRoom,
+            "--json",
+          ],
+          { from: "user" },
+        );
+      } finally {
+        for (const spy of spies) {
+          spy.mockRestore();
+        }
+      }
 
       expect(runtime.log).toHaveBeenCalledTimes(1);
       expect(runtime.error).not.toHaveBeenCalled();

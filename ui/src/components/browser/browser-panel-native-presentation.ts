@@ -5,11 +5,11 @@ import {
 import { subscribeNativeOverlayOcclusion } from "../../lib/native-overlay-occlusion.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
-import type { BrowserPanelControllerHost } from "./browser-panel-operation-ownership.ts";
+import type { BrowserPanelHost } from "./browser-panel-operation-ownership.ts";
 
 interface BrowserPanelNativePresentationHost {
   readonly host: Pick<
-    BrowserPanelControllerHost,
+    BrowserPanelHost,
     "isConnected" | "browserPanelIsOpen" | "renderRoot" | "sessionKey"
   >;
   readonly native: { readonly activeTab: NativeBrowserTab | undefined };
@@ -21,142 +21,57 @@ interface BrowserPanelNativePresentationHost {
 let presentationOrder = 0;
 
 /** The web panel owns geometry and occlusion; native owns the actual views. */
-export class BrowserPanelNativePresentation {
-  // Every panel builds one of these, including on insecure HTTP origins where
-  // crypto.randomUUID is undefined; the helper falls back to getRandomValues.
-  readonly scope = generateUUID();
-  presentedTabId: string | null = null;
-  lastPresented = 0;
-  private stage: HTMLElement | null = null;
-  private unsubscribeOcclusion?: () => void;
-  private intersecting = true;
-  private occluded = false;
-  private frame: number | null = null;
-  private lastPresentation: { key: string } | null = null;
-  private connected = false;
+export function createBrowserPanelNativePresentation(
+  controller: BrowserPanelNativePresentationHost,
+) {
+  // Every panel has a scope, including insecure HTTP origins without randomUUID.
+  const scope = generateUUID();
+  let presentedTabId: string | null = null;
+  let lastPresented = 0;
+  let stage: HTMLElement | null = null;
+  let intersecting = true;
+  let occluded = false;
+  let frame: number | null = null;
+  let lastPresentation: { key: string } | null = null;
+  let connected = false;
 
-  constructor(private readonly controller: BrowserPanelNativePresentationHost) {}
-
-  private get hostElement(): Element | null {
-    const root = this.controller.host.renderRoot;
+  function hostElement(): Element | null {
+    const root = controller.host.renderRoot;
     return root instanceof ShadowRoot ? root.host : root instanceof Element ? root : null;
   }
 
-  connect(): void {
-    if (this.connected) {
+  function schedule(): void {
+    if (!connected || frame !== null) {
       return;
     }
-    this.connected = true;
-    // Native responder focus can route back to this panel without DOM events.
-    this.hostElement?.setAttribute("data-native-browser-scope", this.scope);
-    this.unsubscribeOcclusion = subscribeNativeOverlayOcclusion(
-      (occluded) => {
-        this.occluded = occluded;
-        if (occluded) {
-          this.hide();
-        }
-        this.schedule();
-      },
-      () => this.stage?.getBoundingClientRect() ?? null,
-    );
-    this.update();
-  }
-
-  disconnect(): void {
-    this.hide();
-    this.hostElement?.removeAttribute("data-native-browser-scope");
-    this.connected = false;
-    if (this.frame !== null) {
-      cancelAnimationFrame(this.frame);
-      this.frame = null;
-    }
-    this.unsubscribeOcclusion?.();
-    this.unsubscribeOcclusion = undefined;
-    this.lastPresentation = null;
-    void postNativeBrowserMessage({ type: "release-scope", scope: this.scope });
-  }
-
-  update(): void {
-    if (!this.connected) {
-      return;
-    }
-    if (!this.canPresent()) {
-      this.hide();
-    }
-    this.schedule();
-  }
-
-  mountStage(stage: HTMLElement): () => void {
-    this.stage = stage;
-    this.intersecting = true;
-    const resize = typeof ResizeObserver === "function" ? new ResizeObserver(this.schedule) : null;
-    const intersection =
-      typeof IntersectionObserver === "function"
-        ? new IntersectionObserver(([entry]) => {
-            this.intersecting = entry?.isIntersecting ?? this.intersecting;
-            this.schedule();
-          })
-        : null;
-    resize?.observe(stage);
-    intersection?.observe(stage);
-    const stopScroll = listen(document, "scroll", this.schedule, true);
-    const stopResize = listen(window, "resize", this.schedule);
-    this.update();
-    return () => {
-      this.hide();
-      this.stage = null;
-      resize?.disconnect();
-      intersection?.disconnect();
-      stopScroll();
-      stopResize();
-    };
-  }
-
-  readonly schedule = (): void => {
-    if (!this.connected || this.frame !== null) {
-      return;
-    }
-    this.frame = requestAnimationFrame(() => {
-      this.frame = null;
-      this.report();
+    frame = requestAnimationFrame(() => {
+      frame = null;
+      report();
     });
-  };
-
-  renew(): void {
-    // Explicit selection reclaims a tab that another panel scope may now own.
-    this.lastPresentation = null;
-    this.schedule();
   }
 
-  hide(): void {
-    if (this.connected) {
-      this.send(null, null);
-    }
-  }
-
-  private canPresent(): boolean {
+  function canPresent(): boolean {
     return Boolean(
-      this.connected &&
-      this.controller.host.isConnected &&
-      this.controller.host.browserPanelIsOpen() &&
-      this.controller.native.activeTab &&
-      this.controller.mode === "interact" &&
-      !this.occluded &&
-      this.intersecting,
+      connected &&
+      controller.host.isConnected &&
+      controller.host.browserPanelIsOpen() &&
+      controller.native.activeTab &&
+      controller.mode === "interact" &&
+      !occluded &&
+      intersecting,
     );
   }
 
-  private report(): void {
-    if (!this.connected) {
+  function report(): void {
+    if (!connected) {
       return;
     }
-    const stage = this.stage;
-    if (!stage || !this.canPresent()) {
-      this.hide();
+    if (!stage || !canPresent()) {
+      presentation.hide();
       return;
     }
     const rect = stage.getBoundingClientRect();
-    const host = this.hostElement;
+    const host = hostElement();
     let hit = document.elementFromPoint(rect.x + rect.width / 2, rect.y + rect.height / 2);
     // document hit-testing stops at shadow hosts. Descend to distinguish this
     // panel from a dialog or another panel within the same application root.
@@ -175,10 +90,10 @@ export class BrowserPanelNativePresentation {
       ancestor = ancestor instanceof ShadowRoot ? ancestor.host : ancestor.parentNode;
     }
     if (!ancestor || rect.width <= 0 || rect.height <= 0) {
-      this.hide();
+      presentation.hide();
       return;
     }
-    this.send(this.controller.activeTargetId, {
+    send(controller.activeTargetId, {
       x: rect.x,
       y: rect.y,
       width: rect.width,
@@ -186,39 +101,122 @@ export class BrowserPanelNativePresentation {
     });
   }
 
-  private send(
+  function send(
     tabId: string | null,
     rect: { x: number; y: number; width: number; height: number } | null,
   ): void {
     const payload = {
       type: "present" as const,
-      scope: this.scope,
+      scope,
       tabId,
       rect,
       visible: Boolean(tabId),
     };
     const presentation = { key: JSON.stringify(payload) };
-    if (presentation.key === this.lastPresentation?.key) {
+    if (presentation.key === lastPresentation?.key) {
       return;
     }
-    this.lastPresentation = presentation;
-    const sessionKey = this.controller.host.sessionKey;
-    this.presentedTabId = tabId;
+    lastPresentation = presentation;
+    const sessionKey = controller.host.sessionKey;
+    presentedTabId = tabId;
     if (tabId) {
       // Native resolves duplicate presentations of one tab in favor of the
       // most recent scope; this order also selects a popup's web presenter.
-      this.lastPresented = ++presentationOrder;
+      lastPresented = ++presentationOrder;
     }
     void postNativeBrowserMessage(payload).then((reply) => {
       if (
         reply &&
         !reply.ok &&
-        this.connected &&
-        this.controller.host.sessionKey === sessionKey &&
-        this.lastPresentation === presentation
+        connected &&
+        controller.host.sessionKey === sessionKey &&
+        lastPresentation === presentation
       ) {
-        this.controller.reportError(reply.error);
+        controller.reportError(reply.error);
       }
     });
   }
+
+  const presentation = {
+    scope,
+    get presentedTabId() {
+      return presentedTabId;
+    },
+    get lastPresented() {
+      return lastPresented;
+    },
+    mount(): () => void {
+      connected = true;
+      // Native responder focus can route back to this panel without DOM events.
+      hostElement()?.setAttribute("data-native-browser-scope", scope);
+      const stopOcclusion = subscribeNativeOverlayOcclusion(
+        (value) => {
+          occluded = value;
+          if (value) {
+            presentation.hide();
+          }
+          schedule();
+        },
+        () => stage?.getBoundingClientRect() ?? null,
+      );
+      presentation.update();
+      return () => {
+        presentation.hide();
+        hostElement()?.removeAttribute("data-native-browser-scope");
+        connected = false;
+        if (frame !== null) {
+          cancelAnimationFrame(frame);
+          frame = null;
+        }
+        stopOcclusion();
+        lastPresentation = null;
+        void postNativeBrowserMessage({ type: "release-scope", scope });
+      };
+    },
+    update(): void {
+      if (!connected) {
+        return;
+      }
+      if (!canPresent()) {
+        presentation.hide();
+      }
+      schedule();
+    },
+    mountStage(element: HTMLElement): () => void {
+      stage = element;
+      intersecting = true;
+      const resize = typeof ResizeObserver === "function" ? new ResizeObserver(schedule) : null;
+      const intersection =
+        typeof IntersectionObserver === "function"
+          ? new IntersectionObserver(([entry]) => {
+              intersecting = entry?.isIntersecting ?? intersecting;
+              schedule();
+            })
+          : null;
+      resize?.observe(stage);
+      intersection?.observe(stage);
+      const stopScroll = listen(document, "scroll", schedule, true);
+      const stopResize = listen(window, "resize", schedule);
+      presentation.update();
+      return () => {
+        presentation.hide();
+        stage = null;
+        resize?.disconnect();
+        intersection?.disconnect();
+        stopScroll();
+        stopResize();
+      };
+    },
+    renew(): void {
+      // Explicit selection reclaims a tab that another panel scope may now own.
+      lastPresentation = null;
+      schedule();
+    },
+    hide(): void {
+      if (connected) {
+        send(null, null);
+      }
+    },
+  };
+  return presentation;
 }

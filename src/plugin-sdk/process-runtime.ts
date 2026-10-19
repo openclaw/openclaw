@@ -46,3 +46,11 @@ export {
   type OwnedStdioProcess,
   type OwnedStdioProcessOptions,
 } from "../process/owned-stdio.js";
+
+export {
+  DarwinProcessInspectionError,
+  readDarwinProcessSnapshot,
+  readDarwinProcessTree,
+  readDarwinProcessCommandLine,
+  type DarwinProcess,
+} from "../process/darwin-process-inspection.js";

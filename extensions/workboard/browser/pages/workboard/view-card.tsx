@@ -45,7 +45,7 @@ export function WorkboardCardView(input: {
   });
   const widget = createMemo(() => input.surface === "widget");
   const dependencies = createMemo(() =>
-    getWorkboardDependencyState(input.card, action().state.cards),
+    getWorkboardDependencyState(input.card, action().state.cards, !action().state.nextCursor),
   );
   const lifecycle = createMemo(() =>
     getWorkboardLifecycle(input.card, input.workboard.sessions, input.workboard.sessionResolution),
@@ -296,7 +296,12 @@ export function WorkboardCardView(input: {
       }
       aria-controls={widget() || selectionMode() ? undefined : workboardCardDetailDrawerId}
       draggable={
-        action().writable && !action().archived && !action().state.dispatching ? "true" : "false"
+        action().writable &&
+        !action().archived &&
+        !action().state.dispatching &&
+        !action().state.nextCursor
+          ? "true"
+          : "false"
       }
       onMouseDown={(event) => {
         if (event.button === 0 && event.shiftKey && selectable() && !isCardActionTarget(event)) {
@@ -325,7 +330,12 @@ export function WorkboardCardView(input: {
         event.preventDefault();
       }}
       onDragStart={(event) => {
-        if (!action().writable || action().archived || action().state.dispatching) {
+        if (
+          !action().writable ||
+          action().archived ||
+          action().state.dispatching ||
+          action().state.nextCursor
+        ) {
           event.preventDefault();
           return;
         }

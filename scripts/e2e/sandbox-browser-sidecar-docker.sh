@@ -13,8 +13,8 @@ FUNCTIONAL_IMAGE="$(docker_e2e_resolve_image \
   "openclaw-sandbox-browser-sidecar-functional:local" \
   OPENCLAW_SANDBOX_BROWSER_SIDECAR_FUNCTIONAL_IMAGE)"
 RUNNER_IMAGE="${OPENCLAW_SANDBOX_BROWSER_SIDECAR_RUNNER_IMAGE:-openclaw-sandbox-browser-sidecar-e2e:${OPENCLAW_DOCKER_ALL_LANE_NAME:-local}}"
-SANDBOX_IMAGE="${OPENCLAW_SANDBOX_IMAGE:-openclaw-sandbox:bookworm-slim}"
-BROWSER_IMAGE="${OPENCLAW_SANDBOX_BROWSER_IMAGE:-openclaw-sandbox-browser:bookworm-slim}"
+SANDBOX_IMAGE="${OPENCLAW_SANDBOX_IMAGE:-openclaw-sandbox:trixie-slim}"
+BROWSER_IMAGE="${OPENCLAW_SANDBOX_BROWSER_IMAGE:-openclaw-sandbox-browser:trixie-slim}"
 RUN_ID="$$-$(date +%s)"
 SANDBOX_PREFIX="openclaw-e2e-sbx-${RUN_ID}-"
 BROWSER_PREFIX="openclaw-e2e-browser-${RUN_ID}-"

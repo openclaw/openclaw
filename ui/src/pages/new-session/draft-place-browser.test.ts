@@ -94,9 +94,7 @@ function createBrowser(
       onProjectMissing,
       onSelectProject,
       onApprovedListing: vi.fn(),
-      querySelector: (selector) => view?.root.querySelector(selector) ?? null,
       activeElement: () => view?.root.ownerDocument.activeElement ?? null,
-      body: () => view?.root.ownerDocument.body ?? null,
     },
   );
   onTestFinished(() => {
@@ -144,12 +142,14 @@ describe("DraftPlaceBrowser", () => {
         false,
         { updateComplete: update.promise, root },
       );
+      browser.projectFocus.browse = browse;
       browser.popoverCallbacks("project").onPopoverShow();
       browse.focus();
       browser.selectGatewayBrowser("/workspace");
       const path = document.createElement("input");
       path.className = "new-session-page__browser-path";
       popover.replaceChildren(path);
+      browser.projectFocus.path = path;
       expect(document.activeElement).toBe(document.body);
 
       if (change === "closed") {
@@ -214,7 +214,7 @@ describe("DraftPlaceBrowser", () => {
     expect(writeStorage).not.toHaveBeenCalled();
 
     browser.popoverCallbacks("where").onPopoverHide();
-    browser.onPopoverAfterHide("where");
+    browser.popoverCallbacks("where").onPopoverAfterHide();
     browser.popoverCallbacks("where").onPopoverShow();
     expect(browser.environmentQuery).toBe("");
     expect(browser.projectQuery).toBe("openclaw");

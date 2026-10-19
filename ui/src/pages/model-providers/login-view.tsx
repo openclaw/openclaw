@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import { ProviderBrandIcon } from "../../components/solid/provider-icon.tsx";
 import { buildExternalLinkRel, EXTERNAL_LINK_TARGET } from "../../lib/external-link.ts";
 import { t } from "../../lib/reactive/i18n.ts";
@@ -7,12 +7,8 @@ import type { ModelProviderLogin } from "./login-controller.ts";
 import { renderProviderAccountSummary } from "./profiles-view.tsx";
 
 export function ModelProviderLoginView(props: { controller: ModelProviderLogin }) {
-  const picker = createMemo(() => {
-    return props.controller.pickerView();
-  });
-  const wizard = createMemo(() => {
-    return props.controller.wizardViewProps;
-  });
+  const picker = createMemo(() => props.controller.pickerView());
+  const wizard = createMemo(() => props.controller.wizardViewProps);
   return (
     <Show
       when={picker()}
@@ -119,13 +115,13 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
                       </Show>
                       <section class="model-provider-login__methods">
                         <h3>{t("modelProviders.login.connectAccount")}</h3>
-                        <div data-models-login-choice>
+                        <div
+                          data-models-login-choice
+                          ref={(element) => props.controller.setMethodChoices(element)}
+                        >
                           <For each={provider().choices} keyed={(choice) => choice.id}>
-                            {(selected, index) => (
+                            {(selected) => (
                               <LoginOption
-                                focusTarget={
-                                  index() === 0 ? props.controller.setMethodChoice : undefined
-                                }
                                 label={selected().label}
                                 hint={selected().hint || undefined}
                                 disabled={current().disabled}
@@ -136,11 +132,7 @@ export function ModelProviderLoginView(props: { controller: ModelProviderLogin }
                         </div>
                         <Show when={provider().apiKeyProvider}>
                           <LoginOption
-                            focusTarget={
-                              provider().choices.length === 0
-                                ? props.controller.setMethodChoice
-                                : undefined
-                            }
+                            buttonRef={(element) => props.controller.setApiKeyChoice(element)}
                             label={t("modelProviders.status.apiKey")}
                             hint={t("modelProviders.login.apiKeyHint")}
                             apiKey
@@ -204,16 +196,11 @@ function LoginOption(props: {
   apiKey?: boolean;
   disabled: boolean;
   onClick: () => void;
-  focusTarget?: (element: HTMLButtonElement) => void;
+  buttonRef?: (element: HTMLButtonElement) => void;
 }) {
-  let button!: HTMLButtonElement;
-  createEffect(
-    () => props.focusTarget,
-    (target) => target?.(button),
-  );
   return (
     <button
-      ref={(element) => (button = element)}
+      ref={(element) => props.buttonRef?.(element)}
       type="button"
       class="btn model-provider-login__option"
       data-models-login-provider={props.provider}
@@ -235,9 +222,7 @@ function LoginOption(props: {
 }
 
 export function ModelProviderAccountRecovery(props: { controller: ModelProviderLogin }) {
-  const recovery = createMemo(() => {
-    return props.controller.recoveryView();
-  });
+  const recovery = createMemo(() => props.controller.recoveryView());
   return (
     <Show when={recovery()}>
       {(current) => (

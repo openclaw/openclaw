@@ -402,6 +402,16 @@ describe("createReplyReferencePlanner", () => {
 });
 
 describe("createStreamingDirectiveAccumulator", () => {
+  it.each(["NO_REPLY", "no_reply", "No_Reply"])(
+    "strips a chunked leading %s control line",
+    (token) => {
+      const accumulator = createStreamingDirectiveAccumulator();
+      expect(accumulator.consume(token.slice(0, 4))).toBeNull();
+      expect(accumulator.consume(token.slice(4))).toBeNull();
+      expect(accumulator.consume("\nVisible reply")).toMatchObject({ text: "Visible reply" });
+    },
+  );
+
   it("handles reply tags split before the second bracket", () => {
     const accumulator = createStreamingDirectiveAccumulator();
     expect(accumulator.consume("[")).toBeNull();

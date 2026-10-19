@@ -7,7 +7,6 @@ import {
   type SessionsRecoverResult,
 } from "../../packages/gateway-protocol/src/index.js";
 import { GATEWAY_OWNER_PROFILE_ID } from "../../packages/gateway-protocol/src/schema/users.js";
-import { isEmbeddedAgentRunActive } from "../agents/embedded-agent.js";
 import { resolveExecDefaultsAsync } from "../agents/exec-defaults.js";
 import {
   buildMainSessionRecoveryClearPatch,
@@ -34,12 +33,13 @@ import { readMessageIdempotencyKey } from "../config/sessions/transcript-message
 import { mergeSessionEntry, type InternalSessionEntry } from "../config/sessions/types.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
-import { recordSessionCreated } from "../sessions/session-created.js";
 import {
-  closeSessionWorkAdmissions,
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+  captureSessionTarget,
+  closeSessionControllerAdmission,
+  isSessionControllerWorkActive,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
+import { recordSessionCreated } from "../sessions/session-created.js";
 import { normalizeSessionIdentities } from "../sessions/session-lifecycle-identity.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { resolveGlobalMap } from "../shared/global-singleton.js";
@@ -108,16 +108,22 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
   const identities = [...target.storeKeys, initialSource.sessionId];
   if (
     !isMainSessionRecoveryReconciliationCandidate(initialSource) ||
-    isSessionWorkAdmissionActive(target.storePath, identities)
+    isSessionControllerWorkActive(target.storePath, identities, target.agentId)
   ) {
     return undefined;
   }
   using source = await prepareRecoverySource(params);
-  return await runExclusiveSessionLifecycleMutation("recovery-mark", {
-    scope: target.storePath,
-    identities,
+  return await runSessionMutation({
+    diagnosticLabel: "recovery-mark",
+    target: captureSessionTarget({
+      storeScope: target.storePath,
+      sessionKey: target.canonicalKey,
+      aliases: identities,
+      agentId: target.agentId,
+      incarnation: initialSource.sessionId,
+    }),
     run: async () => {
-      if (isSessionWorkAdmissionActive(target.storePath, identities)) {
+      if (isSessionControllerWorkActive(target.storePath, identities, target.agentId)) {
         return undefined;
       }
       await source.refresh();
@@ -146,7 +152,7 @@ export async function reconcileOrphanedGatewaySessionRecovery(params: {
           current.activeWriterRunId !== initialSource.activeWriterRunId ||
           current.mainRestartRecovery?.cycleId !== initialSource.mainRestartRecovery?.cycleId ||
           current.mainRestartRecovery?.revision !== initialSource.mainRestartRecovery?.revision ||
-          isSessionWorkAdmissionActive(target.storePath, identities)
+          isSessionControllerWorkActive(target.storePath, identities, target.agentId)
         ) {
           throw new Error("Session changed before recovery; refresh and retry.");
         }
@@ -270,11 +276,11 @@ export async function recoverGatewaySession(params: {
             current.mainRestartRecovery.tombstone.recoveredSessionKey ||
             current.archivedAt !== undefined ||
             current.providerReview ||
-            isEmbeddedAgentRunActive(current.sessionId) ||
-            isSessionWorkAdmissionActive(sourceTarget.storePath, [
-              sourceTarget.canonicalKey,
-              current.sessionId,
-            ])
+            isSessionControllerWorkActive(
+              sourceTarget.storePath,
+              [sourceTarget.canonicalKey, current.sessionId],
+              sourceTarget.agentId,
+            )
           ) {
             throw new SessionRecoverySourceChangedError();
           }
@@ -287,9 +293,15 @@ export async function recoverGatewaySession(params: {
             "Finish the pending reply delivery before resuming this session.",
           );
         }
-        const stop = await runExclusiveSessionLifecycleMutation("recovery-drain", {
-          scope: sourceTarget.storePath,
-          identities: [...sourceTarget.storeKeys, initialSource.sessionId],
+        const stop = await runSessionMutation({
+          diagnosticLabel: "recovery-drain",
+          target: captureSessionTarget({
+            storeScope: sourceTarget.storePath,
+            sessionKey: sourceTarget.canonicalKey,
+            aliases: sourceTarget.storeKeys,
+            agentId: sourceTarget.agentId,
+            incarnation: initialSource.sessionId,
+          }),
           run: async () => {
             assertCurrent();
             return await prepareSessionWorkerPlacementStop({
@@ -433,11 +445,19 @@ export async function recoverGatewaySession(params: {
   });
   const successorSessionId = randomUUID();
 
-  const sourceIdentities = [
-    ...sourceTarget.storeKeys,
-    sourceTarget.canonicalKey,
-    initialSource.sessionId,
-  ];
+  const sourceControllerTarget = captureSessionTarget({
+    storeScope: sourceTarget.storePath,
+    sessionKey: sourceTarget.canonicalKey,
+    aliases: sourceTarget.storeKeys,
+    agentId: sourceTarget.agentId,
+    incarnation: initialSource.sessionId,
+  });
+  const successorControllerTarget = captureSessionTarget({
+    storeScope: successorTarget.storePath,
+    sessionKey: successorTarget.canonicalKey,
+    agentId: successorTarget.agentId,
+    incarnation: successorSessionId,
+  });
   const stopFailure = (error: unknown) =>
     errorShape(
       ErrorCodes.UNAVAILABLE,
@@ -492,11 +512,11 @@ export async function recoverGatewaySession(params: {
           }
         }
         if (
-          isEmbeddedAgentRunActive(currentSource.sessionId) ||
-          isSessionWorkAdmissionActive(sourceTarget.storePath, [
-            sourceTarget.canonicalKey,
-            currentSource.sessionId,
-          ])
+          isSessionControllerWorkActive(
+            sourceTarget.storePath,
+            [sourceTarget.canonicalKey, currentSource.sessionId],
+            sourceTarget.agentId,
+          )
         ) {
           return invalidSessionRequest(
             "Session recovery is unavailable while the source still has active work.",
@@ -510,9 +530,9 @@ export async function recoverGatewaySession(params: {
           throw new Error(current.error.message);
         }
       };
-      const prepared = await runExclusiveSessionLifecycleMutation("recovery-drain", {
-        scope: sourceTarget.storePath,
-        identities: sourceIdentities,
+      const prepared = await runSessionMutation({
+        diagnosticLabel: "recovery-drain",
+        target: sourceControllerTarget,
         run: async () => {
           await source.refresh();
           const current = resolveCurrentSource();
@@ -537,9 +557,8 @@ export async function recoverGatewaySession(params: {
             return { ok: false as const, error: stopFailure(error) };
           }
           // Reclaim may need both queues after this short exact-owner preflight.
-          release = closeSessionWorkAdmissions({
-            scope: sourceTarget.storePath,
-            identities: sourceIdentities,
+          release = closeSessionControllerAdmission({
+            target: sourceControllerTarget,
             reason: createAgentRunDirectAbortError(),
           });
           return { ...current, stop };
@@ -562,14 +581,9 @@ export async function recoverGatewaySession(params: {
           return current.ok ? { ok: false as const, error: stopFailure(error) } : current;
         }
       }
-      return await runExclusiveSessionLifecycleMutation("recover", {
-        targets: [
-          { scope: sourceTarget.storePath, identities: sourceIdentities },
-          {
-            scope: successorTarget.storePath,
-            identities: [successorTarget.canonicalKey, successorSessionId],
-          },
-        ],
+      return await runSessionMutation({
+        diagnosticLabel: "recover",
+        targets: [sourceControllerTarget, successorControllerTarget],
         prepare: async () => release(),
         run: async () => {
           await source.refresh();

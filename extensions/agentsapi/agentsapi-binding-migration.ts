@@ -63,14 +63,11 @@ export async function migrateAgentsApiBinding(
     const signal = params.abortSignal
       ? AbortSignal.any([params.abortSignal, AbortSignal.timeout(30_000)])
       : AbortSignal.timeout(30_000);
-    const session = await new AgentsApiClient(
-      params.resolvedApiKey!,
-      assertMigrationCurrent,
-    ).session(binding.sessionId, signal);
+    await new AgentsApiClient(params.resolvedApiKey!, assertMigrationCurrent).session(
+      binding.sessionId,
+      signal,
+    );
     assertMigrationCurrent();
-    if (session.id !== binding.sessionId) {
-      throw new Error("Agents API returned a different session during legacy migration");
-    }
   } catch (error) {
     throw resolveAgentsApiSessionAccessError(error, binding.sessionId);
   }

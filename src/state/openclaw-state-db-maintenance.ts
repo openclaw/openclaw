@@ -3,6 +3,7 @@ import { requireNativeDatabaseFile } from "../infra/database-engine/physical-fac
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
+import { assertSqliteTableIntegrity } from "../infra/sqlite-integrity.js";
 import { OpenClawStateOwnershipError } from "../infra/sqlite-lifecycle-errors.js";
 import {
   assertSqliteSchemaContains,
@@ -51,6 +52,14 @@ import {
 } from "./openclaw-state-db-schema-v22-columns.js";
 import { migrateTaskRunIndexesV24 } from "./openclaw-state-db-schema-v24-indexes.js";
 import {
+  migrateSessionStateHeadLayoutV26,
+  withLegacyStateHeadLayout,
+} from "./openclaw-state-db-schema-v26-layout.js";
+import {
+  migrateStateWriteIndexesV27,
+  withLegacyStateWriteIndexes,
+} from "./openclaw-state-db-schema-v27-indexes.js";
+import {
   assertSupportedStateSchemaVersion,
   readStateSchemaContentVersion,
   type StateSchemaVersionFacts,
@@ -68,6 +77,31 @@ import {
 } from "./openclaw-state-schema-publication.js";
 import { OPENCLAW_STATE_SCHEMA_SQL } from "./openclaw-state-schema.js";
 import { UpdateSchemaRefusalError } from "./openclaw-update-schema-refusal.js";
+import {
+  resolveSchemaMigrationIntegrityTables,
+  SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES,
+} from "./schema-migration-integrity-tables.js";
+
+export function assertMigratedStateTableIntegrity(
+  db: DatabaseSync,
+  pathname: string,
+  previousVersion: number,
+  historicalRepair = false,
+): void {
+  const tables = resolveSchemaMigrationIntegrityTables({
+    kind: "state",
+    foundVersion: previousVersion,
+    supportedVersion: OPENCLAW_STATE_SCHEMA_VERSION,
+  });
+  const affected = historicalRepair
+    ? new Set([...tables, ...SCHEMA_MIGRATION_HISTORICAL_REPAIR_TABLES.state])
+    : tables;
+  for (const table of affected) {
+    if (tableExists(db, table)) {
+      assertSqliteTableIntegrity(db, pathname, table);
+    }
+  }
+}
 
 /**
  * Make the known malformed index parseable, then let SQLite drop and reclaim it
@@ -161,7 +195,7 @@ const STATE_V5_ADDITIVE_TABLES = [
   ...STATE_V6_ADDITIVE_TABLES,
 ] as const;
 const STATE_MIGRATION_VERSIONS = [
-  5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24,
+  5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27,
 ] as const;
 type OpenClawStateMigrationVersion = (typeof STATE_MIGRATION_VERSIONS)[number];
 
@@ -461,6 +495,43 @@ const stateSubagentOperatorRecoveryMigration = {
   migrate: () => false,
   applied: "Required original operator authority for subagent recovery (v25)",
 };
+const stateHeadLayoutMigration = {
+  version: 26,
+  tables: ["session_state_heads"],
+  columns: [],
+  migrate: migrateSessionStateHeadLayoutV26,
+  applied: "Stored session state heads in their composite primary-key tree (v26)",
+};
+const stateWriteIndexMigration = {
+  version: 27,
+  tables: ["acp_replay_events", "skill_usage", "state_leases"],
+  columns: [],
+  migrate: migrateStateWriteIndexesV27,
+  applied: "Removed redundant replay and skill indexes and narrowed the lease-owner index (v27)",
+};
+
+const publicationDraftTables = [
+  "github_publication_requests",
+  "github_personal_publication_requests",
+  "github_repository_publication_requests",
+];
+const statePublicationDraftMigration = {
+  version: 28,
+  tables: publicationDraftTables,
+  columns: publicationDraftTables.map((table) => `${table}.draft`),
+  migrate: (db: DatabaseSync, previousVersion: number): boolean => {
+    if (previousVersion >= 28) {
+      return false;
+    }
+    let changed = false;
+    for (const table of publicationDraftTables) {
+      // Null retains the accepted draft intent and digest; absent feature tables stay lazy.
+      changed = ensureColumn(db, table, "draft INTEGER") || changed;
+    }
+    return changed;
+  },
+  applied: "Retained the requested GitHub PR draft choice (v28)",
+};
 
 /** Version-gated column and row migrations, oldest first; each runs inside the caller's schema transaction. */
 export const versionedStateMigrations: ReadonlyArray<{
@@ -491,6 +562,9 @@ export const versionedStateMigrations: ReadonlyArray<{
     applied: "Recorded cron completion delivery attempt uncertainty (v20)",
   },
   stateTaskIndexMigration,
+  stateHeadLayoutMigration,
+  stateWriteIndexMigration,
+  statePublicationDraftMigration,
 ];
 
 /** Recent version migrations own only their tables; Doctor owns unrelated historical repair. */
@@ -505,6 +579,9 @@ export function migrateBoundedStateSchema(
     stateMeetingChronologyMigration,
     stateTaskIndexMigration,
     stateSubagentOperatorRecoveryMigration,
+    stateHeadLayoutMigration,
+    stateWriteIndexMigration,
+    statePublicationDraftMigration,
   ];
   const pending = migrations.filter(({ version }) => version > previousVersion);
   // An undeclared destination keeps the legacy full runner and full-backup requirement.
@@ -518,11 +595,17 @@ export function migrateBoundedStateSchema(
   const indexes = getCanonicalSqliteNamedIndexContracts(OPENCLAW_STATE_SCHEMA_SQL).filter((index) =>
     tables.has(index.tableName),
   );
+  const indexSourceSchema =
+    previousVersion < 27
+      ? withLegacyStateWriteIndexes(OPENCLAW_STATE_SCHEMA_SQL)
+      : OPENCLAW_STATE_SCHEMA_SQL;
+  const sourceSchema =
+    previousVersion < 26 ? withLegacyStateHeadLayout(indexSourceSchema) : indexSourceSchema;
   // Older binaries can leave same-version repairs pending alongside a version change.
   if (
     !options.versionMigrationOnly &&
     (tableExists(db, "cron_run_logs") ||
-      collectSqliteSchemaIssues(db, OPENCLAW_STATE_SCHEMA_SQL, {
+      collectSqliteSchemaIssues(db, sourceSchema, {
         ...STATE_RUNTIME_SCHEMA_COMPATIBILITY,
         allowedMissingColumns: [
           ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingColumns ?? []),
@@ -531,6 +614,8 @@ export function migrateBoundedStateSchema(
         allowedMissingIndexes: [
           ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.allowedMissingIndexes ?? []),
           ...indexes.map((index) => index.name),
+          "idx_acp_replay_events_session_seq",
+          "idx_skill_usage_key",
         ],
         excludedIndexes: [
           ...(STATE_RUNTIME_SCHEMA_COMPATIBILITY.excludedIndexes ?? []),

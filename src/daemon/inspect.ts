@@ -17,14 +17,15 @@ import {
   collectServiceFiles,
   isLegacyLabel,
   isPotentialGatewayServiceName,
-  readServiceFile,
   scanSystemdDir,
   type ExtraGatewayService,
   type ServiceFileInspectionError,
 } from "./inspect-files.js";
 import {
+  areSystemdCommandsMaintenance,
   hasGatewaySubcommandArg,
   hasGatewayServiceMarker,
+  detectSystemdGatewayExecutionMarker,
   detectLaunchdGatewayExecutionMarker,
   isOpenClawGatewayTaskName,
   detectWindowsServiceExecutionMarker,
@@ -44,10 +45,7 @@ import {
 } from "./schtasks-layout.js";
 import { listScheduledTasks } from "./schtasks-state-probe.js";
 import { resolveWindowsServiceCommandProfile } from "./service-env-merge.js";
-import {
-  isLoadedSystemdMaintenanceCommand,
-  listLoadedSystemdUnits,
-} from "./systemd-loaded-unit-inventory.js";
+import { listLoadedSystemdUnits } from "./systemd-loaded-unit-inventory.js";
 import { resolveSystemdServiceName } from "./systemd-service-files.js";
 import {
   DEFAULT_SYSTEMD_SYSTEM_UNIT_DIRS,
@@ -445,7 +443,13 @@ async function scanGatewayServices(
           continue;
         }
         const backupPath = path.join(userDir, `${name}.service.bak`);
-        if ((await readServiceFile(backupPath)) !== null) {
+        const backup = await fs.readFile(backupPath).catch((error: unknown) => {
+          if (!hasErrnoCode(error, "ENOENT")) {
+            errors.push({ source: backupPath, message: "Service path could not be inspected." });
+          }
+          return null;
+        });
+        if (backup !== null) {
           push({
             platform: "linux",
             label,
@@ -475,11 +479,7 @@ async function scanGatewayServices(
           try {
             for (const unit of await listLoadedSystemdUnits(scope, env)) {
               const name = unit.name.slice(0, -".service".length);
-              const command = normalizeLowercaseStringOrEmpty(unit.execStart);
-              const gatewayArg = /(?:^|[\s;])gateway(?:[\s;]|$)/.test(command);
-              const marker = gatewayArg
-                ? (EXTRA_MARKERS.find((value) => command.includes(value)) ?? null)
-                : null;
+              const marker = detectSystemdGatewayExecutionMarker(unit.commands);
               const selected = isPotentialGatewayServiceName(
                 name,
                 "linux",
@@ -495,7 +495,7 @@ async function scanGatewayServices(
                 });
                 continue;
               }
-              if (!selected && (await isLoadedSystemdMaintenanceCommand(unit, scope, env))) {
+              if (!selected && areSystemdCommandsMaintenance(unit.commands)) {
                 continue;
               }
               push({

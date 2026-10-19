@@ -25,19 +25,6 @@ export class PluginFactoryBinding extends PluginHostObject {
   }
 }
 
-export class PluginCallToken extends PluginHostObject {
-  #hostCleanup: boolean;
-
-  constructor(value: object, hostCleanup: boolean) {
-    super(value);
-    this.#hostCleanup = hostCleanup;
-  }
-
-  static isHostCleanup(token: object): boolean {
-    return #hostCleanup in token && token.#hostCleanup;
-  }
-}
-
 /** Installed once in the shared instance singleton, including its private-field brand. */
 export function createPluginValueInstances<TInstance extends object>() {
   // Private fields are installed on the returned object without invoking Proxy traps.

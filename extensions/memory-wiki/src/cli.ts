@@ -154,7 +154,7 @@ function isBoundedGatewayString(
   return typeof value === "string" && value.length <= maxChars;
 }
 
-function isStringArray(
+function isBoundedGatewayStringArray(
   value: unknown,
   maxChars = GATEWAY_RESPONSE_MAX_STRING_CHARS,
 ): value is string[] {
@@ -240,9 +240,9 @@ function isMemoryWikiImportResult(value: unknown): value is MemoryWikiImportedSo
       "artifactCount",
       "workspaces",
     ]) &&
-    isStringArray(value.pagePaths) &&
+    isBoundedGatewayStringArray(value.pagePaths) &&
     typeof value.indexesRefreshed === "boolean" &&
-    isStringArray(value.indexUpdatedFiles) &&
+    isBoundedGatewayStringArray(value.indexUpdatedFiles) &&
     isBoundedGatewayString(value.indexRefreshReason, GATEWAY_RESPONSE_MAX_CODE_CHARS)
   );
 }

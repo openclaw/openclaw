@@ -442,7 +442,6 @@ export async function copyUpdateCandidatePlugins(
   plan: UpdateCandidatePluginPlan,
   params: UpdateCandidatePluginProjectionParams & {
     onCodeLink?: (fact: UpdateCandidatePluginCodeLink) => void;
-    onProgress?: () => void;
   },
 ): Promise<Record<string, string>> {
   const targetStateDir = resolvePathViaExistingAncestorSync(path.resolve(params.targetStateDir));
@@ -504,7 +503,6 @@ export async function copyUpdateCandidatePlugins(
         candidateRoot: plan.trees.candidateRoot,
         hostLinks: new Set(),
         onCodeLink: params.onCodeLink,
-        onProgress: params.onProgress,
       });
     }
   }

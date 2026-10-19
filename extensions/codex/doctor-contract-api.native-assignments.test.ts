@@ -487,6 +487,7 @@ describe("Codex native Task assignment upgrade", () => {
                     historyOwner: currentOwner,
                     assignmentStore: createNativeSubagentAssignmentStore({
                       bindingStore: fixture.runtime,
+                      readBinding: () => fixture.runtime.read(identity),
                       identity,
                       owner: currentOwner,
                     }),

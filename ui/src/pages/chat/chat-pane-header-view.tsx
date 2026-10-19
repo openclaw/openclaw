@@ -72,6 +72,7 @@ export function PaneHeaderSessionMenu(props: SessionMenuProps) {
       prop:onboarding={props.onboarding}
       prop:preferencesBrowserOnly={props.preferencesBrowserOnly}
       prop:compact={props.compact}
+      prop:prewarm={props.prewarm}
       prop:copyMarkdownAllowed={props.copyMarkdownAllowed}
       prop:splitAllowed={props.splitAllowed}
       prop:settings={props.settings}

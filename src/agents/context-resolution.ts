@@ -50,7 +50,7 @@ export type ModelContextTokenProjection = {
 };
 
 const normalizePositiveContextTokens = (value: number | undefined) =>
-  typeof value === "number" && value > 0 ? value : undefined;
+  value !== undefined && value > 0 ? value : undefined;
 
 const ANTHROPIC_CONTEXT_1M_TOKENS = 1_000_000;
 
@@ -78,11 +78,11 @@ function resolveProviderModelRef(params: {
 
 /** Preserve shipped self-prefixed context refs after exact configured-row selection. */
 function resolveConfiguredProviderModel(
-  cfg: OpenClawConfig | null | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
   model: string,
 ): ConfigModelEntry | undefined {
-  const providerConfig = resolveMergedModelProviderConfig(cfg ?? undefined, provider);
+  const providerConfig = resolveMergedModelProviderConfig(cfg, provider);
   const bareModel = stripSelfProviderModelPrefix(provider, model);
   const findModel = createConfiguredProviderModelResolver(providerConfig, provider, (id) =>
     normalizeConfiguredProviderCatalogModelId(provider, id),
@@ -91,7 +91,7 @@ function resolveConfiguredProviderModel(
 }
 
 function resolveConfiguredRuntimeModel(
-  cfg: OpenClawConfig | null | undefined,
+  cfg: OpenClawConfig | undefined,
   provider: string,
   modelProvider: string | undefined,
   model: string,

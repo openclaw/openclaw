@@ -48,7 +48,7 @@ export async function migrateDatabasePortSource(
   assertCurrent: () => void,
 ): Promise<PortVerification> {
   assertCurrent();
-  await descriptor.migrateSqliteSource?.(sourcePath, sourceVersion);
+  await descriptor.migrateSqliteSource?.(sourcePath, sourceVersion, assertCurrent);
   using db = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
   const { tables, allocations: retainedAllocations } = await inspectDatabasePort(
     { engine: "sqlite", db },
@@ -104,6 +104,7 @@ async function* readBatches(
   maxRowBytes: number,
   derive: ((row: PortRow) => PortRow) | undefined,
   normalize: boolean,
+  decode: ((row: PortRow) => PortRow) | undefined,
 ) {
   const names = table.columns.map((c) => quote(c.name));
   const keyed = table.pk.length > 0;
@@ -154,7 +155,7 @@ async function* readBatches(
       rows = statement.iterate(...params);
     } else {
       const result = await endpoint.db.query(sql, params.map(binding));
-      rows = decodePostgresRows({ ...result, rowCount: result.rowCount ?? 0 }, true);
+      rows = decodePostgresRows(result, true);
     }
     let count = 0,
       bytes = 0;
@@ -173,6 +174,9 @@ async function* readBatches(
         }
         row[name] = value;
       });
+      if (endpoint.engine === "sqlite") {
+        Object.assign(row, decode?.(row));
+      }
       const derived = derive?.(row);
       if (
         !normalize &&
@@ -211,7 +215,7 @@ async function* readBatches(
   }
 }
 
-async function allocations(
+export async function readDatabasePortAllocations(
   endpoint: Endpoint,
   descriptor: PortDescriptor,
 ): Promise<PortVerification["allocations"]> {
@@ -224,9 +228,10 @@ async function allocations(
           qualified(endpoint, table.name),
           identity.column,
         ]);
+        // Matched backups retain resets and uncalled sequences, even below existing row IDs.
         const row = (
           await endpoint.db.query(
-            `SELECT greatest(last_value, coalesce(retained, last_value))::text AS value, is_called OR coalesce(retained >= last_value, false) AS called FROM ${sequence.rows[0].name} CROSS JOIN (SELECT max(${quote(identity.column)}) AS retained FROM ${qualified(endpoint, table.name)}) m`,
+            `SELECT last_value::text AS value, is_called AS called FROM ${sequence.rows[0].name}`,
           )
         ).rows[0];
         result[key] = { value: row.value, called: row.called };
@@ -250,6 +255,28 @@ async function allocations(
     }
   }
   return result;
+}
+
+/** SQLite follows retained rows; AUTOINCREMENT also retains a called sequence high-watermark. */
+export function sqlitePortAllocations(
+  descriptor: PortDescriptor,
+  physical: PortVerification["allocations"],
+  source: PortVerification["allocations"],
+): PortVerification["allocations"] {
+  const expected = { ...source };
+  for (const table of copiedTables(descriptor)) {
+    for (const identity of table.identities) {
+      const key = `${table.name}.${identity.column}`;
+      if (
+        !identity.autoIncrement ||
+        !source[key]!.called ||
+        BigInt(physical[key]!.value) > BigInt(source[key]!.value)
+      ) {
+        expected[key] = physical[key]!;
+      }
+    }
+  }
+  return expected;
 }
 
 async function restoreAllocations(
@@ -313,6 +340,7 @@ async function scan(
   maxRowBytes: number,
   destination?: Endpoint,
   assertCurrent = () => {},
+  transformRow?: (table: string, row: PortRow) => PortRow | undefined,
 ) {
   const tables: PortVerification["tables"] = {};
   for (const table of copiedTables(descriptor)) {
@@ -325,6 +353,7 @@ async function scan(
       maxRowBytes,
       descriptor.derive?.[table.name],
       Boolean(destination),
+      descriptor.decodeSqlite?.[table.name],
     );
     try {
       let next = stream.next();
@@ -333,7 +362,13 @@ async function scan(
         if (done) {
           break;
         }
-        for (const row of batch) {
+        const copied = transformRow
+          ? batch.flatMap((row) => {
+              const transformed = transformRow(table.name, row);
+              return transformed ? [transformed] : [];
+            })
+          : batch;
+        for (const row of copied) {
           hash.update(
             JSON.stringify(table.columns.map((c) => encodeSqliteValue(row[c.name]))) + "\n",
           );
@@ -344,8 +379,8 @@ async function scan(
         if (destination?.engine === "sqlite") {
           next = stream.next();
         }
-        if (destination) {
-          pending = insertBatch(destination, table, batch, assertCurrent);
+        if (destination && copied.length) {
+          pending = insertBatch(destination, table, copied, assertCurrent);
           void pending.catch(() => {});
         }
         if (destination?.engine !== "sqlite") {
@@ -364,6 +399,7 @@ async function scan(
 async function catalogEvidence(
   endpoint: Extract<Endpoint, { engine: "postgres" }>,
   descriptor: PortDescriptor,
+  sourceProjection = false,
 ) {
   await endpoint.db.query("SELECT set_config('search_path', $1, false)", [
     quote(endpoint.namespace),
@@ -372,6 +408,7 @@ async function catalogEvidence(
     (await endpoint.db.query(postgresCatalogQuery(endpoint.namespace, true))).rows[0].catalog,
   ).filter((f) => f.table !== "openclaw_schema_meta");
   if (
+    !sourceProjection &&
     facts.some(
       (fact) =>
         fact.kind === "viewDefinition" ||
@@ -390,10 +427,15 @@ async function catalogEvidence(
       "Unknown PostgreSQL trigger or view; complete descriptor coverage required",
     );
   }
-  assertPostgresCatalog(
-    facts.filter((f) => !f.kind.endsWith("Definition")),
-    descriptor.expectedCatalog,
-  );
+  if (!sourceProjection) {
+    assertPostgresCatalog(
+      facts.filter(
+        (f) =>
+          !f.kind.endsWith("Definition") && !descriptor.postgresDerivedTables?.includes(f.table),
+      ),
+      descriptor.expectedCatalog,
+    );
+  }
   const invalid = await endpoint.db.query(
     `SELECT 1 FROM pg_constraint c JOIN pg_namespace n ON n.oid=c.connamespace WHERE n.nspname=$1 AND NOT c.convalidated UNION ALL SELECT 1 FROM pg_index i JOIN pg_class c ON c.oid=i.indrelid JOIN pg_namespace n ON n.oid=c.relnamespace WHERE n.nspname=$1 AND NOT i.indisvalid`,
     [endpoint.namespace],
@@ -401,29 +443,40 @@ async function catalogEvidence(
   if (invalid.rowCount) {
     throw new DatabasePortDataError("Port catalog has unvalidated constraints or invalid indexes");
   }
-  return facts
-    .filter((f) => f.kind.endsWith("Definition"))
-    .map((f) => ({
-      table: f.table,
-      kind: f.kind,
-      value: JSON.parse(
-        JSON.stringify(f.value).replaceAll(endpoint.namespace, "__port_schema__"),
-      ) as unknown,
-    }));
+  return facts.map((f) => ({
+    table: f.table,
+    kind: f.kind,
+    value: JSON.parse(
+      JSON.stringify(f.value).replaceAll(endpoint.namespace, "__port_schema__"),
+    ) as unknown,
+  }));
 }
 
 async function referenceCatalog(
   endpoint: Extract<Endpoint, { engine: "postgres" }>,
   descriptor: PortDescriptor,
+  source?: Extract<Endpoint, { engine: "postgres" }>,
 ) {
+  const sourcePostData = source && (await descriptor.postgresSourcePostData?.(source));
   const reference = { ...endpoint, namespace: `port_verify_${randomUUID().replaceAll("-", "")}` };
   await endpoint.db.query("BEGIN");
   try {
     await endpoint.db.query(
       `CREATE SCHEMA ${quote(reference.namespace)}; SET LOCAL search_path = ${quote(reference.namespace)}`,
     );
-    await endpoint.db.query(descriptor.preData + "\n;\n" + descriptor.postData);
-    return await catalogEvidence(reference, descriptor);
+    await endpoint.db.query(
+      descriptor.preData +
+        "\n;\n" +
+        descriptor.postData +
+        "\n;\n" +
+        (descriptor.postgresPostData?.(reference.namespace) ?? ""),
+    );
+    const base = await catalogEvidence(reference, descriptor);
+    if (sourcePostData) {
+      await endpoint.db.query(sourcePostData(reference.namespace));
+      return { base, source: await catalogEvidence(reference, descriptor, true) };
+    }
+    return { base, source: undefined };
   } finally {
     await endpoint.db.query("ROLLBACK");
   }
@@ -460,20 +513,27 @@ export async function inspectDatabasePort(
   let definitions: Awaited<ReturnType<typeof referenceCatalog>> | undefined;
   if (source.engine === "postgres") {
     await assertSourceIdentity(source, descriptor, storeId ?? "");
-    definitions = verifyDefinitions ? await referenceCatalog(source, descriptor) : undefined;
+    definitions =
+      verifyDefinitions || descriptor.postgresSourcePostData
+        ? await referenceCatalog(source, descriptor, source)
+        : undefined;
     await source.db.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
   } else {
     source.db.exec("BEGIN");
   }
   try {
-    const catalog = source.engine === "postgres" ? await catalogEvidence(source, descriptor) : [];
+    let catalog =
+      source.engine === "postgres"
+        ? await catalogEvidence(source, descriptor, Boolean(definitions?.source))
+        : [];
     if (definitions) {
-      assertPostgresCatalog(catalog, definitions);
+      assertPostgresCatalog(catalog, definitions.source ?? definitions.base);
+      catalog = definitions.base;
     }
     return {
       catalog,
       tables: await scan(source, descriptor, 64 * 1024 * 1024),
-      allocations: await allocations(source, descriptor),
+      allocations: await readDatabasePortAllocations(source, descriptor),
     };
   } finally {
     if (source.engine === "postgres") {
@@ -517,6 +577,8 @@ export async function materializeDatabasePort(params: {
   maxRowBytes?: number;
   sourceAllocations?: PortVerification["allocations"];
   activeFragments?: readonly string[];
+  /** Export-only redaction before hashing/copying; retained rows preserve keys and column types. */
+  transformRow?: (table: string, row: PortRow) => PortRow | undefined;
 }): Promise<PortVerification> {
   const { source, destination, assertCurrent } = params;
   if (source.engine === destination.engine) {
@@ -551,9 +613,16 @@ export async function materializeDatabasePort(params: {
     }
   }
   assertCurrent();
-  const definitions = await referenceCatalog(postgres, descriptor);
+  const definitions = await referenceCatalog(
+    postgres,
+    descriptor,
+    source.engine === "postgres" ? source : undefined,
+  );
   if (source.engine === "postgres") {
-    assertPostgresCatalog(await catalogEvidence(source, descriptor), definitions);
+    assertPostgresCatalog(
+      await catalogEvidence(source, descriptor, Boolean(definitions.source)),
+      definitions.source ?? definitions.base,
+    );
   }
   if (source.engine === "postgres") {
     await source.db.query("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
@@ -575,8 +644,16 @@ export async function materializeDatabasePort(params: {
         destination.db.exec(`DROP TRIGGER ${quote(trigger.name)}`);
       }
     }
-    const facts = params.sourceAllocations ?? (await allocations(source, descriptor));
-    const tables = await scan(source, descriptor, maxRowBytes, destination, assertCurrent);
+    const facts =
+      params.sourceAllocations ?? (await readDatabasePortAllocations(source, descriptor));
+    const tables = await scan(
+      source,
+      descriptor,
+      maxRowBytes,
+      destination,
+      assertCurrent,
+      params.transformRow,
+    );
     assertCurrent();
     await restoreAllocations(destination, descriptor, facts);
     for (const projection of descriptor.projections ?? []) {
@@ -585,8 +662,12 @@ export async function materializeDatabasePort(params: {
     }
     if (destination.engine === "postgres") {
       assertCurrent();
-      await destination.db.query(descriptor.postData);
-      assertPostgresCatalog(await catalogEvidence(destination, descriptor), definitions);
+      await destination.db.query(
+        descriptor.postData +
+          "\n;\n" +
+          (descriptor.postgresPostData?.(destination.namespace) ?? ""),
+      );
+      assertPostgresCatalog(await catalogEvidence(destination, descriptor), definitions.base);
       await destination.db.query(
         "CREATE TABLE openclaw_schema_meta (store TEXT PRIMARY KEY, version BIGINT NOT NULL, store_id TEXT NOT NULL)",
       );
@@ -604,9 +685,13 @@ export async function materializeDatabasePort(params: {
     }
     const verified = {
       tables: await scan(destination, descriptor, maxRowBytes),
-      allocations: await allocations(destination, descriptor),
+      allocations: await readDatabasePortAllocations(destination, descriptor),
     };
-    if (!isDeepStrictEqual(verified, { tables, allocations: facts })) {
+    const expected =
+      destination.engine === "sqlite"
+        ? sqlitePortAllocations(descriptor, verified.allocations, facts)
+        : facts;
+    if (!isDeepStrictEqual(verified, { tables, allocations: expected })) {
       throw new DatabasePortDataError("Port canonical verification failed");
     }
     if (destination.engine === "postgres") {

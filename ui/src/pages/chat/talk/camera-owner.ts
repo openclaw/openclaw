@@ -9,6 +9,7 @@ type RealtimeTalkCameraOwnerOptions = {
   onReleased?: () => void;
 };
 
+// Owns camera tracks and their ended listeners; release detaches listeners before stopping tracks.
 export class RealtimeTalkCameraOwner {
   stream: MediaStream | null = null;
   video: HTMLVideoElement | null = null;

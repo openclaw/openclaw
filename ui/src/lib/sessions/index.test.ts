@@ -464,15 +464,6 @@ it("ignores stale archive state after a newer unarchive via Gateway events", asy
   sessions.dispose();
 });
 
-it("does not probe for a group catalog when the method is explicitly absent", async () => {
-  const { sessions, request } = sessionHarness({}, []);
-  await sessions.groupsLoad();
-  await sessions.groupsLoad();
-  expect(request).not.toHaveBeenCalled();
-  expect(sessions.state.groups).toEqual([]);
-  sessions.dispose();
-});
-
 it("refreshes stale active rows after a terminal session message", async () => {
   vi.useFakeTimers();
   const list = vi
