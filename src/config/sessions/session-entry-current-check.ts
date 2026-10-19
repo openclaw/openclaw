@@ -481,7 +481,7 @@ async function prepareSessionEntryCurrentCheck(
   });
 }
 
-/** ID selection is a source fact even when it did not select a row. */
+/** ID selection retains published durable facts or a native memory owner, including absence. */
 async function prepareSessionIdCurrentCheck(
   params: SessionEntryCurrentCheckParams & {
     sessionId: string;
@@ -589,10 +589,10 @@ async function prepareSessionIdCurrentCheck(
       }
     };
     const selectionSource = Object.assign(assertSelectionCurrent, {
-      nativeSource: true,
+      nativeSource: Boolean(memory),
       async prepareSessionSource() {
         assertSelectionCurrent();
-        return { nativeSource: true, checks: [], assertCurrent: assertSelectionCurrent };
+        return { nativeSource: Boolean(memory), checks: [], assertCurrent: assertSelectionCurrent };
       },
     });
     const source = Object.assign(composeSessionSourceAssertion([selectionSource, keyed?.source]), {
