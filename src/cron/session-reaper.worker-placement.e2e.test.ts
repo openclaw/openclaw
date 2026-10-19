@@ -80,6 +80,8 @@ describe("scheduled cron session retirement through the Gateway", () => {
     }
   };
   const history = (id: string) => call<{ entries: CronRunLogEntry[] }>("cron.runs", { id });
+  const marker = (id: string, event: string) => path.join(control, `${id}.${event}`);
+  const release = (id: string) => fs.writeFile(marker(id, "release"), "");
 
   beforeAll(async () => {
     receipts = await openFixtureReceiptChannel();
@@ -89,29 +91,25 @@ describe("scheduled cron session retirement through the Gateway", () => {
     deleteTestEnvValue("OPENCLAW_SKIP_PROVIDERS");
     control = path.join(setup.tempHome, "control");
     const plugin = path.join(setup.tempHome, "cron-fixture-plugin");
+    const writeJson = (name: string, value: unknown) =>
+      fs.writeFile(path.join(plugin, name), JSON.stringify(value));
     await fs.mkdir(control);
     await fs.mkdir(plugin);
     const backend = path.join(plugin, "backend.mjs");
     await fs.writeFile(backend, backendSource(receipts.endpoint));
-    await fs.writeFile(
-      path.join(plugin, "package.json"),
-      JSON.stringify({
-        name: "openclaw-cron-retirement-fixture",
-        version: "1.0.0",
-        type: "module",
-        openclaw: { extensions: ["./index.mjs"] },
-      }),
-    );
-    await fs.writeFile(
-      path.join(plugin, "openclaw.plugin.json"),
-      JSON.stringify({
-        id: "cron-fixture-cli",
-        name: "Cron retirement fixture",
-        cliBackends: ["cron-fixture-cli"],
-        activation: { onStartup: true },
-        configSchema: { type: "object", properties: {}, additionalProperties: false },
-      }),
-    );
+    await writeJson("package.json", {
+      name: "openclaw-cron-retirement-fixture",
+      version: "1.0.0",
+      type: "module",
+      openclaw: { extensions: ["./index.mjs"] },
+    });
+    await writeJson("openclaw.plugin.json", {
+      id: "cron-fixture-cli",
+      name: "Cron retirement fixture",
+      cliBackends: ["cron-fixture-cli"],
+      activation: { onStartup: true },
+      configSchema: { type: "object", properties: {}, additionalProperties: false },
+    });
     // Exercise the documented CLI backend plugin contract with a real child process.
     await fs.writeFile(
       path.join(plugin, "index.mjs"),
@@ -165,15 +163,13 @@ describe("scheduled cron session retirement through the Gateway", () => {
     });
   }, 120_000);
 
-  afterAll(async () => {
-    await receipts.close();
-  });
+  afterAll(async () => receipts.close());
 
   afterEach(async () => {
     try {
       if (setup && existsSync(control)) {
         for (const id of ["removed", "one-shot"]) {
-          await fs.writeFile(path.join(control, `${id}.release`), "");
+          await release(id);
         }
       }
       await server?.close({ reason: "scheduled cron retirement tests complete" });
@@ -196,13 +192,7 @@ describe("scheduled cron session retirement through the Gateway", () => {
   }) => {
     // Runtime test setup resets plugin registrations after each test, so both flows share this test.
     const retainedRuns = new Map<string, CronRunLogEntry[]>();
-    const startedRuns: Array<{
-      id: "removed" | "one-shot";
-      job: CronJob;
-      sessionId: string;
-      baseKey: string;
-      runKey: string;
-    }> = [];
+    const startedRuns = [];
     for (const id of ["removed", "one-shot"] as const) {
       const oneShot = id === "one-shot";
       const job = await call<CronJob>("cron.add", {
@@ -225,7 +215,7 @@ describe("scheduled cron session retirement through the Gateway", () => {
       const baseKey = `agent:main:cron:${job.id}`;
       // Keep the first backend blocked so the second scheduled tick must observe its live receipt.
       await withinTest(receipts.waitFor(control, `${id}.started`), signal);
-      expect(existsSync(path.join(control, `${id}.started`))).toBe(true);
+      expect(existsSync(marker(id, "started"))).toBe(true);
       const base = entry(baseKey);
       expect(base).toBeDefined();
       const sessionId = base!.sessionId;
@@ -234,11 +224,10 @@ describe("scheduled cron session retirement through the Gateway", () => {
     }
     for (const { id, job, sessionId, baseKey, runKey } of startedRuns) {
       const oneShot = id === "one-shot";
-      const release = () => fs.writeFile(path.join(control, `${id}.release`), "");
       try {
         expect(entry(baseKey)).toMatchObject({ sessionId });
         expect((await history(job.id)).entries).toEqual([]);
-        expect(existsSync(path.join(control, `${id}.cancelled`))).toBe(false);
+        expect(existsSync(marker(id, "cancelled"))).toBe(false);
         expect(placement(sessionId)).toMatchObject({
           session_key: runKey,
           state: "local",
@@ -254,7 +243,7 @@ describe("scheduled cron session retirement through the Gateway", () => {
           expect(entry(baseKey)?.sessionId).toBe(sessionId);
           expect(placement(sessionId)?.turn_claim_id).toEqual(expect.any(String));
         }
-        await release();
+        await release(id);
 
         await expect
           .poll(() => ({ base: entry(baseKey), placement: placement(sessionId) }), {
@@ -272,7 +261,7 @@ describe("scheduled cron session retirement through the Gateway", () => {
             }),
           ]);
         if (!oneShot) {
-          expect(existsSync(path.join(control, `${id}.cancelled`))).toBe(true);
+          expect(existsSync(marker(id, "cancelled"))).toBe(true);
           // Unpersisted terminal run state remains history, separate from the reusable base.
           expect(entry(runKey)).toMatchObject({
             sessionId,
@@ -287,7 +276,7 @@ describe("scheduled cron session retirement through the Gateway", () => {
         expect(jobs.jobs.map((listed) => listed.id)).not.toContain(job.id);
         retainedRuns.set(job.id, (await history(job.id)).entries);
       } finally {
-        await release();
+        await release(id);
       }
     }
     for (const [jobId, entries] of retainedRuns) {

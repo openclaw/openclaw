@@ -1,5 +1,3 @@
-// Covers session-registry sweep isolation: unreadable cron facts fail the whole
-// sweep closed, while retained stores are reported as per-store skips.
 import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
@@ -65,13 +63,18 @@ function writeAgentDeletion(
   }
 }
 
-async function writeStaleCronSession(storePath: string, agentId: string): Promise<string> {
+async function writeStaleCronSession(
+  state: OpenClawTestState,
+  agentId: string,
+  storePath = path.join(state.sessionsDir(agentId), "sessions.json"),
+) {
   const sessionKey = `agent:${agentId}:cron:done-job:run:old-run`;
+  const scope = { sessionKey, storePath };
   await replaceSessionEntry(
     { sessionKey, storePath },
     { sessionId: `${agentId}-old-run`, updatedAt: Date.now() - 8 * DAY_MS },
   );
-  return sessionKey;
+  return scope;
 }
 
 async function withMaintenanceState(run: (state: OpenClawTestState) => Promise<void>) {
@@ -146,9 +149,7 @@ describe("runSessionRegistryMaintenance", () => {
         setRuntimeConfigSnapshot(config);
         const scopes = [];
         for (const agentId of ["main", "beta"]) {
-          const storePath = store ?? path.join(state.sessionsDir(agentId), "sessions.json");
-          const sessionKey = await writeStaleCronSession(storePath, agentId);
-          scopes.push({ agentId, sessionKey, storePath });
+          scopes.push({ agentId, ...(await writeStaleCronSession(state, agentId, store)) });
         }
 
         if (kind === "per-agent") {
@@ -174,8 +175,7 @@ describe("runSessionRegistryMaintenance", () => {
           cronStorePath: state.statePath("cron/jobs.json"),
         });
 
-        expect(summary.skippedReason).toBeUndefined();
-        expect(summary.pruned).toBe(2);
+        expect(summary).toMatchObject({ skippedReason: undefined, pruned: 2 });
         for (const scope of scopes) {
           expect(loadSessionEntry(scope)).toBeUndefined();
         }
@@ -192,10 +192,8 @@ describe("runSessionRegistryMaintenance", () => {
     "skips agent deletions while maintaining healthy stores (apply=$apply, cleanupCompleted=$cleanupCompleted)",
     async ({ apply, cleanupCompleted }) => {
       await withMaintenanceState(async (state) => {
-        const mainStorePath = path.join(state.sessionsDir("main"), "sessions.json");
-        const retiredStorePath = path.join(state.sessionsDir("retired"), "sessions.json");
-        const mainKey = await writeStaleCronSession(mainStorePath, "main");
-        await writeStaleCronSession(retiredStorePath, "retired");
+        const main = await writeStaleCronSession(state, "main");
+        const retired = await writeStaleCronSession(state, "retired");
         writeAgentDeletion(state, "retired", cleanupCompleted);
         await closeOpenClawAgentDatabasesAsync(state.stateDir);
 
@@ -211,16 +209,14 @@ describe("runSessionRegistryMaintenance", () => {
             expect.objectContaining({ agentId: "main", pruned: 1 }),
             {
               agentId: "retired",
-              storePath: retiredStorePath,
+              storePath: retired.storePath,
               skippedReason: cleanupCompleted
                 ? "agent-deletion-complete"
                 : "agent-deletion-pending",
             },
           ]),
         });
-        expect(
-          loadSessionEntry({ sessionKey: mainKey, storePath: mainStorePath }) !== undefined,
-        ).toBe(!apply);
+        expect(loadSessionEntry(main) !== undefined).toBe(!apply);
       });
     },
   );
@@ -229,11 +225,9 @@ describe("runSessionRegistryMaintenance", () => {
     "preserves stores held by %s deletion history while continuing eligible retention",
     async (history) => {
       await withMaintenanceState(async (state) => {
-        const mainStorePath = path.join(state.sessionsDir("main"), "sessions.json");
-        const retainedStorePath = path.join(state.sessionsDir("retained"), "sessions.json");
-        const mainKey = await writeStaleCronSession(mainStorePath, "main");
-        const retainedKey = await writeStaleCronSession(retainedStorePath, "retained");
-        const databasePath = resolveSqliteTargetFromSessionStorePath(retainedStorePath).path;
+        const main = await writeStaleCronSession(state, "main");
+        const retained = await writeStaleCronSession(state, "retained");
+        const databasePath = resolveSqliteTargetFromSessionStorePath(retained.storePath).path;
         await closeOpenClawAgentDatabasesAsync(state.stateDir);
         runOpenClawStateWriteTransaction((database) => {
           database.db.exec("DROP TABLE agent_deletion_journal");
@@ -256,7 +250,7 @@ describe("runSessionRegistryMaintenance", () => {
           stores: expect.arrayContaining([
             {
               agentId: "retained",
-              storePath: retainedStorePath,
+              storePath: retained.storePath,
               skippedReason: "agent-store-held",
               warning: expect.stringContaining(`Held agent retained database ${databasePath}`),
             },
@@ -265,12 +259,8 @@ describe("runSessionRegistryMaintenance", () => {
         const held = summary.stores.find((store) => store.agentId === "retained");
         expect(held).toMatchObject({ warning: expect.stringContaining("openclaw doctor --fix") });
         expect(await fs.readFile(databasePath)).toEqual(bytes);
-        expect(
-          loadSessionEntry({ sessionKey: retainedKey, storePath: retainedStorePath }),
-        ).toBeDefined();
-        expect(
-          loadSessionEntry({ sessionKey: mainKey, storePath: mainStorePath }) !== undefined,
-        ).toBe(history === "missing");
+        expect(loadSessionEntry(retained)).toBeDefined();
+        expect(loadSessionEntry(main) !== undefined).toBe(history === "missing");
       });
     },
   );

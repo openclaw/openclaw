@@ -1,4 +1,3 @@
-// Every-job firing tests cover repeated schedule execution semantics.
 import { describe, expect, it, vi } from "vitest";
 import { prepareGatewaySuspend } from "../infra/gateway-suspend-coordinator.js";
 import {
@@ -27,12 +26,11 @@ installCronTestHooks({ logger: noopLogger });
 
 async function startEveryJob(text: string) {
   const store = await makeStorePath();
-  const logger = createNoopLogger();
   const clock = createGatewaySchedulerClock(Date.now());
   const fixture = createStartedCronServiceWithFinishedBarrier({
     scheduler: createTestGatewayScheduler(clock.clock),
     storePath: store.storePath,
-    logger,
+    logger: noopLogger,
   });
   const { wake } = await captureCronSchedulerWakeForTest(() => fixture.cron.start());
   const job = await fixture.cron.add({
@@ -43,7 +41,7 @@ async function startEveryJob(text: string) {
     wakeMode: "next-heartbeat",
     payload: { kind: "systemEvent", text },
   });
-  return { ...fixture, store, logger, clock, job, wake };
+  return { ...fixture, store, clock, job, wake };
 }
 
 describe("CronService interval/cron jobs fire on time", () => {
@@ -56,10 +54,8 @@ describe("CronService interval/cron jobs fire on time", () => {
       throw new Error(`missing system event ${expectedText}`);
     }
     const options = matchingCall[1] as Record<string, unknown>;
-    expect(options.agentId).toBe("main");
+    expect(options).toMatchObject({ agentId: "main", contextKey: expect.stringMatching(/^cron:/) });
     expect(options.sessionKey).toBeUndefined();
-    expect(typeof options.contextKey).toBe("string");
-    expect(String(options.contextKey).startsWith("cron:")).toBe(true);
   };
 
   it("resumes due cron work after a busy suspension attempt", async () => {
@@ -92,16 +88,8 @@ describe("CronService interval/cron jobs fire on time", () => {
   });
 
   it("keeps a due timer pending when restart signal admission rolls back", async () => {
-    const {
-      cron,
-      state,
-      enqueueSystemEvent,
-      finished,
-      store,
-      clock,
-      job,
-      wake: wakeScheduler,
-    } = await startEveryJob("rollback-tick");
+    const fixture = await startEveryJob("rollback-tick");
+    const { cron, state, enqueueSystemEvent, finished, store, clock, job } = fixture;
     resetGatewayWorkAdmission();
     let wake: Promise<void> | undefined;
 
@@ -110,7 +98,7 @@ describe("CronService interval/cron jobs fire on time", () => {
       expect(pendingSignal).not.toBeNull();
       const finishedRun = finished.waitForOk(job.id);
       clock.setTime(job.state.nextRunAtMs! + 5);
-      wake = wakeScheduler(state);
+      wake = fixture.wake(state);
       expect(enqueueSystemEvent).not.toHaveBeenCalled();
 
       expect(pendingSignal?.rollback()).toBe(true);
@@ -129,7 +117,6 @@ describe("CronService interval/cron jobs fire on time", () => {
   it("keeps every jobs due while minute cron jobs recompute schedules", async () => {
     const store = await makeStorePath();
     const enqueueSystemEvent = vi.fn();
-    const requestHeartbeat = vi.fn();
     const nowMs = Date.parse("2025-12-13T00:00:00.000Z");
     const clock = createGatewaySchedulerClock(nowMs);
 
@@ -168,35 +155,28 @@ describe("CronService interval/cron jobs fire on time", () => {
       cronEnabled: true,
       log: noopLogger,
       enqueueSystemEvent,
-      requestHeartbeat,
+      requestHeartbeat: vi.fn(),
       runIsolatedAgentJob: vi.fn(async () => ({ status: "ok" as const })),
     });
-
     await cron.start();
-    // Perf: a few recomputation cycles are enough to catch "every" drift.
     for (let minute = 1; minute <= 3; minute++) {
       clock.setTime(nowMs + minute * 60_000);
-      const minuteRun = await cron.run("minute-cron", "force");
-      expect(minuteRun).toEqual({ ok: true, ran: true });
+      expect(await cron.run("minute-cron", "force")).toEqual({ ok: true, ran: true });
     }
 
     // "every" cadence is 2m; verify it stays due at the 6-minute boundary.
     clock.setTime(nowMs + 6 * 60_000);
-    const sfRun = await cron.run("loaded-every", "due");
-    expect(sfRun).toEqual({ ok: true, ran: true });
+    expect(await cron.run("loaded-every", "due")).toEqual({ ok: true, ran: true });
 
-    const sfRuns = enqueueSystemEvent.mock.calls.filter(([text]) => text === "sf-tick").length;
-    const minuteRuns = enqueueSystemEvent.mock.calls.filter(
-      ([text]) => text === "minute-tick",
-    ).length;
-    expect(minuteRuns).toBeGreaterThan(0);
-    expect(sfRuns).toBeGreaterThan(0);
+    expect(enqueueSystemEvent.mock.calls.some(([text]) => text === "minute-tick")).toBe(true);
+    expect(enqueueSystemEvent.mock.calls.some(([text]) => text === "sf-tick")).toBe(true);
 
     const jobs = await cron.list({ includeDisabled: true });
     const sfJob = jobs.find((job) => job.id === "loaded-every");
-    expect(sfJob?.state.lastStatus).toBe("ok");
-    expect(sfJob?.schedule.kind).toBe("every");
-    expect(sfJob?.state.nextRunAtMs).toBe(nowMs + 8 * 60_000);
+    expect(sfJob).toMatchObject({
+      schedule: { kind: "every" },
+      state: { lastStatus: "ok", nextRunAtMs: nowMs + 8 * 60_000 },
+    });
 
     cron.stop();
     await store.cleanup();

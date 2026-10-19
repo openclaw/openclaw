@@ -49,9 +49,6 @@ describe("CronService startup catch-up repair scoping", () => {
     createJob(id, next, { kind: "cron", expr: "0 * * * *", tz: "UTC" });
   const createDailyCronJob = (id: string, next: number) =>
     createJob(id, next, { kind: "cron", expr: "0 9 * * *", tz: "UTC" });
-  const createDateBoundaryEveryJob = (id: string, next: number) =>
-    createJob(id, next, { kind: "every", everyMs: MAX_DATE_TIMESTAMP_MS, anchorMs: 0 });
-
   it("persists skipped recurring slots before the first tick even with an empty startup plan", async () => {
     const store = await makeStorePath();
     const now = Date.now();
@@ -60,8 +57,7 @@ describe("CronService startup catch-up repair scoping", () => {
     const daily = createDailyCronJob("missed-daily", dueAt);
     daily.state.lastRunAtMs = Date.parse("2025-12-12T09:00:00.000Z");
     const every: CronJob = {
-      ...createHourlyCronJob("missed-every", dueAt),
-      schedule: { kind: "every", everyMs: 60_000, anchorMs: dueAt },
+      ...createJob("missed-every", dueAt, { kind: "every", everyMs: 60_000, anchorMs: dueAt }),
       sessionTarget: "isolated",
       payload: { kind: "agentTurn", message: "interval reminder" },
     };
@@ -115,19 +111,14 @@ describe("CronService startup catch-up repair scoping", () => {
     await saveCronStore(store.storePath, {
       version: 1,
       jobs: [
-        createHourlyCronJob("hourly-0", Date.parse("2025-12-13T03:00:00.000Z")),
-        createHourlyCronJob("hourly-1", Date.parse("2025-12-13T04:00:00.000Z")),
-        createHourlyCronJob("hourly-2", Date.parse("2025-12-13T05:00:00.000Z")),
-        createHourlyCronJob("hourly-3", Date.parse("2025-12-13T06:00:00.000Z")),
-        createHourlyCronJob("hourly-4", Date.parse("2025-12-13T07:00:00.000Z")),
+        ...Array.from({ length: 5 }, (_, i) =>
+          createHourlyCronJob(`hourly-${i}`, startNow - (14 - i) * 3_600_000),
+        ),
         createDailyCronJob("daily-overflow", Date.parse("2025-12-13T09:00:00.000Z")),
       ],
     });
 
-    const createState = () =>
-      makeState(store.storePath, {
-        nowMs: () => now,
-      });
+    const createState = () => makeState(store.storePath, { nowMs: () => now });
     const state = createState();
 
     await start(state);
@@ -168,11 +159,13 @@ describe("CronService startup catch-up repair scoping", () => {
     const now = MAX_DATE_TIMESTAMP_MS - 2_000;
     await saveCronStore(store.storePath, {
       version: 1,
-      jobs: [
-        createDateBoundaryEveryJob("date-limit-0", now - 60_000),
-        createDateBoundaryEveryJob("date-limit-1", now - 50_000),
-        createDateBoundaryEveryJob("date-limit-2", now - 40_000),
-      ],
+      jobs: [60_000, 50_000, 40_000].map((offset, i) =>
+        createJob(`date-limit-${i}`, now - offset, {
+          kind: "every",
+          everyMs: MAX_DATE_TIMESTAMP_MS,
+          anchorMs: 0,
+        }),
+      ),
     });
     const order: string[] = [];
     const deferredAutoDisableReasons = new Set([

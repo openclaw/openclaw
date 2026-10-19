@@ -46,9 +46,7 @@ beforeAll(async () => {
   ensureCronRunReceiptSchema(database.db);
 });
 
-beforeEach(() => {
-  vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
-});
+beforeEach(() => vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] }));
 
 afterEach(() => {
   for (const [channelName, storeKey] of actors) {
@@ -59,9 +57,7 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
-afterAll(async () => {
-  await fixture?.cleanup();
-});
+afterAll(async () => fixture?.cleanup());
 
 function job(id: string, overrides: Partial<CronJob>): CronJob {
   return {
@@ -89,38 +85,32 @@ function withinWorker<T>(run: () => T): T {
 function createScheduler(jobs: CronJob[]) {
   const storeKey = fixture.statePath("cron", `case-${caseId++}.json`);
   const channelName = `cron-maintenance-test:${storeKey}`;
+  const send = (type: "cron.schedulerStart" | "cron.schedulerTick") =>
+    withinWorker(() =>
+      runCronSchedulerInWorker(database, {
+        type,
+        input: {
+          storeKey,
+          channelName,
+          snapshot: {
+            config: { cronEnabled: type === "cron.schedulerTick", defaultAgentId: "main" },
+          },
+          nowMs: NOW,
+          monotonicMs: 0,
+        },
+      }),
+    );
   withinWorker(() => {
     runOpenClawStateWriteTransaction(
       () => saveCronStoreInDatabase(database, storeKey, { version: 1, jobs }),
       { database, path: database.path, env: fixture.env },
     );
-    runCronSchedulerInWorker(database, {
-      type: "cron.schedulerStart",
-      input: {
-        storeKey,
-        channelName,
-        snapshot: { config: { cronEnabled: false, defaultAgentId: "main" } },
-        nowMs: NOW,
-        monotonicMs: 0,
-      },
-    });
   });
+  send("cron.schedulerStart");
   actors.set(channelName, storeKey);
   return {
     read: () => loadCronStoreFromDatabase(database.db, storeKey).store,
-    tick: () =>
-      withinWorker(() =>
-        runCronSchedulerInWorker(database, {
-          type: "cron.schedulerTick",
-          input: {
-            storeKey,
-            channelName,
-            snapshot: { config: { cronEnabled: true, defaultAgentId: "main" } },
-            nowMs: NOW,
-            monotonicMs: 0,
-          },
-        }),
-      ),
+    tick: () => send("cron.schedulerTick"),
   };
 }
 
@@ -165,19 +155,12 @@ describe("cron timer maintenance admission", () => {
     const changes = database.db.prepare("SELECT total_changes() AS changes").get();
     const previousRuns = vi.spyOn(Cron.prototype, "previousRuns");
     sqliteTransactionLabels.length = 0;
-    try {
-      const result = scheduler.tick();
-      expect(scheduler.read()).toEqual(before);
-      expect(database.db.prepare("SELECT total_changes() AS changes").get()).toEqual(changes);
-      expect(sqliteTransactionLabels).toEqual([]);
-      expect(result.accepted).toEqual([]);
-      expect(result.notifications).toEqual([]);
-      expect(result.ownerless).toEqual([]);
-      expect(result.nextWakeAtMs).toBe(nextRunAtMs);
-      expect(previousRuns).toHaveBeenCalledTimes(0);
-    } finally {
-      previousRuns.mockRestore();
-    }
+    const result = scheduler.tick();
+    expect(scheduler.read()).toEqual(before);
+    expect(database.db.prepare("SELECT total_changes() AS changes").get()).toEqual(changes);
+    expect(sqliteTransactionLabels).toEqual([]);
+    expect(result).toMatchObject({ accepted: [], notifications: [], ownerless: [], nextWakeAtMs });
+    expect(previousRuns).toHaveBeenCalledTimes(0);
   });
 
   it("runs one sweep for a stale backoff slot", () => {
