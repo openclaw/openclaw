@@ -231,6 +231,15 @@ Use the host for shared application behavior:
 | `subscribe`             | Observe host snapshot changes, including the docked session key.                                              |
 | `ui`                    | Register, select, and invalidate plugin contributions.                                                        |
 
+`onEvent("session.message", listener)` listeners receive complete messages;
+delivery begins once the Gateway confirms full-body delivery for this connection.
+The host requests complete roster bodies when the first such listener registers
+and releases that preference when the last listener is removed. Listeners
+registered before connect include the preference in the initial handshake.
+During runtime registration, bodyless roster frames already in flight still
+update core UI consumers but are never delivered to plugin listeners. Other
+event subscriptions are unchanged, and no reconnect is required.
+
 Session and agent `refresh()` operations fetch new snapshots and reject on failure, so a plugin
 can display an error and offer Retry. `host.sessions.rows` is the current
 filtered, paginated session list. `host.sessions.refresh()` preserves that
@@ -388,8 +397,11 @@ These placements do not register arbitrary Settings routes.
 The host supplies the selected Settings agent, engine availability, connection
 state, advertised Gateway methods, locale, shared Settings components, and bounded navigation. Authenticated
 operator RPC remains trusted native UI authority, bound to the mounted view's
-lifetime. Retained callbacks reject after that lifetime ends, including when the advertised
-method catalog changes. An absent method catalog means the method is unavailable. The host keeps
+lifetime. A memory view stays mounted through a same-client reconnect: `connected` and
+`connectionEpoch` arrive through `update(snapshot)`, and a reply to a request sent in an earlier
+epoch rejects. Agent, engine, route, advertised method catalog, Gateway client, account or
+recovery identity, and operator-access changes end the view; retained callbacks then reject.
+An absent method catalog means the method is unavailable. The host keeps
 routing, agent selection, engine decisions, and config writes; the plugin owns
 its presentation, status requests, and indexed-memory search. Search and full-file
 reads remain agent-scoped through the existing Gateway methods. Only an explicit
@@ -414,6 +426,18 @@ arbitrary credentialed URLs, headers, or tokens. A plugin may add its own operat
 deadline, which also covers retries and response-body consumption. The context
 returns parsed JSON plus HTTP status and a sanitized error message; backend route
 validation and mutation authority remain unchanged.
+
+The optional `login` capability connects a channel presentation to an existing
+application-owned login flow shared with setup. Its snapshot exposes the current
+message, QR image, connected state, and busy state; opaque login session keys stay
+with the host. `start(force)` and `wait()` retain the setup account selection.
+`captureLogout()` returns the selected account and a guarded logout callback;
+capture it before awaiting the host's `confirm` dialog. Account or linked-state
+changes, lost administrator access, replaced owners, and ended connection epochs
+invalidate that callback. Closing the detail does not reset the shared login flow.
+The host confirmation retains normal dialog admission and cancels when its view
+or transport lifetime ends. Optional phone and duration formatters preserve the
+host's locale conventions.
 
 The normal plugin builder preserves this declaration. The Control UI build
 loads it from the completed bundled distribution with the same package identity,

@@ -431,11 +431,11 @@ it("suppresses assistant notes while a runtime-context block is still streaming"
 });
 
 it("invalidates the persist-time guard after disposal", async () => {
-  const { ownedTimers, setTimeoutFn, clearTimeoutFn } = createObserverTimerTracker();
   const unrelated = vi.fn();
   const unrelatedTimer = setTimeout(unrelated, 60_000);
+  const { ownedTimers } = createObserverTimerTracker();
   const persistDigest = vi.fn(async (_params: PersistDigestParams) => true);
-  const harness = createHarness({ persistDigest, setTimeoutFn, clearTimeoutFn });
+  const harness = createHarness({ persistDigest });
   try {
     startAndAddToolNotes(harness.observer);
     await advanceAndFlush(12_000);

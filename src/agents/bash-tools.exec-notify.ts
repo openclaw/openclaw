@@ -36,6 +36,7 @@ import {
   renderExecExitLabel,
 } from "./bash-tools.exec-output.js";
 import { readToolAllowlistIntersection } from "./tool-policy-shared.js";
+import { getGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 
 const DEFAULT_NOTIFY_TAIL_CHARS = 400;
 const recovering = new Set<string>();
@@ -327,15 +328,17 @@ export function prepareExecExitNotification(
   if (!owner) {
     return undefined;
   }
-  return captureSessionEventTarget(owner, targetKey).then(
+  return captureSessionEventTarget(owner, targetKey, {
+    operatorAuthority: getGatewayToolCallerIdentity()?.operatorAuthority,
+  }).then(
     (target) => {
       if (isCronRunSessionKey(targetKey)) {
         const runs = listAgentRunsForSession({
           sessionKey: targetKey,
           sessionId: target.sessionId,
         });
-        // Retain the originating runs, so a completion turn cannot extend its own lifetime.
-        target.assertCurrent = () => {
+        // The originating run must survive queue acceptance, not the queued follow-up.
+        session.assertExitNotificationAcceptanceCurrent = () => {
           if (!runs.some((run) => hasAgentRunContextExecutionOwner(run.runId))) {
             throw new Error("Originating cron run ended; inspect the result with process log");
           }
@@ -426,6 +429,7 @@ export async function maybeNotifyOnExit(
         processSessionInstanceId(session),
         {
           ...eventOptions,
+          assertAcceptanceCurrent: session.assertExitNotificationAcceptanceCurrent,
           onAdopted: session.clearExitNotification,
         },
       );

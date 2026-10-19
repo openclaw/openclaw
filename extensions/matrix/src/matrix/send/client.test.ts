@@ -39,7 +39,7 @@ describe("matrix send client helpers", () => {
   });
 
   beforeEach(() => {
-    primeMatrixClientResolverMocks({ resolved: {} });
+    primeMatrixClientResolverMocks();
   });
 
   afterEach(() => {

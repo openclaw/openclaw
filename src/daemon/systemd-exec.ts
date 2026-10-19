@@ -1,4 +1,3 @@
-/** systemctl execution, user-manager routing, and availability probes. */
 import { err, ok, type Result } from "@openclaw/normalization-core/result";
 import { normalizeLowercaseStringOrEmpty } from "@openclaw/normalization-core/string-coerce";
 import { escapeRegExp } from "../shared/regexp.js";
@@ -388,7 +387,7 @@ export async function isSystemctlAvailable(env: GatewayServiceEnv): Promise<bool
  * The caller supplies its deadline- and custody-checked D-Bus query. */
 export async function bindSystemdManagerOwner(
   query: SystemdBusQuery,
-  managerUid: number,
+  managerUid: number | undefined,
   unavailable: () => Error,
 ): Promise<{ destination: string; verify: () => Promise<void> }> {
   const readOwner = () => readSystemdBusOwner(query, unavailable);
@@ -400,10 +399,10 @@ export async function bindSystemdManagerOwner(
     "u",
     unavailable,
   );
-  if (!isSystemdManagerUid(managerUid) || !Number.isInteger(uid)) {
+  if ((managerUid !== undefined && !isSystemdManagerUid(managerUid)) || !isSystemdManagerUid(uid)) {
     throw unavailable();
   }
-  if (uid !== managerUid) {
+  if (managerUid !== undefined && uid !== managerUid) {
     throw new ServiceOwnershipRefusalError("systemd-manager-changed");
   }
   return {

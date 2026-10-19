@@ -1,4 +1,4 @@
-import { createEffect, onSettled, untrack } from "solid-js";
+import { onSettled } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
@@ -22,7 +22,7 @@ function ownerFor(host: Host) {
   if (retained) {
     return retained;
   }
-  const owner = createBrowserPanelPresentation(host);
+  const owner = createBrowserPanelPresentation(host, onSettled);
   owners.set(host, owner);
   for (const key of ["hostedTabs", "activeHostedTabId"] as const) {
     Object.defineProperty(host, key, { configurable: true, get: () => owner[key] });
@@ -40,12 +40,15 @@ function ownerFor(host: Host) {
 
 export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPanelMethods>(
   "openclaw-browser-panel",
-  (_props, host) => (
-    <>
-      <style>{`${dockStyles}\n${tabStyles}\n${browserStyles}`}</style>
-      <BrowserPanelContent owner={ownerFor(host)} />
-    </>
-  ),
+  (_props, host) => {
+    const content = browserPanelContent(ownerFor(host));
+    return (
+      <>
+        <style>{`${dockStyles}\n${tabStyles}\n${browserStyles}`}</style>
+        {content}
+      </>
+    );
+  },
   {
     properties: {
       client: { default: null, attribute: false },
@@ -75,12 +78,8 @@ export const BrowserPanelHost = defineSolidBridge<BrowserPanelInputs, BrowserPan
   },
 );
 
-function BrowserPanelContent(props: { owner: BrowserPanelPresentation }) {
-  // The native bridge retains this synchronous owner for the host's lifetime.
-  const owner = untrack(() => props.owner);
+function browserPanelContent(owner: BrowserPanelPresentation) {
   const state = projectOwner(owner, (current) => current);
-  // Native presentation and viewport geometry follow the committed DOM.
-  createEffect(state.revision, () => owner.rendered());
   onSettled(() => {
     let disposed = false;
     let detach: (() => void) | undefined;

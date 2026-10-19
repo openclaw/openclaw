@@ -1,5 +1,5 @@
 import type { SkillsFileGetResult } from "@openclaw/gateway-protocol";
-import { render } from "@solidjs/web";
+import { render, spread } from "@solidjs/web";
 import { createEffect, createMemo, Errored, For, Loading, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { registerFilePreviewEnglish } from "../i18n/locales/en-file-preview.ts";
@@ -261,10 +261,7 @@ export function createSkillFileHovercard(props: SkillFileHovercardProps) {
         return;
       }
       dispose = render(() => {
-        createEffect(
-          () => t("filePreview.skill.title"),
-          (title) => card.setAttribute("aria-label", title),
-        );
+        spread(card, () => ({ "aria-label": t("filePreview.skill.title") }), true);
         return (
           <Errored
             fallback={(_error, retry) => (

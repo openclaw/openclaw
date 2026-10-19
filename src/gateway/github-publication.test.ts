@@ -227,7 +227,7 @@ describe("Gateway GitHub publication", () => {
       body: `Published by the Gateway after authoritative workspace reconciliation.\n\n## Worked on by\n\n- @alice\n\n<!-- openclaw-publication:${first.requestId} -->`,
       head: `openclaw:${BRANCH}`,
       base: "main",
-      draft: true,
+      draft: false,
     });
     for (const [, options] of mocks.runCommand.mock.calls) {
       expect(options?.env).toMatchObject({

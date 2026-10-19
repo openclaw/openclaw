@@ -306,6 +306,10 @@ export async function runCodexAppServerSideQuestion(
     agentId: sideRunParams.agentId,
     sandbox: params.sandbox,
   });
+  const assertNativeCurrent = () => {
+    assertCurrent();
+    nativeExecutionPolicy.source?.();
+  };
   try {
     assertCurrent();
     const nativeToolSurfaceEnabled = shouldEnableCodexAppServerNativeToolSurface(
@@ -337,10 +341,7 @@ export async function runCodexAppServerSideQuestion(
       );
     }
     const clientOptions = {
-      // Existing synchronous process startup admission.
-      assertCurrent: () => {
-        authority.assertLegacyCurrent();
-      },
+      assertCurrent: assertNativeCurrent,
       assertCurrentAsync: nativeExecutionPolicy.assertCurrent,
       startOptions: appServer.start,
       timeoutMs: appServer.requestTimeoutMs,
@@ -667,9 +668,7 @@ export async function runCodexAppServerSideQuestion(
           allowedEvents: nativeHookRelayEvents,
           signal: runAbortController.signal,
           runBeforeToolCall: sideRunParams.hostCapabilities.runBeforeToolCall,
-          assertActive: () => {
-            authority.assertLegacyCurrent();
-          },
+          assertActive: assertNativeCurrent,
           assertActiveAsync: nativeExecutionPolicy.assertCurrent,
           onPreToolUseFailure: (failure) => {
             if (!nativePreToolUseFailures.active && nativeToolLifecycleProjector) {
@@ -702,7 +701,7 @@ export async function runCodexAppServerSideQuestion(
             bindingIdentity,
             async () => {
               const assertCurrentBinding = () => {
-                assertCurrent();
+                assertNativeCurrent();
                 runAbortController.signal.throwIfAborted();
               };
               assertCurrentBinding();
@@ -715,9 +714,9 @@ export async function runCodexAppServerSideQuestion(
               ) {
                 throw new Error("Codex side-question binding changed before fork");
               }
-              const currentRequestOptions = () => ({
+              const currentRequestOptions = (): ReturnType<typeof requestOptions> => ({
                 ...requestOptions(),
-                withCurrent: authority.withCurrent,
+                withCurrent: (write) => nativeExecutionPolicy.admit(write, authority.withCurrent),
                 assertCurrent: assertCurrentBinding,
               });
               if (binding.connectionScope === "supervision") {
@@ -914,8 +913,8 @@ export async function runCodexAppServerSideQuestion(
             {
               timeoutMs: appServer.requestTimeoutMs,
               signal: runAbortController.signal,
-              assertCurrent,
-              withCurrent: authority.withCurrent,
+              assertCurrent: assertNativeCurrent,
+              withCurrent: (write) => nativeExecutionPolicy.admit(write, authority.withCurrent),
             },
           )
           .catch((error: unknown) => {

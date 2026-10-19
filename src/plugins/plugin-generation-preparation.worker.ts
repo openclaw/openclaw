@@ -5,7 +5,6 @@ import { withPluginInstallRoots } from "./install-root-context.js";
 import { getPluginCache } from "./plugin-cache.js";
 import { capturePluginGenerationArtifactInScope } from "./plugin-generation-capture.js";
 import {
-  createPluginGenerationSourceCustody,
   markPluginSourceCaptureOperation,
   type PluginRecoverySource,
 } from "./plugin-generation-source-lookup.js";
@@ -31,7 +30,6 @@ type Resource = { dispose(): void; disposeAsync(): Promise<void> };
 const resources = new Set<Resource>();
 const orphaned = new Set<Resource>();
 const owned = new WeakSet<Resource>();
-const sourceCustody = createPluginGenerationSourceCustody();
 const sentReceipts: PluginNativeAdmissionTransfer["receipts"] = new Map();
 const sentRoots = new Set<string>();
 
@@ -168,15 +166,15 @@ function scoped<T>(run: () => T): T {
     throw new Error("Plugin preparation context is not initialized");
   }
   const current = context;
-  return sourceCustody.run(() =>
-    withPluginSourceAdmissionPublisher(publishAdmission, () =>
-      withPluginInstallRoots(current.installRoots, () =>
-        withPluginSourceCaptureStorage(current.storage, () =>
-          withPluginSourceCaptureDirectory(
-            current.scratch,
-            () => (current.readOnly ? withArtifactPreservingStateReads(run) : run()),
-            current.managedRoot,
-          ),
+  // A worker captures one artifact; a management-phase cache would retain an
+  // unused second source tree. Explicit recovery forks own their own custody.
+  return withPluginSourceAdmissionPublisher(publishAdmission, () =>
+    withPluginInstallRoots(current.installRoots, () =>
+      withPluginSourceCaptureStorage(current.storage, () =>
+        withPluginSourceCaptureDirectory(
+          current.scratch,
+          () => (current.readOnly ? withArtifactPreservingStateReads(run) : run()),
+          current.managedRoot,
         ),
       ),
     ),
@@ -190,7 +188,6 @@ async function close(): Promise<void> {
   const errors = outcomes.flatMap((outcome) =>
     outcome.status === "rejected" ? [outcome.reason] : [],
   );
-  await sourceCustody.disposeAsync();
   await getPluginCache().sourceAdmissions?.dispose();
   if (errors.length) {
     throw new AggregateError(errors, "Plugin preparation resources failed to close");
@@ -264,7 +261,10 @@ serveOwnedWorkerTasks<GenerationWorkerReply>(
         if (command.operation !== "call" || command.asynchronous) {
           await settlePluginNativeAdmissions();
         }
-        const value = codec.encode(result);
+        const value =
+          command.operation === "call"
+            ? codec.encodeResult(result, command.handle)
+            : codec.encode(result);
         const admission = admissionChanges();
         return {
           value,

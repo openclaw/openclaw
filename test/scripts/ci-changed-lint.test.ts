@@ -415,66 +415,13 @@ describe("CI changed lint", () => {
   );
 
   it.each(["ui/src/app.ts", ".oxlintrc.json"])(
-    "retains the controller guard and its Git scope when CI splits lint for %s",
+    "retains the controller guard and staged scope when CI splits lint for %s",
     (file) => {
-      const result = detectChangedLanes([file]);
-      for (const { base, staged, checkoutBase, expectedBase, prepared } of [
-        {
-          base: "fixture-base",
-          staged: false,
-          checkoutBase: "ci-base",
-          expectedBase: "fixture-base",
-          prepared: false,
-        },
-        {
-          base: "fixture-base",
-          staged: true,
-          checkoutBase: "ci-base",
-          expectedBase: "fixture-base",
-          prepared: false,
-        },
-        {
-          base: undefined,
-          staged: false,
-          checkoutBase: "ci-base",
-          expectedBase: "ci-base",
-          prepared: true,
-        },
-        {
-          base: undefined,
-          staged: true,
-          checkoutBase: "ci-base",
-          expectedBase: "HEAD",
-          prepared: false,
-        },
-        {
-          base: undefined,
-          staged: false,
-          checkoutBase: undefined,
-          expectedBase: "origin/main",
-          prepared: false,
-        },
-        {
-          base: undefined,
-          staged: true,
-          checkoutBase: undefined,
-          expectedBase: "HEAD",
-          prepared: false,
-        },
-      ]) {
-        if (file === ".oxlintrc.json") {
-          expect(
-            createChangedCheckPlan(detectChangedLanes(["pnpm-lock.yaml"]), {
-              base,
-              staged,
-            }).commands.find(({ args }) => args[0] === "lint")?.args,
-          ).toEqual(["lint", ...(staged ? ["--staged"] : []), ...(base ? ["--base", base] : [])]);
-        }
-        const commands = createChangedCheckPlan(result, {
+      for (const staged of [false, true]) {
+        const commands = createChangedCheckPlan(detectChangedLanes([file]), {
           lintOnly: true,
-          base,
           staged,
-          env: { ...process.env, CHECKOUT_BASE_SHA: checkoutBase },
+          env: { ...process.env, CHECKOUT_BASE_SHA: "unavailable-base" },
           lintSelection: {
             files: [],
             coreStripes: [],
@@ -486,13 +433,7 @@ describe("CI changed lint", () => {
         }).commands;
         expect(
           commands.find(({ args }) => args[0] === "check:control-ui-controllers")?.args,
-        ).toEqual([
-          "check:control-ui-controllers",
-          ...(staged ? ["--staged"] : []),
-          "--base",
-          expectedBase,
-          ...(prepared ? ["--no-merge-base"] : []),
-        ]);
+        ).toEqual(["check:control-ui-controllers", ...(staged ? ["--staged"] : [])]);
       }
     },
   );
@@ -571,7 +512,7 @@ describe("CI changed lint", () => {
       const missing = run("missing-comparison-base");
       expect(missing.error).toBeUndefined();
       expect(missing.status, missing.stderr).toBe(1);
-      expect(missing.stderr).toContain("Could not resolve ratchet base");
+      expect(missing.stderr).toContain("ui/src/new.ts");
     },
   );
 

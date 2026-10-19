@@ -637,7 +637,7 @@ it.each<{
 }>([
   {
     scenario: "lifecycle-contended",
-    message: "is undergoing offline maintenance; retry when it finishes.",
+    message: "without an active schema lease or maintenance scope",
   },
   { catalog: "conflict-on-recheck", message: "remains recorded as running" },
   { catalog: "different-state", message: "non-default state dir or config path" },

@@ -236,8 +236,8 @@ describe("diagnostics gateway methods", () => {
     }
   });
 
-  it("aggregates saturated dynamic session lanes without exporting their names", async () => {
-    const lane = `session:test-${Date.now()}`;
+  it("aggregates saturated dynamic lanes without exporting their names", async () => {
+    const lane = `test:diagnostics-${Date.now()}`;
     const before = await requestLaneDiagnostics();
     setCommandLaneConcurrency(lane, 1);
 

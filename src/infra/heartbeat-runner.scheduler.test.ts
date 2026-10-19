@@ -15,7 +15,6 @@ import { startHeartbeatRunner } from "./heartbeat-runner-scheduler.js";
 import * as heartbeatWake from "./heartbeat-wake.js";
 import {
   getHeartbeatWakeAbortSignal,
-  HEARTBEAT_SKIP_PREEMPTED,
   HEARTBEAT_SKIP_REQUESTS_IN_FLIGHT,
   requestHeartbeat,
   setHeartbeatsEnabled,
@@ -357,7 +356,7 @@ describe("startHeartbeatRunner", () => {
   });
 
   it("retryable preemption does not poison the next retry", async () => {
-    runSpy.mockResolvedValueOnce({ status: "skipped", reason: HEARTBEAT_SKIP_PREEMPTED });
+    runSpy.mockResolvedValueOnce({ status: "skipped", reason: "preempted" });
     start();
     await wake(execWake, 1);
     await advance(60_500, 2);

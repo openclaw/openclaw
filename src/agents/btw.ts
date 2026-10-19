@@ -489,7 +489,7 @@ export async function runBtwSideQuestion(
     }
 
     const cacheParityFork = harness.id === "openclaw" && params.toolCalls === "deny";
-    const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionId);
+    const activeRunSnapshot = getActiveEmbeddedRunSnapshot(sessionFile);
     const imageLimits = resolveImageSanitizationLimits(params.cfg);
     let messages: Message[] = [];
     const inFlightPrompt = activeRunSnapshot?.inFlightPrompt;

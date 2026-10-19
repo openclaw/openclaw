@@ -3,7 +3,7 @@ import type {
   EnvironmentsListResult,
   SystemInfoResult,
 } from "@openclaw/gateway-protocol";
-import { createEffect, createMemo, createSignal, onCleanup, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import { GATEWAY_EVENT_DEVICE_PAIR_CHANGED } from "../../../../src/gateway/events.js";
 import type { PresenceEntry } from "../../api/types.ts";
 import { subtitleForRoute, titleForRoute } from "../../app-navigation.ts";
@@ -92,6 +92,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   let execApprovalsTarget: "gateway" | "node" = "gateway";
   let execApprovalsTargetNodeId: string | null = null;
   let routeDataInitialized = false;
+  let stopGatewayEvents: (() => void) | undefined;
   let publishData = () => {};
   // Request admission and policy drafts retain their synchronous mutation contract.
   const pageData = projectSource(() => dataState, {
@@ -177,26 +178,48 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
     onSnapshot: handleGatewaySnapshot,
     ensureInitialData,
   });
-  // Gateway events refresh pairing and presence inventory within the bound request generation.
-  createEffect(
-    () =>
-      [
-        currentConfigObject(configProjection.read().state),
-        gatewayBinding.gateway,
-        gatewayBinding.client,
-      ] as const,
-    ([current, gateway, client]) => {
-      if (current) {
-        configGateway = gateway;
-        configClient = client;
-        publishData();
-      }
-    },
-  );
-  createEffect(
-    () => context.gateway,
-    (gateway) =>
-      gateway.subscribeEvents((event) => {
+  onSettled(() => {
+    syncConfigCustody();
+    return configProjection.subscribe(syncConfigCustody);
+  });
+  onCleanup(() => {
+    stopGatewayEvents?.();
+    dialogs.cancel();
+    presenceTask.cancel();
+    systemInfoTask.cancel();
+    environmentsTask.cancel();
+    canManagePairing = false;
+    canAdmin = false;
+  });
+
+  function setRouteData(data: DevicesRouteData | undefined) {
+    applyRouteData(data);
+    ensureInitialData();
+    publishData();
+  }
+
+  function syncConfigCustody() {
+    if (currentConfigObject(context.runtimeConfig.state)) {
+      configGateway = gatewayBinding.gateway;
+      configClient = gatewayBinding.client;
+    }
+  }
+
+  function handleGatewaySnapshot(change: GatewayPageChange) {
+    const snapshot = change.snapshot;
+    dataState.client = snapshot.client;
+    dataState.connected = snapshot.phase === "connected";
+    dataState.requestGeneration = gatewayBinding.epoch;
+    const connected = snapshot.phase === "connected";
+    if (change.becameConnected) {
+      systemInfoUnavailable = false;
+    }
+    syncAccess(snapshot);
+    syncConfigCustody();
+    if (change.initial || change.sourceChanged) {
+      stopGatewayEvents?.();
+      const gateway = context.gateway;
+      stopGatewayEvents = gateway.subscribeEvents((event) => {
         if (gatewayBinding.gateway !== gateway || context.gateway !== gateway) {
           return;
         }
@@ -227,33 +250,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
         ) {
           refreshNodeInventory(true);
         }
-      }),
-  );
-  onCleanup(() => {
-    dialogs.cancel();
-    presenceTask.cancel();
-    systemInfoTask.cancel();
-    environmentsTask.cancel();
-    canManagePairing = false;
-    canAdmin = false;
-  });
-
-  function setRouteData(data: DevicesRouteData | undefined) {
-    applyRouteData(data);
-    ensureInitialData();
-    publishData();
-  }
-
-  function handleGatewaySnapshot(change: GatewayPageChange) {
-    const snapshot = change.snapshot;
-    dataState.client = snapshot.client;
-    dataState.connected = snapshot.phase === "connected";
-    dataState.requestGeneration = gatewayBinding.epoch;
-    const connected = snapshot.phase === "connected";
-    if (change.becameConnected) {
-      systemInfoUnavailable = false;
+      });
     }
-    syncAccess(snapshot);
     if (change.identityChanged) {
       clearInventorySamples();
     }
@@ -663,7 +661,7 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
   createEffect(
     createMemo(() => props.routeData),
     // Receipt adoption samples live admission; useGatewayPage owns Gateway observation.
-    (data) => untrack(() => setRouteData(data)),
+    setRouteData,
   );
   return (
     <openclaw-devices-page>

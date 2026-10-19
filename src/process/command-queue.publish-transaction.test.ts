@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "vitest";
 import { createDeferred, withTestTimeout } from "../../test/helpers/promise.js";
 import {
-  clearCommandLane,
   enqueueCommandInLane,
   getCommandLaneSnapshot,
   publishLaneConfiguration,
@@ -35,6 +34,7 @@ function clearGroups() {
 
 function park(lane: string, onStart?: () => void, onFinish?: () => void, priority?: "background") {
   const gate = createDeferred();
+  const cancellation = new AbortController();
   const run = enqueueCommandInLane(
     lane,
     async () => {
@@ -42,21 +42,20 @@ function park(lane: string, onStart?: () => void, onFinish?: () => void, priorit
       await gate.promise;
       onFinish?.();
     },
-    { priority },
+    { priority, abortSignal: cancellation.signal },
   );
-  return { run, resolve: gate.resolve };
+  return { run, resolve: gate.resolve, cancel: () => cancellation.abort() };
 }
 
-async function releaseAll(tasks: ReturnType<typeof park>[], clear = false) {
+async function releaseAll(tasks: ReturnType<typeof park>[], cancelPending = false) {
   for (const task of tasks) {
     task.resolve();
   }
-  if (clear) {
-    clearCommandLane(CRON);
-    clearCommandLane(HOOK);
+  if (cancelPending) {
+    tasks.forEach((task) => task.cancel());
   }
   const runs = tasks.map(({ run }) => run);
-  await (clear ? Promise.allSettled(runs) : Promise.all(runs));
+  await (cancelPending ? Promise.allSettled(runs) : Promise.all(runs));
 }
 
 beforeEach(() => {

@@ -10,8 +10,9 @@ function resourceTransport() {
     () => undefined,
     (root) => own(root),
   );
-  const accept = (value: unknown) => {
-    const encoded = sender.encode(value);
+  const accept = (value: unknown, handle?: number) => {
+    const encoded =
+      handle === undefined ? sender.encode(value) : sender.encodeResult(value, handle);
     receiver.releaseReceivedHandles(sender.takeReleasedHandles());
     return receiver.decode(encoded);
   };
@@ -19,7 +20,9 @@ function resourceTransport() {
     (handle, args, asynchronous) => {
       try {
         const result = sender.call(handle, receiver.encodeArguments(args));
-        return asynchronous ? Promise.resolve(result).then(accept) : accept(result);
+        return asynchronous
+          ? Promise.resolve(result).then((value) => accept(value, handle))
+          : accept(result, handle);
       } catch (error) {
         receiver.releaseReceivedHandles(sender.takeReleasedHandles());
         throw error;
@@ -91,6 +94,31 @@ it.each(["sync", "async"])(
     await parent.disposeAsync();
   },
 );
+
+it.each(["sync", "async"])("releases %s method replies after their last owner", async (mode) => {
+  const transport = resourceTransport();
+  async function cycle() {
+    const payload = { value: 42 };
+    const read = () => payload;
+    const facts = () => ({ read });
+    const factsAsync = async () => facts();
+    const create = () =>
+      transport.own({ facts, factsAsync, dispose() {}, async disposeAsync() {} });
+    const [first, second] = transport.exchange([create(), create()]);
+    const reply = mode === "async" ? await first!.factsAsync() : first!.facts();
+    first!.dispose();
+    expect(reply.read()).toEqual({ value: 42 });
+    const references = [new WeakRef(payload), new WeakRef(read), new WeakRef(reply.read)];
+    await second!.disposeAsync();
+    return references;
+  }
+  const references = await cycle();
+  const control = new WeakRef({});
+  await nextTurn();
+  queryObjects(WeakRef);
+  expect(control.deref()).toBeUndefined();
+  expect(references.every((reference) => reference.deref() === undefined)).toBe(true);
+});
 
 it("keeps shared callbacks with their remaining owner and retries failed disposal", async () => {
   const transport = resourceTransport();

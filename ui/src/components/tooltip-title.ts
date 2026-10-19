@@ -1,6 +1,7 @@
 import "./tooltip.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { anchorFromNavigationEvent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { showToast } from "../lib/toast.ts";
 import {
   HOVER_PREVIEW_UNAVAILABLE_EVENT,
@@ -40,6 +41,7 @@ export function installTitleTooltips(ownerDocument: Document) {
     previewOwned: boolean;
     filePath: string | null;
     disposeFileContent?: () => void;
+    stopListeners: (() => void)[];
     title: string | null;
     label: string | null;
     pointer: boolean;
@@ -50,12 +52,11 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (!active) {
       return;
     }
-    const { anchor, title, label, disposeFileContent } = active;
+    const { anchor, title, label, disposeFileContent, stopListeners } = active;
     active = null;
     disposeFileContent?.();
     observer.disconnect();
-    anchor.removeEventListener("pointerleave", handlePointerLeave);
-    anchor.removeEventListener("focusout", handleFocusOut);
+    stopListeners.forEach((stop) => stop());
     if (title !== null && anchor.getAttribute("title") === "") {
       anchor.setAttribute("title", title);
     }
@@ -219,6 +220,7 @@ export function installTitleTooltips(ownerDocument: Document) {
       link,
       previewOwned,
       filePath: anchor.getAttribute("data-file-path"),
+      stopListeners: [],
       title,
       label,
       pointer: input === "pointer",
@@ -231,8 +233,10 @@ export function installTitleTooltips(ownerDocument: Document) {
     if (label !== null) {
       anchor.setAttribute("aria-label", label);
     }
-    anchor.addEventListener("pointerleave", handlePointerLeave);
-    anchor.addEventListener("focusout", handleFocusOut);
+    active.stopListeners = [
+      listen(anchor, "pointerleave", handlePointerLeave),
+      listen(anchor, "focusout", handleFocusOut),
+    ];
     observer.observe(anchor, {
       attributes: true,
       attributeFilter: [
@@ -293,13 +297,13 @@ export function installTitleTooltips(ownerDocument: Document) {
       tooltip.previewForAnchor(anchor, tooltipContent, input);
     }
   };
-  ownerDocument.addEventListener("pointerover", discover, true);
-  ownerDocument.addEventListener("focusin", discover, true);
-  ownerDocument.addEventListener(HOVER_PREVIEW_UNAVAILABLE_EVENT, discover, true);
+  const stopListeners = [
+    listen(ownerDocument, "pointerover", discover, true),
+    listen(ownerDocument, "focusin", discover, true),
+    listen(ownerDocument, HOVER_PREVIEW_UNAVAILABLE_EVENT, discover, true),
+  ];
   return () => {
-    ownerDocument.removeEventListener("pointerover", discover, true);
-    ownerDocument.removeEventListener("focusin", discover, true);
-    ownerDocument.removeEventListener(HOVER_PREVIEW_UNAVAILABLE_EVENT, discover, true);
+    stopListeners.forEach((stop) => stop());
     restore();
   };
 }

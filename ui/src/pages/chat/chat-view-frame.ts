@@ -35,7 +35,7 @@ import { getChatComposerState, isChatRunWorking } from "./components/chat-compos
 import type { ChatComposerProps } from "./components/chat-composer-types.ts";
 import type { ChatDetailsProps } from "./components/chat-details-types.ts";
 import { createChatSelectionAttachment } from "./components/chat-selection-attachment.ts";
-import { showChatAnnotationEditor } from "./components/chat-selection-popup.ts";
+import { showChatAnnotationEditor } from "./components/chat-selection-popup.tsx";
 import type { ChatSwarmProgressProps } from "./components/chat-swarm-progress.solid.tsx";
 import type { ChatTaskSuggestionTrayProps } from "./components/chat-task-suggestions.tsx";
 import { getTranscriptState, type ChatThreadProps } from "./components/chat-thread-interactions.ts";
@@ -134,7 +134,7 @@ const placementQueues = new WeakMap<
   { initialTurn: ChatQueueItem; queue: ChatQueueItem[] }
 >();
 
-export function createChatViewFrame(props: ChatProps) {
+export function createChatViewFrame(props: ChatProps, getRoot: () => HTMLElement | undefined) {
   // The request session hosts the card; only sourceSessionKey names the requester.
   const approvalSourceSessionKey = props.inlineApproval?.sourceSessionKey;
   const approvalSourceSession = approvalSourceSessionKey
@@ -148,10 +148,7 @@ export function createChatViewFrame(props: ChatProps) {
     : undefined;
   // Focus crosses the transcript boundary into either the native or plugin-owned composer.
   const focusComposer = (selector = ".agent-chat__composer-combobox > textarea") =>
-    props.transcript.scrollElement
-      ?.closest(".chat")
-      ?.querySelector<HTMLElement>(selector)
-      ?.focus({ preventScroll: true });
+    getRoot()?.querySelector<HTMLElement>(selector)?.focus({ preventScroll: true });
   const openSelectionComment = (
     selection: ChatSelectionSource,
     anchorRect: DOMRect,

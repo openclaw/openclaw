@@ -1,4 +1,4 @@
-import { createEffect, createMemo, For, Show } from "solid-js";
+import { createMemo, For, Show } from "solid-js";
 import type {
   ProjectRecord,
   TaskSuggestion,
@@ -7,6 +7,7 @@ import type {
 import { Icon } from "../../../components/solid/icon.tsx";
 import { pathDisplayName } from "../../../lib/path-display.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { createScrollStateRef } from "../../../lib/reactive/scroll-state.ts";
 import { isAbsolutePath } from "../../new-session/path.ts";
 import { ChatTaskStartMenu } from "./chat-task-start-menu.tsx";
 
@@ -98,7 +99,6 @@ function TaskSuggestionCard(props: {
   active: boolean;
   view: ChatTaskSuggestionTrayProps;
 }) {
-  let path: HTMLElement | undefined;
   const busy = () => props.view.taskSuggestionBusyIds?.has(props.suggestion.id) ?? false;
   const canAccept = () => props.view.canAcceptTaskSuggestions === true;
   const acceptance = () => props.view.taskSuggestionAcceptance?.(props.suggestion.id);
@@ -118,17 +118,10 @@ function TaskSuggestionCard(props: {
   // Native edits and manual disclosure state survive unrelated owner refreshes.
   const repositoryCwd = createMemo(() => repository()?.cwd ?? "");
   const instructionsOpen = createMemo(() => Boolean(acceptance()) || busy());
-  createEffect(cwd, () => {
-    const frame = requestAnimationFrame(() => {
-      if (path) {
-        path.toggleAttribute(
-          "data-overflow-right",
-          path.scrollLeft + path.clientWidth < path.scrollWidth - 1,
-        );
-      }
-    });
-    return () => cancelAnimationFrame(frame);
-  });
+  const pathRef = createScrollStateRef(
+    (element, state) => element.toggleAttribute("data-overflow-right", !state.atEnd),
+    { presented: () => props.active, horizontal: true, content: cwd },
+  );
   const accept = (mode: TaskSuggestionStartMode) => {
     if (!busy() && canAccept()) {
       props.view.onAcceptTaskSuggestion?.(props.suggestion, mode, undefined);
@@ -213,20 +206,7 @@ function TaskSuggestionCard(props: {
             <span class="task-suggestion__hide">{t("chat.taskSuggestions.hideInstructions")}</span>
           </summary>
           <div class="task-suggestion__instruction-body">
-            <code
-              ref={(element) => {
-                path = element;
-              }}
-              onScroll={(event) => {
-                const element = event.currentTarget;
-                element.toggleAttribute(
-                  "data-overflow-right",
-                  element.scrollLeft + element.clientWidth < element.scrollWidth - 1,
-                );
-              }}
-            >
-              {cwd()}
-            </code>
+            <code ref={pathRef}>{cwd()}</code>
             <pre>{sanitizeTaskSuggestionText(props.suggestion.prompt)}</pre>
           </div>
         </details>

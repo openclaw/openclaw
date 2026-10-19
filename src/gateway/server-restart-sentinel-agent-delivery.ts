@@ -1,6 +1,8 @@
 import path from "node:path";
 import { formatGeneratedMediaDeliveredForPrompt } from "../agents/internal-events.js";
 import type { RuntimeContextFragment } from "../agents/internal-runtime-context.js";
+import { reserveSubagentCompletionControllerSource } from "../agents/subagents/announce/subagent-announce-controller-source.js";
+import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import {
   durableMessageBatchMayHaveReachedRecipient,
   sendDurableMessageBatchCore,
@@ -39,7 +41,11 @@ import {
 } from "../infra/session-delivery-queue.records.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getMediaDir } from "../media/store.js";
-import { isSessionWorkAdmissionActive } from "../sessions/session-lifecycle-admission.js";
+import { isSessionControllerWorkActive } from "../sessions/session-controller.lifecycle.js";
+import {
+  retireSessionControllerInput,
+  type SessionControllerInput,
+} from "../sessions/session-controller.mailbox.js";
 import { readAssistantDisplayContent } from "../shared/assistant-display-content.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../utils/message-channel.js";
@@ -421,7 +427,11 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
   }
   const assertRequesterIdle = () => {
     if (
-      isSessionWorkAdmissionActive(params.storePath, [params.canonicalKey, sessionEntry?.sessionId])
+      isSessionControllerWorkActive(
+        params.storePath,
+        [params.canonicalKey, sessionEntry?.sessionId],
+        params.agentId,
+      )
     ) {
       throw new SessionDeliveryDeferredError(
         "queued generated-media completion is waiting for its requester to finish",
@@ -508,9 +518,15 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
       },
     },
   });
+  const completionOwner =
+    entry.owner?.kind === "subagent_completion" ? subagentRuns.get(entry.owner.runId) : undefined;
+  let controllerInput: SessionControllerInput | undefined;
   let accepted = false;
   try {
-    params.queueContext.admission.assertCurrent();
+    assertRequesterAdmissionCurrent();
+    controllerInput = completionOwner
+      ? await reserveSubagentCompletionControllerSource(completionOwner, queuedRunId)
+      : undefined;
     assertRequesterAdmissionCurrent();
     await dispatchGatewayMethodInProcess(
       "agent",
@@ -536,6 +552,7 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
         idempotencyKey: queuedRunId,
       },
       {
+        controllerInput,
         ...(cronSessionId ? { allowSyntheticCronRunContinuation: true } : {}),
         expectFinal: true,
         ...(binding ? { assertAdmissionCurrent: assertRequesterAdmissionCurrent } : {}),
@@ -560,6 +577,10 @@ export async function deliverQueuedGeneratedMediaCompletion(params: {
       );
     }
     throw error;
+  } finally {
+    if (controllerInput && !controllerInput.custody.rpcAdopted) {
+      retireSessionControllerInput(controllerInput);
+    }
   }
   return true;
 }

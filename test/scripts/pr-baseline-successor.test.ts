@@ -1,6 +1,6 @@
 import { existsSync, readFileSync, readdirSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
-import { afterAll, beforeAll, describe, expect, it } from "vitest";
+import { afterAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createBaselineFixture } from "./pr-baseline-native.test-support.js";
 
@@ -9,16 +9,13 @@ const describePosix = process.platform === "win32" ? describe.skip : describe;
 const fixture = () => createBaselineFixture(dirs.make("openclaw-pr-successor-"));
 
 describePosix("native successor source admission entry", () => {
-  let f: ReturnType<typeof fixture>;
-  beforeAll(() => {
-    f = fixture();
-  });
   it("admits two reviewed successors while preserving signed ancestry, all sixteen resolutions and proof", () => {
-    writeFileSync(f.local("gates-build.log"), "original proof bytes\n");
+    const f = fixture();
+    f.writeLocal("gates-build.log", "original proof bytes\n");
     const initial = f.advanceMain("initial upstream");
     f.pass("prepare-baseline-refresh", f.manifest(initial));
-    const initialHead = f.git(f.worktree, "rev-parse", "HEAD");
-    const initialBinding = readFileSync(f.local("prepare-baseline.json"));
+    const initialHead = f.prepGit("rev-parse", "HEAD");
+    const initialBinding = f.readLocal("prepare-baseline.json");
     const archives = () =>
       Object.fromEntries(
         readdirSync(join(f.worktree, ".local"))
@@ -26,29 +23,29 @@ describePosix("native successor source admission entry", () => {
           .flatMap((dir) =>
             readdirSync(f.local(dir)).map((name) => [
               `${dir}/${name}`,
-              readFileSync(f.local(`${dir}/${name}`)).toString("base64"),
+              f.readLocal(`${dir}/${name}`).toString("base64"),
             ]),
           ),
       );
     const retained = archives();
     expect(JSON.parse(initialBinding.toString()).resolutions).toHaveLength(16);
     writeFileSync(join(f.worktree, "docs/later-fixup.md"), "reviewed post-refresh correction\n");
-    f.git(f.worktree, "add", "docs/later-fixup.md");
-    f.git(f.worktree, "commit", "-qm", "fix: reviewed post-refresh correction");
+    f.prepGit("add", "docs/later-fixup.md");
+    f.prepGit("commit", "-qm", "fix: reviewed post-refresh correction");
     f.approve();
     f.publish();
     for (const label of ["second upstream", "third upstream"]) {
-      const prior = f.git(f.worktree, "rev-parse", "HEAD");
+      const prior = f.prepGit("rev-parse", "HEAD");
       const baseline = f.advanceMain(label, [f.product[0]!]);
       const args = f.successor(baseline);
       f.pass("prepare-baseline-successor", args);
-      f.git(f.worktree, "verify-commit", "HEAD");
-      expect(f.git(f.worktree, "show", "-s", "--format=%P", "HEAD")).toBe(`${prior} ${baseline}`);
+      f.prepGit("verify-commit", "HEAD");
+      expect(f.prepGit("show", "-s", "--format=%P", "HEAD")).toBe(`${prior} ${baseline}`);
       expect(archives()).toMatchObject(retained);
-      expect(f.git(f.worktree, "show", "HEAD:docs/later-fixup.md")).toBe(
+      expect(f.prepGit("show", "HEAD:docs/later-fixup.md")).toBe(
         "reviewed post-refresh correction",
       );
-      expect(f.git(f.worktree, "merge-base", initialHead, "HEAD")).toBe(initialHead);
+      expect(f.prepGit("merge-base", initialHead, "HEAD")).toBe(initialHead);
       f.approve();
       const rejected = f.run("prepare-baseline-refresh", f.manifest(baseline, []));
       expect(rejected.status).not.toBe(0);
@@ -62,24 +59,20 @@ describePosix("native successor source admission entry", () => {
   it.each(["branch", "closed", "head", "work", "branch-after-live", "closed-after-live"])(
     "preserves transition custody when %s authority changes during replay",
     (scenario) => {
-      const scenarioFixture = fixture();
-      scenarioFixture.pass(
-        "prepare-baseline-refresh",
-        scenarioFixture.manifest(scenarioFixture.advanceMain("initial upstream")),
-      );
-      scenarioFixture.approve();
-      const source = scenarioFixture.git(scenarioFixture.worktree, "rev-parse", "HEAD");
-      const before = Object.fromEntries(
-        ["prepare-baseline.json", "prep-context.env", "correction-review.json", "review.json"].map(
-          (name) => [name, readFileSync(scenarioFixture.local(name))],
-        ),
-      );
-      const product = scenarioFixture.product.map((name) =>
-        readFileSync(join(scenarioFixture.worktree, name)),
-      );
-      scenarioFixture.git(scenarioFixture.worktree, "branch", "foreign-preparation", source);
-      const baseline = scenarioFixture.advanceMain("next upstream", [scenarioFixture.product[0]!]);
-      const hook = scenarioFixture.local("late-authority.mjs");
+      const f = fixture();
+      f.pass("prepare-baseline-refresh", f.manifest(f.advanceMain("initial upstream")));
+      f.approve();
+      const source = f.prepGit("rev-parse", "HEAD");
+      const before = f.snapshot([
+        "prepare-baseline.json",
+        "prep-context.env",
+        "correction-review.json",
+        "review.json",
+      ]);
+      const product = f.product.map((name) => readFileSync(join(f.worktree, name)));
+      f.prepGit("branch", "foreign-preparation", source);
+      const baseline = f.advanceMain("next upstream", [f.product[0]!]);
+      const hook = f.local("late-authority.mjs");
       writeFileSync(
         hook,
         `
@@ -139,76 +132,56 @@ cp.execFileSync = function(file, args, ...rest) {
 syncBuiltinESMExports();
 `,
       );
-      const result = scenarioFixture.run(
-        "prepare-baseline-successor",
-        scenarioFixture.successor(baseline),
-        {
-          NODE_OPTIONS: "--import=" + hook,
-          FIXTURE_DRIFT: scenario,
-          FIXTURE_SOURCE: source,
-          FIXTURE_BASELINE: baseline,
-          FIXTURE_WORKTREE: scenarioFixture.worktree,
-        },
-      );
+      const result = f.run("prepare-baseline-successor", f.successor(baseline), {
+        NODE_OPTIONS: "--import=" + hook,
+        FIXTURE_DRIFT: scenario,
+        FIXTURE_SOURCE: source,
+        FIXTURE_BASELINE: baseline,
+        FIXTURE_WORKTREE: f.worktree,
+      });
       if (scenario.endsWith("-after-live")) {
         // An actor changing authority during post-observation proof must never
         // receive a successful ref move (or partial writes on a foreign branch).
         // With replay completed first, this late proof window no longer exists.
-        const fired = existsSync(scenarioFixture.local("drift-fired"));
+        const fired = existsSync(f.local("drift-fired"));
         if (fired) {
-          expect(
-            scenarioFixture.git(scenarioFixture.worktree, "rev-parse", "refs/heads/pr-42-prep"),
-          ).toBe(source);
-          for (const [name, bytes] of Object.entries(before)) {
-            expect(readFileSync(scenarioFixture.local(name))).toEqual(bytes);
-          }
-          expect(
-            scenarioFixture.product.map((name) =>
-              readFileSync(join(scenarioFixture.worktree, name)),
-            ),
-          ).toEqual(product);
+          expect(f.prepGit("rev-parse", "refs/heads/pr-42-prep")).toBe(source);
+          f.expectSnapshot(before);
+          expect(f.product.map((name) => readFileSync(join(f.worktree, name)))).toEqual(product);
         } else {
           expect(result.status, result.stdout + result.stderr).toBe(0);
-          expect(scenarioFixture.git(scenarioFixture.worktree, "status", "--porcelain")).toBe("");
-          expect(existsSync(scenarioFixture.local("review-transition.json"))).toBe(false);
+          expect(f.prepGit("status", "--porcelain")).toBe("");
+          expect(existsSync(f.local("review-transition.json"))).toBe(false);
         }
         return;
       }
-      expect(existsSync(scenarioFixture.local("drift-fired"))).toBe(true);
+      expect(existsSync(f.local("drift-fired"))).toBe(true);
       expect(result.status, result.stdout + result.stderr).not.toBe(0);
-      expect(
-        scenarioFixture.git(scenarioFixture.worktree, "rev-parse", "refs/heads/pr-42-prep"),
-      ).toBe(source);
-      expect(readFileSync(scenarioFixture.local("review.json"))).toEqual(before["review.json"]);
-      const journal = readFileSync(scenarioFixture.local("review-transition.json"));
+      expect(f.prepGit("rev-parse", "refs/heads/pr-42-prep")).toBe(source);
+      expect(f.readLocal("review.json")).toEqual(before["review.json"]);
+      const journal = f.readLocal("review-transition.json");
       if (scenario === "branch" || scenario === "work") {
-        expect(
-          scenarioFixture.git(scenarioFixture.worktree, "symbolic-ref", "--short", "HEAD"),
-        ).toBe(scenario === "branch" ? "foreign-preparation" : "pr-42-prep");
-        expect(scenarioFixture.git(scenarioFixture.worktree, "status", "--porcelain")).toBe(
+        expect(f.prepGit("symbolic-ref", "--short", "HEAD")).toBe(
+          scenario === "branch" ? "foreign-preparation" : "pr-42-prep",
+        );
+        expect(f.prepGit("status", "--porcelain")).toBe(
           scenario === "branch" ? "" : "M docs/fix-0.md",
         );
-        for (const [name, bytes] of Object.entries(before)) {
-          expect(readFileSync(scenarioFixture.local(name))).toEqual(bytes);
-        }
-        expect(
-          scenarioFixture.product.map((name) => readFileSync(join(scenarioFixture.worktree, name))),
-        ).toEqual(
+        f.expectSnapshot(before);
+        expect(f.product.map((name) => readFileSync(join(f.worktree, name)))).toEqual(
           scenario === "work" ? [Buffer.from("foreign work"), ...product.slice(1)] : product,
         );
       } else {
         // Refusal after installation retains the admitted target, not a fake
         // rollback or a success-shaped missing journal.
         const admitted = JSON.parse(journal.toString());
-        expect(scenarioFixture.git(scenarioFixture.worktree, "write-tree")).toBe(
-          scenarioFixture.git(scenarioFixture.worktree, "rev-parse", admitted.target + "^{tree}"),
-        );
-        expect(existsSync(scenarioFixture.local("correction-review.json"))).toBe(false);
-        expect(readFileSync(scenarioFixture.local("prepare-baseline.json"))).toEqual(
+        expect(f.prepGit("write-tree")).toBe(f.prepGit("rev-parse", admitted.target + "^{tree}"));
+        expect(existsSync(f.local("correction-review.json"))).toBe(false);
+        expect(f.readLocal("prepare-baseline.json")).toEqual(
           Buffer.from(admitted.binding, "base64"),
         );
       }
-      expect(readFileSync(scenarioFixture.local("review-transition.json"))).toEqual(journal);
+      expect(f.readLocal("review-transition.json")).toEqual(journal);
     },
   );
 });

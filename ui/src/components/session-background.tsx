@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, onCleanup, onSettled, untrack } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled } from "solid-js";
 import {
   DEFAULT_BACKGROUND_PREFERENCE,
   type BackgroundPreference,
@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { resolveProfileAppearancePrefs } from "../app/server-prefs-profile.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../styles/session-background.css";
 import { backgroundPaletteKey, readBackgroundOpacityLimit } from "./session-background-contrast.ts";
@@ -89,21 +90,19 @@ export const SessionBackground = defineSolidBridge<Props>(
         ? backgroundImageReadIdentity(context()!, source.assetId)
         : null;
     };
-    // Keep live-prop snapshots outside tracking, including during effect apply.
-    const syncSurface = () =>
-      untrack(() => {
-        const surface =
-          host.isConnected && props.surface !== "preview"
-            ? host.closest<HTMLElement>(".new-session-page, .sidebar-region")
-            : null;
-        if (surfaceElement !== surface) {
-          surfaceElement?.removeAttribute("data-background-custom");
-          surfaceElement?.removeAttribute("data-background-painted");
-          surfaceElement = surface;
-        }
-        surface?.toggleAttribute("data-background-custom", host.hasAttribute("data-custom"));
-        surface?.toggleAttribute("data-background-painted", host.hasAttribute("data-painted"));
-      });
+    const syncSurface = () => {
+      const surface =
+        host.isConnected && props.surface !== "preview"
+          ? host.closest<HTMLElement>(".new-session-page, .sidebar-region")
+          : null;
+      if (surfaceElement !== surface) {
+        surfaceElement?.removeAttribute("data-background-custom");
+        surfaceElement?.removeAttribute("data-background-painted");
+        surfaceElement = surface;
+      }
+      surface?.toggleAttribute("data-background-custom", host.hasAttribute("data-custom"));
+      surface?.toggleAttribute("data-background-painted", host.hasAttribute("data-painted"));
+    };
     const releaseImage = () => {
       const prior = request;
       request = null;
@@ -117,37 +116,41 @@ export const SessionBackground = defineSolidBridge<Props>(
         URL.revokeObjectURL(prior.url);
       }
     };
-    const retireChangedImage = () =>
-      untrack(() => {
-        if (
-          request &&
-          (request.context !== context() ||
-            request.client !== context()?.gateway.snapshot.client ||
-            request.identity !== currentIdentity())
-        ) {
+    const retireChangedImage = () => {
+      if (
+        request &&
+        (request.context !== context() ||
+          request.client !== context()?.gateway.snapshot.client ||
+          request.identity !== currentIdentity())
+      ) {
+        releaseImage();
+      }
+    };
+    const contextProjection = createMemo(() =>
+      projectSource(context(), {
+        read: (application) => application,
+        equality: "revision",
+        subscribe: (application, publish) => {
+          const changed = () => {
+            retireChangedImage();
+            publish();
+          };
+          const cleanups = [
+            application?.theme.subscribe(changed),
+            application?.gateway.subscribe(changed),
+          ];
+          return () => cleanups.forEach((cleanup) => cleanup?.());
+        },
+      }),
+    );
+    onSettled(() =>
+      subscribeBrowserAuthRestored(() => {
+        if (!request?.url) {
+          failedIdentity = null;
           releaseImage();
-        }
-      });
-    createEffect(
-      () => context(),
-      (application) => {
-        const changed = () => {
-          retireChangedImage();
           notify();
-        };
-        const cleanups = [
-          application?.theme.subscribe(changed),
-          application?.gateway.subscribe(changed),
-          subscribeBrowserAuthRestored(() => {
-            if (!request?.url) {
-              failedIdentity = null;
-              releaseImage();
-              notify();
-            }
-          }),
-        ];
-        return () => cleanups.forEach((cleanup) => cleanup?.());
-      },
+        }
+      }),
     );
     const observer = new MutationObserver(notify);
     observer.observe(host.ownerDocument.documentElement, {
@@ -177,6 +180,7 @@ export const SessionBackground = defineSolidBridge<Props>(
     });
     const view = createMemo(() => {
       revision();
+      contextProjection().revision();
       const source = currentSource();
       const fullBleed = preference()?.presentation === "full-bleed";
       const visible = props.presented && !accessibility?.matches;
@@ -254,10 +258,7 @@ export const SessionBackground = defineSolidBridge<Props>(
         void readBackgroundImage(state.context, state.source.assetId, {
           signal: pending.controller.signal,
           isCurrent: () =>
-            untrack(
-              () =>
-                host.isConnected && request === pending && currentIdentity() === pending.identity,
-            ),
+            host.isConnected && request === pending && currentIdentity() === pending.identity,
         })
           .then((url) => {
             if (

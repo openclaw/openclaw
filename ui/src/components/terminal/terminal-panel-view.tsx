@@ -1,4 +1,4 @@
-import { For, Show, createEffect, createMemo } from "solid-js";
+import { For, Show, createMemo } from "solid-js";
 import { t } from "../../lib/reactive/i18n.ts";
 import { nativeListener } from "../../lib/solid-native-listener.ts";
 import { generateUUID } from "../../lib/uuid.ts";
@@ -86,24 +86,14 @@ export function TerminalPanelHostedActions(props: {
   // Header content moves outside the panel's delegated event root.
   const toggle = nativeListener("click", () => props.view().picker.onToggle());
   const focusOut = nativeListener("focusout", (event) => props.view().picker.onFocusOut(event));
-  let trigger!: HTMLButtonElement;
-  createEffect(
-    () => props.view().hosted,
-    (hosted) => {
-      if (hosted) {
-        props.view().picker.triggerRef(trigger);
-      }
-    },
-  );
   return (
     <span ref={props.ref} style={{ display: "contents" }}>
       <openclaw-tooltip prop:content={t("terminal.sessions")}>
         <button
           ref={(element) => {
-            trigger = element;
             toggle(element);
             focusOut(element);
-            props.view().picker.triggerRef(element);
+            props.view().picker.hostedTriggerRef(element);
           }}
           class="rail-header__action"
           type="button"

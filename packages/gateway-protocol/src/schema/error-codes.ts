@@ -8,7 +8,6 @@ import {
 import { closedObject } from "./closed-object.js";
 import type { ErrorShape } from "./frames.js";
 import { NonEmptyString } from "./primitives.js";
-// Gateway Protocol schema module defines protocol validation shapes.
 import { stringLiteralUnion } from "./string-literal-union.js";
 
 export {

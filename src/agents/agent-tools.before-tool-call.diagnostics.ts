@@ -31,6 +31,7 @@ import { pruneMapToMaxSize } from "../infra/map-size.js";
 import type { SessionState } from "../logging/diagnostic-session-state.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
 import { getPluginToolMeta } from "../plugins/tool-metadata.js";
+import type { SessionControllerWatchdogAttempt } from "../sessions/session-controller.watchdog.js";
 import { createLazyRuntimeSurface } from "../shared/lazy-runtime.js";
 import type { Skill } from "../skills/loading/skill-contract.js";
 import {
@@ -72,8 +73,18 @@ export function startToolExecutionLiveness(
   event: Omit<Extract<DiagnosticEventInput, { type: "tool.execution.started" }>, "type">,
   emitDiagnostics: boolean,
   signal?: AbortSignal,
+  attempt?: SessionControllerWatchdogAttempt,
 ) {
-  const liveness = createDiagnosticToolExecutionLiveness(signal);
+  const liveness = createDiagnosticToolExecutionLiveness(
+    signal,
+    attempt
+      ? {
+          attempt,
+          toolCallId: event.toolCallId ?? event.toolName,
+          toolName: event.toolName,
+        }
+      : undefined,
+  );
   if (emitDiagnostics) {
     emitTrustedDiagnosticEvent(
       markToolExecutionLivenessDiagnosticEvent(
@@ -635,6 +646,7 @@ export async function reconcileLoopCallExecutionParams(args: {
       warningThreshold: TOOL_LOOP_WARNING_THRESHOLD,
     });
     markDiagnosticArgumentChurnObservation({
+      watchdogAttempt: args.ctx.watchdogAttempt,
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
       runId: args.ctx.runId,
@@ -689,6 +701,7 @@ export async function recordLoopOutcome(args: {
         record.argsHash,
       ).count > 0;
     markDiagnosticArgumentChurnObservation({
+      watchdogAttempt: args.ctx.watchdogAttempt,
       sessionKey: args.ctx.sessionKey,
       sessionId: args.ctx.sessionId,
       runId: args.ctx.runId,

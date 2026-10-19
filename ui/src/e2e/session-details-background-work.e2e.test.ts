@@ -126,6 +126,13 @@ const processes: SessionProcessSummary[] = [
 
 suite.define(() => {
   it("visualizes subagents and background processes in Details", async () => {
+    const rowInsets: Array<{
+      label: string;
+      left: number;
+      right: number;
+      top: number;
+      bottom: number;
+    }> = [];
     for (const colorScheme of ["light", "dark"] as const) {
       await suite.withPage(
         { colorScheme, locale: "en-US", viewport: { width: 1728, height: 1100 } },
@@ -222,6 +229,68 @@ suite.define(() => {
             path.join(suite.artifactDir, `details-background-${colorScheme}.png`),
             frame.elements[0]!.png,
           );
+          // Every full-width action should give its contents the same breathing room,
+          // whether Details is docked, floating, or opened from the mobile menu.
+          for (const width of [1728, 1100, 390]) {
+            await page.setViewportSize({ width, height: 1100 });
+            await expect
+              .poll(() => pane.locator(".chat-details").getAttribute("role"))
+              .toBe(width === 1728 ? "complementary" : "dialog");
+            await openChatDetails(pane);
+            const controls = details.locator(
+              ".chat-subagent-activity__row, .chat-details__process, .chat-details__more, .chat-details__navigation",
+            );
+            rowInsets.push(
+              ...(await controls.evaluateAll((rows) =>
+                rows.map((row) => {
+                  const bounds = row.getBoundingClientRect();
+                  const content = Array.from(row.childNodes).flatMap((node) => {
+                    if (node instanceof Element) {
+                      return [node.getBoundingClientRect()];
+                    }
+                    if (!node.textContent?.trim()) {
+                      return [];
+                    }
+                    const range = document.createRange();
+                    range.selectNodeContents(node);
+                    return [range.getBoundingClientRect()];
+                  });
+                  return {
+                    label: row.className,
+                    left: Math.min(...content.map((box) => box.left)) - bounds.left,
+                    right: bounds.right - Math.max(...content.map((box) => box.right)),
+                    top: Math.min(...content.map((box) => box.top)) - bounds.top,
+                    bottom: bounds.bottom - Math.max(...content.map((box) => box.bottom)),
+                  };
+                }),
+              )),
+            );
+            const firstRow = subagents.locator("button.chat-subagent-activity__row").first();
+            await firstRow.hover({ position: { x: 4, y: 10 } });
+            expect(
+              await firstRow.evaluate((row) => {
+                const bounds = row.getBoundingClientRect();
+                return row.contains(document.elementFromPoint(bounds.left + 4, bounds.top + 10));
+              }),
+            ).toBe(true);
+            const hovered = await takeControlUiScreenshotFrame(page, details, [firstRow], {
+              animations: "disabled",
+              elements: [subagents, processGroup],
+            });
+            await writeFile(
+              path.join(suite.artifactDir, "details-padding-" + colorScheme + "-" + width + ".png"),
+              hovered.png,
+            );
+            await writeFile(
+              path.join(
+                suite.artifactDir,
+                "details-padding-" + colorScheme + "-" + width + "-rows.png",
+              ),
+              hovered.elements[0]!.png,
+            );
+          }
+          await page.setViewportSize({ width: 1728, height: 1100 });
+          await openChatDetails(pane);
           await subagents.getByRole("button", { name: "Show 3 more" }).click();
           await expect.poll(() => subagents.locator("[data-subagent-session-key]").count()).toBe(6);
           // A collapsed group keeps its counts and bar in the heading.
@@ -244,6 +313,12 @@ suite.define(() => {
           expect(gateway).toBeDefined();
         },
       );
+    }
+    for (const inset of rowInsets) {
+      expect(inset.left, inset.label).toBeGreaterThanOrEqual(7.5);
+      expect(inset.right, inset.label).toBeGreaterThanOrEqual(7.5);
+      expect(inset.top, inset.label).toBeGreaterThanOrEqual(5.5);
+      expect(inset.bottom, inset.label).toBeGreaterThanOrEqual(5.5);
     }
   });
 });

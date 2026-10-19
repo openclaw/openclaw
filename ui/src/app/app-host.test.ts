@@ -1,6 +1,6 @@
 /* @vitest-environment jsdom */
 import { render } from "@solidjs/testing-library";
-import { createComponent, createSignal, flush } from "solid-js";
+import { createComponent, createRoot, createSignal, flush } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
@@ -18,23 +18,32 @@ import {
 import { i18n } from "../i18n/index.ts";
 import { SESSION_FACE_PREFERENCE_PARAM } from "../lib/sessions/route-navigation.ts";
 import { createSessionCapabilityHarness } from "../lib/sessions/session-capability.test-support.ts";
+import { defineSolidBridge } from "../lib/solid-bridge.ts";
+import { showToast } from "../lib/toast.ts";
 import { setupSidebarTest } from "../test-helpers/app-sidebar-setup.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
+import { afterModalHidden, installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
-import { createShellOwner } from "./app-host-solid.test-support.ts";
+import {
+  connectShellEvents,
+  createShellOwner,
+  mountShellView,
+  settleShell,
+} from "./app-host-solid.test-support.ts";
 import {
   committedRouterState,
   createLazyElementSpec,
   createRosterRefreshContext,
   resetAppHostTestGlobals,
   type ShellKeyboardState,
+  type ShellRouteCommitState,
+  type ShellCustodianRouteState,
   type TestOptionalCustomElement,
   stubRenderedWhenDefined,
 } from "./app-host.test-support.ts";
-import { OpenClawShell } from "./app-host.tsx";
+import { OpenClawShell, ShellOwner } from "./app-host.tsx";
 import { ShellGatewayOwner, type ShellGatewayHost } from "./app-shell-gateway.ts";
-import type { ShellNavigationOwner } from "./app-shell-navigation.ts";
 import { createApplicationNavigationPreferences } from "./bootstrap-navigation-preferences.ts";
 import { createApplicationTheme } from "./bootstrap-theme.ts";
 import { bootstrapApplication } from "./bootstrap.ts";
@@ -118,7 +127,6 @@ type ShellChromeEventState = {
   elements: object;
   runtime: { context: ApplicationContext };
   navDrawerOpen: boolean;
-  handleShellNavDrawerToggle: (event: Event) => void;
   openPalette: () => void;
   connect: () => void;
   disconnect: () => void;
@@ -128,7 +136,6 @@ type ShellNavDrawerCloseState = { element: HTMLElement } & ShellChromeEventState
     desktopNavigationExpanded: boolean;
     navDrawerTrigger: HTMLElement | null;
     closeNavDrawer: (options?: { restoreFocus?: boolean }) => void;
-    handleWindowResize: () => void;
     toggleNavigationSurface: () => void;
   };
 
@@ -189,18 +196,6 @@ type ShellEpochState = {
   disconnect: () => void;
 };
 
-type ShellRouteCommitState = {
-  runtime: { context: ApplicationContext };
-  activeSessionKey: string;
-  didConsiderNativeRouteRestore: boolean;
-  shellNavigation: ShellNavigationOwner;
-};
-
-type ShellCustodianRouteState = {
-  custodianMinimizeRequestId: number;
-  shellNavigation: ShellNavigationOwner;
-};
-
 type ShellSessionNavigationState = {
   runtime: { context: ApplicationContext };
   activeSessionKey: string;
@@ -212,6 +207,99 @@ type ShellSessionNavigationState = {
 
 describe("OpenClaw shell context lifecycle", () => {
   setupSidebarTest();
+
+  it("restores a modal toast to a late-mounted shell after its navigation drawer closes", async () => {
+    await import("../components/modal-dialog.ts");
+    vi.stubGlobal("requestIdleCallback", vi.fn());
+    vi.stubGlobal("matchMedia", () => ({
+      matches: true,
+      addEventListener() {},
+      removeEventListener() {},
+    }));
+    const restoreDialog = installDialogPolyfill();
+    const runtime = bootstrapApplication();
+    const shell = createShellOwner();
+    shell.runtime = runtime;
+    document.body.append(shell.element);
+    const view = mountShellView(shell);
+    let modal: HTMLElementTagNameMap["openclaw-modal-dialog"] | undefined;
+    try {
+      await settleShell(shell);
+      expect(shell.routeState).toEqual({});
+      expect(shell.shellElement).toBeInstanceOf(HTMLElement);
+      expect(shell.shellElement?.isConnected).toBe(false);
+      expect(shell.navDrawerElement).toBeInstanceOf(HTMLElement);
+
+      shell.connect();
+      shell.routeState = { routeId: "about" };
+      await settleShell(shell);
+      const trigger = document.createElement("button");
+      shell.shellElement!.append(trigger);
+      shell.toggleNavigationSurface(trigger);
+      await settleShell(shell);
+      const toast = shell.toastElement as HTMLElementTagNameMap["openclaw-toast-host"];
+      expect(toast.parentElement).toBe(shell.navDrawerElement);
+      expect(showToast({ message: "Drawer result", durationMs: 60_000 })).toBe(true);
+      await toast.updateComplete;
+      await vi.dynamicImportSettled();
+      flush();
+
+      modal = document.createElement("openclaw-modal-dialog");
+      document.body.append(modal);
+      await modal.updateComplete;
+      expect(showToast({ message: "Modal result", durationMs: 60_000 })).toBe(true);
+      await toast.updateComplete;
+      expect(toast.parentElement).toBe(modal.getOverlayContainer());
+
+      shell.closeNavDrawer();
+      await settleShell(shell);
+      expect(shell.navDrawerOpen).toBe(false);
+      expect(shell.navDrawerElement?.getAttribute("aria-modal")).toBeNull();
+      const hidden = afterModalHidden(modal);
+      modal.hide();
+      await modal.updateComplete;
+      await hidden;
+      await Promise.resolve();
+      flush();
+
+      expect(toast.parentElement).toBe(shell.shellElement);
+      expect(toast.textContent).toContain("Modal result");
+    } finally {
+      view.unmount();
+      shell.disconnect();
+      shell.element.remove();
+      modal?.remove();
+      runtime.stop();
+      restoreDialog();
+    }
+  });
+
+  it("registers and retires shell hosts outside the route outlet", () => {
+    vi.stubGlobal("requestIdleCallback", vi.fn());
+    const runtime = bootstrapApplication();
+    const Bridge = defineSolidBridge("openclaw-shell-ref-test", () => null, { properties: {} });
+    let owner: ShellOwner | undefined;
+    const view = render(() =>
+      createComponent(OpenClawShell, {
+        runtime,
+        onShell(shell) {
+          owner = shell instanceof ShellOwner ? shell : undefined;
+        },
+      }),
+    );
+    try {
+      flush();
+      expect(owner).toBeDefined();
+      const host = new Bridge.Element();
+      owner?.element.append(host);
+      expect(owner?.queryRenderedElement("openclaw-shell-ref-test")).toBe(host);
+      host.remove();
+      expect(owner?.queryRenderedElement("openclaw-shell-ref-test")).toBeNull();
+    } finally {
+      view.unmount();
+      runtime.stop();
+    }
+  });
 
   it("preserves reload intent on disconnect but clears it on context replacement", async () => {
     vi.stubGlobal("sessionStorage", createStorageMock());
@@ -235,6 +323,7 @@ describe("OpenClaw shell context lifecycle", () => {
       return module;
     });
     const [runtime, setRuntime] = createSignal(first);
+    let currentShell: ShellOwner | undefined;
     let view: ReturnType<typeof render> | undefined;
     try {
       view = render(() =>
@@ -242,13 +331,21 @@ describe("OpenClaw shell context lifecycle", () => {
           get runtime() {
             return runtime();
           },
+          onShell(shell) {
+            currentShell = shell instanceof ShellOwner ? shell : undefined;
+          },
         }),
       );
       flush();
       expect(readLazyShellAction()).toEqual({ eventType: COMMAND_PALETTE_OPEN_EVENT });
+      expect(currentShell?.lazyCustomElements.visibleState?.element).toBe(COMMAND_PALETTE_ELEMENT);
+      const firstShell = currentShell;
       setRuntime(second);
       flush();
       expect(readLazyShellAction()).toBeNull();
+      expect(currentShell).toBeDefined();
+      expect(currentShell).not.toBe(firstShell);
+      expect(currentShell?.lazyCustomElements.visibleState).toBeUndefined();
     } finally {
       view?.unmount();
       gate.resolve();
@@ -376,6 +473,31 @@ describe("OpenClaw shell source initialization", () => {
 });
 
 describe("OpenClaw shell route session commits", () => {
+  it("settles shell commits after the invalidating caller is disposed", async () => {
+    const shell = createShellOwner();
+    const unmount = shell.mountPresentation();
+    onTestFinished(unmount);
+    flush();
+
+    let disposeCaller!: () => void;
+    createRoot((dispose) => {
+      disposeCaller = dispose;
+      shell.invalidate();
+    });
+    const commit = shell.updateComplete;
+    shell.invalidate();
+    expect(shell.updateComplete).toBe(commit);
+    disposeCaller();
+    flush();
+    await expect(commit).resolves.toBe(true);
+
+    shell.invalidate();
+    const retiredCommit = shell.updateComplete;
+    unmount();
+    flush();
+    await expect(retiredCommit).resolves.toBe(false);
+  });
+
   it("preserves catalog identity when routing a slash-command draft", () => {
     const navigate = vi.fn();
     const shell = createShellOwner() as unknown as ShellSessionNavigationState;
@@ -685,7 +807,8 @@ describe("OpenClaw shell keyboard shortcuts", () => {
     shell.navDrawerOpen = true;
     shell.navDrawerTrigger = trigger;
 
-    shell.handleWindowResize();
+    connectShellEvents(shell);
+    window.dispatchEvent(new Event("resize"));
 
     expect(closeNavDrawer).toHaveBeenCalledExactlyOnceWith({ restoreFocus: false });
     expect(dismissTransientMenus).toHaveBeenCalledOnce();
@@ -718,19 +841,12 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       value: { isConnected: true, isOpen: false, openPalette, togglePalette: vi.fn() },
     });
 
-    const handlePaletteOpen = () => openPalette();
-    window.addEventListener(COMMAND_PALETTE_OPEN_EVENT, handlePaletteOpen);
-    try {
-      shell.handleShellNavDrawerToggle(
-        new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }),
-      );
-      shell.openPalette();
+    connectShellEvents(shell);
+    window.dispatchEvent(new CustomEvent(SHELL_NAV_DRAWER_TOGGLE_EVENT, { detail: { trigger } }));
+    window.dispatchEvent(new Event(COMMAND_PALETTE_OPEN_EVENT));
 
-      expect(shell.navDrawerOpen).toBe(true);
-      expect(openPalette).toHaveBeenCalledOnce();
-    } finally {
-      window.removeEventListener(COMMAND_PALETTE_OPEN_EVENT, handlePaletteOpen);
-    }
+    expect(shell.navDrawerOpen).toBe(true);
+    expect(openPalette).toHaveBeenCalledOnce();
   });
 
   it.each(["MacIntel"])(
@@ -741,6 +857,7 @@ describe("OpenClaw shell keyboard shortcuts", () => {
       const openPalette = vi.fn();
       const shell = configureLazyPaletteShell(element, openPalette);
       stubRenderedWhenDefined(shell);
+      connectShellEvents(shell);
       const chord = (metaKey: boolean) =>
         new KeyboardEvent("keydown", {
           key: "л",
@@ -750,12 +867,12 @@ describe("OpenClaw shell keyboard shortcuts", () => {
           cancelable: true,
         });
       const other = chord(platform !== "MacIntel");
-      shell.handleDocumentKeydown(other);
+      document.dispatchEvent(other);
       expect(other.defaultPrevented).toBe(false);
       expect(openPalette).not.toHaveBeenCalled();
 
       const primary = chord(platform === "MacIntel");
-      shell.handleDocumentKeydown(primary);
+      document.dispatchEvent(primary);
       expect(primary.defaultPrevented).toBe(true);
       await vi.waitFor(() => expect(openPalette).toHaveBeenCalledOnce());
     },

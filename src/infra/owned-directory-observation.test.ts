@@ -87,6 +87,73 @@ describe("process-owned directory observation", () => {
     expect(listener).toHaveBeenCalledOnce();
   });
 
+  it("shares recursive watches while preserving each consumer's recovery interval", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const directory = tempDirs.make("owned-directory-recursive-");
+    const watch = vi.spyOn(nativeWatchFs, "watch");
+    const frequent = vi.fn();
+    const quiet = vi.fn();
+    subscriptions.push(observeOwnedDirectory(directory, frequent, { recursive: true }));
+    subscriptions.push(
+      observeOwnedDirectory(directory, quiet, {
+        recursive: true,
+        reconcileIntervalMs: 30 * 60_000,
+      }),
+    );
+    expect(watch).toHaveBeenCalledOnce();
+    expect(watch.mock.calls[0]![1]).toMatchObject({ recursive: true });
+    vi.advanceTimersByTime(300_000);
+    expect(frequent).toHaveBeenCalledTimes(10);
+    expect(quiet).not.toHaveBeenCalled();
+    watch.mock.calls[0]![2]("change", "nested/resource.txt");
+    expect(quiet).toHaveBeenCalledWith("nested/resource.txt");
+    quiet.mockClear();
+    vi.advanceTimersByTime(25 * 60_000);
+    expect(quiet).toHaveBeenCalledOnce();
+  });
+
+  it("keeps recursive handles outside replaceable subtrees and filters their events", () => {
+    vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
+    vi.setSystemTime(0);
+    const workspace = tempDirs.make("owned-directory-boundary-");
+    const skills = path.join(workspace, "skills");
+    const grouped = path.join(workspace, ".agents", "skills");
+    fs.mkdirSync(skills);
+    fs.mkdirSync(grouped, { recursive: true });
+    const watch = vi.spyOn(nativeWatchFs, "watch");
+    const changed = vi.fn();
+    const groupedChanged = vi.fn();
+    subscriptions.push(
+      observeOwnedDirectory(skills, changed, { recursive: true, watchRoot: workspace }),
+      observeOwnedDirectory(grouped, groupedChanged, { recursive: true, watchRoot: workspace }),
+    );
+    // Windows refuses an ancestor rename while a descendant directory handle is open.
+    expect(watch).toHaveBeenCalledOnce();
+    expect(watch.mock.calls[0]![0]).toBe(workspace);
+    const onChange = watch.mock.calls[0]![2];
+    onChange("change", path.join("skills", "guide", "SKILL.md"));
+    expect(changed).toHaveBeenCalledOnce();
+    expect(groupedChanged).not.toHaveBeenCalled();
+    changed.mockClear();
+    onChange("change", path.join("output", "report.md"));
+    expect(changed).not.toHaveBeenCalled();
+    expect(groupedChanged).not.toHaveBeenCalled();
+    onChange("rename", ".agents");
+    expect(groupedChanged).toHaveBeenCalledOnce();
+
+    // Windows does not report a watched root moving. Replace it before the
+    // safety pass and verify both subscribers leave the retired handle together.
+    const close = vi.spyOn(watch.mock.results[0]!.value, "close");
+    fs.renameSync(workspace, path.join(tempDirs.make("owned-directory-retired-"), "workspace"));
+    fs.mkdirSync(skills, { recursive: true });
+    fs.mkdirSync(grouped, { recursive: true });
+    vi.advanceTimersByTime(30_000);
+    expect(close).toHaveBeenCalledOnce();
+    expect(watch).toHaveBeenCalledTimes(2);
+    expect(watch.mock.calls[1]![0]).toBe(workspace);
+  });
+
   it("repairs failed watches within 30 seconds and resumes healthy recovery", () => {
     vi.useFakeTimers({ toFake: ["Date", "performance", "setTimeout", "clearTimeout"] });
     vi.setSystemTime(0);
@@ -186,12 +253,16 @@ describe("process-owned directory observation", () => {
             ]
           : [],
       );
-    subscriptions.push(observeOwnedDirectory(path.join(agents, "work"), () => {}));
+    const changed = vi.fn();
+    subscriptions.push(
+      observeOwnedDirectory(path.join(agents, "work"), changed, { recursive: true }),
+    );
     const [ancestor] = opened();
     expect(ancestor?.path).toBe(root);
     const close = vi.spyOn(ancestor!.watcher, "close");
     // SQLite sidecars beside a state database appear and vanish on every write.
     ancestor!.onChange("rename", "state.sqlite-journal");
+    expect(changed).not.toHaveBeenCalled();
     expect(close).not.toHaveBeenCalled();
     expect(opened()).toHaveLength(1);
     fs.mkdirSync(agents);

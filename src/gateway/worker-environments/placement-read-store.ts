@@ -41,8 +41,7 @@ export function createPlacementReadStore(params: {
   return {
     getManyAsync,
     async getAsync(sessionId: string) {
-      const id = required(sessionId, "session id");
-      return (await getManyAsync([id])).get(id);
+      return (await getManyAsync([sessionId])).values().next().value;
     },
     async getWithMoveAsync(sessionId: string) {
       const id = required(sessionId, "session id");

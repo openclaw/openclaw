@@ -1,7 +1,8 @@
 import { onSettled } from "solid-js";
-import { composedParent } from "../lib/navigation-click.ts";
+import { composedAncestors, composedParent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import type { TooltipElement } from "./tooltip.ts";
 import { resolveTransientContainer } from "./transient-container.ts";
 
 const CARD_GAP = 10;
@@ -53,26 +54,11 @@ export function createPortaledHovercardOwner(
     portal.scheduleClose();
   };
 
-  function presentationAncestors(): Node[] {
-    const ancestors: Node[] = [];
-    let node: Node | null = triggerElement;
-    while (node) {
-      ancestors.push(node);
-      node =
-        node instanceof Element && node.assignedSlot
-          ? node.assignedSlot
-          : node instanceof ShadowRoot
-            ? node.host
-            : node.parentNode;
-    }
-    return ancestors;
-  }
-
   function checkPresentation(): boolean {
     if (
       triggerElement &&
       (!triggerElement.isConnected ||
-        presentationAncestors().some(
+        composedAncestors(triggerElement).some(
           (node) =>
             node instanceof Element &&
             (node.hasAttribute("inert") ||
@@ -87,7 +73,7 @@ export function createPortaledHovercardOwner(
   }
 
   function observePresentation(): void {
-    const ancestors = presentationAncestors();
+    const ancestors = composedAncestors(triggerElement);
     if (
       ancestors.length === triggerAncestors.length &&
       ancestors.every((node, index) => node === triggerAncestors[index])
@@ -151,14 +137,13 @@ export function createPortaledHovercardOwner(
       const focusables = portal.focusables();
       const focused = event.composedPath()[0];
       if (event.key === "Tab" && focused instanceof HTMLElement) {
-        const tooltip = focused.closest("openclaw-tooltip[open]");
-        const content = tooltip?.querySelector(":scope > [slot=content]");
-        if (tooltip && content) {
+        const tooltip = focused.closest<TooltipElement>("openclaw-tooltip[open]");
+        if (tooltip) {
           const owned = focusables.filter(
             (element) => element.closest("openclaw-tooltip") === tooltip,
           );
-          const trigger = owned.findLast((element) => !content.contains(element));
-          const first = owned.find((element) => content.contains(element));
+          const trigger = owned.findLast((element) => !tooltip.containsRichContent(element));
+          const first = owned.find((element) => tooltip.containsRichContent(element));
           // WebKit does not reliably cross from a slotted trigger into the
           // nested top-layer surface. Bridge only that boundary; native Tab
           // still owns traversal within the inspection and the card.
@@ -360,7 +345,7 @@ export function createPortaledHovercardOwner(
         viewport && listen(viewport, "scroll", schedulePosition),
       ];
       owner.append(card);
-      promoteToPopoverTopLayer(card);
+      promoteToPopoverTopLayer(card, () => [card]);
       trigger.setAttribute("aria-controls", card.id);
       trigger.setAttribute("aria-expanded", "true");
       position();

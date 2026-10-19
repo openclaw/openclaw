@@ -1,5 +1,6 @@
-import { createEffect, createMemo, createSignal, For, onCleanup, Show, untrack } from "solid-js";
+import { createMemo, createSignal, For, onCleanup, Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../lib/reactive/pending-focus.ts";
 import "../styles/option-card.css";
 
 type OptionCardOption = {
@@ -22,39 +23,43 @@ export function OptionCard(input: { props?: OptionCardProps }) {
   let host!: HTMLElement;
   const options = createMemo(() => input.props?.options.slice(0, 4) ?? []);
   const recommendedIndex = createMemo(() => options().findIndex((option) => option.recommended));
-  const requestKey = createMemo(() => {
-    const props = input.props;
-    return props
-      ? JSON.stringify([
-          props.header ?? "",
-          props.question,
-          props.options.map((option) => [option.value, option.label, option.recommended === true]),
-        ])
-      : "";
-  });
-  const [selected, setSelected] = createSignal(() => {
-    requestKey();
-    return untrack(() => options().find((option) => option.recommended)?.value ?? "");
-  });
+  const request = createMemo(
+    () => ({
+      key: input.props
+        ? JSON.stringify([
+            input.props.header ?? "",
+            input.props.question,
+            input.props.options.map((option) => [
+              option.value,
+              option.label,
+              option.recommended === true,
+            ]),
+          ])
+        : "",
+      recommended: options().find((option) => option.recommended)?.value ?? "",
+    }),
+    { equals: (previous, next) => previous.key === next.key },
+  );
+  // A new request resets the local selection; display-only option refreshes preserve it.
+  const [selected, setSelected] = createSignal(() => request().recommended);
   const choices = new Set<HTMLButtonElement>();
-  let focusPreselection = false;
-  createEffect(
-    () => ({ key: requestKey(), disabled: input.props?.disabled, selected: selected() }),
-    (current, previous) => {
-      if (current.key !== previous?.key) {
-        focusPreselection = Boolean(current.selected);
-      }
-      if (!focusPreselection || current.disabled) {
-        return;
-      }
-      focusPreselection = false;
-      const active = host.ownerDocument.activeElement;
-      if (active && active !== host.ownerDocument.body && !host.contains(active)) {
-        return;
-      }
-      [...choices]
-        .find((button) => button.dataset.optionValue === current.selected)
-        ?.focus({ preventScroll: true });
+  createPendingFocus(
+    () => ({ request: request(), disabled: input.props?.disabled, selected: selected() }),
+    {
+      requested: (current, previous) =>
+        current.request.key !== previous?.request.key
+          ? Boolean(current.request.recommended)
+          : undefined,
+      ready: (current) => !current.disabled,
+      focus: (current) => {
+        const active = host.ownerDocument.activeElement;
+        if (active && active !== host.ownerDocument.body && !host.contains(active)) {
+          return;
+        }
+        [...choices]
+          .find((button) => button.dataset.optionValue === current.selected)
+          ?.focus({ preventScroll: true });
+      },
     },
   );
   const select = (value: string) => {

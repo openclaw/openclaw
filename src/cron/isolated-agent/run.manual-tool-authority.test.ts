@@ -1,25 +1,14 @@
-// A manual run starts with the caller's authority, but its tools stay bounded by the stored job.
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
-import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { applyEmbeddedAttemptToolsAllow } from "../../agents/embedded-agent-runner/run/attempt-tool-construction-plan.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
-import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
-import {
-  createAdmittedGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../agents/tools/gateway-caller-context.js";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { createGatewayMethodRegistry } from "../../gateway/methods/registry.js";
 import { captureGatewayOperatorRunAuthority } from "../../gateway/operator-run-authority.js";
 import { createScheduledGatewayRunner } from "../../gateway/scheduled-run-gateway-context.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
-  cfg,
   createCronFixture,
   installRequesterCronAuthorityTestHooks,
   stateDir,
@@ -30,87 +19,41 @@ import { createOperatorClient } from "../../gateway/server-plugin-in-process-dis
 import { withPluginRuntimeGatewayRequestScope } from "../../plugins/runtime/gateway-request-scope.js";
 import { getPluginToolMeta } from "../../plugins/tool-metadata.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import { CronService, type CronEvent } from "../service.js";
-import { createNoopLogger } from "../service.test-harness.js";
+import type { CronEvent } from "../service.js";
 import {
-  ensureAgentWorkspaceMock,
+  createAuthorityCronService,
+  prepareAuthorityConfig,
+  resetAuthorityRunHarness,
+  withAuthorityTools,
+} from "./run.authority.test-support.js";
+import {
   loadRunCronIsolatedAgentTurn,
-  mockRunCronFallbackPassthrough,
-  resetRunCronIsolatedAgentTurnHarness,
-  resolveCronDeliveryPlanMock,
-  resolveConfiguredModelRefMock,
+  makeCronSession,
+  resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const { resolveAgentDir } = await import("./run.runtime.js");
 installRequesterCronAuthorityTestHooks();
 
-beforeEach(() => {
-  resetRunCronIsolatedAgentTurnHarness();
-  vi.stubEnv("OPENCLAW_TEST_FAST", "1");
-  ensureAgentWorkspaceMock.mockImplementation(async ({ dir }: { dir: string }) => ({ dir }));
-  resolveCronDeliveryPlanMock.mockReturnValue({ requested: false, mode: "none" });
-  mockRunCronFallbackPassthrough();
-});
+beforeEach(resetAuthorityRunHarness);
 
 afterEach(() => {
   runEmbeddedAgentMock.mockReset();
 });
 
-describe("manual run tool authority after the initiating invocation closes", () => {
-  it.each<{
-    name: string;
-    toolsAllow: string[];
-    withdraw?: "disable" | "remove";
-    senderIsOwner?: boolean;
-  }>([
-    { name: "allowed tool reaches its handler", toolsAllow: [AUTOMATIONS_TOOL_NAME] },
-    {
-      name: "senderless scheduled run can inspect its own job",
-      toolsAllow: [AUTOMATIONS_TOOL_NAME],
-      senderIsOwner: false,
-    },
-    { name: "tool outside the stored allowlist is absent", toolsAllow: ["read"] },
-    {
-      name: "disabling the job rejects the pending tool call",
-      toolsAllow: [AUTOMATIONS_TOOL_NAME],
-      withdraw: "disable",
-    },
-    {
-      name: "removing the job rejects the pending tool call",
-      toolsAllow: [AUTOMATIONS_TOOL_NAME],
-      withdraw: "remove",
-    },
-  ])("$name", async ({ toolsAllow, withdraw, senderIsOwner }) => {
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const config: OpenClawConfig = {
-      ...cfg,
-      models: createEmbeddedAgentRunnerOpenAiConfig(["gpt-4.1"]).models,
-      agents: {
-        defaults: { skipBootstrap: true, workspace: stateDir, model: "openai/gpt-4.1" },
-        entries: { main: { agentDir, workspace: stateDir } },
-      },
-      auth: {
-        profiles: { "openai:cron-fixture": { provider: "openai", mode: "api_key" } },
-        order: { openai: ["openai:cron-fixture"] },
-      },
+it.each(["allowed", "senderless", "read-only", "disable", "remove"] as const)(
+  "manual run retains %s tool authority after caller closure",
+  async (scenario) => {
+    const toolsAllow = [scenario === "read-only" ? "read" : AUTOMATIONS_TOOL_NAME];
+    const withdraw = scenario === "disable" || scenario === "remove" ? scenario : undefined;
+    const senderIsOwner = scenario === "senderless" ? false : undefined;
+    const sessionStorePath = path.join(stateDir, "agents", "main", "sessions", "sessions.json");
+    const config = await prepareAuthorityConfig({
+      session: { store: sessionStorePath },
       tools: { allow: [AUTOMATIONS_TOOL_NAME, "read"] },
-    };
-    setRuntimeConfigSnapshot(config);
-    // Capture and execution must address the same canonical credential owner.
-    vi.mocked(resolveAgentDir).mockReturnValue(agentDir);
-    resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
-    await persistAuthProfileBatch({
-      stateDir,
-      profiles: [
-        {
-          profileId: "openai:cron-fixture",
-          credential: { type: "api_key", provider: "openai", key: "gpt-4.1-key" },
-        },
-      ],
     });
+    resolveCronSessionMock.mockReturnValue(makeCronSession({ storePath: sessionStorePath }));
     const fixture = createCronFixture(undefined, config);
     const { context } = fixture;
     context.resolveGatewayContext = () => context;
@@ -119,105 +62,61 @@ describe("manual run tool authority after the initiating invocation closes", () 
       expectDefined(cronHandlers["cron.list"], "cron.list")(options),
     );
     context.getGatewayMethodRegistry = () =>
-      createGatewayMethodRegistry([
-        {
-          name: "cron.add",
-          scope: "operator.admin",
+      createGatewayMethodRegistry(
+        (
+          [
+            ["cron.add", "operator.admin"],
+            ["cron.run", "operator.write"],
+            ["cron.list", "operator.read"],
+          ] as const
+        ).map(([name, scope]) => ({
+          name,
+          scope,
           owner: { kind: "core", area: "cron" },
-          handler: expectDefined(cronHandlers["cron.add"], "cron.add"),
-        },
-        {
-          name: "cron.run",
-          scope: "operator.write",
-          owner: { kind: "core", area: "cron" },
-          handler: expectDefined(cronHandlers["cron.run"], "cron.run"),
-        },
-        {
-          name: "cron.list",
-          scope: "operator.read",
-          owner: { kind: "core", area: "cron" },
-          handler: listHandler,
-        },
-      ]);
+          handler: name === "cron.list" ? listHandler : expectDefined(cronHandlers[name], name),
+        })),
+      );
     const toolsReady = createDeferredCore();
     const continueTool = createDeferredCore();
     const finished = createDeferredCore<CronEvent>();
     let offeredTools: string[] = [];
     let toolResult: unknown;
     let toolError: string | undefined;
-    // The model is controlled. Admission, stored tool policy, tool construction and dispatch are real.
-    runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) => {
-      const admitted = await expectDefined(params.preparedRunAdmission, "run admission").admit(
-        "gateway",
-        params.runId,
-      );
-      const caller = createAdmittedGatewayToolCallerIdentity({
-        admittedRunContext: admitted,
-        agentId: "main",
-        sessionKey: params.sessionKey,
-      });
-      return withGatewayToolCallerIdentity(caller, async () => {
-        const constructed = createOpenClawCodingTools({
-          config: params.config,
-          agentId: "main",
-          sessionKey: params.sessionKey,
-          sessionId: params.sessionId,
-          runId: params.runId,
-          operationalRunInstance: admitted.operationalRunInstance,
-          workspaceDir: params.workspaceDir,
-          cwd: params.cwd,
+    runEmbeddedAgentMock.mockImplementation(async (params: RunEmbeddedAgentParams) =>
+      withAuthorityTools(
+        params,
+        async (constructed) => {
+          // The embedded attempt applies the run allowlist after construction.
+          const tools = applyEmbeddedAttemptToolsAllow(constructed, params.toolsAllow, {
+            toolMeta: getPluginToolMeta,
+          });
+          offeredTools = tools.map((tool) => tool.name);
+          toolsReady.resolve();
+          await continueTool.promise;
+          const automations = tools.find((tool) => tool.name === AUTOMATIONS_TOOL_NAME);
+          try {
+            toolResult = await automations?.execute("scheduled-list", { action: "list" });
+          } catch (error) {
+            toolError = String(error);
+          }
+          return { payloads: [{ text: "Listed automations" }], meta: { agentMeta: {} } };
+        },
+        {
+          includeOpenClawTools: true,
           abortSignal: params.abortSignal,
-          runtimeToolAllowlist: params.toolsAllow,
           ...(senderIsOwner === false
             ? { senderIsOwner, trigger: params.trigger, jobId: params.jobId }
             : {}),
-          scheduledToolPolicy: params.scheduledToolPolicy,
-          toolConstructionPlan: {
-            includeBaseCodingTools: true,
-            includeShellTools: false,
-            includeChannelTools: false,
-            includeOpenClawTools: true,
-            includePluginTools: false,
-          },
-        });
-        // The embedded attempt applies the run allowlist after construction.
-        const tools = applyEmbeddedAttemptToolsAllow(constructed, params.toolsAllow, {
-          toolMeta: getPluginToolMeta,
-        });
-        offeredTools = tools.map((tool) => tool.name);
-        toolsReady.resolve();
-        await continueTool.promise;
-        const automations = tools.find((tool) => tool.name === AUTOMATIONS_TOOL_NAME);
-        try {
-          toolResult = await automations?.execute("scheduled-list", { action: "list" });
-        } catch (error) {
-          toolError = String(error);
-        }
-        return { payloads: [{ text: "Listed automations" }], meta: { agentMeta: {} } };
-      });
-    });
-    const execution = new CronService({
-      scheduler: createTestGatewayScheduler(),
-      storePath: path.join(stateDir, "cron", "jobs.json"),
-      cronEnabled: true,
-      defaultAgentId: "main",
-      log: createNoopLogger(),
-      enqueueSystemEvent: vi.fn(),
-      requestHeartbeat: vi.fn(),
+        },
+      ),
+    );
+    const execution = createAuthorityCronService(config, runCronIsolatedAgentTurn, {
       runSchedulerOwned: createScheduledGatewayRunner(() => context),
       onEvent: (event) => {
         if (event.action === "finished") {
           finished.resolve(event);
         }
       },
-      runIsolatedAgentJob: (request) =>
-        runCronIsolatedAgentTurn({
-          ...request,
-          cfg: config,
-          deps: {},
-          agentId: "main",
-          sessionKey: `cron:${request.job.id}`,
-        }),
     });
     context.cron = execution;
     const client = createOperatorClient({
@@ -254,7 +153,12 @@ describe("manual run tool authority after the initiating invocation closes", () 
       );
       expect(accepted).toMatchObject({ ok: true, payload: { enqueued: true } });
       // Preparation finished under the stored job; now the admin request ends.
-      await toolsReady.promise;
+      await Promise.race([
+        toolsReady.promise,
+        finished.promise.then((event) => {
+          throw new Error(`Cron finished before tool construction: ${event.error ?? event.status}`);
+        }),
+      ]);
       source.release();
       if (withdraw === "disable") {
         await execution.update(jobId, { enabled: false });
@@ -289,5 +193,5 @@ describe("manual run tool authority after the initiating invocation closes", () 
       execution.stop();
       await execution.waitForIdle();
     }
-  });
-});
+  },
+);

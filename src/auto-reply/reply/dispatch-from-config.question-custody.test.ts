@@ -11,6 +11,7 @@ import { clearAgentHarnesses } from "../../agents/harness/registry.js";
 import { resolveReplyCompletion } from "../../agents/reply-completion.js";
 import type { OpenClawConfig } from "../../config/config.js";
 import { EmbeddedQuestionBroker } from "../../infra/embedded-question-broker.js";
+import { testing as controllerTesting } from "../../sessions/session-controller.test-support.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import type { MsgContext } from "../templating.js";
 import type { GetReplyOptions, ReplyPayload } from "../types.js";
@@ -29,15 +30,15 @@ import {
   dispatchReplyFromConfig,
   globalBeforeAll0,
   firstToolResultPayload,
-  replyRunRegistry,
   requireToolResultHandler,
   setNoAbort,
+  getSessionControllerOperation,
 } from "./dispatch-from-config.test-support.js";
 import { resetInboundDedupe } from "./inbound-dedupe.js";
 import { createQueueTestRun } from "./queue.test-helpers.js";
 import { admitFollowupRunLifecycle, completeFollowupRunLifecycle } from "./queue/lifecycle.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
-import { testing as replyRunTesting } from "./reply-run-registry.test-support.js";
+import { bindReplySourceToFollowup } from "./reply-source-binding.js";
 import { buildTestCtx } from "./test-ctx.js";
 
 beforeAll(globalBeforeAll0);
@@ -46,7 +47,7 @@ beforeEach(() => {
   setNoAbort();
 });
 afterEach(() => {
-  replyRunTesting.resetReplyRunRegistry();
+  controllerTesting.resetSessionControllerForTest();
   resetInboundDedupe();
   clearAgentHarnesses();
 });
@@ -164,7 +165,7 @@ describe("dispatch input custody after a question response", () => {
     const onAdopted = vi.fn(async () => {
       throw new Error("source adoption closed");
     });
-    const onSettled = vi.fn(() => {
+    const onSettled = vi.fn(async () => {
       if (failure === "source-abort") {
         abort.abort();
       } else {
@@ -180,9 +181,18 @@ describe("dispatch input custody after a question response", () => {
         outcome === "confirmed"
           ? { status: "accepted", mode: "steer" }
           : { status: "skipped", reason: "question-response-indeterminate" };
-      const input = { turnAdoptionLifecycle: opts?.turnAdoptionLifecycle };
+      const input = createQueueTestRun({ prompt: "answer", messageId: fixture.ctx.MessageSid });
+      input.run.sessionKey = fixture.ctx.SessionKey;
+      input.turnAdoptionLifecycle = opts?.turnAdoptionLifecycle;
+      const source = bindReplySourceToFollowup(opts, input);
+      if (!source) {
+        throw new Error("Dispatch did not carry its source input");
+      }
       await admitFollowupRunLifecycle(input).catch(() => {});
       completeFollowupRunLifecycle(input, "consumed");
+      // The full source receipt also owns this still-running resolver. Join
+      // the adapter cleanup here, not the enclosing invocation itself.
+      await source.custody.settling;
       return undefined;
     });
     try {
@@ -214,7 +224,7 @@ describe("dispatch input custody after a question response", () => {
       expect(onSettled).toHaveBeenCalledOnce();
       expect(fixture.cancel).not.toHaveBeenCalled();
       expect(fixture.operation.result).toBeNull();
-      expect(replyRunRegistry.get(fixture.operation.key)).toBe(fixture.operation);
+      expect(getSessionControllerOperation(fixture.operation.key)).toBe(fixture.operation);
     } finally {
       fixture.operation.complete();
     }
@@ -482,7 +492,7 @@ describe("dispatch input custody after a question response", () => {
       );
       expect(fixture.cancel).not.toHaveBeenCalled();
       expect(fixture.operation.result).toBeNull();
-      expect(replyRunRegistry.get(fixture.operation.key)).toBe(fixture.operation);
+      expect(getSessionControllerOperation(fixture.operation.key)).toBe(fixture.operation);
     } finally {
       question.dispose();
       fixture.operation.complete();

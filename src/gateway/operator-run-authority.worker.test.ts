@@ -24,7 +24,10 @@ import {
   invalidateOperatorRolePolicy,
   publishOperatorRoleConfigChange,
 } from "./operator-role-policy.js";
-import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
+import {
+  captureChannelOperatorRunAuthority,
+  captureGatewayOperatorRunAuthority,
+} from "./operator-run-authority.js";
 import type { GatewayRequestHandlerOptions } from "./server-methods/types.js";
 import {
   dispatchGatewayMethodInProcess,
@@ -157,7 +160,7 @@ it("prepares a warm skill library without DDL after the tool caller's initiating
   ));
 
 it("preserves the live operator source through principal capture without trusting copied labels", () =>
-  withOperator(async ({ client, context }) => {
+  withOperator(async ({ profile, client, context }) => {
     const principal = expectDefined(captureAgentTurnPrincipal(client), "captured principal");
     const source = new AbortController();
     const sourceAuthority = abortAuthority(source);
@@ -173,10 +176,30 @@ it("preserves the live operator source through principal capture without trustin
       expect(originalSource).toBeDefined();
       expect(principalSource).toBe(originalSource);
       expect(copiedSource).not.toBe(originalSource);
+      const channel = captureChannelOperatorRunAuthority({
+        profileId: profile.id,
+        assignedRole: null,
+        scopes: ["operator.read"],
+        gatewayAccessGrant: null,
+        getRuntimeConfig: context.getRuntimeConfig,
+        ...sourceAuthority,
+      });
+      const readers = [...captures.map(({ authority }) => authority), channel].flatMap(
+        (authority) => [
+          expectDefined(authority.readCurrentRoleAssignment, "role reader"),
+          expectDefined(authority.readCurrentGithubLogin, "GitHub reader"),
+        ],
+      );
+      for (const read of readers) {
+        expect(read()).toBeNull();
+      }
       for (const retained of captures) {
         expect(retained.authority.assertCurrent).not.toThrow();
       }
       source.abort(new Error("source revoked"));
+      for (const read of readers) {
+        expect(read).toThrow();
+      }
       for (const retained of captures) {
         expect(retained.authority.assertCurrent).toThrow();
       }

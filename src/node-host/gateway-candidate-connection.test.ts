@@ -1,27 +1,26 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { GatewayClientOptions } from "../gateway/client.js";
+import type { GatewayClientCloseInfo, GatewayClientOptions } from "../gateway/client.js";
 import { createNodeHostGatewayCandidateConnection } from "./gateway-candidate-connection.js";
 
-const mocks = vi.hoisted(() => ({
-  options: [] as GatewayClientOptions[],
-  clients: [] as Array<{
-    request: ReturnType<typeof vi.fn>;
-    start: ReturnType<typeof vi.fn>;
-    stop: ReturnType<typeof vi.fn>;
-    stopAndWait: ReturnType<typeof vi.fn<() => Promise<void>>>;
-    updateNodeManifest: ReturnType<typeof vi.fn>;
-  }>,
-}));
+const mocks = vi.hoisted(() => {
+  const createClient = (options: GatewayClientOptions) => ({
+    request: vi.fn(async () => ({ url: options.url })),
+    start: vi.fn(),
+    stop: vi.fn(),
+    stopAndWait: vi.fn(async () => {}),
+    updateNodeManifest: vi.fn(),
+  });
+  return {
+    createClient,
+    options: [] as GatewayClientOptions[],
+    clients: [] as ReturnType<typeof createClient>[],
+  };
+});
 
+// mock-isolation: Control candidate connection callbacks without opening real Gateway sockets.
 vi.mock("../gateway/client.js", () => ({
   GatewayClient: function GatewayClient(options: GatewayClientOptions) {
-    const client = {
-      request: vi.fn(async () => ({ url: options.url })),
-      start: vi.fn(),
-      stop: vi.fn(),
-      stopAndWait: vi.fn(async () => {}),
-      updateNodeManifest: vi.fn(),
-    };
+    const client = mocks.createClient(options);
     mocks.options.push(options);
     mocks.clients.push(client);
     return client;
@@ -32,29 +31,42 @@ const candidates = [
   { host: "192.168.1.20", port: 18789, contextPath: "/openclaw-gw", tls: false },
   { host: "gateway.tailnet.example", port: 443, tls: true },
 ];
+const manifest = { caps: ["mcp"], commands: ["mcp.tools.call.v1"] };
+const callbacks = {
+  onEvent: vi.fn(),
+  onHelloOk: vi.fn(),
+  onConnectError: vi.fn(),
+  onReconnectPaused: vi.fn(),
+  onClose: vi.fn(),
+  onWinningCandidate: vi.fn(),
+};
+
+function closeCandidate(
+  overrides: Partial<GatewayClientCloseInfo> = {},
+  reason = "transport unavailable",
+  code = 1006,
+) {
+  mocks.options[0]?.onClose?.(code, reason, {
+    phase: "pre-hello",
+    socketOpened: false,
+    transportValidated: false,
+    connectRequestSent: false,
+    transientPreHelloCleanClose: false,
+    ...overrides,
+  });
+}
 
 function createConnection(
   cloudflareAccessByCandidate?: Parameters<
     typeof createNodeHostGatewayCandidateConnection
   >[0]["cloudflareAccessByCandidate"],
 ) {
-  const callbacks = {
-    onEvent: vi.fn(),
-    onHelloOk: vi.fn(),
-    onConnectError: vi.fn(),
-    onReconnectPaused: vi.fn(),
-    onClose: vi.fn(),
-    onWinningCandidate: vi.fn(),
-  };
-  return {
-    callbacks,
-    connection: createNodeHostGatewayCandidateConnection({
-      candidates,
-      clientOptions: {},
-      cloudflareAccessByCandidate,
-      ...callbacks,
-    }),
-  };
+  return createNodeHostGatewayCandidateConnection({
+    candidates,
+    clientOptions: {},
+    cloudflareAccessByCandidate,
+    ...callbacks,
+  });
 }
 
 describe("gateway candidate connection", () => {
@@ -65,33 +77,22 @@ describe("gateway candidate connection", () => {
   });
 
   it("rotates only before hello, fences stale callbacks, and forwards through the winner", async () => {
-    const { callbacks, connection } = createConnection();
+    const connection = createConnection();
     connection.start();
 
     expect(mocks.options[0]?.url).toBe("ws://192.168.1.20:18789/openclaw-gw");
     expect(mocks.clients[0]?.start).toHaveBeenCalledOnce();
-    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
-      phase: "pre-hello",
-      socketOpened: false,
-      transportValidated: false,
-      connectRequestSent: false,
-      transientPreHelloCleanClose: false,
-    });
+    closeCandidate();
     await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
+    const [first, winner] = mocks.clients;
 
-    expect(mocks.clients[0]?.stop).toHaveBeenCalledOnce();
+    expect(first?.stop).toHaveBeenCalledOnce();
     expect(mocks.options[1]?.url).toBe("wss://gateway.tailnet.example:443");
-    expect(mocks.clients[1]?.start).toHaveBeenCalledOnce();
+    expect(winner?.start).toHaveBeenCalledOnce();
 
     mocks.options[0]?.onEvent?.({ type: "event", event: "stale" });
     mocks.options[0]?.onHelloOk?.({} as never);
-    mocks.options[0]?.onClose?.(1006, "stale close", {
-      phase: "pre-hello",
-      socketOpened: false,
-      transportValidated: false,
-      connectRequestSent: false,
-      transientPreHelloCleanClose: false,
-    });
+    closeCandidate({}, "stale close");
     expect(callbacks.onEvent).not.toHaveBeenCalled();
     expect(callbacks.onHelloOk).not.toHaveBeenCalled();
     expect(callbacks.onWinningCandidate).not.toHaveBeenCalled();
@@ -106,45 +107,30 @@ describe("gateway candidate connection", () => {
     expect(callbacks.onWinningCandidate).toHaveBeenCalledWith(candidates[1]);
 
     await connection.request("node.test", { active: true }, undefined);
-    connection.updateNodeManifest({ caps: ["mcp"], commands: ["mcp.tools.call.v1"] });
-    expect(mocks.clients[0]?.request).not.toHaveBeenCalled();
-    expect(mocks.clients[1]?.request).toHaveBeenCalledWith(
-      "node.test",
-      { active: true },
-      undefined,
-    );
-    expect(mocks.clients[1]?.updateNodeManifest).toHaveBeenCalledWith({
-      caps: ["mcp"],
-      commands: ["mcp.tools.call.v1"],
-    });
+    connection.updateNodeManifest(manifest);
+    expect(first?.request).not.toHaveBeenCalled();
+    expect(winner?.request).toHaveBeenCalledWith("node.test", { active: true }, undefined);
+    expect(winner?.updateNodeManifest).toHaveBeenCalledWith(manifest);
   });
 
   it("does not rotate after the connect request was sent", async () => {
     createConnection();
 
-    mocks.options[0]?.onClose?.(1008, "connect failed", {
-      phase: "pre-hello",
-      socketOpened: true,
-      transportValidated: true,
-      connectRequestSent: true,
-      transientPreHelloCleanClose: false,
-    });
+    closeCandidate(
+      { socketOpened: true, transportValidated: true, connectRequestSent: true },
+      "connect failed",
+      1008,
+    );
     await Promise.resolve();
 
     expect(mocks.clients).toHaveLength(1);
   });
 
   it("promotes a candidate after hello instead of replaying setup auth on another endpoint", async () => {
-    const { callbacks } = createConnection();
+    createConnection();
 
     mocks.options[0]?.onHelloOk?.({} as never);
-    mocks.options[0]?.onClose?.(1006, "later reconnect transport failure", {
-      phase: "pre-hello",
-      socketOpened: false,
-      transportValidated: false,
-      connectRequestSent: false,
-      transientPreHelloCleanClose: false,
-    });
+    closeCandidate({}, "later reconnect transport failure");
     await Promise.resolve();
 
     expect(callbacks.onWinningCandidate).toHaveBeenCalledWith(candidates[0]);
@@ -152,56 +138,30 @@ describe("gateway candidate connection", () => {
   });
 
   it("carries a pre-hello manifest update into the next candidate", async () => {
-    const { connection } = createConnection();
-    const manifest = { caps: ["mcp"], commands: ["mcp.tools.call.v1"] };
+    const connection = createConnection();
 
     connection.updateNodeManifest(manifest);
-    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
-      phase: "pre-hello",
-      socketOpened: false,
-      transportValidated: false,
-      connectRequestSent: false,
-      transientPreHelloCleanClose: false,
-    });
+    closeCandidate();
     await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
 
     expect(mocks.clients[1]?.updateNodeManifest).toHaveBeenCalledWith(manifest);
   });
 
-  it("does not create the queued candidate after stop", async () => {
-    const { connection } = createConnection();
-
-    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
-      phase: "pre-hello",
-      socketOpened: false,
-      transportValidated: false,
-      connectRequestSent: false,
-      transientPreHelloCleanClose: false,
-    });
-    await connection.stop();
-    await Promise.resolve();
-
-    expect(mocks.clients).toHaveLength(1);
-  });
-
-  it("does not start a connection when readiness completes after stop", async () => {
-    const { connection } = createConnection();
-
+  it.each([false, true])("cannot start candidates after stop (queued=%s)", async (queued) => {
+    const connection = createConnection();
+    if (queued) {
+      closeCandidate();
+    }
     await connection.stop();
     connection.start();
-
+    await Promise.resolve();
+    expect(mocks.clients).toHaveLength(1);
     expect(mocks.clients[0]?.start).not.toHaveBeenCalled();
   });
 
   it("preserves a retired candidate's drain failure during shutdown", async () => {
-    const { connection } = createConnection();
-    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
-      phase: "pre-hello",
-      socketOpened: false,
-      transportValidated: false,
-      connectRequestSent: false,
-      transientPreHelloCleanClose: false,
-    });
+    const connection = createConnection();
+    closeCandidate();
     await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
     const retiredFailure = new Error("retired candidate storage failed");
     mocks.clients[0]?.stopAndWait.mockRejectedValueOnce(retiredFailure);
@@ -220,13 +180,7 @@ describe("gateway candidate connection", () => {
       "CF-Access-Client-Id": credentials.clientId,
       "CF-Access-Client-Secret": credentials.clientSecret,
     });
-    mocks.options[0]?.onClose?.(1006, "transport unavailable", {
-      phase: "pre-hello",
-      socketOpened: false,
-      transportValidated: false,
-      connectRequestSent: false,
-      transientPreHelloCleanClose: false,
-    });
+    closeCandidate();
     await vi.waitFor(() => expect(mocks.clients).toHaveLength(2));
 
     expect(mocks.options[1]?.url).toBe("wss://gateway.tailnet.example:443");

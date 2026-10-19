@@ -21,6 +21,7 @@ import { flushLogger, resetLogger } from "../../../logging/logger.js";
 import * as plugins from "../../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
@@ -318,7 +319,12 @@ export function installSpawnAuthorityFixture() {
       "spawn-authority-test",
     );
     const parent = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: parentSessionKey,
+        incarnation: "parent-session",
+        agentId: "main",
+      }),
       runId: parentRunId,
       sessionKey: parentSessionKey,
       sessionId: "parent-session",
@@ -332,8 +338,8 @@ export function installSpawnAuthorityFixture() {
     bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
     const authority = runContext.getAdmittedRunDelegatedAuthority(admitted)!;
     parent.bindAgentRunDelegatedAuthority(authority);
-    expect(parent.entry?.operationalRunInstance).toBe(admitted.operationalRunInstance);
-    expect(parent.entry?.agentRunDelegatedAuthority).toBe(authority);
+    expect(parent.entry?.adapter.operationalRunInstance).toBe(admitted.operationalRunInstance);
+    expect(parent.entry?.adapter.agentRunDelegatedAuthority).toBe(authority);
     expect(admitted.executionIdentityToken).toBeUndefined();
 
     return { cfg, storePath, context, admission, parent, admitted, authority };

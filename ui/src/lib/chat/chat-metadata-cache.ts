@@ -23,7 +23,12 @@ export type ChatMetadataResponse =
   | { revision: string; unchanged: true };
 
 export type ChatMetadataUpdate =
-  | { type: "invalidated"; scope: "session" | "full"; refreshSessionFacts: boolean }
+  | {
+      type: "invalidated";
+      scope: "session" | "full";
+      refreshSessionFacts: boolean;
+      retireCatalog?: boolean;
+    }
   | { type: "loading" }
   | { type: "result"; result: ChatMetadataResult }
   | { type: "error"; error: unknown };
@@ -71,6 +76,7 @@ export type ChatMetadataEntry = {
 
 export type ChatMetadataInvalidation = {
   sessionOnly?: boolean;
+  retireCatalog?: boolean;
   matchesCatalog?: (scope: ChatMetadataParams) => boolean;
   commandsChanged?: boolean;
   delayMs?: number;
@@ -101,7 +107,10 @@ export function invalidateChatMetadataStore(
   } else if (catalogInvalidation === "refresh") {
     invalidateModelCatalogCache(client, scope, sessionDefaults);
   }
-  chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, { commandsChanged });
+  chatMetadataCache.get(client)?.invalidate(scope, sessionDefaults, {
+    commandsChanged,
+    retireCatalog: catalogInvalidation === "clear",
+  });
 }
 
 export function invalidateChatMetadataForSessionEvent(

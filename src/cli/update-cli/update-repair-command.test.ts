@@ -484,6 +484,15 @@ describe("update repair ledger recovery", () => {
     { driver: "reused", ageMs: 60_000 },
   ] as const)("repairs a dead driver without maintenance: %j", async (fixture) => {
     const run = seedRun(fixture);
+    const recorded = getUpdateRun(run.runId);
+    expect(await readUpdateRunStatus()).toMatchObject({
+      abandonedRun: {
+        runId: run.runId,
+        rule: "inactive-driver-dead",
+        nextAction: "Run `openclaw update repair` before retrying the update.",
+      },
+    });
+    expect(getUpdateRun(run.runId)).toEqual(recorded);
 
     await runRegisteredCli({ register: registerUpdateCli, argv: ["update", "repair"] });
 

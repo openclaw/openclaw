@@ -191,10 +191,10 @@ export function createPluginCommandRuntime(): PluginCommandRuntime {
   if (!registry) {
     throw new Error("Plugin command runtime requires an active or request-scoped registry.");
   }
-  const state: PluginCommandRuntimeState = Object.freeze({
+  const state: PluginCommandRuntimeState = {
     registry,
-    commands: Object.freeze(listRegisteredPluginCommands(registry)),
-  });
+    commands: listRegisteredPluginCommands(registry),
+  };
 
   const assertCurrent = () => {
     if (isPluginRegistryRetired(state.registry)) {
@@ -271,7 +271,7 @@ export function matchPluginCommandInvocation(
     if (plugin?.status !== "error" || !plugin.enabled) {
       return null;
     }
-    return Object.freeze({
+    return {
       dispatch: createSelectedPluginCommandDispatch(
         state,
         { availability: "manifest-only", plugin },
@@ -279,10 +279,10 @@ export function matchPluginCommandInvocation(
       ),
       acceptsArgs: true,
       requireAuth: true,
-    });
+    };
   }
   const metadata = projectPluginCommandNativeMetadata(match.command, provider);
-  return Object.freeze({
+  return {
     dispatch: createSelectedPluginCommandDispatch(
       state,
       { availability: "loaded", command: match.command, args: match.args },
@@ -291,5 +291,5 @@ export function matchPluginCommandInvocation(
     acceptsArgs: metadata.acceptsArgs,
     requireAuth: metadata.requireAuth,
     ...(metadata.progressMessage ? { progressMessage: metadata.progressMessage } : {}),
-  });
+  };
 }

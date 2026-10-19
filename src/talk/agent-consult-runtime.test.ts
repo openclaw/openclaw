@@ -9,7 +9,7 @@ import {
   waitForDiagnosticEventsDrained,
 } from "../infra/diagnostic-events.js";
 import { MODEL_SELECTION_LOCKED_MESSAGE } from "../sessions/model-overrides.js";
-import { runExclusiveSessionLifecycleMutation } from "../sessions/session-lifecycle-admission.js";
+import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
 import {
   createOpenClawTestState,
   type OpenClawTestState,
@@ -412,7 +412,7 @@ describe("realtime voice agent consult runtime", () => {
     sessionStore[sessionKey] = { sessionId: "active-session", updatedAt: 1 };
     const mutationStarted = createDeferred();
     const releaseMutation = createDeferred();
-    const mutation = runExclusiveSessionLifecycleMutation("patch", {
+    const mutation = runSessionMutation({
       scope: state.statePath("sessions.json"),
       identities: [sessionKey, "active-session"],
       run: async () => {

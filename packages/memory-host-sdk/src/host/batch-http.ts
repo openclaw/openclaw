@@ -3,8 +3,6 @@ import type { SsrFPolicy } from "./openclaw-runtime-network.js";
 import { postJson } from "./post-json.js";
 import type { RemoteEmbeddingRequestAuth } from "./remote-http.js";
 
-// JSON POST helper for batch APIs with provider-style transient retry.
-
 /** POST JSON and retry provider 429/5xx failures with bounded backoff. */
 export async function postJsonWithRetry<T>(params: {
   url: string;

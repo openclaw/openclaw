@@ -28,12 +28,14 @@ type ReadEntry<T> = {
 
 function createReadCache<Input, Output>(
   load: (input: Input, signal: AbortSignal) => Promise<Output>,
-  freshnessMs: number,
+  freshness: number | { milliseconds: number; joinPending: true },
   revision?: (input: Input, signal: AbortSignal) => Promise<string | null>,
   keyOf: (input: Input) => string = JSON.stringify,
   snapshot?: { empty: () => Output },
   retain: (value: Output) => boolean = () => true,
 ) {
+  const freshnessMs = typeof freshness === "number" ? freshness : freshness.milliseconds;
+  const joinPending = typeof freshness !== "number" && freshness.joinPending;
   // Versioned reads retain only the current inputs/revision per checkout. LRU
   // eviction and Gateway shutdown own their lifetime, independently of viewers.
   const entries = new Map<string, ReadEntry<Output>>();
@@ -74,7 +76,7 @@ function createReadCache<Input, Output>(
         (options.refresh && currentRevision === null) ||
         !entry ||
         entry.revision !== revisionKey ||
-        (entry.expiresAt <= Date.now() && (!snapshot || !entry.pending))
+        (entry.expiresAt <= Date.now() && (!(snapshot || joinPending) || !entry.pending))
       ) {
         if (snapshot && pending.size >= MAX_CACHED_CHECKOUTS) {
           return entry?.value ?? snapshot.empty();
@@ -249,6 +251,12 @@ function createReadCaches() {
         runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
       0,
     ),
+    diffSummary: createReadCache(
+      (input: GitReadOperations["checkout.diff"]["input"], signal) =>
+        runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
+      // Visible clients share this short-lived summary; never duplicate a slow scan.
+      { milliseconds: 10_000, joinPending: true },
+    ),
     branches: createReadCache(
       (input: GitReadOperations["repository.branches"]["input"], signal) =>
         runGitWorkerOperation({ type: "repository.branches", input }, { signal }),
@@ -294,8 +302,8 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
   if (state.closing) {
     return Promise.reject(new Error("Git reads are unavailable while the Gateway is restarting"));
   }
-  const { context, branchFacts, diff, branches, baseline, identities } = (state.caches ??=
-    createReadCaches());
+  const { context, branchFacts, diff, diffSummary, branches, baseline, identities } =
+    (state.caches ??= createReadCaches());
   switch (operation.type) {
     case "repository.identities":
       return identities.read(operation.input, options);
@@ -307,12 +315,14 @@ export function runGitReadOperation(operation: GitReadOperation, options?: GitRe
       return branchFacts.read(operation.input, options);
     case "checkout.diff":
       // Transport truncation mutates these envelopes, not the shared patch strings.
-      return diff.read(operation.input, options).then((value) => ({
-        ...value,
-        files: value.files.map((file) => ({ ...file })),
-        ...(value.commits ? { commits: value.commits.map((commit) => ({ ...commit })) } : {}),
-        ...(value.mergeBase ? { mergeBase: { ...value.mergeBase } } : {}),
-      }));
+      return (operation.input.summaryOnly ? diffSummary : diff)
+        .read(operation.input, options)
+        .then((value) => ({
+          ...value,
+          files: value.files.map((file) => ({ ...file })),
+          ...(value.commits ? { commits: value.commits.map((commit) => ({ ...commit })) } : {}),
+          ...(value.mergeBase ? { mergeBase: { ...value.mergeBase } } : {}),
+        }));
     case "repository.branches":
       return branches.read(operation.input, options);
     case "checkout.baseline":

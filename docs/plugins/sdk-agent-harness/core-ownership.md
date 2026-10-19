@@ -39,6 +39,24 @@ applies it when building the surface; harnesses do not need to forward that fact
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
 
+Core also passes optional `params.preparedWebSearchPolicy` with `allowed`,
+`persistentAllowed`, the `modelRef` provider/model tuple, and `requesterFacts`
+containing the session-policy and lineage reads consumed during capability preparation. Harnesses can consume this data without reading session
+policy synchronously. Apply turn-specific tool restrictions separately; this snapshot
+does not grant execution authority or replace live native-action checks. Existing
+harnesses may ignore the field.
+
+For native-owned models, core uses the prepared native model reference. Codex
+rejects a changed tuple or requester facts before applying the prepared search
+policy; retrying the turn prepares current policy. Native admission retains the
+captured requester checks through the physical native write, including session-ID
+selection and absence. The existing `captureSessionEntryCurrentCheckAsync` helper
+accepts an optional `sessionId` selector in place of `sessionKey`; when both are
+supplied, the ID selects the row. Existing key-only callers are unchanged.
+Both bindings are optional in the SDK
+shape to preserve existing callers. Pending native supervision without a selected
+model omits the field and retains the harness's existing policy-resolution path.
+
 ### Prepared local execution environment
 
 `hostCapabilities.preparedEnvironment()` returns captured identity and execution facts for the admitted attempt. Its optional `localGitConfigParameters` is an append fragment, not a replacement for `GIT_CONFIG_PARAMETERS`. Apply it only to local child processes owned by the harness. Preserve unrelated inherited or explicitly configured Git parameters and the runtime's environment filters; an explicit native value, including an empty string, replaces its inherited base before the host fragment is appended. Keep inherited credentials in the child environment rather than copying them into tool request overrides or persisted native thread configuration. Remote, sandbox, and externally started peers retain their existing environment owners.
@@ -195,6 +213,14 @@ OpenClaw then visibly rejects explicitly restricted turns before invoking the
 harness. The operator can switch the session to the embedded runtime or upgrade
 the harness. Channel `/btw` side questions with a restrictive direct policy are
 rejected by core and are not covered by this declaration.
+
+A harness that resolves hosted `web_search` availability itself should await
+`resolveWebSearchToolPolicyAsync(...)` from `openclaw/plugin-sdk/agent-harness`.
+It prepares the stored session facts that policy reads, so the result does not
+depend on the Gateway's session projection, which can lag during startup and
+restart recovery. The synchronous `resolveWebSearchToolPolicy` reads only
+already-prepared facts and can throw `Session capability metadata requires
+worker preparation`.
 
 For a known, actionable refusal, `AgentHarnessPreflightError` accepts an optional
 `userMessage`. Core renders this owner-authored public copy across chat surfaces

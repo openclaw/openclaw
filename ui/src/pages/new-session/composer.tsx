@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createEffect, createMemo, createSignal, onSettled, Show, untrack } from "solid-js";
 import type { GatewayAgentRow } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { createFooterControlRef } from "../../app/shell-layout-traits-solid.tsx";
 import type { ImageLightboxItem } from "../../components/image-lightbox.types.ts";
 import {
   lobsterPetSeed,
@@ -24,13 +25,19 @@ import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionToolOverrides } from "../../lib/sessions/patch.ts";
 import { refreshSlashCommands } from "../chat/chat-commands.ts";
 import { resolveChatAttachmentLimits } from "../chat/components/chat-attachment-admission.ts";
+import { createChatAttachmentInputHandle } from "../chat/components/chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "../chat/components/chat-attachment-inputs.tsx";
 import {
   createChatAttachmentDropHandlers,
   handleChatAttachmentPaste,
 } from "../chat/components/chat-attachments.ts";
 import { AttachmentPreview, AttachmentReadStatus } from "../chat/components/chat-attachments.tsx";
-import { adjustTextareaHeight, paneDomId } from "../chat/components/chat-composer-dom.ts";
+import {
+  adjustTextareaHeight,
+  handleTextareaOverflowInteraction,
+  handleTextareaOverflowScroll,
+  paneDomId,
+} from "../chat/components/chat-composer-dom.ts";
 import "../../components/tooltip.ts";
 import { EmojiMenu } from "../chat/components/chat-composer-emoji.tsx";
 import {
@@ -413,6 +420,8 @@ function createComposerPlaceholder(options: () => NewSessionComposerOptions) {
 }
 
 export function NewSessionComposer(props: { options: NewSessionComposerOptions }) {
+  const footerControl = createFooterControlRef();
+  const inputHandle = createChatAttachmentInputHandle();
   const draft = createMemo(() => {
     const source = props.options.draftSource;
     return source ? projectOwner(source, (owner) => owner.read()) : undefined;
@@ -455,6 +464,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
   });
   return (
     <div
+      ref={footerControl}
       class="agent-chat__composer-shell new-session-page__composer"
       onDrop={(event) => {
         if (options().nativeTerminal && event.dataTransfer?.files.length) {
@@ -513,7 +523,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
         <HumanMentionMenuView args={[textarea.mentionMenu, frame().mentionMenuHost]} />
         <EmojiMenu args={[textarea.emojiMenu, "new-session", textarea.getTextarea()]} />
         <Show when={!options().nativeTerminal}>
-          <ChatAttachmentInputs {...frame().attachmentProps} />
+          <ChatAttachmentInputs {...frame().attachmentProps} inputHandle={inputHandle} />
         </Show>
         <SelectedHumanMentions
           text={options().message}
@@ -555,6 +565,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
               aria-activedescendant={frame().activeMenuOptionId ?? undefined}
               aria-describedby={frame().menuAnnouncementId}
               onInput={(event) => {
+                handleTextareaOverflowInteraction(event);
                 if (options().dictationActive) {
                   return;
                 }
@@ -576,6 +587,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 frame().updateMenus(target, event);
               }}
               onBeforeInput={(event) => {
+                handleTextareaOverflowInteraction(event);
                 const target = event.currentTarget;
                 textarea.mentionInput = {
                   value: target.value,
@@ -588,6 +600,9 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                   !frame().composerLocked && !options().nativeTerminal && !textarea.composing,
                 );
               }}
+              onScroll={handleTextareaOverflowScroll}
+              onWheel={handleTextareaOverflowInteraction}
+              onPointerDown={handleTextareaOverflowInteraction}
               onSelect={(event) => frame().handleSelect(event)}
               onFocus={(event) => frame().handleSelect(event)}
               onPointerUp={(event) => frame().handleSelect(event)}
@@ -599,6 +614,7 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 }
               }}
               onBlur={(event) => {
+                handleTextareaOverflowInteraction(event);
                 clearCompositionEnd(event);
                 textarea.composing = false;
                 textarea.emojiMenu.close();
@@ -608,8 +624,12 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
                 textarea.composing = false;
                 frame().updateMenus(event.currentTarget);
               }}
-              onKeyDown={(event) => frame().handleComposerKeydown(event)}
-              onCompositionStart={() => {
+              onKeyDown={(event) => {
+                handleTextareaOverflowInteraction(event);
+                frame().handleComposerKeydown(event);
+              }}
+              onCompositionStart={(event) => {
+                handleTextareaOverflowInteraction(event);
                 textarea.composing = true;
                 textarea.emojiMenu.close();
                 textarea.mentionMenu.close();
@@ -641,7 +661,11 @@ export function NewSessionComposer(props: { options: NewSessionComposerOptions }
         <div class="agent-chat__composer-footer">
           <div class="agent-chat__composer-lead">
             <Show when={!options().nativeTerminal}>
-              <NewSessionPlusMenu options={options()} attachments={frame().attachmentProps} />
+              <NewSessionPlusMenu
+                options={options()}
+                attachments={frame().attachmentProps}
+                inputHandle={inputHandle}
+              />
             </Show>
             {options().permissionControl}
             <Show when={!options().nativeTerminal && options().draftAvailable}>

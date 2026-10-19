@@ -20,6 +20,8 @@ import type { UpdateRunRecord } from "./update-run-record.js";
 
 type ReconciliationOptions = UpdateRunLedgerOptions & {
   signal?: AbortSignal;
+  /** Relocation-capable callers must not retain readers on the live database. */
+  snapshot?: true;
 };
 
 function prepareReconciliation(options: ReconciliationOptions) {
@@ -45,7 +47,7 @@ function prepareReconciliation(options: ReconciliationOptions) {
         executeExistingOpenClawStateRead(captured, command, {
           context,
           signal: captured.signal,
-          preferIndependentWarmRead: true,
+          preferIndependentWarmRead: captured.snapshot ? undefined : true,
         }),
       );
       assertCurrent();

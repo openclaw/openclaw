@@ -100,10 +100,9 @@ describe("requester pause notices", () => {
           pauseNotice: { acknowledgment: "TURNOVER-PAUSE" },
         });
         const firstKey = deliveredCallArg().directIdempotencyKey;
-        vi.setSystemTime(Date.now() + 30_001);
         expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
         expect(deliverSpy).toHaveBeenCalledTimes(2);
-        expect(deliverSpy.mock.calls[1]?.[0].directIdempotencyKey).not.toBe(firstKey);
+        expect(deliverSpy.mock.calls[1]?.[0].directIdempotencyKey).toBe(firstKey);
         expect(deliverSpy.mock.calls[1]?.[0].triggerMessage).toContain("TURNOVER-PAUSE");
         expect(child.requesterSettleWake?.pauseNotice).toBeUndefined();
         expect(child.pauseReason).toBe("sessions_yield");
@@ -174,13 +173,21 @@ describe("requester pause notices", () => {
     registryRuntimeMock.listSubagentRunsForRequester.mockReturnValue(children);
     const params = wakeParams({
       settledEntry: child,
-      completeBatch: (batch, generation, outcome, onCommitted) => {
+      completeBatch: async (batch, generation, outcome, onCommitted) => {
         if (!consumeSubagentPauseNotice(child)) {
-          completeBatch(batch, generation, outcome, onCommitted);
+          await completeBatch(batch, generation, outcome, onCommitted);
         }
       },
     });
 
+    deliverSpy.mockImplementationOnce(async ({ onBeforeDispatch }) => {
+      if (typeof onBeforeDispatch !== "function") {
+        throw new Error("missing pause dispatch transition");
+      }
+      await onBeforeDispatch();
+      expect(child.requesterSettleWake?.batchRunIds).toEqual(["run-a", "run-b"]);
+      return { delivered: true, path: "direct" };
+    });
     expect(await maybeWakeRequesterAfterAllChildrenSettled(params)).toBe(true);
     expect(deliverSpy).toHaveBeenCalledOnce();
     const message = String(deliveredCallArg().triggerMessage);

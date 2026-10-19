@@ -114,7 +114,6 @@ function createRecoveryRuntime(options: {
   }
   const context = {
     broadcastToConnIds: vi.fn(options.broadcast),
-    chatAbortControllers: new Map<never, never>(),
     getRuntimeConfig: () => ({}),
     getSessionEventSubscriberConnIds: () =>
       new Set(options.hasSubscribers === false ? [] : ["session-observer"]),

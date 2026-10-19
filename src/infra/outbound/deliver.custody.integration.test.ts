@@ -3,7 +3,7 @@ import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { onTrustedMessageAuditEvent } from "../../audit/message-audit-events.js";
 import { deliverFollowupDecision } from "../../auto-reply/reply/followup-delivery.js";
-import type { AdmittedFollowupTurn } from "../../auto-reply/reply/followup-turn-admission.js";
+import type { AdmittedFollowupTurn } from "../../auto-reply/reply/reply-agent-turn-preparation.js";
 import type { ReplyPayload } from "../../auto-reply/types.js";
 import { createMessageReceiptFromOutboundResults } from "../../channels/message/receipt.js";
 import type { ChannelMessageSendTextContext } from "../../channels/message/types.js";
@@ -187,7 +187,6 @@ describe("follow-up delivery custody", () => {
           key: "main",
           current: () => undefined,
           publish: () => undefined,
-          adopt: () => undefined,
         },
         sendPolicy: "allow",
         preflightCompactionApplied: false,

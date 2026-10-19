@@ -26,7 +26,10 @@ import {
   releaseLegacyPackageUpdateParent,
   type LegacyUpdateExecutorParent,
 } from "./update-command-executor-legacy.js";
-import { runUpdateCommandExecutorOperation } from "./update-command-executor-operation.js";
+import {
+  prepareUpdateCommandExecutorTerminal,
+  runUpdateCommandExecutorOperation,
+} from "./update-command-executor-operation.js";
 import {
   resolveUpdateCommandRetainedRoot,
   type UpdateCommandExecutor,
@@ -39,6 +42,7 @@ import {
   slotReservations,
   occupiedSlotKey,
   childOwners,
+  terminalPreparations,
 } from "./update-command-executor-state.js";
 import { createUpdateIdentityWarningReporter } from "./update-command-identity-warning.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
@@ -137,6 +141,7 @@ export async function withUpdateCommandExecutor<T>(
         childOwners.delete(fence);
         slotReservations.delete(fence);
         admittedAuthorities.delete(fence);
+        terminalPreparations.delete(fence);
       };
       const children = createChildOwner({
         runId,
@@ -451,11 +456,16 @@ export async function withUpdateCommandExecutor<T>(
           return finishAdmission();
         },
       };
-      const operationOutcome = await runUpdateCommandExecutorOperation({
-        operation: () => operation(executor),
-        children,
-      });
+      const operationOutcome = await prepareUpdateCommandExecutorTerminal(
+        fence,
+        await runUpdateCommandExecutorOperation({
+          operation: () => operation(executor),
+          children,
+        }),
+      );
       identityWarnings.flush();
+      // Preparation awaits notifications/report IO. Cancellation can arrive there,
+      // so sample it only after that scope has joined, before retiring authority.
       const outcome = cancellation.cause
         ? {
             error:

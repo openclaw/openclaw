@@ -10,7 +10,7 @@ import {
 } from "../infra/kysely-sync.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isSqliteCorruptionError } from "../infra/sqlite-error-diagnostics.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import { normalizeAgentId } from "../routing/session-key.js";
 import { isSessionStoreTopologyChange, sessionChanges } from "../sessions/session-row-changes.js";
 import { hasClawDeletionOwnership } from "./agent-deletion-journal-authority.worker.js";
@@ -198,7 +198,7 @@ export function readAgentDatabaseDeletionSnapshot(
 ): AgentDatabaseDeletionSnapshot | undefined {
   return withExistingOpenClawStateDatabaseReadOnly(
     ({ db, path: statePath }) =>
-      runSqliteDeferredTransactionSync(
+      runSqliteReadSnapshotSync(
         db,
         () => ({
           retainedDeletions: readRetainedAgentDeletionsFromDatabase(db, statePath, purpose),

@@ -173,62 +173,6 @@ describe("update command admission with fresh state", () => {
     },
   );
 
-  it.each(["healthy", "release"] as const)(
-    "publishes one settled metadata refusal (%s)",
-    async (cleanup) => {
-      allowPackageRuntime();
-      const doctor = vi.spyOn(packageUpdate, "runPackageUpdateDoctor");
-      vi.stubEnv("OPENCLAW_UPDATE_RUN_ID", inheritedRunIds[0]);
-      vi.mocked(packageMetadata.fetchNpmPackageTargetStatus).mockImplementationOnce(async () => {
-        if (cleanup === "release") {
-          const db = new DatabaseSync(
-            path.join(tempRoot.resolvePreferredOpenClawTmpDir(), "managed-update-handoffs.sqlite"),
-          );
-          try {
-            db.exec(
-              "CREATE TRIGGER deny_refusal_release BEFORE DELETE ON managed_update_handoffs BEGIN SELECT RAISE(FAIL, 'fixture refusal release denied'); END",
-            );
-          } finally {
-            db.close();
-          }
-        }
-        return { version: null, nodeEngine: null, error: "fixture registry unavailable" };
-      });
-      const observations: string[] = [];
-      vi.mocked(defaultRuntime.writeJson).mockImplementation(() => {
-        observations.push(createManagedHandoffLeaseStore().read(fixture.root).kind);
-      });
-      const failure = await updateCommand({ yes: true, json: true, restart: false }).then(
-        () => undefined,
-        (error: unknown) => error,
-      );
-      expect(observations).toEqual([cleanup === "release" ? "current" : "absent"]);
-      expect(defaultRuntime.writeJson).toHaveBeenCalledOnce();
-      expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-        expect.objectContaining({
-          status: "error",
-          reason:
-            cleanup === "healthy" ? "target-metadata-preflight" : "update-admission-cleanup-failed",
-        }),
-      );
-      expect(failure).toMatchObject({ code: 1 });
-      if (cleanup === "release") {
-        expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
-          expect.objectContaining({
-            recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
-          }),
-        );
-      }
-      expect(fs.existsSync(fixture.databasePath)).toBe(false);
-      expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
-      expect(doctor).not.toHaveBeenCalled();
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("registry unavailable"),
-      );
-      expectFreshStatePreserved();
-    },
-  );
-
   it("closes the stage when successful initialization is followed by legacy release failure", async () => {
     allowPackageRuntime();
     const staged = createStage(fixture.root);

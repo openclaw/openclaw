@@ -47,6 +47,40 @@ const unknownSharingAuthorities = resolveGlobalSet<string>(
   "close-and-restart",
 );
 
+/** ID selection cannot pass a worker commit whose identity facts are not yet published. */
+export function isSessionIdSelectionPublished(params: {
+  databaseIdentity: string;
+  sessionId: string;
+  sessionKey?: string;
+}): boolean {
+  const prefix = `${params.databaseIdentity}\0`;
+  for (const key of unknownSharingAuthorities) {
+    if (key.startsWith(prefix)) {
+      return false;
+    }
+  }
+  for (const [key, publications] of pendingSessionEntryPublications) {
+    if (!key.startsWith(prefix)) {
+      continue;
+    }
+    const sessionKey = key.slice(prefix.length);
+    for (const publication of publications) {
+      if (
+        !publication.settled &&
+        !publication.superseded.has(sessionKey) &&
+        !publication.generationUnchanged.has(sessionKey) &&
+        (sessionKey === params.sessionKey ||
+          !publication.entryPostimages?.has(sessionKey) ||
+          publication.entryPostimages.get(sessionKey)?.sessionId?.trim() ===
+            params.sessionId.trim())
+      ) {
+        return false;
+      }
+    }
+  }
+  return true;
+}
+
 /** A fresh snapshot cannot settle a write whose outcome the authority owner lost. */
 export function markSessionSharingAuthorityUnknown(
   database: SessionEntryCacheDatabase | string,

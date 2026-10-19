@@ -156,6 +156,7 @@ it("fetches one persisted settings avatar alongside unrelated requests", async (
     });
     expect(avatar?.classList).toContain("is-pending");
     avatarImage(view)?.dispatchEvent(new Event("load"));
+    flush();
     expect(avatar?.classList).not.toContain("is-pending");
     expect(avatarRequestUrls(), "requests after the persisted avatar loads").toEqual([
       globalThis.location.origin + "/avatar/beta?v=1",
@@ -276,6 +277,7 @@ it("keeps a reopened picker preview pending until the authenticated avatar resol
   response.resolve(avatarResponse());
   await waitForFast(() => expect(image?.getAttribute("src")).toBe("blob:settings-avatar-1"));
   image?.dispatchEvent(new Event("load"));
+  flush();
   expect(preview?.classList).not.toContain("is-pending");
   expect(fetchAvatar).toHaveBeenCalledOnce();
 });

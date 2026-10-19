@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
 import { Value } from "typebox/value";
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import { GatewayClientRequestError } from "../../../packages/gateway-client/src/request-error.js";
 import {
   QuestionRequestParamsSchema,
@@ -20,12 +20,15 @@ import {
 } from "../../infra/embedded-question-broker.js";
 import { isBuiltInDefaultSecretProviderRef } from "../../secrets/ref-contract.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
+import * as questionDispatch from "../harness/gateway-question-dispatch.js";
 import { claimPendingAgentQuestionAnswer } from "../harness/gateway-question.js";
 import { reserveAskUserPromptDelivery, settleAskUserPromptDelivery } from "./ask-user-tool.js";
 import { resetPendingAskUserQuestionsForTest } from "./ask-user-tool.test-support.js";
+import type { GatewayQuestionCall } from "./gateway-question-lifecycle.js";
+import * as gatewayTransport from "./gateway.js";
 import { createSecretsTool, normalizeSecretsRequestParams } from "./secrets-tool.js";
 
-type GatewayCall = NonNullable<Parameters<typeof createSecretsTool>[0]["gatewayCall"]>;
+type GatewayCall = GatewayQuestionCall;
 type GatewayImplementation = (
   method: string,
   opts: Record<string, unknown>,
@@ -113,11 +116,22 @@ function outcome<T>(pending: Promise<T>) {
     (error: unknown) => ({ error }),
   );
 }
+let storeTransportSpy: MockInstance<typeof gatewayTransport.callGatewayTool> | undefined;
+let questionResolverSpy:
+  | MockInstance<typeof questionDispatch.resolveAgentQuestionGatewayCall>
+  | undefined;
+
 function secretTool(
   gateway: ReturnType<typeof gatewayStub>,
-  options: Omit<Parameters<typeof createSecretsTool>[0], "gatewayCall"> = {},
+  options: Parameters<typeof createSecretsTool>[0] = {},
 ) {
-  return createSecretsTool({ ...options, gatewayCall: gateway.call });
+  storeTransportSpy = vi
+    .spyOn(gatewayTransport, "callGatewayTool")
+    .mockImplementation(gateway.call);
+  questionResolverSpy = vi
+    .spyOn(questionDispatch, "resolveAgentQuestionGatewayCall")
+    .mockReturnValue(gateway.call);
+  return createSecretsTool(options);
 }
 
 function methodCalls(gateway: ReturnType<typeof gatewayStub>, method: string) {
@@ -204,7 +218,14 @@ function promptOptions(
 }
 
 afterEach(() => {
-  resetPendingAskUserQuestionsForTest();
+  try {
+    resetPendingAskUserQuestionsForTest();
+  } finally {
+    questionResolverSpy?.mockRestore();
+    storeTransportSpy?.mockRestore();
+    questionResolverSpy = undefined;
+    storeTransportSpy = undefined;
+  }
 });
 
 describe("secrets request normalization", () => {

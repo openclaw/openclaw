@@ -317,7 +317,9 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
           }
           if (event.key === "Enter") {
             event.preventDefault();
-            props.onCommitRename();
+            if (!props.actionsDisabled) {
+              props.onCommitRename();
+            }
           } else if (event.key === "Escape") {
             event.preventDefault();
             props.onCancelRename();
@@ -325,7 +327,9 @@ function SessionCrumb(props: ChatPaneHeaderProps) {
         }}
         onBlur={(event) => {
           clearCompositionEnd(event);
-          props.onCommitRename();
+          if (!props.actionsDisabled) {
+            props.onCommitRename();
+          }
         }}
       />
     </Show>

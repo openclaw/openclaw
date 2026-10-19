@@ -1,10 +1,12 @@
-// Native task/process inspection and sanitized proof rendering.
+import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import fs from "node:fs/promises";
 import { createServer } from "node:net";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 import { expect } from "vitest";
+import { z } from "zod";
 import {
   getWindowsCmdExePath,
   getWindowsPowerShellExePath,
@@ -25,14 +27,16 @@ export const TASK_LOGON_S4U = 2;
 const TASK_LOGON_INTERACTIVE_TOKEN = 3;
 export const TASK_RUNLEVEL_LEAST_PRIVILEGE = 0;
 
-export type ScheduledTaskPrincipal = {
-  enabled: boolean;
-  lastRunTime: string;
-  lastTaskResult: number;
-  logonType: number;
-  runLevel: number;
-  taskState: number;
-};
+const integer = z.number().refine(Number.isInteger);
+const principalSchema = z.object({
+  enabled: z.boolean(),
+  lastRunTime: z.string(),
+  lastTaskResult: integer,
+  logonType: integer,
+  runLevel: integer,
+  taskState: integer,
+});
+export type ScheduledTaskPrincipal = z.infer<typeof principalSchema>;
 
 export type WindowsProcessDiagnostic = {
   CommandLine?: string | null;
@@ -46,6 +50,19 @@ export type WindowsProcessDiagnostic = {
 };
 
 type TaskDefinitionSnapshot = { exists: false; taskXml: null } | { exists: true; taskXml: string };
+
+function inspectWithPowerShell(script: string, maxBuffer?: number) {
+  return spawnSync(
+    getWindowsPowerShellExePath(),
+    [
+      "-NoProfile",
+      "-NonInteractive",
+      "-EncodedCommand",
+      Buffer.from(script, "utf16le").toString("base64"),
+    ],
+    { encoding: "utf8", timeout: 5_000, windowsHide: true, maxBuffer },
+  );
+}
 
 export async function canBindLoopbackPort(port: number): Promise<boolean> {
   const server = createServer();
@@ -62,6 +79,22 @@ export async function readTaskXml(taskName: string): Promise<string | null> {
   return result.code === 0
     ? result.stdout.replace(/^\uFEFF/u, "").replaceAll(String.fromCharCode(0), "")
     : null;
+}
+
+export async function captureTaskDefinition(taskName: string, restorePath: string) {
+  const xml = await readTaskXml(taskName);
+  assert.ok(xml);
+  await fs.writeFile(restorePath, `\uFEFF${xml}`, "utf16le");
+  return {
+    xml,
+    async restore() {
+      assert.equal(
+        (await execSchtasks(["/Create", "/F", "/TN", taskName, "/XML", restorePath])).code,
+        0,
+      );
+      assert.equal(await readTaskXml(taskName), xml);
+    },
+  };
 }
 
 export async function readTaskDefinitionSnapshot(
@@ -114,16 +147,7 @@ export function readTaskPrincipal(taskName: string): ScheduledTaskPrincipal {
     "$result=@{enabled=[bool]$task.Enabled;logonType=[int]$principal.LogonType;runLevel=[int]$principal.RunLevel;taskState=[int]$task.State;lastTaskResult=[int64]$task.LastTaskResult;lastRunTime=$task.LastRunTime.ToUniversalTime().ToString('o')}",
     "[Console]::Out.Write(($result | ConvertTo-Json -Compress))",
   ].join("; ");
-  const result = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    { encoding: "utf8", timeout: 5_000, windowsHide: true },
-  );
+  const result = inspectWithPowerShell(script);
   if (result.error) {
     throw result.error;
   }
@@ -134,29 +158,11 @@ export function readTaskPrincipal(taskName: string): ScheduledTaskPrincipal {
       }`,
     );
   }
-  const parsed = JSON.parse(result.stdout.trim()) as Partial<ScheduledTaskPrincipal>;
-  if (
-    typeof parsed.enabled !== "boolean" ||
-    typeof parsed.logonType !== "number" ||
-    !Number.isInteger(parsed.logonType) ||
-    typeof parsed.runLevel !== "number" ||
-    !Number.isInteger(parsed.runLevel) ||
-    typeof parsed.taskState !== "number" ||
-    !Number.isInteger(parsed.taskState) ||
-    typeof parsed.lastTaskResult !== "number" ||
-    !Number.isInteger(parsed.lastTaskResult) ||
-    typeof parsed.lastRunTime !== "string"
-  ) {
+  const parsed = principalSchema.safeParse(JSON.parse(result.stdout.trim()));
+  if (!parsed.success) {
     throw new Error(`Scheduled Task principal returned invalid data for ${taskName}`);
   }
-  return {
-    enabled: parsed.enabled,
-    lastRunTime: parsed.lastRunTime,
-    lastTaskResult: parsed.lastTaskResult,
-    logonType: parsed.logonType,
-    runLevel: parsed.runLevel,
-    taskState: parsed.taskState,
-  };
+  return parsed.data;
 }
 
 export function readRelatedProcessDiagnostics(needles: string[]): {
@@ -169,37 +175,19 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
     "$ErrorActionPreference='Stop'",
     "Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CommandLine,UserModeTime,KernelModeTime,ReadOperationCount,WriteOperationCount,@{Name='CreationDate';Expression={if ($_.CreationDate) {$_.CreationDate.ToUniversalTime().ToString('o')}}} | ConvertTo-Json -Compress",
   ].join("; ");
-  const result = spawnSync(
-    getWindowsPowerShellExePath(),
-    [
-      "-NoProfile",
-      "-NonInteractive",
-      "-EncodedCommand",
-      Buffer.from(script, "utf16le").toString("base64"),
-    ],
-    { encoding: "utf8", maxBuffer: 1024 * 1024, timeout: 5_000, windowsHide: true },
-  );
+  const result = inspectWithPowerShell(script, 1024 * 1024);
+  const failed = (error: string) => ({ error, ok: false, processes: [], truncated: false });
   if (result.error) {
-    return { error: result.error.message, ok: false, processes: [], truncated: false };
+    return failed(result.error.message);
   }
   if (result.status !== 0) {
-    return {
-      error: result.stderr.trim() || `PowerShell exited ${result.status ?? "without status"}`,
-      ok: false,
-      processes: [],
-      truncated: false,
-    };
+    return failed(result.stderr.trim() || `PowerShell exited ${result.status ?? "without status"}`);
   }
   let parsed: unknown;
   try {
     parsed = JSON.parse(result.stdout.trim() || "[]");
   } catch (error) {
-    return {
-      error: error instanceof Error ? error.message : String(error),
-      ok: false,
-      processes: [],
-      truncated: false,
-    };
+    return failed(error instanceof Error ? error.message : String(error));
   }
   const entries = (Array.isArray(parsed) ? parsed : [parsed]).filter(
     (entry): entry is WindowsProcessDiagnostic => typeof entry === "object" && entry !== null,
@@ -209,11 +197,11 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
     const commandLine = (entry.CommandLine ?? "").replaceAll("/", "\\").toLowerCase();
     return normalizedNeedles.some((needle) => commandLine.includes(needle));
   });
-  const matchingPids = new Set(
-    matching
-      .map((entry) => entry.ProcessId)
-      .filter((pid): pid is number => typeof pid === "number"),
-  );
+  const ids = (key: "ProcessId" | "ParentProcessId") =>
+    new Set(
+      matching.map((entry) => entry[key]).filter((pid): pid is number => typeof pid === "number"),
+    );
+  const matchingPids = ids("ProcessId");
   // Anchors and console hosts need not carry fixture paths in argv. Expand only
   // descendants of matching processes; context parents must not admit unrelated siblings.
   let descendantsAdded: boolean;
@@ -231,11 +219,7 @@ export function readRelatedProcessDiagnostics(needles: string[]): {
       }
     }
   } while (descendantsAdded);
-  const parentPids = new Set(
-    matching
-      .map((entry) => entry.ParentProcessId)
-      .filter((pid): pid is number => typeof pid === "number"),
-  );
+  const parentPids = ids("ParentProcessId");
   const processes = entries.filter(
     (entry) =>
       matching.includes(entry) ||
@@ -274,9 +258,10 @@ export function sanitizeDiagnosticText(
     .map((variant) => variant.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"))
     .join("|");
   const sanitized = pattern
-    ? value.replace(new RegExp(pattern, "giu"), (match) => {
-        return variantPlaceholders.get(match.toLowerCase()) ?? match;
-      })
+    ? value.replace(
+        new RegExp(pattern, "giu"),
+        (match) => variantPlaceholders.get(match.toLowerCase()) ?? match,
+      )
     : value;
   return sanitized.length <= DIAGNOSTIC_TEXT_LIMIT
     ? sanitized
@@ -350,16 +335,17 @@ export function assertUnattendedLeastPrivilegeTask(params: {
   expect(params.taskXml).toMatch(/<BootTrigger(?:\s[^>]*)?\/?>/u);
   expect(params.taskXml).toMatch(/<LogonTrigger(?:\s[^>]*)?\/?>/u);
   const normalizePath = (value: string) => path.win32.normalize(value).toLowerCase();
-  const command = decodeXml(params.taskXml.match(/<Command>([^<]*)<\/Command>/u)?.[1] ?? "");
-  const args = decodeXml(params.taskXml.match(/<Arguments>([^<]*)<\/Arguments>/u)?.[1] ?? "");
-  const workingDirectory = decodeXml(
-    params.taskXml.match(/<WorkingDirectory>([^<]*)<\/WorkingDirectory>/u)?.[1] ?? "",
-  );
-  expect(normalizePath(command)).toBe(normalizePath(getWindowsCmdExePath()));
-  expect(args).toBe(`/d /s /c ""${params.scriptPath}""`);
-  expect(normalizePath(workingDirectory)).toBe(
-    normalizePath(path.win32.dirname(params.scriptPath)),
-  );
+  const field = (tag: string) =>
+    decodeXml(params.taskXml.match(new RegExp(`<${tag}>([^<]*)</${tag}>`, "u"))?.[1] ?? "");
+  expect({
+    command: normalizePath(field("Command")),
+    args: field("Arguments"),
+    cwd: normalizePath(field("WorkingDirectory")),
+  }).toEqual({
+    command: normalizePath(getWindowsCmdExePath()),
+    args: `/d /s /c ""${params.scriptPath}""`,
+    cwd: normalizePath(path.win32.dirname(params.scriptPath)),
+  });
   assertLeastPrivilegeTask(params);
 }
 
@@ -381,15 +367,10 @@ export async function waitForRuntimeStatus(
   expectedPid?: number,
 ): Promise<void> {
   const deadline = Date.now() + WAIT_TIMEOUT_MS;
-  let lastStatus = "unknown";
-  let lastDetail = "";
-  let lastPid: number | undefined;
+  let last: GatewayServiceRuntime = {};
   while (Date.now() < deadline) {
-    const runtime = await readRuntime();
-    lastStatus = runtime.status ?? "unknown";
-    lastDetail = runtime.detail ?? "";
-    lastPid = runtime.pid;
-    if (runtime.status === expected && (expectedPid === undefined || runtime.pid === expectedPid)) {
+    last = await readRuntime();
+    if (last.status === expected && (expectedPid === undefined || last.pid === expectedPid)) {
       return;
     }
     await sleep(WAIT_INTERVAL_MS);
@@ -397,7 +378,7 @@ export async function waitForRuntimeStatus(
   throw new Error(
     `Timed out waiting for Scheduled Task status=${expected}${
       expectedPid === undefined ? "" : ` pid=${expectedPid}`
-    }; observed ${lastStatus}${lastPid === undefined ? "" : ` pid=${lastPid}`}: ${lastDetail}`,
+    }; observed ${last.status ?? "unknown"}${last.pid === undefined ? "" : ` pid=${last.pid}`}: ${last.detail ?? ""}`,
   );
 }
 

@@ -79,5 +79,6 @@ export function formatQueuedEvents(
     isNewSession: false,
     events: event?.events ?? [],
     deferredEventIds: event?.deferredEventIds,
+    onEventsAdmitted: event?.onEventsAdmitted,
   });
 }

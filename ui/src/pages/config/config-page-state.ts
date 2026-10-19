@@ -70,66 +70,22 @@ import {
 } from "./config-sections.ts";
 import * as themeImport from "./custom-theme-import-owner.ts";
 import { importCustomThemeFromUrl } from "./custom-theme-import.ts";
-import { configTargetIdFromHash, type ConfigRouteData } from "./route-data.ts";
-import type { SecurityOverview } from "./security.tsx";
+import { admitMemoryRoute } from "./memory-route-admission.ts";
+import {
+  configTargetIdFromHash,
+  type ConfigRouteData,
+  type ConfigRouteSource,
+} from "./route-data.ts";
 import {
   buildSessionObserverTogglePatch,
   buildSessionObserverUtilityModelPatch,
 } from "./session-observer-settings.ts";
-import { createConfigViewState } from "./view-state.ts";
+import { createConfigViewState, createMediaDeviceState } from "./view-state.ts";
 import type { ConfigProps, ConfigViewState } from "./view-types.ts";
 
 registerEnglishCatalog(registerSettingsEnglish);
 
 const EMPTY_SESSION_CATALOG_LABELS: ReadonlyMap<string, string> = new Map();
-
-function createMediaDeviceState(): Omit<
-  NonNullable<ConfigProps["microphone"]>,
-  "selectedDeviceId"
-> & {
-  loaded: boolean;
-  requestsPermission: boolean;
-} {
-  return {
-    devices: [],
-    permissionRequired: true,
-    loading: false,
-    error: null,
-    loaded: false,
-    requestsPermission: false,
-  };
-}
-
-export function extractQuickSettingsSecurity(root: Record<string, unknown>): SecurityOverview {
-  const gateway = asConfigRecord(root.gateway);
-  const auth = asConfigRecord(gateway?.auth);
-  const tools = asConfigRecord(root.tools);
-  const exec = asConfigRecord(tools?.exec) ?? {};
-  const browser = asConfigRecord(root.browser);
-  let gatewayAuth = "unknown";
-  if (auth) {
-    const mode = typeof auth.mode === "string" ? auth.mode.trim() : "";
-    gatewayAuth = mode
-      ? mode
-      : auth.password
-        ? "password"
-        : auth.token
-          ? "token"
-          : auth.trustedProxy
-            ? "trusted-proxy"
-            : "none";
-  }
-  const profile = tools?.profile;
-  const security = exec.security;
-  return {
-    gatewayAuth,
-    execPolicy: typeof security === "string" && security.trim() ? security.trim() : "allowlist",
-    browserEnabled: browser?.enabled !== false,
-    browserEnabledOverridden: browser !== null && Object.hasOwn(browser, "enabled"),
-    toolProfile: typeof profile === "string" ? profile.trim() : "",
-    toolProfileOverridden: tools !== null && Object.hasOwn(tools, "profile"),
-  };
-}
 
 /** Coordinates page-local drafts and requests; config and preference writes stay with their owners. */
 export function createConfigPage(
@@ -151,13 +107,24 @@ export function createConfigPage(
     : null;
   // Imperative owner notifications can arrive while a descendant is rendering.
   const [revision, publish] = createSignal(0, { ownedWrite: true });
-  const invalidate = () => publish((value) => value + 1);
+  const invalidate = () => {
+    publish((value) => value + 1);
+    onSettled(afterCommit);
+  };
   const [presentation, setPresentation] = createStore<{
     formModes: Partial<Record<ConfigPageId, ConfigProps["formMode"]>>;
     selections: Partial<Record<ConfigPageId, ConfigSelection>>;
   }>({ formModes: {}, selections: {} });
   let pageId: ConfigPageId = "advanced";
   let routeData: ConfigRouteData | null = null;
+  const routeListeners = new Set<() => void>();
+  const admittedRoute: ConfigRouteSource = {
+    read: () => routeData,
+    subscribe(listener) {
+      routeListeners.add(listener);
+      return () => routeListeners.delete(listener);
+    },
+  };
   let connected = false;
   let settings = loadSettings();
   let hiddenSessionCatalogIds = loadStoredHiddenSessionCatalogIds();
@@ -192,6 +159,7 @@ export function createConfigPage(
   let poll: ReturnType<typeof setInterval> | undefined;
   let countdown: ReturnType<typeof setInterval> | undefined;
   let routeInitialized = false;
+  let normalizedMemoryLocation = "";
   let targetBlockId: string | null = null;
   let scrollFrame: number | null = null;
 
@@ -205,6 +173,7 @@ export function createConfigPage(
     const state = context.runtimeConfig.state;
     return asConfigRecord(state.configForm ?? state.configSnapshot?.config) ?? {};
   }
+
   function mutationDisabled() {
     revision();
     return isCuratedConfigMutationDisabled();
@@ -226,6 +195,9 @@ export function createConfigPage(
     abortRequests();
     pageId = nextPageId;
     routeData = nextRouteData;
+    admitMemoryRoute(context, pageId, routeData, normalizedMemoryLocation, (location) => {
+      normalizedMemoryLocation = location;
+    });
     const selection = routeData
       ? normalizeConfigSelection(pageId, routeData.section, null)
       : configSelectionFromSearch(pageId, globalThis.location?.search ?? "");
@@ -240,6 +212,9 @@ export function createConfigPage(
       routeData?.targetBlockId ?? configTargetIdFromHash(globalThis.location?.hash ?? "");
     synchronize();
     invalidate();
+    for (const notify of routeListeners) {
+      notify();
+    }
   }
 
   const hiddenSessionCatalogsChanged = () => {
@@ -345,15 +320,14 @@ export function createConfigPage(
   }
 
   function afterCommit() {
-    if (!targetBlockId || scrollFrame !== null) {
+    if (!connected || !targetBlockId || scrollFrame !== null) {
       return;
     }
     scrollFrame = requestAnimationFrame(() => {
       scrollFrame = null;
-      const target = [...(host().querySelectorAll<HTMLElement>("[id]") ?? [])].find(
-        (element) => element.id === targetBlockId,
-      );
-      if (!target) {
+      // Settings routes share one live page; keep the document's ID lookup scoped to it.
+      const target = targetBlockId ? host().ownerDocument.getElementById(targetBlockId) : null;
+      if (!target || !host().contains(target)) {
         return;
       }
       target.scrollIntoView?.({ behavior: resolveScrollBehavior(), block: "start" });
@@ -910,7 +884,6 @@ export function createConfigPage(
       customThemeImportBusy: customThemeImportOwner.snapshot.busy,
       customThemeImportMessage: customThemeImportOwner.snapshot.message,
       customThemeImportExpanded: customThemeImportOwner.snapshot.expanded,
-      customThemeImportFocusToken: customThemeImportOwner.snapshot.focusToken,
       onCustomThemeImportUrlChange: (next) => customThemeImportOwner.setUrl(next),
       onImportCustomTheme: () => void importCustomTheme(),
       onClearCustomTheme: () => clearCustomTheme(),
@@ -1032,8 +1005,6 @@ export function createConfigPage(
   };
   // Route changes synchronize the config owners, lazy requests, and polling.
   createEffect(route, (next) => updateRoute(next.pageId, next.routeData));
-  // Scroll the requested settings section after its DOM has committed.
-  createEffect(revision, () => afterCommit());
   onSettled(() => {
     // These notifications admit requests and retire connection-scoped work synchronously.
     const subscriptions = [
@@ -1078,6 +1049,7 @@ export function createConfigPage(
     };
   });
   return {
+    admittedRoute,
     application() {
       revision();
       return context;

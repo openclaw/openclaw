@@ -516,7 +516,7 @@ suite.define(() => {
     }
   });
 
-  it("keeps sidebar sessions visible through transport and client replacement reconnects", async () => {
+  it("retains sidebar sessions through transport loss and reloads them after client replacement", async () => {
     const context = await suite.browser.newContext(createControlUiE2eContextOptions());
     const page = await context.newPage();
     const sessionKey = "agent:main:disconnect-proof";
@@ -584,11 +584,12 @@ suite.define(() => {
         })
         .toBeGreaterThan(reconnectPreviewCount);
       await sidebarRow.waitFor({ state: "visible" });
-      expect(await sidebarRows.count()).toBe(3);
+      // A replacement client retires membership; only the fresh route descriptor is ready.
+      expect(await sidebarRows.count()).toBe(1);
       for (const otherKey of otherSessionKeys) {
-        await page
-          .locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`)
-          .waitFor({ state: "visible" });
+        expect(
+          await page.locator(`.sidebar-recent-session[data-session-key="${otherKey}"]`).count(),
+        ).toBe(0);
       }
 
       const firstReconnectListCount = (await gateway.getRequests("sessions.list", rosterMatch))

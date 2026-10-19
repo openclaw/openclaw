@@ -164,7 +164,6 @@ const reviewedMembers = new Map<string, readonly string[]>([
 // another proven candidate or an inventory-reviewed worker/maintenance entry.
 const nonRuntimeCandidates = new Map<string, readonly string[]>([
   ["src/state/openclaw-state-db-maintenance.ts", ["writeCurrentStateSchemaMetadata"]],
-  ["src/state/user-github-connections.kernel.ts", ["listUserGitHubConnectionsInDatabase"]],
   ["src/state/user-profile-mutation.ts", ["runUserProfileWriteTransaction"]],
   ["src/gateway/channel-operator-authority.ts", ["resolveChannelOperatorIdentityFacts"]],
   [
@@ -273,7 +272,13 @@ const synchronousScopes = new Map<string, ReadonlyMap<string, number>>([
   ["src/state/openclaw-state-db.ts", new Map([["runOpenClawStateWriteTransaction", 0]])],
   ["src/state/user-profile-mutation.ts", new Map([["runUserProfileWriteTransaction", 0]])],
   ["src/state/user-profiles-internal.ts", new Map([["readResolvedUserProfile", 1]])],
-  ["src/infra/sqlite-transaction.ts", new Map([["runSqliteDeferredTransactionSync", 1]])],
+  [
+    "src/infra/sqlite-transaction.ts",
+    new Map([
+      ["runSqliteDeferredTransactionSync", 1],
+      ["runSqliteReadSnapshotSync", 1],
+    ]),
+  ],
   [
     "src/plugins/runtime/generation-state.ts",
     new Map([["withPluginRuntimeGenerationRegistryScope", 1]]),

@@ -11,6 +11,11 @@ import { createAgentHarnessHostCapabilities } from "./host-capability.js";
 
 type HostAttempt = Parameters<typeof createAgentHarnessHostCapabilities>[0]["attempt"];
 
+export const harnessHostAdmissionsForTest = new WeakMap<
+  ReturnType<typeof createAgentHarnessHostCapabilities>["capabilities"],
+  { admittedRunContext: AdmittedRunContext; close: () => void }
+>();
+
 type AdmittedHostCapabilityTestFixture = Readonly<{
   admittedRunContext: AdmittedRunContext;
   hostCapabilities: ReturnType<typeof createAgentHarnessHostCapabilities>["capabilities"];
@@ -78,6 +83,10 @@ export async function createAdmittedHostCapabilityTestFixture(
       toolCalls: options.toolCalls,
     }),
   );
+  harnessHostAdmissionsForTest.set(host.capabilities, {
+    admittedRunContext,
+    close: admission.close,
+  });
   return {
     admittedRunContext,
     hostCapabilities: host.capabilities,

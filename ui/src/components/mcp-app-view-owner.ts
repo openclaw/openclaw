@@ -6,11 +6,11 @@ import type { ApplicationContext } from "../app/context.ts";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { navigateMcpAppLink } from "../app/mcp-app-routing.ts";
 import { hasOperatorReadAccess } from "../app/operator-access.ts";
-import { t as translate } from "../i18n/index.ts";
+import { i18n, t as translate } from "../i18n/index.ts";
 import { registerMcpAppEnglish } from "../i18n/locales/en-mcp-app.ts";
 import { parseMcpAppLink } from "../lib/mcp-app-route.ts";
 import { openExternalUrlSafe } from "../lib/open-external-url.ts";
-import type { SolidBridgeElement } from "../lib/solid-bridge.ts";
+import { listen } from "../lib/reactive/listener.ts";
 import { OpenClawAppBridge, bindMcpAppResourceHandlers } from "./mcp-app-bridge.ts";
 import { createMcpAppConfirm } from "./mcp-app-confirm.ts";
 import {
@@ -28,75 +28,27 @@ import {
   type McpAppContextState,
   type McpAppContextEventDetail,
   MCP_APP_VIEW_EXPIRED_EVENT,
-  type McpAppHostSandboxCsp,
 } from "./mcp-app-security.ts";
+import type {
+  McpAppBinding,
+  McpAppResources,
+  McpAppViewElement,
+  McpAppViewPayload,
+  McpAppViewProps,
+} from "./mcp-app-view-types.ts";
 import { promoteToPopoverTopLayer } from "./menu-surface.ts";
 import { resolveSandboxHostUrl } from "./sandbox-host.ts";
 
 registerMcpAppEnglish();
 
-type McpAppViewPayload = {
-  sandboxUrl: string;
-  sandboxPort: number;
-  sandboxOrigin?: string;
-  html: string;
-  csp?: McpAppHostSandboxCsp;
-  toolInput: unknown;
-  toolResult: Parameters<OpenClawAppBridge["sendToolResult"]>[0];
-  messageSupported?: boolean;
-  updateModelContextSupported?: boolean;
-  richModelContextSupported?: boolean;
-  fileResourcesSupported?: boolean;
-  openFilesSupported?: boolean;
-  hostContext?: { "openai/modelContext"?: McpAppContextState; "openai/deepLink"?: { url: string } };
-  displayMode?: "inline" | "fullscreen";
-  displayModes?: {
-    availableDisplayModes?: Array<"inline" | "fullscreen">;
-    preferredDisplayMode?: "inline" | "fullscreen";
-  };
-};
-
-type McpAppResources = {
-  bridge: OpenClawAppBridge | null;
-  requestAbort: AbortController;
-  cleanups: Set<() => void>;
-  frameHeight: number;
-  iframe: HTMLIFrameElement;
-  transport: { close(): Promise<void> } | null;
-  disposed: boolean;
-  updateHostContext?: () => void;
-  reconnect?: () => Promise<void>;
-};
-type McpAppBinding = {
-  client: NonNullable<ApplicationContext["gateway"]["snapshot"]["client"]>;
-  sessionKey: string;
-  viewId: string;
-  agentId?: string;
-  connectionRevision: number | undefined;
-  scope: number;
-};
-
 const MCP_APP_TEARDOWN_TIMEOUT_MS = 250;
 
-export type McpAppViewProps = {
-  sessionKey: string;
-  agentId: string;
-  viewId: string;
-  height: number;
-  fillContainer: boolean;
-  surface: "conversation" | "board";
-  title: string;
-  deepLink: string | undefined;
-  onRelaunch: (() => void) | undefined;
-  onHeightChange: ((height: number) => void) | undefined;
-  relaunching: boolean;
-  displayMode: "inline" | "fullscreen";
-};
-export type ViewMethods = { teardown(): Promise<void>; restartAfterTeardown(): void };
-export type McpAppViewElement = SolidBridgeElement<McpAppViewProps, ViewMethods>;
-
 /** Owns synchronous frame/protocol admission; the view observes its publications. */
-export function createMcpAppView(host: McpAppViewElement, context: ApplicationContext) {
+export function createMcpAppView(
+  host: McpAppViewElement,
+  context: ApplicationContext,
+  afterSettlement: (callback: () => void) => void,
+) {
   let inactive: "ended" | "reconstructed" | null = null;
   let errorState: unknown = null;
   let mountElement: HTMLDivElement | undefined;
@@ -107,6 +59,101 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
   const confirmation = createMcpAppConfirm();
   const listeners = new Set<() => void>();
   const publishState = () => listeners.forEach((listener) => listener());
+  let started = false;
+  let disposed = false;
+  let retired = false;
+  let inputFlushPending = false;
+  let reconnectSetupPending = false;
+  let stopConnection: (() => void) | undefined;
+  let stopLocale: (() => void) | undefined;
+  let bindingInputs: ReturnType<typeof readBindingInputs> | undefined;
+  let presentationInputs:
+    | readonly [number, boolean, McpAppViewProps["displayMode"], string | undefined]
+    | undefined;
+  let titleInput: string | undefined;
+  let surfaceInput: McpAppViewProps["surface"] | undefined;
+
+  function inputChanged() {
+    if (!started || disposed || inputFlushPending) {
+      return;
+    }
+    inputFlushPending = true;
+    afterSettlement(flushInputs);
+  }
+
+  function readBindingInputs() {
+    const gateway = context.gateway;
+    return [
+      gateway.snapshot.client,
+      host.sessionKey,
+      host.viewId,
+      host.agentId,
+      gateway.connectionRevision,
+      gatewayPresentationScope(gateway).key,
+      gateway.snapshot.phase === "connected" &&
+        gateway.snapshot.hello !== null &&
+        !hasOperatorReadAccess(gateway.snapshot.hello.auth ?? null),
+    ] as const;
+  }
+
+  function flushInputs() {
+    inputFlushPending = false;
+    if (disposed) {
+      return;
+    }
+    const nextBinding = readBindingInputs();
+    const bindingChanged = !bindingInputs?.every((value, index) => value === nextBinding[index]);
+    bindingInputs = nextBinding;
+    const reconnectSetup = reconnectSetupPending && !retired;
+    reconnectSetupPending = false;
+    if (bindingChanged || reconnectSetup) {
+      void setup(currentBinding(nextBinding));
+    }
+    if (titleInput !== host.title) {
+      titleInput = host.title;
+      updateTitle();
+    }
+    const nextPresentation = [
+      host.height,
+      host.fillContainer,
+      host.displayMode,
+      host.deepLink,
+    ] as const;
+    const presentationChanged = !presentationInputs?.every(
+      (value, index) => value === nextPresentation[index],
+    );
+    presentationInputs = nextPresentation;
+    if (presentationChanged) {
+      updatePresentation();
+    }
+    if (surfaceInput !== host.surface && !presentationChanged) {
+      updateReservedHeight();
+    }
+    surfaceInput = host.surface;
+  }
+
+  function start() {
+    started = true;
+    let { client, phase, hello } = context.gateway.snapshot;
+    stopConnection = context.gateway.subscribe((snapshot) => {
+      if (snapshot.client !== client || snapshot.phase !== phase || snapshot.hello !== hello) {
+        connectionChanged();
+      }
+      ({ client, phase, hello } = snapshot);
+      // Scope, generation, and access can change without replacing the snapshot's objects.
+      inputChanged();
+    });
+    stopLocale = i18n.subscribe(updateTitle);
+    inputChanged();
+  }
+
+  function dispose() {
+    disposed = true;
+    stopConnection?.();
+    stopLocale?.();
+    void teardown();
+  }
+
   function setInactive(value: typeof inactive) {
     inactive = value;
     publishState();
@@ -117,9 +164,11 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
     confirmation.cancel();
     if (context.gateway.snapshot.phase === "connected") {
       const resources = activeResources;
-      if (!resources) {
-        void setup(currentBinding());
-      } else if (resources.reconnect) {
+      if (!resources && !retired) {
+        setupAbort?.abort();
+        reconnectSetupPending = true;
+        inputChanged();
+      } else if (resources?.reconnect) {
         const signal = requestAbort.signal;
         void resources.reconnect().then(
           () => {
@@ -139,6 +188,10 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
     }
   }
   async function setup(binding: McpAppBinding | null) {
+    if (disposed) {
+      return;
+    }
+    retired = false;
     setupAbort?.abort();
     const abort = new AbortController();
     setupAbort = abort;
@@ -184,7 +237,7 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
   function updatePresentation() {
     confirmation.update();
     if (host.displayMode === "fullscreen") {
-      promoteToPopoverTopLayer(host);
+      promoteToPopoverTopLayer(host, () => [host]);
     } else {
       host.removeAttribute("popover");
     }
@@ -293,6 +346,9 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
 
   /** Parent render owners await this before removing the connected view. */
   async function teardown() {
+    retired = true;
+    bindingInputs = readBindingInputs();
+    reconnectSetupPending = false;
     setupAbort?.abort();
     await teardownResources(activeResources);
   }
@@ -306,21 +362,16 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
     void setup(currentBinding());
   }
 
-  function currentBinding(): McpAppBinding | null {
-    const gateway = context.gateway;
-    const client = gateway.snapshot.client;
-    const denied =
-      gateway.snapshot.phase === "connected" &&
-      gateway.snapshot.hello !== null &&
-      !hasOperatorReadAccess(gateway.snapshot.hello.auth ?? null);
+  function currentBinding(inputs = readBindingInputs()): McpAppBinding | null {
+    const [client, sessionKey, viewId, agentId, connectionRevision, scope, denied] = inputs;
     return client && !denied
       ? {
           client,
-          sessionKey: host.sessionKey,
-          viewId: host.viewId,
-          agentId: host.agentId || undefined,
-          connectionRevision: gateway.connectionRevision,
-          scope: gatewayPresentationScope(gateway).key,
+          sessionKey,
+          viewId,
+          agentId: agentId || undefined,
+          connectionRevision,
+          scope,
         }
       : null;
   }
@@ -405,9 +456,10 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
       resources = createdResources;
       activeResources = createdResources;
       addResourceCleanup(createdResources, () => confirmation.cancel());
-      signal.addEventListener("abort", () => void teardownResources(createdResources), {
-        once: true,
-      });
+      addResourceCleanup(
+        createdResources,
+        listen(signal, "abort", () => void teardownResources(createdResources), { once: true }),
+      );
 
       const addCleanup = (cleanup: () => void) => addResourceCleanup(createdResources, cleanup);
       await loadMcpAppSandbox(
@@ -661,12 +713,11 @@ export function createMcpAppView(host: McpAppViewElement, context: ApplicationCo
   }
   return {
     confirmation,
-    connectionChanged,
+    start,
+    dispose,
+    inputChanged,
     setup,
     currentBinding,
-    updateTitle,
-    updatePresentation,
-    updateReservedHeight,
     teardown,
     restartAfterTeardown,
     read: () => ({ inactive, error: errorState }),

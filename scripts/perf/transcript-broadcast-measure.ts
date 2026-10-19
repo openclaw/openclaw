@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -8,6 +8,8 @@ import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
+import { prepareSessionEventMetrics } from "../../src/gateway/session-event-metrics.js";
+import { encodePngRgba } from "../../src/media/png-encode.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import {
   readMockUserText,
@@ -15,8 +17,11 @@ import {
 } from "../e2e/lib/mock-inference-facts.ts";
 import { readBody } from "../e2e/lib/mock-openai-http.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
+import { startGatewayBenchDiagnostics } from "../lib/gateway-bench-diagnostics.ts";
 import {
   readGatewayCpuUsage,
+  startGatewayDiagnostics,
+  readGatewayResources,
   measureGatewayCpuUsage,
   measureGatewayAllocations,
 } from "../lib/gateway-bench-profile.ts";
@@ -32,6 +37,7 @@ const { values } = parseArgs({
   options: {
     "state-dir": { type: "string" },
     allocations: { type: "boolean", default: false },
+    diagnostics: { type: "boolean", default: false },
     scenario: { type: "string", default: "transcript-broadcast" },
     revision: { type: "string" },
     operations: { type: "string" },
@@ -41,9 +47,17 @@ const { values } = parseArgs({
     port: { type: "string", default: "41033" },
     "mock-port": { type: "string", default: "41034" },
     clients: { type: "string", default: "60" },
+    "exact-clients": { type: "string" },
+    "activity-summaries": { type: "boolean", default: false },
     runs: { type: "string", default: "20" },
     rounds: { type: "string", default: "5" },
     chunks: { type: "string", default: "100" },
+    "prompt-kib": { type: "string", default: "128" },
+    "heap-snapshot": { type: "boolean", default: false },
+    "session-row-deltas": { type: "boolean", default: false },
+    "session-envelope-refs": { type: "boolean", default: false },
+    "start-at": { type: "string" },
+    "list-interval-ms": { type: "string", default: "0" },
   },
 });
 if (!values["state-dir"]) {
@@ -58,16 +72,23 @@ if (port > 65535 || mockPort > 65535 || port === mockPort) {
 }
 const scenario = values.scenario;
 if (
-  !["sessions.list", "subscribe", "chat.send", "transcript-broadcast", "plugins.reload"].includes(
-    scenario,
-  )
+  ![
+    "sessions.list",
+    "subscribe",
+    "chat.send",
+    "transcript-broadcast",
+    "attempt-retention",
+    "plugins.reload",
+  ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, or plugins.reload",
+    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, attempt-retention, or plugins.reload",
   );
 }
-const turnScenario = scenario === "chat.send" || scenario === "transcript-broadcast";
-if (!values.allocations && scenario !== "transcript-broadcast") {
+const retentionScenario = scenario === "attempt-retention";
+const turnScenario =
+  scenario === "chat.send" || scenario === "transcript-broadcast" || retentionScenario;
+if (!values.allocations && scenario !== "transcript-broadcast" && !retentionScenario) {
   throw new Error("--scenario requires --allocations");
 }
 const operations = integer(
@@ -80,9 +101,24 @@ if (!["compact", "sidebar", "dashboard"].includes(rowMode)) {
   throw new Error("--row-mode must be compact, sidebar, or dashboard");
 }
 const clientCount = scenario === "chat.send" ? 1 : integer(values.clients, "--clients");
+const exactClients = integer(values["exact-clients"] ?? String(clientCount), "--exact-clients", 0);
+if (exactClients > clientCount) {
+  throw new Error("--exact-clients must not exceed --clients");
+}
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
 const rounds = integer(values.rounds, "--rounds");
 const chunkCount = integer(values.chunks, "--chunks");
+const listIntervalMs = integer(values["list-interval-ms"], "--list-interval-ms", 0);
+const startAt = values["start-at"] ? integer(values["start-at"], "--start-at") : undefined;
+if (values["session-envelope-refs"] && !values["session-row-deltas"]) {
+  throw new Error("--session-envelope-refs requires --session-row-deltas");
+}
+const promptBytes = integer(values["prompt-kib"], "--prompt-kib") * 1024;
+const promptContent = createCipheriv(
+  "aes-256-ctr",
+  createHash("sha256").update("attempt-retention-967").digest(),
+  Buffer.alloc(16),
+);
 const root = path.resolve(values["state-dir"]);
 const fixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
@@ -117,8 +153,15 @@ if (scenario === "plugins.reload") {
   reloadPluginId = plugin.pluginIds[0];
   cfg.plugins = { enabled: true, allow: plugin.pluginIds, load: { paths: [plugin.pluginsDir] } };
 }
-const toolPath = path.join(root, "workspace", "synthetic-tool-input.txt");
-writeFileSync(toolPath, "Synthetic allocation benchmark tool result.\n");
+const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) => {
+  const file = path.join(root, "workspace", `synthetic-tool-input-${index}.txt`);
+  writeFileSync(
+    file,
+    "Synthetic allocation benchmark tool result.\n" +
+      (retentionScenario ? promptContent.update(Buffer.alloc(8192)).toString("hex") : ""),
+  );
+  return file;
+});
 const configPath = path.join(output, "openclaw.json");
 writeFileSync(configPath, JSON.stringify(cfg));
 const chunk = "Synthetic streamed answer. ";
@@ -173,11 +216,15 @@ let activePrimaryStreams = 0;
 let peakPrimaryStreams = 0;
 let toolCalls = 0;
 let toolResults = 0;
+let outputLimitResponses = 0;
+let recoveredResponses = 0;
+let imageRequests = 0;
 let cohort:
   | {
       id: string;
       arrivals: Set<number>;
       toolCallIds: Set<string>;
+      outputLimited: Set<string>;
       ready: Promise<void>;
       release: () => void;
       reject: (error: Error) => void;
@@ -191,6 +238,9 @@ const mock = createServer((req, res) => {
   void (async () => {
     const body: unknown = JSON.parse(await readBody(req));
     const facts = summarizeMockInferenceRequest(body);
+    if (facts.purpose === "activity-recap") {
+      recapRequests++;
+    }
     let input: unknown;
     if (body && typeof body === "object") {
       if ("input" in body) {
@@ -207,23 +257,29 @@ const mock = createServer((req, res) => {
           .find((text) => text !== undefined)
       : undefined;
     const index = facts.turnIndex;
-    const toolOutput =
+    const toolOutputs =
       Array.isArray(input) && cohort
-        ? input.findLast(
+        ? input.filter(
             (item) =>
               item?.type === "function_call_output" && cohort?.toolCallIds.has(item.call_id),
           )
-        : undefined;
+        : [];
+    const toolOutput = toolOutputs.at(-1);
     const continuation =
-      scenario === "chat.send" && facts.purpose === "benchmark-turn" && toolOutput !== undefined;
+      (scenario === "chat.send" || retentionScenario) && toolOutput !== undefined;
     if (continuation) {
       if (
-        typeof toolOutput.output !== "string" ||
-        !toolOutput.output.includes("Synthetic allocation benchmark tool result.")
+        toolOutputs.some(
+          (toolResult) =>
+            typeof toolResult.output !== "string" ||
+            !toolResult.output.includes("Synthetic allocation benchmark tool result."),
+        )
       ) {
         throw new Error("synthetic read tool did not return its fixture text");
       }
-      toolResults++;
+      if (!retentionScenario || !cohort?.outputLimited.has(toolOutput.call_id)) {
+        toolResults += toolOutputs.length;
+      }
     }
     const primary =
       cohort &&
@@ -234,8 +290,27 @@ const mock = createServer((req, res) => {
       index >= 1 &&
       index <= runCount &&
       lastUser !== undefined &&
-      stripInboundMetadata(lastUser).trim() ===
+      stripInboundMetadata(lastUser).trim().split("\n")[0] ===
         `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
+    if (retentionScenario && (primary || continuation)) {
+      const hasImage =
+        Array.isArray(input) &&
+        input.some(
+          (message) =>
+            Array.isArray(message?.content) &&
+            message.content.some(
+              (part: unknown) =>
+                isRecord(part) &&
+                part.type === "input_image" &&
+                typeof part.image_url === "string" &&
+                part.image_url.startsWith("data:image/"),
+            ),
+        );
+      if (!hasImage) {
+        throw new Error("synthetic inline image did not survive the provider request");
+      }
+      imageRequests++;
+    }
     activeStreams++;
     peakStreams = Math.max(peakStreams, activeStreams);
     streamRequests++;
@@ -257,38 +332,64 @@ const mock = createServer((req, res) => {
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
       let toolAnswer;
-      if (primary && scenario === "chat.send" && cohort) {
-        const callId = `call_allocation_${cohort.id}`;
-        cohort.toolCallIds.add(callId);
-        const item = {
-          type: "function_call",
-          id: `fc_${cohort.id}`,
-          call_id: callId,
-          name: "read",
-          arguments: JSON.stringify({ path: toolPath }),
-        };
-        toolCalls++;
+      if (primary && (scenario === "chat.send" || retentionScenario) && cohort) {
+        const currentCohort = cohort;
+        const items = toolPaths.map((toolPath, toolIndex) => {
+          const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}`;
+          currentCohort.toolCallIds.add(callId);
+          return {
+            type: "function_call",
+            id: `fc_${currentCohort.id}_${index}_${toolIndex}`,
+            call_id: callId,
+            name: "read",
+            arguments: JSON.stringify({ path: toolPath }),
+          };
+        });
+        toolCalls += items.length;
         toolAnswer = [
-          { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-          {
-            type: "response.function_call_arguments.delta",
-            item_id: item.id,
-            output_index: 0,
-            delta: item.arguments,
-          },
-          { type: "response.output_item.done", output_index: 0, item },
+          ...items.flatMap((item, output_index) => [
+            { type: "response.output_item.added", output_index, item: { ...item, arguments: "" } },
+            {
+              type: "response.function_call_arguments.delta",
+              item_id: item.id,
+              output_index,
+              delta: item.arguments,
+            },
+            { type: "response.output_item.done", output_index, item },
+          ]),
           {
             type: "response.completed",
             response: {
               id: `resp_${cohort.id}`,
               status: "completed",
-              output: [item],
+              output: items,
               usage: { input_tokens: 11, output_tokens: 10, total_tokens: 21 },
             },
           },
         ];
       }
-      const answer = toolAnswer ?? (primary || continuation ? events : utilityEvents);
+      let answer = toolAnswer ?? (primary || continuation ? events : utilityEvents);
+      if (retentionScenario && continuation && cohort) {
+        if (!cohort.outputLimited.has(toolOutput.call_id)) {
+          cohort.outputLimited.add(toolOutput.call_id);
+          outputLimitResponses++;
+          const outputLimitAnswer = [
+            {
+              type: "response.incomplete",
+              response: {
+                id: `resp_limit_${toolOutput.call_id}`,
+                status: "incomplete",
+                incomplete_details: { reason: "max_output_tokens" },
+                output: [],
+                usage: { input_tokens: 11, output_tokens: 4096, total_tokens: 4107 },
+              },
+            },
+          ];
+          answer = outputLimitAnswer;
+        } else {
+          recoveredResponses++;
+        }
+      }
       for (const event of answer) {
         if (res.destroyed) {
           break;
@@ -313,12 +414,71 @@ const mock = createServer((req, res) => {
 const children: ChildProcess[] = [];
 const clients: ReturnType<typeof createGatewayWsClient>[] = [];
 const counters = new Map<string, number>();
+const eventBytes = new Map<string, number>();
+const sessionEventSizes = new Map<string, { frames: number; bytes: number }>();
+type FrameSizes = {
+  frameBytes: number;
+  payloadBytes: number;
+  fields: Record<string, number>;
+  sessionFields?: Record<string, number>;
+  duplicateEnvelopeFields?: number;
+  potentialNumericRefsFrameBytes?: number;
+};
+const representativeFrames = new Map<string, FrameSizes>();
+let initialFullFrame: FrameSizes | undefined;
 const perClientCounters: Map<string, number>[] = [];
 let measuring = false;
 let lastSubscriberEventAt = performance.now();
 let closing = false;
 let subscriberFailure: Error | undefined;
+let recapRequests = 0;
 let gateway: ChildProcess | undefined;
+function fieldBytes(record: Record<string, unknown>) {
+  return Object.fromEntries(
+    Object.entries(record).map(([field, value]) => [
+      field,
+      Buffer.byteLength(JSON.stringify({ [field]: value })) - 2,
+    ]),
+  );
+}
+function measureFrameFields(
+  event: { payload?: unknown },
+  payload: Record<string, unknown>,
+  frameBytes: number,
+): FrameSizes {
+  const wire = isRecord(payload.session) ? payload.session : undefined;
+  const full =
+    wire && isRecord(wire.full) ? wire.full : wire && !("base" in wire) ? wire : undefined;
+  const fields = wire && isRecord(wire.set) ? wire.set : full;
+  const result: FrameSizes = {
+    frameBytes,
+    payloadBytes: Buffer.byteLength(JSON.stringify(payload)),
+    fields: fieldBytes(payload),
+    ...(fields ? { sessionFields: fieldBytes(fields) } : {}),
+  };
+  if (full) {
+    const sortedFields = Object.keys(full).toSorted();
+    const duplicateFields = sortedFields.filter(
+      (field) =>
+        field !== "key" &&
+        field !== "agentId" &&
+        Object.hasOwn(payload, field) &&
+        JSON.stringify(payload[field]) === JSON.stringify(full[field]),
+    );
+    const potential: Record<string, unknown> = {
+      ...payload,
+      sessionFieldRefs: duplicateFields.map((field) => sortedFields.indexOf(field)),
+    };
+    for (const field of duplicateFields) {
+      delete potential[field];
+    }
+    result.duplicateEnvelopeFields = duplicateFields.length;
+    result.potentialNumericRefsFrameBytes = Buffer.byteLength(
+      JSON.stringify({ ...event, payload: potential }),
+    );
+  }
+  return result;
+}
 const ownedListeners = new Set<ChildProcess>();
 const env = {
   ...createGatewayBenchEnv(path.join(root, "home"), configPath, { startupTrace: false }),
@@ -402,6 +562,7 @@ async function rpc(
   client: ReturnType<typeof createGatewayWsClient>,
   method: string,
   params: unknown,
+  onResponse?: (id: string) => void,
 ) {
   assertGatewayAlive();
   const response = await client.request(method, params, 180_000);
@@ -409,9 +570,16 @@ async function rpc(
   if (!response.ok) {
     throw new Error(`${method}: ${JSON.stringify(response.error)}`);
   }
+  onResponse?.(response.id);
   return response.payload;
 }
 async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
+  if (retentionScenario) {
+    // Retire each previous session generation so retained history is not the measurement.
+    for (const key of keys) {
+      await rpc(client, "sessions.reset", { key });
+    }
+  }
   let release!: () => void;
   let reject!: (error: Error) => void;
   const cohortReady = new Promise<void>((resolve, rejectReady) => {
@@ -422,6 +590,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
     id: randomUUID(),
     arrivals: new Set(),
     toolCallIds: new Set(),
+    outputLimited: new Set(),
     ready: cohortReady,
     release,
     reject,
@@ -441,11 +610,35 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
       cohortReady,
       ...keys.map(async (sessionKey, index) => {
         const runId = randomUUID();
+        const image = retentionScenario
+          ? promptContent.update(Buffer.alloc(256 * 128 * 4))
+          : undefined;
+        if (image) {
+          for (let alpha = 3; alpha < image.length; alpha += 4) {
+            image[alpha] = 255;
+          }
+        }
         await rpc(client, scenario === "chat.send" ? "chat.send" : "agent", {
           sessionKey,
-          message: `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.`,
+          message:
+            `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.` +
+            (retentionScenario
+              ? `\nSynthetic prompt payload: ${promptContent.update(Buffer.alloc(promptBytes / 2)).toString("hex")}`
+              : ""),
           deliver: false,
           idempotencyKey: runId,
+          ...(image
+            ? {
+                attachments: [
+                  {
+                    type: "file",
+                    mimeType: "image/png",
+                    fileName: "synthetic-noise.png",
+                    content: encodePngRgba(image, 256, 128).toString("base64"),
+                  },
+                ],
+              }
+            : {}),
         });
         const result = await rpc(client, "agent.wait", { runId, timeoutMs: 170_000 });
         if (
@@ -530,6 +723,7 @@ try {
     const clientCounters = new Map<string, number>();
     perClientCounters.push(clientCounters);
     let previousSeq: number | undefined;
+    let receivedFrameBytes = 0;
     const client = createGatewayWsClient({
       url: `ws://127.0.0.1:${port}`,
       onEvent: (event) => {
@@ -542,11 +736,50 @@ try {
           }
           previousSeq = event.seq;
         }
+        const payload = isRecord(event.payload) ? event.payload : undefined;
+        if (index === 0 && !initialFullFrame && event.event === "sessions.changed" && payload) {
+          const sizes = measureFrameFields(event, payload, receivedFrameBytes);
+          if (sizes.duplicateEnvelopeFields !== undefined) {
+            initialFullFrame = sizes;
+          }
+        }
         if (measuring) {
           counters.set(event.event, (counters.get(event.event) ?? 0) + 1);
           clientCounters.set(event.event, (clientCounters.get(event.event) ?? 0) + 1);
+          eventBytes.set(event.event, (eventBytes.get(event.event) ?? 0) + receivedFrameBytes);
+          const attribution = prepareSessionEventMetrics(event.event, payload, [], undefined)?.("");
+          if (attribution) {
+            const delivery =
+              index < exactClients &&
+              typeof payload?.sessionKey === "string" &&
+              keys.includes(payload.sessionKey)
+                ? "subscribed"
+                : "roster";
+            const bucket = `${event.event}:${attribution.reason}:${delivery}`;
+            const sizes = sessionEventSizes.get(bucket) ?? { frames: 0, bytes: 0 };
+            sizes.frames++;
+            sizes.bytes += receivedFrameBytes;
+            sessionEventSizes.set(bucket, sizes);
+            if (
+              index === 0 &&
+              event.event === "sessions.changed" &&
+              payload &&
+              receivedFrameBytes > (representativeFrames.get(bucket)?.frameBytes ?? 0)
+            ) {
+              representativeFrames.set(
+                bucket,
+                measureFrameFields(event, payload, receivedFrameBytes),
+              );
+            }
+          }
         }
       },
+    });
+    // The helper parses frames before onEvent; capture their exact uncompressed size first.
+    client.ws.prependListener("message", (data: import("ws").RawData) => {
+      receivedFrameBytes = Array.isArray(data)
+        ? data.reduce((sum, part) => sum + part.byteLength, 0)
+        : data.byteLength;
     });
     client.ws.on("close", (code) => {
       if (!closing) {
@@ -572,7 +805,13 @@ try {
       },
       role: "operator",
       scopes: ["operator.read", "operator.admin"],
-      caps: ["session-scoped-events", "chat-only-assistant-text"],
+      caps: [
+        "session-scoped-events",
+        "chat-only-assistant-text",
+        ...(exactClients < clientCount ? ["roster-message-bodies-optional"] : []),
+        ...(values["session-row-deltas"] ? ["session-row-deltas"] : []),
+        ...(values["session-envelope-refs"] ? ["session-event-field-refs"] : []),
+      ],
     });
     if (index === 0) {
       await rpc(client, "sessions.create", {
@@ -584,8 +823,7 @@ try {
       for (const key of keys) {
         await rpc(client, "sessions.create", {
           key,
-          parentSessionKey: parentKey,
-          spawnDepth: 1,
+          ...(values["activity-summaries"] ? {} : { parentSessionKey: parentKey, spawnDepth: 1 }),
           fork: false,
           visibility: "shared",
           displayName: "Synthetic broadcast child",
@@ -594,7 +832,7 @@ try {
       }
     }
     await rpc(client, "sessions.subscribe", {});
-    for (const key of keys) {
+    for (const key of index < exactClients ? keys : []) {
       await rpc(client, "sessions.messages.subscribe", { key, subscriptionId: key });
     }
   }
@@ -606,6 +844,27 @@ try {
   const runScenario = async () => {
     if (turnScenario) {
       await runRound(sender);
+      if (values["activity-summaries"]) {
+        for (let offset = 0; offset < keys.length; offset += 20) {
+          const batch = keys.slice(offset, offset + 20);
+          const result = await rpc(sender, "sessions.activitySummary.ensure", {
+            sessions: batch.map((key) => ({ key })),
+          });
+          if (
+            !isRecord(result) ||
+            !Array.isArray(result.sessions) ||
+            result.sessions.length !== batch.length ||
+            result.sessions.some(
+              (row: unknown) =>
+                !isRecord(row) ||
+                !isRecord(row.activitySummary) ||
+                row.activitySummary.state === "unavailable",
+            )
+          ) {
+            throw new Error("sessions.activitySummary.ensure did not admit the measured sessions");
+          }
+        }
+      }
       return;
     }
     for (let operation = 0; operation < operations; operation++) {
@@ -648,9 +907,22 @@ try {
   await runScenario();
   console.log("PHASE warmed");
   await drainEvents();
+  const initialRetainedResources = retentionScenario
+    ? await readGatewayResources(gateway, { collectGarbage: true })
+    : undefined;
+  if (startAt !== undefined) {
+    if (Date.now() >= startAt) {
+      throw new Error("--start-at passed before fixture readiness and warmup");
+    }
+    await delay(startAt - Date.now());
+  }
+  const measurementStartedAt = Date.now();
   const samples = [];
   for (let round = 0; round < rounds; round++) {
     counters.clear();
+    eventBytes.clear();
+    sessionEventSizes.clear();
+    representativeFrames.clear();
     for (const counts of perClientCounters) {
       counts.clear();
     }
@@ -660,11 +932,103 @@ try {
     primaryStreamRequests = 0;
     toolCalls = 0;
     toolResults = 0;
+    outputLimitResponses = 0;
+    recoveredResponses = 0;
+    imageRequests = 0;
+    recapRequests = 0;
+    const finishGatewayDiagnostics = values.diagnostics
+      ? await startGatewayDiagnostics(gateway)
+      : undefined;
+    const finishControllerDiagnostics = values.diagnostics
+      ? startGatewayBenchDiagnostics()
+      : undefined;
     const before = await readGatewayCpuUsage(gateway);
     measuring = true;
+    const listLatencies: number[] = [];
+    const listRequests: Array<{
+      method: "sessions.list";
+      responseId: string;
+      client: number;
+      round: number;
+      startedAtEpochMs: number;
+      endedAtEpochMs: number;
+      durationMs: number;
+    }> = [];
     const workload = async () => {
-      await runScenario();
-      await drainEvents();
+      let polling = true;
+      let stopPolling!: () => void;
+      const stopped = new Promise<void>((resolve) => {
+        stopPolling = resolve;
+      });
+      const listWork = listIntervalMs
+        ? Promise.all(
+            clients
+              .map(async (client, clientIndex) => {
+                while (true) {
+                  if (!polling) {
+                    break;
+                  }
+                  const started = performance.now();
+                  let responseId = "";
+                  const page = await rpc(
+                    client,
+                    "sessions.list",
+                    { rowMode: "compact", limit, archived: "all" },
+                    values.diagnostics
+                      ? (id) => {
+                          responseId = id;
+                        }
+                      : undefined,
+                  );
+                  if (
+                    !isRecord(page) ||
+                    typeof page.totalCount !== "number" ||
+                    page.count !== Math.min(limit, page.totalCount) ||
+                    !Array.isArray(page.sessions) ||
+                    page.sessions.length !== page.count ||
+                    page.count === 0
+                  ) {
+                    throw new Error("concurrent sessions.list did not return the requested page");
+                  }
+                  const ended = performance.now();
+                  const durationMs = ended - started;
+                  listLatencies.push(durationMs);
+                  if (values.diagnostics) {
+                    listRequests.push({
+                      method: "sessions.list",
+                      responseId,
+                      client: clientIndex,
+                      round,
+                      startedAtEpochMs: performance.timeOrigin + started,
+                      endedAtEpochMs: performance.timeOrigin + ended,
+                      durationMs,
+                    });
+                  }
+                  await Promise.race([
+                    delay(Math.max(0, listIntervalMs - (performance.now() - started)), undefined, {
+                      ref: false,
+                    }),
+                    stopped,
+                  ]);
+                }
+              })
+              .map((work) =>
+                work.catch((error: unknown) => {
+                  subscriberFailure ??= error instanceof Error ? error : new Error(String(error));
+                  polling = false;
+                  stopPolling();
+                }),
+              ),
+          )
+        : undefined;
+      try {
+        await runScenario();
+        await drainEvents();
+      } finally {
+        polling = false;
+        stopPolling();
+        await listWork;
+      }
     };
     const allocation = values.allocations
       ? await measureGatewayAllocations(
@@ -678,6 +1042,9 @@ try {
       await workload();
     }
     measuring = false;
+    const diagnostics = finishGatewayDiagnostics
+      ? { gateway: await finishGatewayDiagnostics(), controller: finishControllerDiagnostics?.() }
+      : undefined;
     assertGatewayAlive();
     if (clients.some((client) => client.ws.readyState !== client.ws.OPEN)) {
       throw new Error("a subscriber was lost during the measured round");
@@ -692,6 +1059,18 @@ try {
         `expected one completed tool call per turn, calls=${toolCalls}, results=${toolResults}`,
       );
     }
+    if (
+      retentionScenario &&
+      (toolCalls !== runCount * toolPaths.length ||
+        toolResults !== toolCalls ||
+        outputLimitResponses !== runCount ||
+        recoveredResponses !== runCount ||
+        imageRequests !== runCount * 3)
+    ) {
+      throw new Error(
+        `expected ${runCount} image/tool/recovery cycles: ${JSON.stringify({ toolCalls, toolResults, outputLimitResponses, recoveredResponses, imageRequests })}`,
+      );
+    }
     for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
       if (!expected || perClientCounters.some((counts) => counts.get(event) !== expected)) {
@@ -700,24 +1079,75 @@ try {
         );
       }
     }
+    if (
+      values["activity-summaries"] &&
+      (!recapRequests ||
+        ![...sessionEventSizes].some(
+          ([bucket, counts]) =>
+            bucket.startsWith("sessions.changed:activity-summary:") && counts.frames > 0,
+        ))
+    ) {
+      throw new Error(
+        "activity recap model requests and sessions.changed events were not observed",
+      );
+    }
     const cpu = measureGatewayCpuUsage(before, await readGatewayCpuUsage(gateway));
+    const retainedResources = retentionScenario
+      ? await readGatewayResources(gateway, {
+          collectGarbage: true,
+          ...(values["heap-snapshot"] && round === rounds - 1
+            ? { snapshotPath: path.join(output, "settled.heapsnapshot") }
+            : {}),
+        })
+      : undefined;
     const deliveredEvents = [...counters.values()].reduce((sum, count) => sum + count, 0);
     const deliveredSessionEvents =
       (counters.get("session.message") ?? 0) + (counters.get("sessions.changed") ?? 0);
     const sourceEvents = deliveredSessionEvents / clientCount;
+    const sortedListLatencies = listLatencies.toSorted((a, b) => a - b);
     const sample = {
       round,
       scenario,
       allocation,
+      diagnostics,
       toolCalls,
       toolResults,
+      recapRequests,
+      ...(retentionScenario
+        ? { outputLimitResponses, recoveredResponses, imageRequests, retainedResources }
+        : {}),
       ...cpu,
       eventCounts: Object.fromEntries(counters),
+      eventBytes: Object.fromEntries(eventBytes),
+      sessionEventSizes: Object.fromEntries(sessionEventSizes),
+      representativeFrames: Object.fromEntries(representativeFrames),
+      ...(listIntervalMs
+        ? {
+            sessionsList: {
+              count: listLatencies.length,
+              p50: sortedListLatencies[Math.ceil(listLatencies.length * 0.5) - 1],
+              p95: sortedListLatencies[Math.ceil(listLatencies.length * 0.95) - 1],
+              p99: sortedListLatencies[Math.ceil(listLatencies.length * 0.99) - 1],
+              latencies: listLatencies,
+              ...(values.diagnostics
+                ? {
+                    requests: listRequests,
+                    p99Request: listRequests.toSorted((a, b) => a.durationMs - b.durationMs)[
+                      Math.ceil(listRequests.length * 0.99) - 1
+                    ],
+                  }
+                : {}),
+            },
+          }
+        : {}),
       perClientEventCounts: perClientCounters.map((counts) => Object.fromEntries(counts)),
       peakStreams,
       peakPrimaryStreams,
       primaryStreamRequests,
-      utilityStreamRequests: streamRequests - primaryStreamRequests - toolResults,
+      utilityStreamRequests:
+        streamRequests -
+        primaryStreamRequests -
+        (retentionScenario ? outputLimitResponses + recoveredResponses : toolResults),
       streamRequests,
       deliveredEvents,
       deliveredSessionEvents,
@@ -749,12 +1179,21 @@ try {
     operationsPerRound: turnScenario ? runCount : operations,
     limit,
     rowMode,
+    sessionRowDeltas: values["session-row-deltas"],
+    sessionEnvelopeRefs: values["session-envelope-refs"],
+    listIntervalMs,
+    diagnostics: values.diagnostics,
+    measurementStartedAt,
+    initialFullFrame,
     clientCount,
+    exactClients,
+    activitySummaries: values["activity-summaries"],
     runCount,
     chunks: chunkCount,
     peakStreams,
     streamRequests,
     fixture,
+    ...(retentionScenario ? { promptBytes, initialRetainedResources } : {}),
     samples,
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));

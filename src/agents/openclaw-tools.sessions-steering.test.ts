@@ -33,11 +33,13 @@ import { waitForSessionParticipantRecording } from "../sessions/session-particip
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "./embedded-agent-runner/run/attempt-queue-message.js";
-import {
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueMessageOptions,
-} from "./embedded-agent-runner/runs.js";
+import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/runs.js";
 import { testing as embeddedRunsTesting } from "./embedded-agent-runner/runs.test-support.js";
+import {
+  activeRun,
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "./openclaw-tools.sessions-steering.test-support.js";
 import { guardSessionManager } from "./session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -47,6 +49,7 @@ import {
   streamMocks,
 } from "./sessions/agent-session-loop-correctness.test-support.js";
 import { SessionManager } from "./sessions/session-manager.js";
+import { withGatewayToolCallerIdentity } from "./tools/gateway-caller-context.js";
 import { createSessionsSendTool } from "./tools/sessions-send-tool.js";
 
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -69,14 +72,79 @@ afterEach(() => {
   embeddedRunsTesting.resetActiveEmbeddedRuns();
 });
 
+it.each(["missing", "different", "different account"] as const)(
+  "explicit sessions_send steering refuses %s requester identity without starting other work",
+  async (identity) => {
+    const requesterKey = "agent:re-portal:main";
+    const targetKey = "agent:leasing-ops:dashboard:active-target";
+    const dir = tempDirs.make("openclaw-sessions-requester-refusal-");
+    const storePath = path.join(dir, "sessions.json");
+    await upsertSessionEntryCore(
+      { agentId: "leasing-ops", sessionKey: targetKey, storePath },
+      { sessionId: "caller-active-session", updatedAt: 1 },
+    );
+    await upsertSessionEntryCore(
+      { agentId: "re-portal", sessionKey: requesterKey, storePath },
+      { sessionId: "requester-session", updatedAt: 1 },
+    );
+    const testConfig = { ...config, session: { ...config.session, store: storePath } };
+    const queue = await activeRun(targetKey, {
+      config: testConfig,
+      requesterSessionKey: requesterKey,
+    });
+    const caller = createSessionsSendTestCaller(requesterKey);
+    const tool = createSessionsSendTool({
+      agentSessionKey: requesterKey,
+      agentChannel: "telegram",
+      callGateway: callGatewayMock,
+      config: testConfig,
+    });
+    const result = await withGatewayToolCallerIdentity(
+      identity === "missing"
+        ? undefined
+        : {
+            ...caller,
+            requesterOrigin: {
+              ...caller.requesterOrigin,
+              ...(identity === "different" ? { senderId: "bob" } : { accountId: "other-account" }),
+            },
+          },
+      () =>
+        tool.execute("refused-steer", {
+          mode: "steer",
+          sessionKey: targetKey,
+          message: "stop the current work",
+          timeoutSeconds: 0,
+        }),
+    );
+    expect(result.details).toMatchObject({
+      status: "error",
+      error: expect.stringContaining('mode: "followup"'),
+    });
+    expect(queue).not.toHaveBeenCalled();
+    expect(callGatewayMock.mock.calls.map(([request]) => request.method)).toEqual([
+      "sessions.resolve",
+    ]);
+  },
+);
+
 it.each([
-  { supportsTranscriptCommitWait: false },
-  { supportsTranscriptCommitWait: true },
-  { supportsTranscriptCommitWait: true, mode: "steer" as const, alternateStore: true },
-  { supportsTranscriptCommitWait: true, mode: "steer" as const, hiddenRun: true },
+  {},
+  { mode: "steer" as const, alternateStore: true, refreshedDisplay: true },
+  { mode: "steer" as const, hiddenRun: true },
 ])(
-  "sessions_send persists steered provenance with transcript wait support $supportsTranscriptCommitWait and mode $mode, alternate store $alternateStore, hidden run $hiddenRun",
-  async ({ supportsTranscriptCommitWait, mode, alternateStore, hiddenRun }) => {
+  "sessions_send persists steered provenance with mode $mode, alternate store $alternateStore, hidden run $hiddenRun, refreshed display $refreshedDisplay",
+  async ({
+    mode,
+    alternateStore,
+    hiddenRun,
+    refreshedDisplay,
+  }: {
+    mode?: "steer";
+    alternateStore?: boolean;
+    hiddenRun?: boolean;
+    refreshedDisplay?: boolean;
+  }) => {
     const runId = "hidden-sessions-send-steering-run";
     const runScopedCallerKey =
       mode === "steer"
@@ -91,6 +159,15 @@ it.each([
       storePath: alternateStore
         ? resolveSessionStorePathCore(undefined, { agentId: "leasing-ops" })
         : path.join(dir, "sessions.json"),
+    };
+    const testConfig = {
+      ...config,
+      session: {
+        ...config.session,
+        store: alternateStore
+          ? path.join(dir, "agents", "{agentId}", "sessions", "sessions.json")
+          : scope.storePath,
+      },
     };
     await upsertSessionEntryCore(scope, { sessionId: scope.sessionId, updatedAt: Date.now() });
     const sessionManager = SessionManager.open(scope, dir);
@@ -142,7 +219,7 @@ it.each([
             },
           ),
       );
-      setActiveEmbeddedRun(
+      await setSessionsSendTestActiveRun(
         "caller-active-session",
         {
           ...(hiddenRun ? { runId } : {}),
@@ -150,11 +227,14 @@ it.each([
           messageInjectionV2: { version: 2, isAvailable: () => true, queueMessage },
           isStreaming: () => true,
           isCompacting: () => false,
-          supportsTranscriptCommitWait,
+          supportsTranscriptCommitWait: true,
           sourceReplyDeliveryMode: mode === "steer" ? "automatic" : "message_tool_only",
           abort: () => {},
         },
         runScopedCallerKey,
+        requesterKey,
+        testConfig,
+        scope.storePath,
       );
       if (hiddenRun) {
         registerAgentRunContext(runId, {
@@ -174,26 +254,28 @@ it.each([
         callGateway: callGatewayMock,
         agentSessionKey: requesterKey,
         agentChannel: "telegram",
-        config: {
-          ...config,
-          session: {
-            ...config.session,
-            store: alternateStore
-              ? path.join(dir, "agents", "{agentId}", "sessions", "sessions.json")
-              : scope.storePath,
-          },
-        },
+        config: testConfig,
       });
 
       if (mode === "steer") {
         vi.useFakeTimers({ toFake: ["setTimeout", "clearTimeout"] });
       }
-      const send = tool.execute("call-run-scoped-caller", {
-        mode,
-        sessionKey: runScopedCallerKey,
-        message: "[TASK-COMPLETE] re-portal occupancy ready",
-        timeoutSeconds: 0,
-      });
+      const caller = createSessionsSendTestCaller(requesterKey);
+      if (refreshedDisplay) {
+        caller.requesterOrigin = {
+          ...caller.requesterOrigin,
+          senderName: "Updated requester name",
+          senderUsername: "updated-requester",
+        };
+      }
+      const send = withGatewayToolCallerIdentity(caller, () =>
+        tool.execute("call-run-scoped-caller", {
+          mode,
+          sessionKey: runScopedCallerKey,
+          message: "[TASK-COMPLETE] re-portal occupancy ready",
+          timeoutSeconds: 0,
+        }),
+      );
       pending.push(send);
       await Promise.race([queued.promise, send, prompt]);
       expect(session.pendingMessageCount).toBe(1);
@@ -220,9 +302,7 @@ it.each([
         delivery: { status: "skipped" },
       });
       expect(queueMessage).toHaveBeenCalledOnce();
-      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(
-        mode === "steer" ? false : supportsTranscriptCommitWait ? true : undefined,
-      );
+      expect(queueMessage.mock.calls[0]?.[1]?.waitForTranscriptCommit).toBe(mode !== "steer");
       expect(queueMessage.mock.calls[0]?.[1]?.isInboundUserMessage).toBeUndefined();
       const entries = SessionManager.open(scope, dir).getEntries();
       expect(

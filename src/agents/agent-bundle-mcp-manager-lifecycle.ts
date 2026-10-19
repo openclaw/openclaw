@@ -383,6 +383,9 @@ export function createSessionMcpRuntimeManagerLifecycle(
     opts?: {
       preserveRequiredRetirement?: boolean;
       requireStoppedScheduler?: boolean;
+      expectedRuntimes?: ReadonlyMap<string, SessionMcpRuntime>;
+      preserveActiveLeases?: boolean;
+      assertCurrent?: () => void;
       agentDeletion?: {
         agentId: string;
         assertCurrent: () => void;
@@ -409,6 +412,29 @@ export function createSessionMcpRuntimeManagerLifecycle(
     const priorDisposal = store.disposalInFlight;
     const queued = runExclusiveOnRuntimeKeys(runtimeKeys, async () => {
       await priorDisposal;
+      opts?.assertCurrent?.();
+      const expectedRuntimes = opts?.expectedRuntimes;
+      if (
+        expectedRuntimes &&
+        ([...expectedRuntimes].some(
+          ([key, runtime]) => store.runtimesBySessionId.get(key) !== runtime,
+        ) ||
+          (sessionId !== undefined &&
+            runtimeKeysForSessionId(sessionId).some((key) => {
+              const current = store.runtimesBySessionId.get(key);
+              return current && expectedRuntimes.get(key) !== current;
+            })))
+      ) {
+        return;
+      }
+      if (
+        opts?.preserveActiveLeases &&
+        sessionId !== undefined &&
+        totalActiveLeasesForSessionId(sessionId) > 0
+      ) {
+        store.deferredRetirementSessionIds.add(sessionId);
+        return;
+      }
       const deletion = opts?.agentDeletion;
       if (deletion) {
         deletion.assertCurrent();
@@ -458,6 +484,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
         ...previousDisposals,
         ...runtimeKeys.map(async (runtimeKey) => {
           deletion?.assertCurrent();
+          opts?.assertCurrent?.();
           const runtime = store.runtimesBySessionId.get(runtimeKey);
           if (deletion && runtime && runtimeAgentId(runtime) !== deletion.agentId) {
             return;
@@ -480,7 +507,7 @@ export function createSessionMcpRuntimeManagerLifecycle(
       }
     });
     const disposal = trackDisposal(runtimeKeys, () => queued).catch((error: unknown) => {
-      if (opts?.agentDeletion) {
+      if (opts?.agentDeletion || opts?.assertCurrent) {
         throw error;
       }
     });

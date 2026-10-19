@@ -56,8 +56,6 @@ type ManagerIndexFixtureConfig = {
 
 type ProviderCall = Pick<ManagerIndexFixtureConfig, "provider" | "model" | "outputDimensionality">;
 
-export type ManagerIndexFixture = ReturnType<typeof createManagerIndexFixture>;
-
 type SessionTranscript = {
   messages: Array<{
     content: string;

@@ -3,7 +3,7 @@ import path from "node:path";
 import { createSandboxTestContext } from "openclaw/plugin-sdk/test-fixtures";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenShellMirrorBackend } from "./backend.types.js";
-import { createOpenShellFsBridge } from "./fs-bridge.js";
+import { OpenShellFsBridge } from "./fs-bridge.js";
 import { createOpenShellTestWorkspace, expectPathMissing } from "./openshell-fs.test-support.js";
 
 function createBackend() {
@@ -27,7 +27,7 @@ function createBackend() {
 describe("openshell mirror fs bridges", () => {
   let workspaceDir: string;
   let backend: ReturnType<typeof createBackend>;
-  let bridge: ReturnType<typeof createOpenShellFsBridge>;
+  let bridge: OpenShellFsBridge;
   const local = (filePath: string) => path.join(workspaceDir, filePath);
   const readLocal = (filePath: string) => fs.readFile(local(filePath), "utf8");
   async function seedLocal(filePath: string, data = "payload") {
@@ -44,7 +44,7 @@ describe("openshell mirror fs bridges", () => {
         ...overrides,
       },
     });
-    return createOpenShellFsBridge({ sandbox, backend });
+    return new OpenShellFsBridge(sandbox, backend);
   }
   beforeEach(async () => {
     const workspace = await createOpenShellTestWorkspace("fs");
