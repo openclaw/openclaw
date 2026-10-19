@@ -254,9 +254,16 @@ async function main() {
     "sender-identity",
   ] as const) {
     const selected = validators.filter((entry) => entry[3] === group);
-    // Approval unions repeat presentations; scalar-heavy validators stay inlined.
+    // Approval and snapshot schemas repeat shapes; other validators stay inlined.
     const compiled = selected
-      .map(([name, schema]) => compile(name, group === "approvals" ? Intern(schema) : schema))
+      .map(([name, schema]) =>
+        compile(
+          name,
+          group === "approvals" || name === "ChatHistoryState" || name === "ChatTranscriptMetadata"
+            ? Intern(schema)
+            : schema,
+        ),
+      )
       .join("\n");
     // Import the compiler's exact helpers by name so one scalar check does not bundle every guard.
     const source = [

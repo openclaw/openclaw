@@ -3,6 +3,8 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { doctorCommand } from "../commands/doctor.js";
+import { runClientCredentialOperation } from "../infra/client-credential-store.js";
+import { generateStoredDeviceIdentity } from "../infra/device-identity-material.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { readSqliteNumberPragma } from "../infra/sqlite-pragma.test-support.js";
 import { seedNativeVersionZeroState } from "../state/native-version-zero.test-support.js";
@@ -107,26 +109,36 @@ it("adopts native version-zero state without requiring orphan-recovery metadata"
     await writeConfig(state);
     const databasePath = resolveOpenClawStateSqlitePath(state.env);
     fs.mkdirSync(path.dirname(databasePath), { recursive: true });
-    editDatabase(databasePath, (db) => seedNativeVersionZeroState(db, true));
+    const identity = generateStoredDeviceIdentity(1);
+    editDatabase(databasePath, (db) => {
+      seedNativeVersionZeroState(db, true);
+      db.prepare(
+        "UPDATE device_identities SET device_id=?, public_key_pem=?, private_key_pem=? WHERE identity_key='node'",
+      ).run(identity.deviceId, identity.publicKeyPem, identity.privateKeyPem);
+    });
     await repair();
     expectDatabase(databasePath, {
       "PRAGMA user_version": [{ user_version: OPENCLAW_STATE_SCHEMA_VERSION }],
       "SELECT role, schema_version FROM schema_meta WHERE meta_key = 'primary'": [
         { role: "global", schema_version: OPENCLAW_STATE_SCHEMA_VERSION },
       ],
-      "SELECT * FROM device_identities": [
-        {
-          identity_key: "node",
-          device_id: "native-device",
-          public_key_pem: "public",
-          private_key_pem: "private",
-          created_at_ms: 1,
-          updated_at_ms: 1,
-        },
-      ],
+      "SELECT name FROM sqlite_schema WHERE name='device_identities'": [],
       "SELECT raw_json FROM exec_approvals_config WHERE config_key = 'current'": [
         { raw_json: "{}" },
       ],
+    });
+    expect(
+      runClientCredentialOperation(state.env, { kind: "identity.read", identity_key: "node" }),
+    ).toEqual({
+      kind: "identity",
+      identity: {
+        identity_key: "node",
+        device_id: identity.deviceId,
+        public_key_pem: identity.publicKeyPem,
+        private_key_pem: identity.privateKeyPem,
+        created_at_ms: 1,
+        updated_at_ms: 1,
+      },
     });
     expect(recoveryDirs(databasePath)).toEqual([]);
   });

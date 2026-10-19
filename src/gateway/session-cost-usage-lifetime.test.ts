@@ -170,13 +170,30 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       deleteFiles: false,
       phase: "draining",
     });
-    const refresh = vi.spyOn(aggregation, "refreshCostUsageCacheForAgent");
+    const mainRefreshStarted = createDeferred();
+    const refreshUsage = aggregation.refreshCostUsageCacheForAgent;
+    const refresh = vi
+      .spyOn(aggregation, "refreshCostUsageCacheForAgent")
+      .mockImplementation((params) => {
+        if (params.agentId === "main") {
+          mainRefreshStarted.resolve();
+        }
+        return refreshUsage(params);
+      });
+    const releaseBackfill = createDeferred();
+    roster.mockImplementationOnce(async (cfg) => {
+      await releaseBackfill.promise;
+      return readRoster(cfg);
+    });
     const { publications, warn, lifetime } = observeProjection(config);
+    const startupRoster = roster.mock.results.at(-1)!.value;
     try {
       releaseRoster.resolve();
       expect.soft(await cost()).toMatchObject(fresh(10, 0.1));
-      await withinTest(roster.mock.results.at(-1)!.value, signal);
+      releaseBackfill.resolve();
+      await withinTest(startupRoster, signal);
       await vi.advanceTimersByTimeAsync(0);
+      await withinTest(mainRefreshStarted.promise, signal);
       const refreshed = await withinTest(
         Promise.allSettled(refresh.mock.results.map((result) => result.value)),
         signal,
@@ -187,7 +204,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       );
       await lifetime.stop();
       await queued.drain();
-      expect(refreshed).not.toHaveLength(0);
+      expect(refreshed).toContainEqual({ status: "fulfilled", value: "refreshed" });
       expect.soft(refreshed.filter((result) => result.status === "rejected")).toEqual([]);
       expect.soft(publications.filter((event) => event.usageRefreshFailed)).toEqual([]);
       expect(warn).not.toHaveBeenCalled();
@@ -195,6 +212,7 @@ it("keeps usage backfill and all-agent totals available while another agent's de
       expect(await withinTest(reading, signal)).toMatchObject({ totals: { totalTokens: 10 } });
     } finally {
       releaseRoster.resolve();
+      releaseBackfill.resolve();
       await lifetime.stop();
       queued.beginClose();
       await queued.drain();

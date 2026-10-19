@@ -16,6 +16,10 @@ import {
 } from "./openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "./openclaw-state-db.paths.js";
 import { STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL } from "./openclaw-state-schema-v13-widerow.test-support.js";
+import {
+  addPreCutoverClientCredentialTablesForTest,
+  withStateMigrationBackupForTest,
+} from "./openclaw-state-schema.test-support.js";
 
 const templateDirs = useAutoCleanupTempDirTracker(afterAll);
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) => {
@@ -33,6 +37,7 @@ beforeAll(async () => {
   await closeOpenClawStateDatabaseAsync();
   const legacy = new (requireNodeSqlite().DatabaseSync)(templatePath);
   try {
+    addPreCutoverClientCredentialTablesForTest(legacy);
     legacy.exec(STATE_SCHEMA_13_TO_12_DOWNGRADE_SQL);
   } finally {
     legacy.close();
@@ -63,8 +68,8 @@ describe("v13 plugin-index migration", () => {
       ]
     >,
   )(
-    "preserves an invalid plugin-index row during v13 %s when %s is invalid (%s)",
-    (migrationPath, column, value) => {
+    "preserves an invalid plugin-index row during captured v13 %s when %s is invalid (%s)",
+    async (migrationPath, column, value) => {
       const { legacy, options } = createLegacyStateDatabase();
       const values = {
         install_records_json: '{ "demo": { "source": "npm", "spec": "demo@1.0.0" } }',
@@ -84,9 +89,12 @@ describe("v13 plugin-index migration", () => {
       const original = legacy.prepare("SELECT * FROM installed_plugin_index").get();
       legacy.close();
 
-      if (migrationPath === "doctor repair") {
-        repairOpenClawStateDatabaseSchema(options);
-      }
+      await withStateMigrationBackupForTest(options, () => {
+        if (migrationPath === "doctor repair") {
+          expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+        }
+        openOpenClawStateDatabase(options);
+      });
       const migrated = openOpenClawStateDatabase(options);
       expect(
         migrated.db
@@ -127,7 +135,7 @@ describe("v13 plugin-index migration", () => {
     },
   );
 
-  it("keeps the legacy plugin-index row when quarantine preservation fails", () => {
+  it("keeps the legacy plugin-index row when quarantine preservation fails", async () => {
     const { legacy, options } = createLegacyStateDatabase();
     legacy.exec(`
       INSERT INTO installed_plugin_index (
@@ -141,7 +149,9 @@ describe("v13 plugin-index migration", () => {
     const original = legacy.prepare("SELECT * FROM installed_plugin_index").get();
     legacy.close();
 
-    expect(() => openOpenClawStateDatabase(options)).toThrow("Audit sequence exhausted");
+    await expect(
+      withStateMigrationBackupForTest(options, () => openOpenClawStateDatabase(options)),
+    ).rejects.toThrow("Audit sequence exhausted");
     const retained = new (requireNodeSqlite().DatabaseSync)(
       resolveOpenClawStateSqlitePath(options.env),
     );

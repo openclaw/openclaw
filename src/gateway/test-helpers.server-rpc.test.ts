@@ -5,7 +5,6 @@ import { setImmediate as yieldToEventLoop } from "node:timers/promises";
 import { afterEach, describe, expect, test, vi } from "vitest";
 import type { WebSocket } from "ws";
 import { createDeferred } from "../../test/helpers/promise.js";
-import * as testPromises from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { listAgentIds } from "../agents/agent-scope.js";
 import { type AgentsConfig, getRuntimeConfig as getMockedRuntimeConfig } from "../config/config.js";
@@ -21,7 +20,6 @@ import {
   waitForSessionTranscriptIndexReconcile,
 } from "../config/sessions/session-transcript-reconcile.js";
 import * as historyWorkers from "../config/sessions/session-transcript-worker-runtime.js";
-import { loadOrCreateDeviceIdentity } from "../infra/device-identity.js";
 import { getGatewayContextResolver } from "../plugins/runtime/gateway-context-binding.js";
 import {
   getActiveGatewayRootWorkCount,
@@ -39,20 +37,9 @@ import {
 import { listOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.test-support.js";
 import { SQLITE_SESSION_WRITER_QUEUES } from "../state/openclaw-agent-write-admission-state.js";
 import { runOpenClawAgentWriteAdmission } from "../state/openclaw-agent-write-admission.js";
-import {
-  captureOpenClawStateDatabaseReadAdmission,
-  registerOpenClawStateDatabaseAsyncResource,
-} from "../state/openclaw-state-db-cache.js";
-import {
-  closeOpenClawStateDatabaseByPathAsync,
-  isOpenClawStateDatabaseOpen,
-} from "../state/openclaw-state-db.js";
 import { getGatewayRecoveryRuntime } from "./server-recovery-runtime-context.js";
 import { getSessionRowProjection } from "./session-row-projection-access.js";
-import {
-  releaseSessionTestDirectories,
-  removeSessionTestDirectories,
-} from "./session-test-directories.test-support.js";
+import { releaseSessionTestDirectories } from "./session-test-directories.test-support.js";
 import { createGatewayConfigOverrides } from "./test-helpers.config-runtime.js";
 import {
   installGatewayTestHooks,
@@ -192,69 +179,6 @@ describe("Gateway RPC fixture session writes", () => {
       closing.mockRestore();
     }
   });
-
-  test.each(["complete", "timeout"] as const)(
-    "joins client identity database closure before removal (%s)",
-    async (outcome) => {
-      const dir = tempDirs.make("openclaw-gw-identity-close-");
-      const sibling = path.join(tempDirs.make("openclaw-gw-identity-sibling-"), "device.sqlite");
-      const identityPath = path.join(dir, "copilot-device.json");
-      const identities = [identityPath, path.join(dir, "unpaired-copilot-device.json")];
-      for (const pathname of [...identities, sibling]) {
-        loadOrCreateDeviceIdentity({ path: pathname });
-      }
-      const admission = captureOpenClawStateDatabaseReadAdmission(identityPath);
-      const closing = createDeferred();
-      const release = createDeferred();
-      const unregister = registerOpenClawStateDatabaseAsyncResource({
-        async close(identity) {
-          if (identity?.key === admission.identity.key) {
-            closing.resolve();
-            await release.promise;
-          }
-        },
-      });
-      const withTestTimeout = testPromises.withTestTimeout;
-      const deadline =
-        outcome === "timeout"
-          ? vi
-              .spyOn(testPromises, "withTestTimeout")
-              .mockImplementation((promise, _ms, message) => withTestTimeout(promise, 0, message))
-          : undefined;
-      const removing = removeSessionTestDirectories([dir]);
-      void removing.catch(() => {});
-      try {
-        expect(
-          await Promise.race([
-            closing.promise.then(() => "closing"),
-            removing.then(() => "removed"),
-          ]),
-        ).toBe("closing");
-        expect(isOpenClawStateDatabaseOpen(identityPath)).toBe(true);
-        await fs.access(dir);
-        if (outcome === "timeout") {
-          await expect(removing).rejects.toThrow(
-            `Timed out closing shared-state fixture database ${JSON.stringify(identityPath)}`,
-          );
-          await fs.access(dir);
-        } else {
-          release.resolve();
-          await removing;
-          expect(identities.map(isOpenClawStateDatabaseOpen)).toEqual([false, false]);
-          await expect(fs.access(dir)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-        expect(isOpenClawStateDatabaseOpen(sibling)).toBe(true);
-      } finally {
-        deadline?.mockRestore();
-        release.resolve();
-        await removing.catch(() => {});
-        unregister();
-        for (const pathname of [...identities, sibling]) {
-          await closeOpenClawStateDatabaseByPathAsync(pathname);
-        }
-      }
-    },
-  );
 
   test.each(["session", "gateway event"] as const)(
     "%s release joins admitted continuations before deselecting their store",

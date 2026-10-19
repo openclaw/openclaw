@@ -2,12 +2,13 @@
 
 import { afterAll, afterEach, beforeAll, describe, expect, it } from "vitest";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
+import { createDreamingViewState } from "./dreaming.ts";
 import {
   renderDreamingView,
   fullDreamingViewAccess,
   installDreamingViewTestTranslations,
 } from "./view.test-helpers.ts";
-import { createDreamingViewState, renderDreaming } from "./view.tsx";
+import { renderDreaming } from "./view.tsx";
 
 afterEach(() => cleanupSolid());
 

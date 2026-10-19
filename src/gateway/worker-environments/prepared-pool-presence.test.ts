@@ -89,7 +89,7 @@ function presencePool(
       ...profile,
       ...(options.executionMode ? { executionMode: options.executionMode } : {}),
     };
-    return { providerId: fixture.provider.id, profileSnapshot, preparationKey };
+    return { providerId: fixture.provider.id, profileSnapshot };
   });
   const owner = fixture.pool({
     prepareIntent,

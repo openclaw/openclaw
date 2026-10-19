@@ -3,10 +3,13 @@ import Foundation
 import SQLite3
 
 /// The local credential owner; it never opens the selected Gateway database.
-/// Preparatory API only: production consumers switch together after migration.
-/// periphery:ignore - PR1b activates this preparatory local credential adapter.
 public final class OpenClawClientCredentialStore: @unchecked Sendable {
-    public struct Identity: Equatable, Sendable {
+    public struct Identity: Codable, Equatable, Sendable {
+        private enum CodingKeys: String, CodingKey {
+            case key = "identity_key", deviceID = "device_id", publicKeyPEM = "public_key_pem"
+            case privateKeyPEM = "private_key_pem", createdAtMs = "created_at_ms", updatedAtMs = "updated_at_ms"
+        }
+
         public let key: String
         public let deviceID: String
         public let publicKeyPEM: String
@@ -31,7 +34,12 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
         }
     }
 
-    public struct Token: Equatable, Sendable {
+    public struct Token: Codable, Equatable, Sendable {
+        private enum CodingKeys: String, CodingKey {
+            case deviceID = "device_id", role, gatewayScope = "gateway_scope", token, scopesJSON = "scopes_json"
+            case updatedAtMs = "updated_at_ms"
+        }
+
         public let deviceID: String
         public let role: String
         public let gatewayScope: String?
@@ -56,7 +64,12 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
         }
     }
 
-    public struct SocketCredentials: Equatable, Sendable {
+    public struct SocketCredentials: Codable, Equatable, Sendable {
+        public let socketKey = "current"
+        enum CodingKeys: String, CodingKey {
+            case socketKey = "socket_key", path = "socket_path", token = "socket_token", updatedAtMs = "updated_at_ms"
+        }
+
         public let path: String?
         public let token: String?
         public let updatedAtMs: Int64
@@ -67,6 +80,8 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
             self.updatedAtMs = updatedAtMs
         }
     }
+
+    let rootURL: URL
 
     private struct AdmissionKey: Hashable {
         let device: dev_t
@@ -86,45 +101,53 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
             .appendingPathComponent("credentials.sqlite")
     }
 
-    /// App-absent CLI/maintenance and iOS app/extension operations acquire the same
-    /// exclusive SQLite custody and close before returning. Never await in `operation`.
-    public static func withExclusiveOperation<T>(
-        rootURL: URL,
-        createIfMissing: Bool = true,
-        busyTimeoutMilliseconds: Int32 = 5000,
-        operation: (OpenClawClientCredentialStore) throws -> T) throws -> T?
-    {
-        if !createIfMissing, !FileManager.default.fileExists(atPath: self.databaseURL(rootURL: rootURL).path) {
-            return nil
+    /// POSIX identity for owner routing, including roots not created yet. Foundation
+    /// URL resolution preserves macOS's /var alias, which SQLite NOFOLLOW rejects.
+    public static func canonicalPath(_ url: URL) throws -> String {
+        var ancestor = url
+        var missing: [String] = []
+        while true {
+            if let resolved = realpath(ancestor.path, nil) {
+                defer { free(resolved) }
+                return missing.reduce(String(cString: resolved)) {
+                    ($0 as NSString).appendingPathComponent($1)
+                }
+            }
+            guard errno == ENOENT else {
+                throw OpenClawNativeStateError("Could not resolve local client credential path")
+            }
+            let parent = ancestor.deletingLastPathComponent()
+            guard parent.path != ancestor.path else {
+                throw OpenClawNativeStateError("Could not resolve local client credential root")
+            }
+            missing.insert(ancestor.lastPathComponent, at: 0)
+            ancestor = parent
         }
-        let owner = try self.init(
-            rootURL: rootURL,
-            createIfMissing: createIfMissing,
-            busyTimeoutMilliseconds: busyTimeoutMilliseconds)
-        defer { owner.close() }
-        return try operation(owner)
     }
 
-    /// Retain only for an active macOS owner serving its bounded local operations.
-    /// Cross-process clients must route to that owner; an IPC error never permits a
-    /// direct fallback. Close after draining requests, before yielding custody.
-    /// iOS app/extension callers use `withExclusiveOperation` so suspension cannot
-    /// strand an app-lifetime lock. Both invoke this same native owner implementation.
+    /// Opens physical custody for one bounded operation. The active macOS app keeps
+    /// its logical root ownership between operations; clients route through it.
+    /// App-absent and iOS callers use the same store and close before returning.
     public init(
         rootURL: URL,
         createIfMissing: Bool = true,
-        busyTimeoutMilliseconds: Int32 = 5000) throws
+        busyTimeoutMilliseconds: Int32 = 5000,
+        migration: Bool = false) throws
     {
+        self.rootURL = rootURL
         let url = Self.databaseURL(rootURL: rootURL)
         try Self.prepare(url: url, createIfMissing: createIfMissing)
+        // System temporary roots may contain an ancestor symlink (/var on macOS).
+        // The credential directory and file were checked without following links.
+        let canonicalPath = try Self.canonicalPath(url)
         var opened: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_FULLMUTEX | SQLITE_OPEN_NOFOLLOW
-        let result = sqlite3_open_v2(url.path, &opened, flags, nil)
+        let result = sqlite3_open_v2(canonicalPath, &opened, flags, nil)
         guard result == SQLITE_OK, let opened else {
             if let opened {
                 sqlite3_close(opened)
             }
-            throw OpenClawNativeStateError("Could not open local client credentials")
+            throw OpenClawNativeStateError("Could not open local client credentials (SQLite \(result))")
         }
         self.database = opened
         do {
@@ -134,8 +157,10 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
             guard try self.scalarText("PRAGMA journal_mode") == "delete" else {
                 throw OpenClawNativeStateError("Local client credentials require DELETE journal mode")
             }
-            try self.execute("PRAGMA synchronous=FULL; PRAGMA locking_mode=EXCLUSIVE")
+            try self.execute("PRAGMA synchronous=FULL")
             try self.transaction {
+                // Retain acquired custody; early exclusive mode lets competing openers retain shared locks.
+                try self.execute("PRAGMA locking_mode=EXCLUSIVE")
                 try OpenClawNativeStateAdmission.assertDatabaseHasNotMoved(opened)
                 let version = try self.scalarInteger("PRAGMA user_version")
                 var initialized = false
@@ -174,6 +199,9 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
                     }
                     _ = Self.admissionLock.withLock { Self.admitted.insert(key) }
                 }
+            }
+            if !migration {
+                try assertReady(rootURL: rootURL)
             }
         } catch {
             self.close()
@@ -223,8 +251,9 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
     /// A refresh replaces only the token observed by its caller; nil means absent.
     public func replaceToken(_ token: Token, expectedToken: String?) throws -> Bool {
         try self.transaction {
-            guard try self.cachedToken(
-                deviceID: token.deviceID, role: token.role, gatewayScope: token.gatewayScope)?.token == expectedToken
+            let current = try self.cachedToken(
+                deviceID: token.deviceID, role: token.role, gatewayScope: token.gatewayScope)
+            guard Self.sameUTF8Bytes(current?.token, expectedToken)
             else { return false }
             let columns = "device_id, role, token, scopes_json, updated_at_ms"
             let update = "token=excluded.token, scopes_json=excluded.scopes_json, updated_at_ms=excluded.updated_at_ms"
@@ -243,16 +272,6 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
                         "ON CONFLICT(device_id, role) DO UPDATE SET \(update)", values)
             }
             return true
-        }
-    }
-
-    public func removeToken(
-        deviceID: String, role: String, gatewayScope: String? = nil, observedToken: String) throws -> Bool
-    {
-        try self.transaction {
-            let (table, predicate, values) = Self.tokenKey(deviceID: deviceID, role: role, gatewayScope: gatewayScope)
-            try self.run("DELETE FROM \(table) WHERE \(predicate) AND token=?", values + [.text(observedToken)])
-            return try sqlite3_changes(self.connection()) != 0
         }
     }
 
@@ -279,7 +298,7 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
     /// Restored backups may retain the path while redacting the token to NULL.
     public func replaceSocketCredentials(_ candidate: SocketCredentials, expectedToken: String?) throws -> Bool {
         try self.transaction {
-            guard try self.socketCredentials()?.token == expectedToken else { return false }
+            guard try Self.sameUTF8Bytes(self.socketCredentials()?.token, expectedToken) else { return false }
             try self.run(
                 "INSERT INTO native_exec_socket_credentials VALUES ('current', ?, ?, ?) " +
                     "ON CONFLICT(socket_key) DO UPDATE SET socket_path=excluded.socket_path, " +
@@ -290,6 +309,14 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
                     .integer(candidate.updatedAtMs),
                 ])
             return true
+        }
+    }
+
+    static func sameUTF8Bytes(_ lhs: String?, _ rhs: String?) -> Bool {
+        switch (lhs, rhs) {
+        case (nil, nil): true
+        case let (lhs?, rhs?): lhs.utf8.elementsEqual(rhs.utf8)
+        default: false
         }
     }
 
@@ -345,11 +372,19 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
         }
     }
 
-    private func transaction<T>(_ operation: () throws -> T) throws -> T {
+    func transaction<T>(_ operation: () throws -> T) throws -> T {
         try self.connectionLock.withLock {
+            if try sqlite3_get_autocommit(self.connection()) == 0 {
+                return try operation()
+            }
+            try OpenClawNativeStateSQLite.assertNoOfflineMaintenance(
+                databaseURL: self.rootURL.appendingPathComponent("state/openclaw.sqlite"))
             try self.execute("BEGIN EXCLUSIVE")
             do {
                 let result = try operation()
+                try Task.checkCancellation()
+                try OpenClawNativeStateSQLite.assertNoOfflineMaintenance(
+                    databaseURL: self.rootURL.appendingPathComponent("state/openclaw.sqlite"))
                 try self.execute("COMMIT")
                 return result
             } catch {
@@ -359,7 +394,7 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
         }
     }
 
-    private enum Value {
+    enum Value {
         case text(String), integer(Int64), null
     }
 
@@ -375,13 +410,13 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
             code: code == SQLITE_BUSY || code == SQLITE_LOCKED ? .busy : .failure)
     }
 
-    private func execute(_ sql: String) throws {
+    func execute(_ sql: String) throws {
         guard try sqlite3_exec(self.connection(), sql, nil, nil, nil) == SQLITE_OK else {
             throw self.failure("execute owner operation")
         }
     }
 
-    private func withStatement<T>(_ sql: String, _ values: [Value], _ body: (OpaquePointer) throws -> T) throws -> T {
+    func withStatement<T>(_ sql: String, _ values: [Value], _ body: (OpaquePointer) throws -> T) throws -> T {
         var statement: OpaquePointer?
         guard try sqlite3_prepare_v2(self.connection(), sql, -1, &statement, nil) == SQLITE_OK, let statement else {
             throw self.failure("prepare owner operation")
@@ -400,13 +435,13 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
         return try body(statement)
     }
 
-    private func run(_ sql: String, _ values: [Value]) throws {
+    func run(_ sql: String, _ values: [Value]) throws {
         try self.withStatement(sql, values) {
             guard sqlite3_step($0) == SQLITE_DONE else { throw self.failure("write owner operation") }
         }
     }
 
-    private func query<T>(_ sql: String, _ values: [Value] = [], _ read: (OpaquePointer) throws -> T) throws -> T? {
+    func query<T>(_ sql: String, _ values: [Value] = [], _ read: (OpaquePointer) throws -> T) throws -> T? {
         try self.withStatement(sql, values) {
             let result = sqlite3_step($0)
             if result == SQLITE_DONE {
@@ -417,7 +452,7 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
         }
     }
 
-    private static func text(_ statement: OpaquePointer, _ column: Int32) throws -> String {
+    static func text(_ statement: OpaquePointer, _ column: Int32) throws -> String {
         guard sqlite3_column_type(statement, column) == SQLITE_TEXT, let text = sqlite3_column_text(statement, column)
         else { throw OpenClawNativeStateError("Invalid local client credential text") }
         return String(cString: text)
@@ -457,7 +492,14 @@ public final class OpenClawClientCredentialStore: @unchecked Sendable {
         let directory = url.deletingLastPathComponent()
         if createIfMissing {
             try FileManager.default.createDirectory(
-                at: directory, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
+                at: directory.deletingLastPathComponent(),
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700])
+            // FileManager applies attributes after mkdir; another first writer must
+            // never observe the credential directory before it becomes private.
+            guard mkdir(directory.path, 0o700) == 0 || errno == EEXIST else {
+                throw OpenClawNativeStateError("Could not create local client credential directory")
+            }
         }
         var info = stat()
         guard lstat(directory.path, &info) == 0, info.st_mode & S_IFMT == S_IFDIR, info.st_uid == geteuid(),

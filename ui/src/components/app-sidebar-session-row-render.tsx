@@ -91,12 +91,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
     narration = createMemo(() => subtitleState().narration),
     toolName = createMemo(() => subtitleState().toolName);
   const indicators = renderSidebarSessionIndicators(host, session, display, icon);
-  const running = createMemo(() => indicators.running),
-    stateId = createMemo(() => indicators.stateId),
-    metaId = createMemo(() => indicators.metaId),
-    pullRequest = createMemo(() => indicators.pullRequest),
-    persistentIndicator = createMemo(() => indicators.persistentIndicator),
-    childrenExpanded = createMemo(() => indicators.childrenExpanded);
+  const { running, stateId, metaId, pullRequest, childrenExpanded } = indicators;
   const controls: CatalogRowControls = {};
   const openMenuFromEvent: JSX.EventHandler<HTMLDivElement, MouseEvent | KeyboardEvent> = (event) =>
     handleContextMenuEvent(event, controls.link ?? null, (trigger, x, y) => {
@@ -227,7 +222,7 @@ function renderRecentSessionRow(params: RecentSessionParams) {
         aria-describedby={[stateId(), metaId()].filter(Boolean).join(" ") || undefined}
         onClick={(event: MouseEvent) => host().handleSessionRowClick(event, session())}
       >
-        {persistentIndicator()}
+        {indicators.persistentIndicator}
         <span class="sidebar-recent-session__text">
           <span class="sidebar-recent-session__title-row">
             <Show when={session().titlePending} fallback={marqueeLabel()}>

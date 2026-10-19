@@ -205,7 +205,13 @@ export function serviceUpdateResult(
 export async function writeRecoveryConfig(configPath: string, version: string) {
   await fs.writeFile(
     configPath,
-    JSON.stringify(stampConfigWriteMetadata({ gateway: { port: 19001 } }, version)),
+    // Native service transport uses a shared token; paired-device auth has socket-level proof.
+    JSON.stringify(
+      stampConfigWriteMetadata(
+        { gateway: { port: 19001, auth: { mode: "token", token: "fixture-service-token" } } },
+        version,
+      ),
+    ),
   );
   clearConfigCache();
   clearRuntimeConfigSnapshot();

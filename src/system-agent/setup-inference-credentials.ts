@@ -311,9 +311,7 @@ export async function stageSavedAuthCandidate(
     };
   }
   const saved = credential.setup;
-  const choices = (
-    ctx.deps.resolveManifestProviderAuthChoices ?? resolveManifestProviderAuthChoices
-  )({
+  const choices = resolveManifestProviderAuthChoices({
     config: ctx.cfg,
     workspaceDir: ctx.workspace,
     includeUntrustedWorkspacePlugins: false,
@@ -384,15 +382,12 @@ export async function stageProviderAutoCandidate(
   ctx: StageContext,
   choiceId: string,
 ): Promise<StagedCandidate | StageFailure> {
-  const choice = (ctx.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
-    choiceId,
-    {
-      config: ctx.cfg,
-      workspaceDir: ctx.workspace,
-      includeUntrustedWorkspacePlugins: false,
-      includeWorkspacePlugins: false,
-    },
-  );
+  const choice = resolveManifestProviderAuthChoice(choiceId, {
+    config: ctx.cfg,
+    workspaceDir: ctx.workspace,
+    includeUntrustedWorkspacePlugins: false,
+    includeWorkspacePlugins: false,
+  });
   if (
     !choice ||
     choice.appGuidedDiscovery !== true ||
@@ -486,15 +481,12 @@ export async function stageProviderAuthCandidate(
     });
   }
   const choice = authChoice
-    ? (ctx.deps.resolveManifestProviderAuthChoice ?? resolveManifestProviderAuthChoice)(
-        authChoice,
-        {
-          config: ctx.cfg,
-          workspaceDir: ctx.workspace,
-          includeUntrustedWorkspacePlugins: false,
-          includeWorkspacePlugins: false,
-        },
-      )
+    ? resolveManifestProviderAuthChoice(authChoice, {
+        config: ctx.cfg,
+        workspaceDir: ctx.workspace,
+        includeUntrustedWorkspacePlugins: false,
+        includeWorkspacePlugins: false,
+      })
     : undefined;
   const installEntry = authChoice
     ? resolveProviderInstallCatalogEntry(authChoice, {

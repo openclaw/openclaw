@@ -4,6 +4,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { globSync } from "tinyglobby";
 import { afterEach, beforeAll, describe, expect, it } from "vitest";
+import { resolveCanonicalNodeTestConfig } from "../../scripts/lib/ci-node-test-plan.mts";
 import { collectModuleReferencesFromSource } from "../../scripts/lib/guard-inventory-utils.mjs";
 import { createNativeTypeScriptParser } from "../../scripts/lib/native-typescript.mts";
 import {
@@ -15,6 +16,7 @@ import { resolveVitestNodeArgs } from "../../scripts/lib/vitest-process-env.mts"
 import { withEnv } from "../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 import { createGatewayDatabaseWorkersVitestConfig } from "../vitest/vitest.gateway-database-workers.config.ts";
+import { createGatewayServerIsolatedVitestConfig } from "../vitest/vitest.gateway-server-isolated.config.ts";
 import {
   gatewayDatabaseWorkerTestFiles,
   isGatewayServerTestFile,
@@ -145,6 +147,25 @@ describe("test-projects args", () => {
     expect(resolveVitestPretestBuildMode([{ configs: [infra], includePatterns: [file] }])).toBe(
       "runtime",
     );
+  });
+
+  it("keeps first sign-in's native provider graph isolated with its runtime prerequisite", () => {
+    const file = "src/gateway/setup-inference.first-signin.integration.test.ts";
+    const config = "test/vitest/vitest.gateway-server-isolated.config.ts";
+    const plan = expectDefined(buildVitestRunPlans([file])[0], "first sign-in plan");
+    expect(resolveCanonicalNodeTestConfig(file, plan.config)).toBe(config);
+    const project = createGatewayServerIsolatedVitestConfig(
+      {},
+      { argv: ["node", "vitest", "run", file] },
+    );
+    expect(project.test).toMatchObject({
+      include: [file],
+      isolate: true,
+      pool: "forks",
+    });
+    expect(
+      resolveVitestPretestBuildMode([{ configs: [config], includePatterns: plan.includePatterns }]),
+    ).toBe("runtime");
   });
 
   it("drops a pnpm passthrough separator while preserving targeted filters", () => {

@@ -126,7 +126,6 @@ describe("update-cli", () => {
   });
 
   it("does not inspect or mutate a Windows host service from an isolated install", async () => {
-    vi.spyOn(process, "platform", "get").mockReturnValue("win32");
     const tempDir = fixture.tempDirs.make("openclaw-update-isolated-service-");
     const { nodeModules } = await fixture.setupInstalledPackageRoot(tempDir);
     fixture.mockRunningManagedGateway();
@@ -135,6 +134,7 @@ describe("update-cli", () => {
 
     await withEnvAsync({ OPENCLAW_HOME: path.join(tempDir, "relocated-home") }, async () => {
       fixture.initializeExistingUpdateProfile();
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       await updateCommand({ yes: true });
     });
 
@@ -247,7 +247,6 @@ describe("update-cli", () => {
     async ({ command, fault }) => {
       const stopFailure = fault === "stop-enable-committed";
       runtimeRecovery.stubNodeRuntime();
-      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       fixture.setTty(true);
       fixture.setStdoutTty(true);
       const root = await fixture.mockPackageInstallAtCaseDir("openclaw-update-native-preparation");
@@ -271,6 +270,7 @@ describe("update-cli", () => {
         ...process.env,
         OPENCLAW_STATE_DIR: target.stateDir,
       });
+      vi.spyOn(process, "platform", "get").mockReturnValue("win32");
       fixture.tempDirsToCleanup.add(target.stateDir);
       await fs.mkdir(target.stateDir, { recursive: true });
       await writeJsonFixture(target.configPath, fixture.baseSnapshot.config);

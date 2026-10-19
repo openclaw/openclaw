@@ -260,7 +260,6 @@ export function makeChatHost(
     chatToolMessages: [],
     connectionEpoch: 0,
     canRestoreComposer: () => true,
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatComposerFallbackByScope: {},
     chatStreamStartedAt: null,

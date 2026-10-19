@@ -29,7 +29,7 @@ import type { PluginToolIcons } from "../chat-tool-icon-controller.ts";
 import { BrowserTabCardHost } from "./browser-tab-card.tsx";
 import { HighlightedCommand } from "./chat-command-highlight.solid.tsx";
 import { DiffStatChips } from "./chat-diff-stat.solid.tsx";
-import { ChatPermissionCard } from "./chat-divider.tsx";
+import { ChatPermissionCard } from "./chat-permission-card.tsx";
 import type { BrowserTabPreview } from "./chat-tool-cards.ts";
 import { ExpandedToolCardContent } from "./chat-tool-content.solid.tsx";
 import { ToolOutcomeSummary } from "./chat-tool-outcome-summary.solid.tsx";

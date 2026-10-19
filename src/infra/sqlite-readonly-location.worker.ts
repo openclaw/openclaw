@@ -95,6 +95,7 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
   if (
     (mode !== "sync" &&
       mode !== "private-fork" &&
+      mode !== "update-generation" &&
       mode !== "async" &&
       mode !== "metadata" &&
       mode !== "consolidated" &&
@@ -118,6 +119,13 @@ async function inspect(args: string[]): Promise<SqliteReadOnlyWorkerResult> {
       args[3] === undefined || mode === "private-fork"
         ? undefined
         : readDatabaseFileIdentity(JSON.parse(args[3]));
+    if (mode === "update-generation") {
+      const { readUpdateDatabaseGenerations } = await import("./update-database-generations.js");
+      return {
+        ok: true,
+        generation: JSON.stringify(readUpdateDatabaseGenerations([pathname])[pathname]),
+      };
+    }
     if (mode === "staging-reconcile") {
       reconcileSqliteSnapshotRetirement(pathname);
       return { ok: true, location: pathname };

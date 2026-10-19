@@ -113,10 +113,7 @@ export async function runSystemAgent(
     (await import("../config/config.js")).readConfigFileSnapshot;
   const registry = await withPluginLifecycleLease({}, async (lease) => {
     const snapshot = await readSnapshot();
-    const currentArtifacts = await hasCurrentSystemAgentOwnerPluginArtifacts(binding, {
-      ...boundOpts.deps,
-      readConfigFileSnapshot: async () => snapshot,
-    });
+    const currentArtifacts = await hasCurrentSystemAgentOwnerPluginArtifacts(binding, snapshot);
     if (!currentArtifacts) {
       throw new SystemAgentInferenceUnavailableError("conversation", [], "route-changed");
     }

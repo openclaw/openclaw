@@ -12,13 +12,11 @@ import { loadSystemAgentOverview } from "./overview.js";
 import {
   resolveSystemAgentVerifiedInferenceRoute,
   type SystemAgentVerifiedInferenceBinding,
-  type SystemAgentVerifiedInferenceDeps,
 } from "./verified-inference.js";
 
 type SystemAgentDialogueOptions = {
   loadOverview?: typeof loadSystemAgentOverview;
   planWithAssistant?: SystemAgentAssistantPlanner;
-  deps?: SystemAgentVerifiedInferenceDeps;
   readonly verifiedInference: SystemAgentVerifiedInferenceBinding;
 };
 
@@ -55,10 +53,7 @@ export async function resolveSystemAgentOperation(
       overview,
       verifiedInference: opts.verifiedInference,
     });
-    if (
-      plan &&
-      !(await resolveSystemAgentVerifiedInferenceRoute(opts.verifiedInference, opts.deps))
-    ) {
+    if (plan && !(await resolveSystemAgentVerifiedInferenceRoute(opts.verifiedInference))) {
       throw new SystemAgentInferenceUnavailableError("planner", [], "route-changed");
     }
   } catch (error) {

@@ -24,7 +24,7 @@ import {
   createSessionContext,
   connectPaneTestView,
 } from "./chat-pane.test-support.ts";
-import { cancelChatStreamRenderFrame } from "./chat-state-render.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 
 const history: ChatHistoryResult = {
   sessionId: "research-notes",
@@ -99,7 +99,7 @@ function createHistoryProgressPane(
   flush();
   onTestFinished(() => {
     pane.disconnectedCallback();
-    cancelChatStreamRenderFrame(state);
+    chatRunPresentation(state).cancelFrame();
   });
   const emitEvent = (event: string, payload: unknown) => {
     const gateway = pane.context.gateway as ApplicationContext["gateway"] & {

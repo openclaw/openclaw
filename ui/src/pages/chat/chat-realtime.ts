@@ -36,22 +36,25 @@ export type ChatRealtimeState = {
   switchRealtimeTalkCamera: () => Promise<void>;
 };
 
-type ChatRealtimeSnapshot = {
+export type ChatRealtimeView = {
   realtimeTalkActive: boolean;
   realtimeTalkStatus: RealtimeTalkStatus;
   realtimeTalkDetail: string | null;
   realtimeTalkInputNotice: string | null;
-  realtimeTalkUseSystemDefault: (() => Promise<void>) | null;
   realtimeTalkInputLevel: RealtimeTalkLevelSignal;
   realtimeTalkVideoStream: MediaStream | null;
   realtimeTalkCameraDevices: RealtimeTalkCameraDevice[];
   realtimeTalkVideoCapable: boolean;
   realtimeTalkVideoPending: boolean;
   realtimeTalkCameraError: boolean;
+};
+
+type ChatRealtimeSnapshot = {
+  realtimeTalkUseSystemDefault: (() => Promise<void>) | null;
   realtimeTalkSession: RealtimeTalkSession | null;
   realtimeTalkVoiceController: RealtimeTalkVoiceSelection | null;
   realtimeTalkConversationState: RealtimeTalkConversationState;
-};
+} & ChatRealtimeView;
 
 /** Synchronous call/device authority; projections observe complete state transitions. */
 class ChatRealtimeOwner {

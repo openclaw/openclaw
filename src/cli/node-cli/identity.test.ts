@@ -15,10 +15,18 @@ import { captureEnv } from "../../test-utils/env.js";
 import { ExpectedCliError } from "../failure-output.js";
 import { registerNodeCli } from "./register.js";
 
-function runNodeIdentity(json = false) {
+function runNodeIdentity(json = false, identity?: string) {
   const program = new Command().exitOverride();
   registerNodeCli(program);
-  return program.parseAsync(["node", "identity", ...(json ? ["--json"] : [])], { from: "user" });
+  return program.parseAsync(
+    [
+      "node",
+      "identity",
+      ...(json ? ["--json"] : []),
+      ...(identity ? ["--identity", identity] : []),
+    ],
+    { from: "user" },
+  );
 }
 
 describe("node identity command", () => {
@@ -68,6 +76,7 @@ describe("node identity command", () => {
     expect(exitSpy).not.toHaveBeenCalled();
     expect(logSpy).not.toHaveBeenCalled();
     expect(writeStdoutSpy).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
     expect(fs.existsSync(path.join(stateDir, "state", "openclaw.sqlite"))).toBe(false);
   });
 
@@ -105,5 +114,14 @@ describe("node identity command", () => {
     const output = logSpy.mock.calls.map((call: unknown[]) => String(call[0])).join("\n");
     expect(output).toContain(identity.deviceId);
     expect(output).toContain(publicKeyRawBase64UrlFromPem(identity.publicKeyPem));
+  });
+  it("selects an existing native profile without creating the default identity", async () => {
+    const identity = loadOrCreateDeviceIdentity({ identityKey: "node" });
+    await runNodeIdentity(true, "node");
+    expect(JSON.parse(stdout.join(""))).toEqual({
+      deviceId: identity.deviceId,
+      publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+    });
+    await expect(runNodeIdentity(false, "unknown")).rejects.toBeInstanceOf(ExpectedCliError);
   });
 });

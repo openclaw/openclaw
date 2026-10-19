@@ -82,7 +82,6 @@ describe("activation demand overlapping presence admission", () => {
           profileSnapshot: options.projectRepository
             ? fixture.profile(PROJECT_KEY, PREPARATION_KEY, undefined, options.projectRepository)
             : fixture.profile(otherKey),
-          preparationKey: PREPARATION_KEY,
         };
       });
       const owner = fixture.pool({

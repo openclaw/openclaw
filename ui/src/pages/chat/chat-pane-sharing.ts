@@ -611,10 +611,6 @@ export abstract class ChatPaneSharing extends ChatPaneReactions {
     this.collaboration.typingOverflow = overflow;
   }
 
-  protected typingActorViews(): ChatTypingActorView[] {
-    return this.collaboration.typingViews;
-  }
-
   protected sendTypingState(typing: boolean, preview?: string, cursor?: number): void {
     const scope = this.captureConnectionScope();
     const row = scope ? selectedChatSessionRow(scope.state) : undefined;
