@@ -24,13 +24,10 @@ const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 
-export type ClawHubFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
 export type ClawHubFetchOptions = {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
 };
 
 export type ClawHubRequestParams = ClawHubFetchOptions & {
@@ -245,7 +242,7 @@ async function requestClawHub(params: ClawHubRequestParams) {
       }
     };
     try {
-      const response = await (params.fetchImpl ?? fetch)(url, {
+      const response = await fetch(url, {
         ...init,
         signal: controller.signal,
       });

@@ -248,7 +248,6 @@ export async function validateUpdateCandidateCanary(params: {
     if (params.migrationPolicy !== "startup-only") {
       const policy = resolveUpdateDoctorExecutionPolicy({
         targetVersion: await readPackageVersion(params.root),
-        allowGatewayServiceRepair: false,
       });
       if (!policy.fix) {
         throw new Error("Cannot check migrations without changing the running service");

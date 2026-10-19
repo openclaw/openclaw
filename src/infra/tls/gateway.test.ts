@@ -117,7 +117,7 @@ afterEach(async () => {
 });
 
 it("disables tls when config is absent or disabled", async () => {
-  const disabled = { enabled: false, required: false };
+  const disabled = { enabled: false };
   await expect(loadGatewayTlsServerRuntime(undefined)).resolves.toEqual(disabled);
   await expect(loadGatewayTlsServerRuntime({ enabled: false })).resolves.toEqual(disabled);
 });
@@ -134,7 +134,6 @@ it("loads existing cert/key with a 100-certificate CA bundle", async () => {
   const result = await loadGatewayTlsServerRuntime({ ...config, caPath, autoGenerate: false });
   expect(result).toMatchObject({
     ...config,
-    required: true,
     caPath,
     fingerprintSha256: fingerprint,
     tlsOptions: { cert: CERT_PEM, key: KEY_PEM, ca: caBundle, minVersion: "TLSv1.3" },
@@ -158,7 +157,6 @@ it.each([
   });
   expect(result).toMatchObject({
     enabled: false,
-    required: true,
     certPath,
     keyPath,
     error: cert === undefined ? error : expect.stringContaining(error),
@@ -191,7 +189,6 @@ it("bounds generation and cleans a partial staged key", async () => {
   expect(resolveOpenSslOutput(args, "-out")).not.toBe(certPath);
   expect(result).toMatchObject({
     enabled: false,
-    required: true,
     certPath,
     keyPath,
     error: expect.stringContaining("openssl timed out"),
@@ -358,7 +355,7 @@ it.each([
     );
   } else {
     const result = await loadGatewayTlsServerRuntime({ ...config, autoGenerate: false });
-    expect(result).toMatchObject({ enabled: bytes === limit, required: true });
+    expect(result).toMatchObject({ enabled: bytes === limit });
     if (bytes === limit) {
       expect(result.tlsOptions).toMatchObject({ cert, key });
     } else {

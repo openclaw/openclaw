@@ -224,14 +224,7 @@ async function createRealMetadataLifecycle(
         ...params,
         deps: {
           getPreparedOwner: () => (ownerAvailable ? owner : undefined),
-          ...(options.authStore
-            ? { getPreparedAuthStore: authSnapshots.getPreparedRuntimeAuthProfileStoreSnapshotCore }
-            : {
-                getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
-                getAuthStoreRevision: () => revision,
-              }),
-          getSkillsVersion: options.skillsWorkspaceDir ? getSkillsSnapshotVersion : () => 0,
-          getPluginRegistryVersion: () => 0,
+          ...(!options.authStore ? { getAuthStoreRevision: () => revision } : {}),
           buildCommands,
           buildProjection: async ({ facts }) => ({
             modelCatalog: facts.modelCatalog.entries,
@@ -502,10 +495,7 @@ describe("gateway chat metadata lifecycle", () => {
         ...params,
         deps: {
           getPreparedOwner,
-          getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
           getAuthStoreRevision: () => revision,
-          getSkillsVersion: () => 0,
-          getPluginRegistryVersion: () => 0,
           buildCommands: async () => ({ commands: [] }),
           buildProjection,
         },
@@ -607,10 +597,7 @@ describe("gateway chat metadata lifecycle", () => {
           ...params,
           deps: {
             getPreparedOwner: () => (ownerAvailable ? owner : undefined),
-            getPreparedAuthStore: () => ({ version: 1, profiles: {} }),
             getAuthStoreRevision: () => revision,
-            getSkillsVersion: () => 0,
-            getPluginRegistryVersion: () => 0,
             buildCommands: async () => ({ commands: [] }),
             buildProjection,
           },

@@ -61,8 +61,6 @@ vi.mock("./server-methods/chat-metadata-runtime.js", async (importOriginal) => {
       actual.createGatewayChatMetadataRuntime({
         ...params,
         deps: {
-          getSkillsVersion: () => 0,
-          getPluginRegistryVersion: () => 0,
           buildCommands,
           buildProjection,
         },

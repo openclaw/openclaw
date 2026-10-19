@@ -6,7 +6,7 @@ import type { RuntimeEnv } from "../runtime.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import { SystemAgentInferenceUnavailableError } from "./inference-error.js";
 import type { SystemAgentCommandDeps } from "./operations.js";
-import type { SystemAgentOverview } from "./overview.js";
+import * as overviewModule from "./overview.js";
 import { runSystemAgent, type RunSystemAgentOptions } from "./system-agent.js";
 import { createSystemAgentTestRuntime } from "./system-agent.runtime.test-support.js";
 import { createSystemAgentVerifiedInferenceTestFixture } from "./system-agent.test-helpers.js";
@@ -41,7 +41,7 @@ vi.mock("./verified-inference.js", async (importOriginal) => {
   };
 });
 
-const overview: SystemAgentOverview = {
+const overview: overviewModule.SystemAgentOverview = {
   defaultAgentId: "main",
   defaultModel: "openai/gpt-5.5",
   agents: [],
@@ -57,7 +57,6 @@ const overview: SystemAgentOverview = {
 };
 
 const systemAgentOverviewDeps = {
-  formatOverview: () => "Default model: openai/gpt-5.5",
   loadOverview: async () => overview,
 };
 
@@ -115,6 +114,10 @@ function runner(runtime: RuntimeEnv, verified = createVerifiedRunOptions()) {
 
 describe("runSystemAgent", () => {
   beforeEach(async () => {
+    const formatter = vi
+      .spyOn(overviewModule, "formatSystemAgentOverview")
+      .mockReturnValue("Default model: openai/gpt-5.5");
+    onTestFinished(() => formatter.mockRestore());
     vi.mocked(runDaemonRestart).mockReset().mockResolvedValue(true);
     configFixture = await createInferenceConfigFixture(verifiedConfig);
     const reader = vi
@@ -329,11 +332,11 @@ describe("runSystemAgent", () => {
       const { runtime, lines } = createSystemAgentTestRuntime();
       const loadOverview = vi.fn(async () => overview);
       const runInteractiveTui = vi.fn(async () => {});
+      vi.mocked(overviewModule.formatSystemAgentOverview).mockReturnValue("formatted overview");
       await runner(runtime)(
         {
           ...options,
           loadOverview,
-          formatOverview: () => "formatted overview",
           runInteractiveTui,
         },
         false,
