@@ -5,7 +5,8 @@ const mocks = vi.hoisted(() => ({
   loadPluginManifestRegistryForPluginRegistry: vi.fn(),
 }));
 
-vi.mock("./plugin-registry-contributions.js", () => ({
+vi.mock("./plugin-registry-contributions.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./plugin-registry-contributions.js")>()),
   loadPluginManifestRegistryForPluginRegistry: (...args: unknown[]) =>
     mocks.loadPluginManifestRegistryForPluginRegistry(...args),
 }));
