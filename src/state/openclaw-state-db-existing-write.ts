@@ -243,21 +243,19 @@ function createExistingOpenClawStateWriter(
             );
           let version: number;
           let recoveryChanges: string[] = [];
-          if (priorVersion !== undefined) {
-            version = priorVersion;
-          } else {
+          if (contract.recoverTaskDeliveryOrphans) {
+            // Requested recovery is work, not a cached schema-admission fact.
             try {
-              version = validate();
+              validate();
             } catch (error) {
-              if (
-                !contract.recoverTaskDeliveryOrphans ||
-                !(error instanceof SqliteRepairableForeignKeyError)
-              ) {
+              if (!(error instanceof SqliteRepairableForeignKeyError)) {
                 throw error;
               }
-              recoveryChanges = recoverOrphanTaskDeliveryRows(db, pathname);
-              version = validate();
             }
+            recoveryChanges = recoverOrphanTaskDeliveryRows(db, pathname);
+            version = validate();
+          } else {
+            version = priorVersion ?? validate();
           }
           if (needsAdmission && contract.initializeAdditiveSchema) {
             // Validate present objects before first use: CREATE IF NOT EXISTS
