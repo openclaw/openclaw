@@ -230,12 +230,14 @@ suite.define(() => {
         await page.keyboard.press("Escape");
         await pane.getByRole("button", { name: "Session sharing", exact: true }).click();
         const sharing = pane.locator(".chat-pane__sharing-menu");
-        await sharing.getByText("Members", { exact: true }).waitFor();
-        const search = sharing.getByRole("searchbox", { name: "Search people and agents…" });
+        await sharing.getByText("Message permissions", { exact: true }).waitFor();
+        const searchToggle = sharing.getByRole("button", { name: "Search people…", exact: true });
+        await searchToggle.click();
+        const search = sharing.getByRole("searchbox", { name: "Search people…", exact: true });
         await search.fill("Person 109");
         await nextFrame(page);
         await page.keyboard.press("ArrowDown");
-        expect(await sharing.locator(".chat-pane__sharing-member").count()).toBe(1);
+        expect(await sharing.locator(".chat-pane__sharing-person").count()).toBe(1);
         expect(
           await sharing
             .locator('[data-value="member:person-109"]')
@@ -244,7 +246,10 @@ suite.define(() => {
         await page.keyboard.press("ArrowUp");
         expect(await search.evaluate((element) => element === document.activeElement)).toBe(true);
         await page.keyboard.press("Escape");
-        expect(await search.inputValue()).toBe("");
+        expect(await sharing.locator('input[type="search"]').inputValue()).toBe("");
+        expect(await searchToggle.evaluate((element) => element === document.activeElement)).toBe(
+          true,
+        );
         await page.keyboard.press("Escape");
         expect(
           await sharing

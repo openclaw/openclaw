@@ -270,7 +270,9 @@ suite.define(() => {
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, sessionA));
     await gateway.deferNext("session.visibility.set");
     await page.getByRole("button", { name: "Session sharing" }).click();
-    await page.getByText("Publish draft", { exact: true }).click();
+    const sharing = page.locator(".chat-pane__sharing-menu").filter({ visible: true });
+    await sharing.getByRole("menuitem", { name: "Session access", exact: true }).click();
+    await sharing.getByRole("menuitemradio", { name: "Shared", exact: true }).click();
     await gateway.waitForRequest("session.visibility.set");
 
     await navigateAwayAndBack(page);
