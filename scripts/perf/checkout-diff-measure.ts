@@ -357,12 +357,20 @@ function observeGitQueues() {
       assert(result.source !== undefined, "Git worker source is required for queue observations");
       let source =
         typeof result.source === "string" ? result.source : new TextDecoder().decode(result.source);
-      source = source
-        .replace(
-          /const enqueuedAt\s*=\s*timing\s*\?\s*performance\.now\(\)\s*:\s*0/g,
+      for (const [pattern, replacement] of [
+        [
+          /const enqueuedAt\s*=\s*(?:timing|measure)\s*\?\s*performance\.now\(\)\s*:\s*0/g,
           "const enqueuedAt = performance.now()",
-        )
-        .replace(/const input\s*=\s*timing\s*\?/g, "const input = observedAt !== undefined ?");
+        ],
+        [/const input\s*=\s*(?:timing|measure)\s*\?/g, "const input = observedAt !== undefined ?"],
+      ] as const) {
+        let guards = 0;
+        source = source.replace(pattern, () => {
+          guards++;
+          return replacement;
+        });
+        assert.equal(guards, 1, "Expected exactly one Git worker queue measurement guard");
+      }
       let publications = 0;
       source = source.replace(/elapsedMs:\s*performance\.now\(\)\s*-\s*observedAt/g, (match) => {
         publications++;
