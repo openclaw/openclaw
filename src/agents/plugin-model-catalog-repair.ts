@@ -1,5 +1,5 @@
 /** Pure repair rules for OpenClaw-generated plugin model catalogs. */
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeModelCostForCatalog } from "./model-cost-normalization.js";
 
 export const PLUGIN_MODEL_CATALOG_GENERATED_BY = "openclaw-plugin-model-catalog-v1";
@@ -47,16 +47,13 @@ export function repairPluginModelCatalogTransportMetadata(
     const models: unknown[] = [];
     let providerChanged = false;
     for (const model of provider.models) {
-      if (!providerApi && (!isRecord(model) || !hasCatalogApi(model.api))) {
+      const modelRecord = asOptionalRecord(model);
+      if (!providerApi && (!modelRecord || !hasCatalogApi(modelRecord.api))) {
         removedModelCount += 1;
         providerChanged = true;
         continue;
       }
-      if (!isRecord(model)) {
-        models.push(model);
-        continue;
-      }
-      const completed = normalizeModelCostForCatalog(model);
+      const completed = modelRecord ? normalizeModelCostForCatalog(modelRecord) : model;
       if (completed !== model) {
         completedCostModelCount += 1;
         providerChanged = true;

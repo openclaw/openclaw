@@ -19,7 +19,6 @@ export type {
   ActivateSetupInferenceResult,
   BoundVerifySetupInferenceResult,
   CompleteSetupInferenceResult,
-  DetectSetupInferenceDeps,
   ProviderAutoSetupInferenceKind,
   SavedAuthSetupInferenceKind,
   SetupInferenceCandidate,

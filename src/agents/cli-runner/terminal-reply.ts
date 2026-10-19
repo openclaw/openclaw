@@ -42,8 +42,10 @@ export function resolveCliSourceReplyMirror(params: {
   });
   const delivered =
     payloads.length > 0 ||
-    (runParams.sourceReplyDeliveryMode === "message_tool_only" &&
-      evidence.didDeliverSourceReplyViaMessageTool === true);
+    // External source sends have receipts but no internal-UI mirror body.
+    (evidence.didDeliverSourceReplyViaMessageTool === true &&
+      (runParams.sourceReplyDeliveryMode === "message_tool_only" ||
+        hasCompletedSourceReplyDeliveryEvidence(evidence)));
   const visibleText =
     payloads
       .map((payload) => payload.text?.trim() ?? "")

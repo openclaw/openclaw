@@ -10,6 +10,7 @@ import {
 } from "../../infra/sqlite-worker-identity.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import type { OpenClawAgentDatabaseExecution } from "../../state/openclaw-agent-execution-contract.js";
+import { toAgentExecutionConstraints } from "../../state/openclaw-agent-execution-scope.js";
 import {
   captureOpenClawAgentDatabaseExecution,
   supportsOpenClawAgentDatabaseExecution,
@@ -286,16 +287,7 @@ export function prepareSessionEntryMutationDatabases(
           const identity = target.identity;
           const execution = captureOpenClawAgentDatabaseExecution(
             target.options,
-            identity.key.startsWith("file:")
-              ? {
-                  expectedIdentity: {
-                    kind: "file",
-                    physicalIdentity: identity.key.slice("file:".length),
-                    nativeLocation: identity.canonicalPath,
-                    birthtime: identity.birthtime,
-                  },
-                }
-              : { expectedCreationIdentity: identity },
+            toAgentExecutionConstraints(identity),
           );
           // One physical execution serves the cohort; caller guards still authorize preparation.
           for (const member of members) {

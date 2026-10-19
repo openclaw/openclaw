@@ -414,11 +414,7 @@ export class MatrixRecoveryKeyStore {
       return null;
     }
     await assertMatrixSupportedStateFile(this.recoveryKeyPath);
-    try {
-      return await readMatrixRecoveryKeyStateForPathAsync(this.recoveryKeyPath, this.stateRuntime);
-    } catch {
-      return null;
-    }
+    return readMatrixRecoveryKeyStateForPathAsync(this.recoveryKeyPath, this.stateRuntime);
   }
 
   private saveRecoveryKeyToDisk(

@@ -26,6 +26,7 @@ import {
   ensureAbsoluteDirectory,
   isPathInside,
 } from "../infra/fs-safe.js";
+import { findGitRoot } from "../infra/git-root.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { applyPrivateModeSync } from "../infra/private-mode.js";
 import { SQLITE_SIDECAR_SUFFIXES } from "../infra/sqlite-files.js";
@@ -106,7 +107,12 @@ export function createLocalSqliteSnapshotProvider(options: LocalSqliteSnapshotPr
   return new LocalSqliteSnapshotProvider(options);
 }
 
-export function createLocalSnapshotProvider(options: LocalSqliteSnapshotProviderOptions) {
+export function createLocalSnapshotProvider({
+  expectedPostgresSource: expectedSource,
+  ...options
+}: LocalSqliteSnapshotProviderOptions & {
+  expectedPostgresSource?: { storeId: string; namespace: string };
+}) {
   const native = createLocalSqliteSnapshotProvider(options);
   const repository = path.resolve(options.repositoryPath);
   const locate = async (snapshot: SnapshotRef) => {
@@ -138,18 +144,16 @@ export function createLocalSnapshotProvider(options: LocalSqliteSnapshotProvider
     async verify(snapshot: SnapshotRef) {
       const directory = await locate(snapshot);
       const envelope = await readSnapshotExportEnvelope(directory);
-      if (envelope.engine === "sqlite") {
+      if (envelope.engine === "sqlite" && !expectedSource) {
         return native.verify(snapshot);
       }
-      return {
-        ok: true as const,
-        manifest: await verifyMatchedPostgresBackup(directory, "user-backup"),
-      };
+      const manifest = await verifyMatchedPostgresBackup(directory, "user-backup", expectedSource);
+      return { ok: true as const, manifest };
     },
     async restoreFresh(snapshot: SnapshotRef, targetPath: string) {
       const directory = await locate(snapshot);
       const envelope = await readSnapshotExportEnvelope(directory);
-      if (envelope.engine === "sqlite") {
+      if (envelope.engine === "sqlite" && !expectedSource) {
         return native.restoreFresh(snapshot, targetPath);
       }
       const target = path.join(
@@ -173,6 +177,7 @@ export function createLocalSnapshotProvider(options: LocalSqliteSnapshotProvider
               anchorPath: sourcePath,
               config,
               profile: "user-backup",
+              expectedSource,
               assertCurrent,
             });
             await publishVerifiedSqliteFile({
@@ -489,23 +494,27 @@ class LocalSqliteSnapshotProvider {
     }
     assertDirectory(repositoryStat, this.#repositoryPath, "SQLite snapshot repository");
 
+    if (findGitRoot(this.#repositoryPath, { maxDepth: 1 })) {
+      throw new Error(
+        `Git backup repository is not a SQLite snapshot repository: ${this.#repositoryPath}. Use \`openclaw backup git log --repository <path>\` instead.`,
+      );
+    }
+
     const entries = await fs.readdir(this.#repositoryPath, { withFileTypes: true });
     const snapshots: SnapshotSummary[] = [];
     for (const entry of entries) {
+      const snapshotPath = path.join(this.#repositoryPath, entry.name);
       if (entry.name.startsWith(".tmp-")) {
         if (entry.isSymbolicLink() || !entry.isDirectory()) {
           throw new Error(
-            `SQLite snapshot repository contains unsafe staging entry: ${path.join(this.#repositoryPath, entry.name)}`,
+            `SQLite snapshot repository contains unsafe staging entry: ${snapshotPath}`,
           );
         }
         continue;
       }
       if (entry.isSymbolicLink() || !entry.isDirectory()) {
-        throw new Error(
-          `SQLite snapshot repository contains unexpected entry: ${path.join(this.#repositoryPath, entry.name)}`,
-        );
+        throw new Error(`SQLite snapshot repository contains unexpected entry: ${snapshotPath}`);
       }
-      const snapshotPath = path.join(this.#repositoryPath, entry.name);
       const snapshotState = await classifySnapshotDirectory(snapshotPath);
       if (snapshotState === "incomplete") {
         continue;
@@ -620,7 +629,7 @@ async function verifySnapshotDatabaseFile(
     throw new Error(`Snapshot artifact changed before SQLite verification: ${artifactPath}`);
   }
 
-  const validationRootIdentity = await lstatIfExists(validationRootPath, { bigint: true });
+  const validationRootIdentity = await lstatIfExists(validationRootPath);
   if (!validationRootIdentity) {
     throw new Error(
       `SQLite validation root does not exist: ${validationRootPath}. Create a private directory there or pass an existing directory with \`--scratch\`.`,
@@ -703,7 +712,7 @@ function buildDatabaseManifest(
 async function ensurePrivateDirectory(directoryPath: string, scopeLabel: string) {
   let expectedExistingIdentity: BigIntStats | undefined;
   if (process.platform !== "win32") {
-    expectedExistingIdentity = await lstatIfExists(directoryPath, { bigint: true });
+    expectedExistingIdentity = await lstatIfExists(directoryPath);
     if (expectedExistingIdentity) {
       assertDirectory(expectedExistingIdentity, directoryPath, scopeLabel);
       // Repair only after ownership and ancestors prove another user cannot
@@ -981,12 +990,9 @@ function readPendingSnapshotIdentity(pendingPath: string): BigIntStats | undefin
   return identity;
 }
 
-async function lstatIfExists(
-  pathname: string,
-  options?: { bigint: true },
-): Promise<BigIntStats | undefined> {
+async function lstatIfExists(pathname: string): Promise<BigIntStats | undefined> {
   try {
-    return await fs.lstat(pathname, options ?? { bigint: true });
+    return await fs.lstat(pathname, { bigint: true });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "ENOENT") {
       return undefined;
@@ -1067,7 +1073,6 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
     outcome = { ok: false, error };
   }
 
-  let cleanupOutcome: { ok: true } | { ok: false; error: unknown };
   try {
     const removed = await removePrivateDirectoryIfOwned(
       directoryPath,
@@ -1077,20 +1082,16 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
     if (!removed) {
       throw new Error(`Private SQLite staging directory disappeared: ${directoryPath}`);
     }
-    cleanupOutcome = { ok: true };
   } catch (error) {
-    cleanupOutcome = { ok: false, error };
-  }
-
-  if (!cleanupOutcome.ok) {
     if (!outcome.ok) {
       throw new AggregateError(
-        [outcome.error, cleanupOutcome.error],
+        [outcome.error, error],
         `SQLite staging operation and cleanup both failed: ${directoryPath}`,
+        { cause: error },
       );
     }
     throw new Error(`Failed to clean private SQLite staging directory: ${directoryPath}`, {
-      cause: cleanupOutcome.error,
+      cause: error,
     });
   }
   requireDirectorySync(await syncDirectory(options.rootReceipt), "Private SQLite staging root");
@@ -1102,12 +1103,9 @@ async function withPrivateSqliteStagingDirectory<T>(options: {
 
 /** Create or strictly admit a Git repository through the local snapshot root trust policy. */
 export async function ensurePrivateSnapshotRepositoryRoot(rootPath: string): Promise<string> {
-  try {
-    return await assertTrustedStagingRoot(await fs.lstat(rootPath, { bigint: true }), rootPath);
-  } catch (error) {
-    if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw error;
-    }
+  const stat = await lstatIfExists(rootPath);
+  if (stat) {
+    return await assertTrustedStagingRoot(stat, rootPath);
   }
   const receipt = await ensurePrivateDirectory(rootPath, "Git backup repository");
   return await assertTrustedStagingRoot(receipt.exactIdentity, rootPath);

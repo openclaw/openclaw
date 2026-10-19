@@ -355,9 +355,10 @@ function advanceRestartSentinelRevisionFloorSync(db: EngineConnection, revision:
 export function writeRestartSentinelRowSync(
   db: EngineConnection,
   rawPayload: RestartSentinelPayload,
+  previousRevision = readRestartSentinelSnapshotSync(db).revision,
 ): RestartSentinel {
   const payload = requireValidPayload(rawPayload);
-  const revision = nextRevision(readRestartSentinelSnapshotSync(db).revision);
+  const revision = nextRevision(previousRevision);
   const row = buildRestartSentinelRow(payload, revision);
   upsertRestartSentinelRowSync(db, row);
   advanceRestartSentinelRevisionFloorSync(db, revision);
@@ -505,7 +506,12 @@ export function recordManagedHandoffSentinelOutcomeRowSync(
       ],
     };
   }
-  const sentinel = writeRestartSentinelRowIfRevisionSync(db, payload, current?.revision ?? null);
+  const sentinel = writeRestartSentinelRowIfRevisionSync(
+    db,
+    payload,
+    current?.revision ?? null,
+    revision,
+  );
   return sentinel ? { kind: "recorded", sentinel } : refused();
 }
 
@@ -532,22 +538,15 @@ export function writeUpdateInstallReceiptRowSync(
   return { version: 1, payload, revision };
 }
 
-/** Compare inside the caller's transaction; null requires an absent current row. */
+/** The conditional write owns comparison; null requires an absent current row. */
 export function writeRestartSentinelRowIfRevisionSync(
   db: EngineConnection,
   rawPayload: RestartSentinelPayload,
   expectedRevision: number | null,
+  previousRevision = readRestartSentinelRevisionFloorSync(db),
 ): RestartSentinel | null {
-  const { state: current, revision: previousRevision } = readRestartSentinelSnapshotSync(db);
-  if (
-    expectedRevision === null
-      ? current.kind !== "missing"
-      : current.kind !== "valid" || current.sentinel.revision !== expectedRevision
-  ) {
-    return null;
-  }
   const payload = requireValidPayload(rawPayload);
-  const revision = nextRevision(previousRevision);
+  const revision = nextRevision(maxRevision(expectedRevision, previousRevision));
   const row = buildRestartSentinelRow(payload, revision);
   const stateDb = getNodeSqliteKysely<GatewayRestartSentinelDatabase>(db);
   const result = executeSqliteQuerySync(

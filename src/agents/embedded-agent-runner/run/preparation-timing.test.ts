@@ -14,16 +14,15 @@ const tempDirs = createTempDirTracker();
 
 afterEach(() => {
   flushDiagnosticsTimeline();
+  vi.unstubAllEnvs();
   tempDirs.cleanup();
 });
 
 async function createTimelineEnv() {
   const dir = tempDirs.make("openclaw-agent-preparation-");
+  vi.stubEnv("OPENCLAW_DIAGNOSTICS", "timeline");
+  vi.stubEnv("OPENCLAW_DIAGNOSTICS_TIMELINE_PATH", join(dir, "timeline.jsonl"));
   return {
-    env: {
-      OPENCLAW_DIAGNOSTICS: "timeline",
-      OPENCLAW_DIAGNOSTICS_TIMELINE_PATH: join(dir, "timeline.jsonl"),
-    } as NodeJS.ProcessEnv,
     path: join(dir, "timeline.jsonl"),
   };
 }
@@ -38,12 +37,10 @@ async function readTimeline(path: string) {
 
 describe("embedded agent preparation timing", () => {
   it("emits the canonical span name with stage attribution", async () => {
-    const { env, path } = await createTimelineEnv();
+    const { path } = await createTimelineEnv();
 
-    await measureEmbeddedAgentPreparation("runtime", async () => "async", { env });
-    expect(await measureEmbeddedAgentPreparation("attempt.tool-base", () => "sync", { env })).toBe(
-      "sync",
-    );
+    await measureEmbeddedAgentPreparation("runtime", async () => "async");
+    expect(await measureEmbeddedAgentPreparation("attempt.tool-base", () => "sync")).toBe("sync");
 
     const events = await readTimeline(path);
     expect(events.map((event) => event.name)).toEqual([

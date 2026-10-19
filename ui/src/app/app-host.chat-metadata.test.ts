@@ -295,7 +295,6 @@ it.each([
       chatRunId: null,
       chatMessage: "Keep this draft",
       chatError: "No route-compatible authentication source is configured",
-      requestUpdate: vi.fn(),
     } as unknown as ChatPageHost;
     const invalidateSessions = vi.spyOn(state.sessions, "invalidate").mockImplementation(() => {});
     const messages = state.chatMessages;
@@ -403,7 +402,7 @@ it.each([
   const hello = {
     ...gatewayHelloForMethods([]),
     snapshot: {
-      presence: [{ instanceId: current().instanceId, user: { id: "original" } }],
+      presence: [{ ts: 0, instanceId: current().instanceId, user: { id: "original" } }],
     },
   };
   current().opts.onHello?.(hello);
@@ -441,7 +440,10 @@ it.each([
       type: "event",
       event: "presence",
       payload: {
-        presence: [{ instanceId: current().instanceId, user: { id: "replacement" } }],
+        reset: true,
+        version: 1,
+        keys: ["self"],
+        presence: [{ ts: 1, instanceId: current().instanceId, user: { id: "replacement" } }],
       },
     });
   } else {
@@ -588,7 +590,7 @@ describe("session command metadata events", () => {
           expect(invalidate).not.toHaveBeenCalled();
         }
       } finally {
-        states.forEach(retireChatMetadataRequests);
+        states.forEach((state) => retireChatMetadataRequests(state));
       }
     },
   );

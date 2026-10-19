@@ -1,4 +1,5 @@
 import { DEFAULT_ACCOUNT_ID } from "openclaw/plugin-sdk/account-id";
+import type { ChannelDirectoryEntry } from "openclaw/plugin-sdk/channel-contract";
 import { createChatChannelPlugin, type ChannelPlugin } from "openclaw/plugin-sdk/channel-core";
 import { createAccountStatusSink } from "openclaw/plugin-sdk/channel-outbound";
 import { buildPassiveProbedChannelStatusSummary } from "openclaw/plugin-sdk/extension-shared";
@@ -21,11 +22,22 @@ import {
   zalouserSecurityAdapter,
   zalouserThreadingAdapter,
 } from "./channel.adapters.js";
-import { listZalouserDirectoryGroupMembers, mapZalouserDirectoryUser } from "./directory.js";
 import type { ZalouserProbeResult } from "./probe.js";
+import { parseZalouserDirectoryGroupId } from "./session-route.js";
 import { createZalouserSetupWizardProxy, zalouserSetupContract } from "./setup-core.js";
 import { createZalouserPluginBase } from "./shared.js";
 import { collectZalouserStatusIssues } from "./status-issues.js";
+import type { ZcaFriend } from "./types.js";
+
+function mapZalouserDirectoryUser(user: ZcaFriend): ChannelDirectoryEntry {
+  return {
+    kind: "user",
+    id: user.userId,
+    name: user.displayName,
+    avatarUrl: user.avatar,
+    raw: user,
+  };
+}
 
 const loadZalouserChannelRuntime = createLazyRuntimeModule(() => import("./channel.runtime.js"));
 const zalouserSetupWizardProxy = createZalouserSetupWizardProxy(
@@ -73,15 +85,11 @@ export const zalouserPlugin: ChannelPlugin<ResolvedZalouserAccount, ZalouserProb
         },
         listGroupMembers: async ({ cfg, accountId, groupId, limit }) => {
           const { listZaloGroupMembers } = await loadZalouserChannelRuntime();
-          return await listZalouserDirectoryGroupMembers(
-            {
-              cfg,
-              accountId: accountId ?? undefined,
-              groupId,
-              limit: limit ?? undefined,
-            },
-            { listZaloGroupMembers },
-          );
+          const account = resolveZalouserAccountSync({ cfg, accountId: accountId ?? undefined });
+          const normalizedGroupId = parseZalouserDirectoryGroupId(groupId);
+          const members = await listZaloGroupMembers(account.profile, normalizedGroupId);
+          const rows = members.map(mapZalouserDirectoryUser);
+          return limit != null && limit > 0 ? rows.slice(0, limit) : rows;
         },
       },
       resolver: zalouserResolverAdapter,

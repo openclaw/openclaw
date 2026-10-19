@@ -18,7 +18,10 @@ import {
   attachProviderAuthAuthority,
   getProviderAuthAuthority,
 } from "../plugins/provider-auth-authority.js";
-import { createProviderModelCatalogIdNormalizer } from "../plugins/provider-model-routes.js";
+import {
+  createProviderModelCatalogIdNormalizer,
+  resolveProviderModelRoutes,
+} from "../plugins/provider-model-routes.js";
 import type { PluginProviderRegistration } from "../plugins/provider-plugin.types.js";
 import { normalizeProviderTransportWithPlugin } from "../plugins/provider-runtime.js";
 import {
@@ -173,38 +176,68 @@ export async function executePreparedDecision(params: {
       if (!row) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
-      // Reuse the selected normal provider's existing catalog hook for protocol facts,
-      // including explicitly configured custom model IDs. No provider rediscovery or chat Model.
-      const supplemental = await canonical.provider.augmentModelCatalog?.({
+      const route = resolveProviderModelRoutes({
+        provider: row.provider,
+        modelId: row.id,
+        api: row.api,
+        baseUrl: row.baseUrl,
         config: prepared.config,
-        agentDir: prepared.agentDir,
-        workspaceDir: context.workspaceDir,
-        env: process.env,
-        entries: [structuredClone(row)],
+        capability: "decision",
       });
-      if (!assertPrepared()) {
-        return { status: "unavailable", reason: "unsupported-input" };
+      if (route) {
+        // Capability routing precedes auth. Never guess among physical destinations
+        // or carry stale catalog capabilities into a provider-selected endpoint.
+        if (route.kind !== "routes" || route.routes.length !== 1) {
+          return { status: "unavailable", reason: "unsupported-input" };
+        }
+        const selectedRoute = route.routes[0];
+        const decision = selectedRoute.inference
+          ? selectedRoute.inference.decision
+          : modelTransportRoutesMatch(row, selectedRoute)
+            ? row.inference?.decision
+            : undefined;
+        row = {
+          ...row,
+          api: selectedRoute.api,
+          baseUrl: selectedRoute.baseUrl,
+          inference: { chat: row.inference?.chat ?? false, ...(decision ? { decision } : {}) },
+        };
+      } else {
+        // Reuse the selected normal provider's existing catalog hook for protocol facts,
+        // including explicitly configured custom model IDs. No provider rediscovery or chat Model.
+        const supplemental = await canonical.provider.augmentModelCatalog?.({
+          config: prepared.config,
+          agentDir: prepared.agentDir,
+          workspaceDir: context.workspaceDir,
+          env: process.env,
+          entries: [structuredClone(row)],
+        });
+        if (!assertPrepared()) {
+          return { status: "unavailable", reason: "unsupported-input" };
+        }
+        row =
+          supplemental?.find((entry) => entry.provider === row?.provider && entry.id === modelId) ??
+          row;
       }
-      row =
-        supplemental?.find((entry) => entry.provider === row?.provider && entry.id === modelId) ??
-        row;
       if (!supportsInput(row, params.batch, params.options.reasoning)) {
         return { status: "unavailable", reason: "unsupported-input" };
       }
-      const normalized = normalizeProviderTransportWithPlugin({
-        provider: row.provider,
-        modelId: row.id,
-        config: prepared.config,
-        workspaceDir: context.workspaceDir,
-        context: {
-          provider: row.provider,
-          modelId: row.id,
-          config: prepared.config,
-          workspaceDir: context.workspaceDir,
-          api: row.api,
-          baseUrl: row.baseUrl,
-        },
-      });
+      const normalized = route
+        ? undefined
+        : normalizeProviderTransportWithPlugin({
+            provider: row.provider,
+            modelId: row.id,
+            config: prepared.config,
+            workspaceDir: context.workspaceDir,
+            context: {
+              provider: row.provider,
+              modelId: row.id,
+              config: prepared.config,
+              workspaceDir: context.workspaceDir,
+              api: row.api,
+              baseUrl: row.baseUrl,
+            },
+          });
       let model: DecisionProviderContextV2["model"] = {
         ...row,
         api: normalizeResolvedTransportApi(normalized?.api) ?? row.api,
@@ -360,9 +393,8 @@ export async function executePreparedDecision(params: {
         if (!validateDecisionResultV2(offered, value, model.inference?.decision)) {
           return { status: "unavailable", reason: "invalid-response" };
         }
-        const snapshot = structuredClone(value);
         assertPrepared();
-        return { status, result: snapshot };
+        return { status, result: value };
       }
       if (status !== "unavailable") {
         throw new Error("Invalid decision provider outcome");

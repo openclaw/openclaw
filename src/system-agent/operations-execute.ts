@@ -93,12 +93,8 @@ export async function executeSystemAgentOperation(
       return { applied: false, exitsInteractive: operation.message.includes("Bye.") };
     case "overview": {
       const overview = await loadOverviewForOperation(opts.deps);
-      if (opts.deps?.formatOverview) {
-        runtime.log(opts.deps.formatOverview(overview));
-      } else {
-        const { formatSystemAgentOverview } = await import("./overview.js");
-        runtime.log(formatSystemAgentOverview(overview));
-      }
+      const { formatSystemAgentOverview } = await import("./overview.js");
+      runtime.log(formatSystemAgentOverview(overview));
       return { applied: false };
     }
     case "agents": {

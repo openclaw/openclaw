@@ -3,6 +3,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { executableFileExistsSync } from "openclaw/plugin-sdk/path-existence-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import type { BrowserExecutable } from "./chrome.executable-types.js";
 
@@ -91,14 +92,8 @@ export function findPlaywrightChromiumExecutable(
       }
       for (const segments of chromiumPaths) {
         const candidate = join(cache, entry, ...segments);
-        try {
-          if (!fs.statSync(candidate).isFile()) {
-            continue;
-          }
-          fs.accessSync(candidate, platform === "win32" ? fs.constants.F_OK : fs.constants.X_OK);
+        if (executableFileExistsSync(candidate, platform)) {
           return { kind: "chromium", path: candidate };
-        } catch {
-          // A stale or incomplete cache entry is not an installed browser.
         }
       }
     }

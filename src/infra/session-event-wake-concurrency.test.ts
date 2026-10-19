@@ -10,6 +10,7 @@ import {
   requestSessionEventWakeAndWait,
   setSessionEventWakeHandler as setRuntimeSessionEventWakeHandler,
 } from "./session-event-wake.js";
+import { expectWakeHandlerReplacementConcurrency } from "./wake-concurrency.test-helpers.js";
 
 describe("session event wake target concurrency", () => {
   type WakeRequest = Parameters<typeof requestSessionEventWake>[0];
@@ -141,6 +142,59 @@ describe("session event wake target concurrency", () => {
       await Promise.all([active, retrying, queued]);
     }
   });
+
+  it.each(["dispose", "drain"] as const)(
+    "retains a wake interrupted by %s for its successor",
+    async (action) => {
+      vi.useFakeTimers();
+      const finish = createDeferred();
+      let activeSignal: AbortSignal | undefined;
+      const handler = vi.fn(async (_request: WakeRequest, signal: AbortSignal) => {
+        activeSignal = signal;
+        await finish.promise;
+        throw new Error("interrupted wake preparation");
+      });
+      setSessionEventWakeHandler(handler);
+      const request = {
+        source: "exec-event" as const,
+        intent: "event" as const,
+        reason: "exec-event",
+        sessionKey: "agent:main:interrupted",
+        coalesceMs: 0,
+      };
+      const result = requestSessionEventWakeAndWait(request);
+      try {
+        await vi.advanceTimersByTimeAsync(1);
+        expect(handler).toHaveBeenCalledOnce();
+        if (action === "dispose") {
+          currentHandlerDisposer?.();
+        } else {
+          markGatewayRestartDraining();
+        }
+        expect(activeSignal?.aborted).toBe(action === "dispose");
+        finish.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+        await expect(result).resolves.toEqual({
+          status: "skipped",
+          reason: action === "dispose" ? "handler-unavailable" : "gateway-draining",
+        });
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+        resetGatewayWorkAdmission();
+        const replacement = vi.fn(async () => ({ status: "ran" as const, durationMs: 1 }));
+        setSessionEventWakeHandler(replacement);
+        await vi.runAllTimersAsync();
+        expect(replacement).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({ reason: request.reason, sessionKey: request.sessionKey }),
+          expect.any(AbortSignal),
+        );
+        expect(handler).toHaveBeenCalledOnce();
+        expect(getActiveGatewayRootWorkCount()).toBe(0);
+      } finally {
+        finish.resolve();
+        await vi.advanceTimersByTimeAsync(0);
+      }
+    },
+  );
 
   it.each([100, 5_000])(
     "preserves distinct target deadlines with a new %ims wake",
@@ -299,95 +353,17 @@ describe("session event wake target concurrency", () => {
   });
 
   it("preserves the target concurrency bound across session event handler replacement", async () => {
-    vi.useFakeTimers();
-    const finishOldWakeByAgent = new Map<string, () => void>();
-    const finishNewWakeByAgent = new Map<string, () => void>();
-    const oldWakeSignals: AbortSignal[] = [];
-    let peakActiveWakeCount = 0;
-    const oldHandler = vi.fn(async (request: WakeRequest, signal: AbortSignal) => {
-      peakActiveWakeCount = Math.max(peakActiveWakeCount, getActiveGatewayRootWorkCount());
-      if (signal) {
-        oldWakeSignals.push(signal);
-      }
-      await new Promise<void>((resolve) => {
-        finishOldWakeByAgent.set(request.agentId ?? "", resolve);
-      });
-      return { status: "ran" as const, durationMs: 1 };
+    await expectWakeHandlerReplacementConcurrency({
+      setHandler: setSessionEventWakeHandler,
+      requestTarget: (agentId) => {
+        requestCronWake({
+          reason: `cron:${agentId}`,
+          agentId,
+          sessionKey: `agent:${agentId}:main`,
+        });
+      },
+      getAbortSignal: (signal) => signal,
     });
-    setSessionEventWakeHandler(oldHandler);
-
-    function requestTarget(agentId: string): void {
-      requestCronWake({
-        reason: `cron:${agentId}`,
-        agentId,
-        sessionKey: `agent:${agentId}:main`,
-      });
-    }
-
-    for (let index = 0; index < 4; index += 1) {
-      requestTarget(`target-${index}`);
-    }
-    await vi.advanceTimersByTimeAsync(1);
-    expect(oldHandler).toHaveBeenCalledTimes(4);
-    expect(getActiveGatewayRootWorkCount()).toBe(4);
-
-    const newHandler = vi.fn(async (request: WakeRequest) => {
-      peakActiveWakeCount = Math.max(peakActiveWakeCount, getActiveGatewayRootWorkCount());
-      await new Promise<void>((resolve) => {
-        finishNewWakeByAgent.set(request.agentId ?? "", resolve);
-      });
-      return { status: "ran" as const, durationMs: 1 };
-    });
-    setSessionEventWakeHandler(newHandler);
-    requestTarget("target-0");
-    for (let index = 4; index < 8; index += 1) {
-      requestTarget(`target-${index}`);
-    }
-
-    try {
-      await vi.advanceTimersByTimeAsync(1);
-      expect(oldWakeSignals).toHaveLength(4);
-      expect(oldWakeSignals.every((signal) => signal.aborted)).toBe(false);
-      expect(newHandler).not.toHaveBeenCalled();
-      expect(getActiveGatewayRootWorkCount()).toBe(4);
-
-      for (const finishWake of finishOldWakeByAgent.values()) {
-        finishWake();
-      }
-      await vi.advanceTimersByTimeAsync(0);
-      expect(newHandler.mock.calls.map(([request]) => request.agentId)).toEqual([
-        "target-0",
-        "target-4",
-        "target-5",
-        "target-6",
-      ]);
-      expect(getActiveGatewayRootWorkCount()).toBe(4);
-
-      finishNewWakeByAgent.get("target-0")?.();
-      await vi.advanceTimersByTimeAsync(0);
-      expect(newHandler.mock.calls.map(([request]) => request.agentId)).toEqual([
-        "target-0",
-        "target-4",
-        "target-5",
-        "target-6",
-        "target-7",
-      ]);
-      expect(getActiveGatewayRootWorkCount()).toBe(4);
-    } finally {
-      for (let index = 0; index < 9; index += 1) {
-        for (const finishWake of finishOldWakeByAgent.values()) {
-          finishWake();
-        }
-        for (const finishWake of finishNewWakeByAgent.values()) {
-          finishWake();
-        }
-        await vi.advanceTimersByTimeAsync(0);
-      }
-    }
-
-    expect(newHandler).toHaveBeenCalledTimes(5);
-    expect(peakActiveWakeCount).toBe(4);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("joins disposed work without letting its stale disposer abort a replacement", async () => {

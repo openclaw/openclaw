@@ -4,13 +4,14 @@ import {
   isUnresolvedShellReference,
   readStateDirDotEnvFromStateDir,
 } from "../config/state-dir-dotenv.js";
-import { hasErrnoCode } from "../infra/errno.js";
+import { hasErrnoCode, ignoreMissingPath } from "../infra/errno.js";
 import {
   GATEWAY_SERVICE_KIND,
   GATEWAY_SERVICE_MARKER,
   resolveGatewayServiceDescription,
 } from "./constants.js";
 import { formatLine, writeFormattedLines } from "./output.js";
+import { assertServiceInspectionFallbackAllowed } from "./service-inspection-error.js";
 import {
   hasEnvironmentFileSource,
   hasInlineEnvironmentSource,
@@ -153,12 +154,9 @@ export async function refreshLegacySystemdServiceMetadata(
   const deadlineAt = performance.now() + Math.max(1, timeoutMs);
   const remainingTimeoutMs = () => Math.max(1, deadlineAt - performance.now());
   const unitPath = resolveSystemdUnitPath(env);
-  const current = await fs.readFile(unitPath, "utf8").catch((error: unknown) => {
-    if (hasErrnoCode(error, "ENOENT")) {
-      return null;
-    }
-    throw error;
-  });
+  const current = await fs
+    .readFile(unitPath, "utf8")
+    .catch((error: unknown) => ignoreMissingPath(error) ?? null);
   if (current === null || removeLegacyGatewayVersionMetadata(current) === current) {
     return false;
   }
@@ -426,7 +424,10 @@ async function removeNodeSystemdManagedEnvironmentKeys(env: GatewayServiceEnv): 
   let existingFile: Awaited<ReturnType<typeof readSystemdEnvironmentFile>>;
   try {
     existingFile = await readSystemdEnvironmentFile(envFilePath);
-  } catch {
+  } catch (error) {
+    if (!hasErrnoCode(error, "ENOENT")) {
+      throw error;
+    }
     return;
   }
   const remaining = Object.fromEntries(
@@ -522,7 +523,12 @@ export async function installSystemdService(
   const { unitPath, backedUp } = await writeSystemdUnit(args, load);
   if (
     args.warn &&
-    hasGatewayServiceLauncherOverride(await readSystemdServiceExecStart(args.env).catch(() => null))
+    hasGatewayServiceLauncherOverride(
+      await readSystemdServiceExecStart(args.env).catch((error: unknown) => {
+        assertServiceInspectionFallbackAllowed(error);
+        return null;
+      }),
+    )
   ) {
     args.warn(
       "Systemd drop-in overrides the managed service command or working directory; inspect, update, or remove the drop-in because reinstalling the base unit does not change the effective launcher.",
@@ -551,14 +557,13 @@ export async function uninstallSystemdService({
     }
     // Unit file was already absent; still clean generated node env state below.
   }
-  await fs.unlink(`${unitPath}.bak`).catch((error: unknown) => {
-    if (!hasErrnoCode(error, "ENOENT")) {
-      throw error;
-    }
-  });
+  await fs.unlink(`${unitPath}.bak`).catch(ignoreMissingPath);
   await removeNodeSystemdManagedEnvironmentKeys(env);
   if (removed) {
     stdout.write(`${formatLine("Removed systemd service", unitPath)}\n`);
+    // The manager keeps a deleted unit loaded until it reloads. A retry after a
+    // failed reload finds no unit file and skips this; accepted, rare.
+    await reloadSystemdUserManager(env);
   } else {
     stdout.write(`Systemd service not found at ${unitPath}\n`);
   }

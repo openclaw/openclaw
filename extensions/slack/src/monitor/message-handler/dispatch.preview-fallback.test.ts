@@ -1025,7 +1025,7 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     expect(getSlackSessionRuns(prepared.ctx, { channelId: "C123", threadTs: THREAD_TS })).toEqual(
       [],
     );
-    capturedReplyOptions?.turnAdoptionLifecycle?.onSettled?.();
+    await capturedReplyOptions?.turnAdoptionLifecycle?.onSettled?.();
     expect(onSettled).toHaveBeenCalledOnce();
   });
 
@@ -1061,40 +1061,44 @@ describe("dispatchPreparedSlackMessage preview fallback", () => {
     await dispatchPreparedSlackMessage(prepared);
   });
 
-  it("retains queued publisher ownership until settlement", async () => {
-    const prepared: Parameters<typeof dispatchPreparedSlackMessage>[0] = createPreparedSlackMessage(
-      {
-        turnAdoptionLifecycle: {
-          admission: "exclusive",
-          onAdopted: async () => {},
-          onDeferred: () => {},
-          onAbandoned: () => {},
-        },
-      },
-    );
-    const address = { channelId: "C123", threadTs: THREAD_TS };
-    mockedReplyOptionEvents = [
-      checkpoint(async () => {
-        expect(
-          getSlackSessionRuns(prepared.ctx, address).map(({ route }) => route.sessionKey),
-        ).toEqual([prepared.route.sessionKey]);
-        capturedReplyOptions?.turnAdoptionLifecycle?.onDeferred?.();
-      }),
-    ];
-    await dispatchPreparedSlackMessage(prepared);
-    expect(getSlackSessionRuns(prepared.ctx, address).map(({ route }) => route.sessionKey)).toEqual(
-      [prepared.route.sessionKey],
-    );
-    const endQueuedRun = capturedReplyOptions?.queuedDeliveryCorrelations?.[0]?.begin();
-    capturedReplyOptions?.turnAdoptionLifecycle?.onSettled?.();
-    expect(getSlackSessionRuns(prepared.ctx, address)).toHaveLength(1);
-    expect(getSlackSessionRuns({ ...prepared.ctx }, address)).toHaveLength(1);
-    const restarted: Parameters<typeof dispatchPreparedSlackMessage>[0] =
-      createPreparedSlackMessage();
-    expect(getSlackSessionRuns(restarted.ctx, address)).toEqual([]);
-    endQueuedRun?.();
-    expect(getSlackSessionRuns(prepared.ctx, address)).toEqual([]);
-  });
+  it.each([false, true])(
+    "retains queued publisher ownership until settlement (executed: %s)",
+    async (executed) => {
+      const prepared: Parameters<typeof dispatchPreparedSlackMessage>[0] =
+        createPreparedSlackMessage({
+          turnAdoptionLifecycle: {
+            admission: "exclusive",
+            onAdopted: async () => {},
+            onDeferred: () => {},
+            onAbandoned: () => {},
+          },
+        });
+      const address = { channelId: "C123", threadTs: THREAD_TS };
+      mockedReplyOptionEvents = [
+        checkpoint(async () => {
+          expect(
+            getSlackSessionRuns(prepared.ctx, address).map(({ route }) => route.sessionKey),
+          ).toEqual([prepared.route.sessionKey]);
+          capturedReplyOptions?.turnAdoptionLifecycle?.onDeferred?.();
+        }),
+      ];
+      await dispatchPreparedSlackMessage(prepared);
+      expect(
+        getSlackSessionRuns(prepared.ctx, address).map(({ route }) => route.sessionKey),
+      ).toEqual([prepared.route.sessionKey]);
+      const endQueuedRun = executed
+        ? capturedReplyOptions?.queuedDeliveryCorrelations?.[0]?.begin()
+        : undefined;
+      await capturedReplyOptions?.turnAdoptionLifecycle?.onSettled?.();
+      expect(getSlackSessionRuns(prepared.ctx, address)).toHaveLength(executed ? 1 : 0);
+      expect(getSlackSessionRuns({ ...prepared.ctx }, address)).toHaveLength(executed ? 1 : 0);
+      const restarted: Parameters<typeof dispatchPreparedSlackMessage>[0] =
+        createPreparedSlackMessage();
+      expect(getSlackSessionRuns(restarted.ctx, address)).toEqual([]);
+      endQueuedRun?.();
+      expect(getSlackSessionRuns(prepared.ctx, address)).toEqual([]);
+    },
+  );
 
   it("gates native progress previews before message_sending hooks", async () => {
     getGlobalHookRunnerMock.mockReturnValue({

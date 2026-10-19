@@ -315,7 +315,9 @@ export function* loadRuntimePluginCandidate(params: {
       record.memorySlotSelected = true;
     }
   }
+  const beforeConfigValidation = performance.now();
   const validatedConfig = prepareRuntimePluginConfig(params);
+  const configValidationMs = performance.now() - beforeConfigValidation;
   if (!validatedConfig.ok) {
     params.logger.error(
       `[plugins] ${record.id} invalid config: ${validatedConfig.error.join(", ")}`,
@@ -328,6 +330,7 @@ export function* loadRuntimePluginCandidate(params: {
     return;
   }
 
+  const beforeArtifactPreparation = performance.now();
   const artifactParams = {
     pluginId,
     rootDir: pluginRoot,
@@ -481,10 +484,12 @@ export function* loadRuntimePluginCandidate(params: {
   }
 
   let moduleLoadMs = 0;
+  let modulePreparationMs = 0;
   let beforeRegister: number | undefined;
   let failurePhase: "load" | "register" = "load";
   let failed = false;
   const beforeModuleLoad = performance.now();
+  const artifactPreparationMs = beforeModuleLoad - beforeArtifactPreparation;
   try {
     // Top-level code may execute before module evaluation throws, so record the
     // import attempt before invoking the loader.
@@ -496,13 +501,19 @@ export function* loadRuntimePluginCandidate(params: {
     if (!recovery && candidate.origin !== "bundled") {
       // Host callers await acquisition after selection and policy checks. Synchronous
       // CLI consumers skip this step and use the same loader's inline acquisition.
-      yield () =>
-        params.loadPluginModule.prepare(safeSource, {
-          record,
-          rootDir: moduleRoot,
-          registry,
-          standalone: manifestRecord.manifestPath === candidate.source,
-        });
+      yield async () => {
+        const started = performance.now();
+        try {
+          await params.loadPluginModule.prepare(safeSource, {
+            record,
+            rootDir: moduleRoot,
+            registry,
+            standalone: manifestRecord.manifestPath === candidate.source,
+          });
+        } finally {
+          modulePreparationMs = performance.now() - started;
+        }
+      };
     }
     const loadPluginModule = (source: string) => {
       if (recovery) {
@@ -681,7 +692,10 @@ export function* loadRuntimePluginCandidate(params: {
     const registerMs =
       beforeRegister === undefined ? undefined : performance.now() - beforeRegister;
     detailPluginStartupTrace(params.options.startupTrace, record.id, [
+      ["configValidationMs", configValidationMs],
+      ["artifactPreparationMs", artifactPreparationMs],
       ["loadMs", moduleLoadMs || elapsed],
+      ["modulePreparationMs", modulePreparationMs],
       ["loadFailedCount", failed && failurePhase === "load" ? 1 : 0],
       ...(registerMs === undefined
         ? []

@@ -362,7 +362,7 @@ const send = (message) => process.stdout.write(JSON.stringify(message) + "\\n");
 createInterface({ input: process.stdin }).on("line", (line) => {
   const request = JSON.parse(line);
   if (request.method === "test/complete") {
-    ${shutdown === "retired-command" ? 'send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "commandExecution", id: "retired-command", command: "fixture", cwd: process.cwd(), status: "completed", exitCode: 0, aggregatedOutput: "" } } });' : ""}
+    ${shutdown !== "forced" ? 'send({ method: "item/completed", params: { threadId: "thread-1", turnId: "turn-1", item: { type: "commandExecution", id: "fixture-command", command: "fixture", cwd: process.cwd(), status: "completed", exitCode: 0, aggregatedOutput: "" } } });' : ""}
     send({ method: "turn/completed", params: { threadId: "thread-1", turn: { id: "turn-1", status: "completed", items: [] } } });
   } else if (request.id !== undefined) {
     send({ id: request.id, result: results[request.method] ?? {} });
@@ -430,10 +430,13 @@ process.stdin.on("end", () => ${
           await waitForTaskOwnedProcessExit(descendantPid, signal);
         }
         expect(isPidAlive(descendantPid)).toBe(retained);
-        // This is the cleanup guard that also records the one-shot recovery
-        // receipt; a clean root exit must not bypass its failure path.
-        if (shutdown === "confirmed") {
-          expect(warning).not.toHaveBeenCalled();
+        // Confirmed termination is sufficient for host-tool-only turns. Native
+        // commands can have reparented descendants even after a clean root exit.
+        if (shutdown === "forced") {
+          expect(warning).toHaveBeenCalledWith(
+            "Codex app-server required forced shutdown; process cleanup confirmed",
+          );
+          expect(warning).not.toHaveBeenCalledWith(expect.stringMatching(/agent cleanup failed:/));
         } else {
           expect(warning).toHaveBeenCalledWith(
             expect.stringMatching(/agent cleanup failed:.*step=codex-shared-client-release/),

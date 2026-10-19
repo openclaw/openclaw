@@ -388,6 +388,10 @@ Model behavior:
   the full catalog instead of showing no models.
 - Wizard runs a model check and warns if the configured model is unknown or missing auth.
 
+When replacing an existing sign-in, setup verifies it before asking you to activate it.
+Activation preserves your provider models and plugin settings. If another edit changes
+the same connection during setup, review the newer settings before retrying.
+
 Credential and profile paths:
 
 - Agent-local auth profiles (API keys, tokens, and OAuth): `~/.openclaw/agents/<agentId>/agent/openclaw-agent.sqlite` (`auth_profile_store`).

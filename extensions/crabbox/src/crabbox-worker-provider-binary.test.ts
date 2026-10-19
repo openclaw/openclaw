@@ -1,6 +1,8 @@
+import fs from "node:fs/promises";
 import { syncBuiltinESMExports } from "node:module";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ensureManagedCrabboxBinary, type CrabboxBinary } from "./crabbox-managed-binary.js";
 import type { CrabboxCommandRunner } from "./crabbox-worker-command.js";
@@ -10,7 +12,8 @@ import {
   OPENCLAW_ROOT,
 } from "./crabbox-worker-provider.test-support.js";
 
-vi.mock("./crabbox-managed-binary.js", () => ({
+vi.mock("./crabbox-managed-binary.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./crabbox-managed-binary.js")>()),
   ensureManagedCrabboxBinary: vi.fn(),
 }));
 
@@ -25,6 +28,7 @@ const SIBLING_BINARY = path.resolve(OPENCLAW_ROOT, "../crabbox/bin/crabbox");
 const { providers, createProvider } = createProviderFixtures({
   isExecutable: (candidate) => candidate === SIBLING_BINARY,
 });
+const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 beforeEach(() => {
   vi.mocked(ensureManagedCrabboxBinary)
     .mockReset()
@@ -37,10 +41,89 @@ afterEach(async () => {
   await Promise.all([...providers].map((provider) => provider.dispose()));
   providers.clear();
   vi.restoreAllMocks();
+  vi.unstubAllEnvs();
   syncBuiltinESMExports();
 });
 
 describe("Crabbox provider binary resolution", () => {
+  it.each([
+    ["outdated", commandResult({ stdout: "crabbox 0.66.0" }), "version 0.66.0", false],
+    [
+      "indeterminate",
+      commandResult({ termination: "timeout", code: null }),
+      "timed out after 30000 ms",
+      true,
+    ],
+    [
+      "indeterminate",
+      commandResult({ stdout: "not-a-version" }),
+      "version output was not recognized",
+      false,
+    ],
+    [
+      "indeterminate",
+      new Error(`token=synthetic-version-secret-0123456789 ${"failure ".repeat(100)}`),
+      "execution failed",
+      false,
+    ],
+  ] as const)(
+    "warns once for an explicit %s candidate after shared discovery (%#)",
+    async (status, probe, reason, joinInFlight) => {
+      const actual = await vi.importActual<typeof import("./crabbox-managed-binary.js")>(
+        "./crabbox-managed-binary.js",
+      );
+      vi.mocked(ensureManagedCrabboxBinary).mockImplementation(actual.ensureManagedCrabboxBinary);
+      vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("crabbox-fallback-"));
+      const managed = actual.resolveManagedCrabboxBinaryPath();
+      await fs.mkdir(path.dirname(managed), { recursive: true });
+      await fs.writeFile(managed, "fixture");
+      const started = createDeferred<void>();
+      const finish = createDeferred<void>();
+      const warn = vi.fn<(message: string) => void>();
+      const runCommand = vi.fn<CrabboxCommandRunner>(async ([binary, command]) => {
+        if (command !== "--version") {
+          return commandResult({ stdout: "[]" });
+        }
+        if (binary === managed) {
+          return commandResult({ stdout: `crabbox ${actual.CRABBOX_MIN_VERSION}` });
+        }
+        started.resolve();
+        await finish.promise;
+        if (probe instanceof Error) {
+          throw probe;
+        }
+        return probe;
+      });
+      const provider = createProvider({ runCommand, warn });
+      const implicit = provider.listMachineOptions!(PROFILE);
+      await started.promise;
+      const explicitProfile = { ...PROFILE, binary: SIBLING_BINARY };
+      const joined = joinInFlight ? provider.listOperatingSystems!(explicitProfile) : undefined;
+      finish.resolve();
+      await implicit;
+      if (!joinInFlight) {
+        expect(warn).not.toHaveBeenCalled();
+      }
+      await (joined ?? provider.listOperatingSystems!(explicitProfile));
+      await provider.listMachineOptions!(explicitProfile);
+
+      expect(warn).toHaveBeenCalledOnce();
+      const message = warn.mock.calls[0]![0];
+      expect(message).toContain(`configured binary "${SIBLING_BINARY}"`);
+      expect(message).toContain(`probe status "${status}"`);
+      expect(message).toContain(reason);
+      expect(message).toContain(`using managed binary "${managed}"`);
+      expect(message).not.toContain("synthetic-version-secret");
+      if (status === "outdated") {
+        expect(message).toContain(`required ${actual.CRABBOX_MIN_VERSION}`);
+      } else {
+        const detail = message.split('probe status "indeterminate": ')[1]!.split("); using")[0]!;
+        expect(detail.length).toBeLessThanOrEqual(201);
+      }
+      expect(ensureManagedCrabboxBinary).toHaveBeenCalledOnce();
+    },
+  );
+
   it("coalesces concurrent discovery into one version probe per binary", async () => {
     const actual = await vi.importActual<typeof import("./crabbox-managed-binary.js")>(
       "./crabbox-managed-binary.js",
@@ -56,7 +139,8 @@ describe("Crabbox provider binary resolution", () => {
       }
       return commandResult({ stdout: "[]" });
     });
-    const provider = createProvider({ runCommand });
+    const warn = vi.fn();
+    const provider = createProvider({ runCommand, warn });
     const discoveries = Array.from({ length: 6 }, (_, index) =>
       index % 2 === 0
         ? provider.listMachineOptions!(PROFILE)
@@ -77,6 +161,7 @@ describe("Crabbox provider binary resolution", () => {
       ["/opt/other/crabbox", "--version"],
       ["/opt/other/crabbox", "providers"],
     ]);
+    expect(warn).not.toHaveBeenCalled();
   });
 
   it("evicts a shared rejection so later discovery can retry", async () => {

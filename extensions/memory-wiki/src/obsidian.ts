@@ -1,6 +1,5 @@
-import { constants as fsConstants } from "node:fs";
-import fs from "node:fs/promises";
 import path from "node:path";
+import { executableFileExists } from "openclaw/plugin-sdk/path-existence-runtime";
 import { runExec } from "openclaw/plugin-sdk/process-runtime";
 import type { ResolvedMemoryWikiConfig } from "./config.js";
 
@@ -16,16 +15,6 @@ type ObsidianCliDeps = {
   resolveCommand?: (command: string) => Promise<string | null>;
 };
 
-async function isExecutableFile(inputPath: string): Promise<boolean> {
-  try {
-    await fs.access(inputPath, process.platform === "win32" ? fsConstants.F_OK : fsConstants.X_OK);
-    // X_OK also succeeds for searchable directories; follow symlinks to check the target type.
-    return (await fs.stat(inputPath)).isFile();
-  } catch {
-    return false;
-  }
-}
-
 async function resolveCommandOnPath(command: string): Promise<string | null> {
   const pathValue = process.env.PATH ?? "";
   const pathEntries = pathValue.split(path.delimiter).filter(Boolean);
@@ -37,7 +26,7 @@ async function resolveCommandOnPath(command: string): Promise<string | null> {
   for (const dir of pathEntries) {
     for (const extension of windowsExts) {
       const candidate = path.join(dir, extension ? `${command}${extension}` : command);
-      if (await isExecutableFile(candidate)) {
+      if (await executableFileExists(candidate)) {
         return candidate;
       }
     }

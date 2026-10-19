@@ -1,3 +1,4 @@
+import { performance } from "node:perf_hooks";
 import {
   createSessionActivityNoteState,
   flushSessionActivityAssistantNote,
@@ -23,6 +24,7 @@ import {
 const narratorLog = createSubsystemLogger("auto-reply/progress-narrator");
 
 const MIN_INTERVAL_MS = 12_000;
+const NARRATION_TIMEOUT_MS = 10_000;
 const NARRATION_MAX_CHARS = 280;
 const NARRATION_NOTE_MAX_CHARS = 160;
 const VISIBILITY_RETRY_MS = 1_000;
@@ -124,29 +126,43 @@ function createProgressNarrator(params: {
   }
 
   const generate = async (input: ProgressNarrationInput, abortSignal: AbortSignal) => {
-    const prepared = await (preparedPromise ??= prepareNarrationModel({
-      cfg: params.cfg,
-      agentId: params.agentId,
-    }));
-    // Failed or borrowed routes recheck credentials on the next narration.
-    if (!prepared || prepared.agentHarnessRuntimeOverride) {
-      preparedPromise = undefined;
+    const deadline = performance.now() + NARRATION_TIMEOUT_MS;
+    const controller = new AbortController();
+    const signal = AbortSignal.any([abortSignal, controller.signal]);
+    const timeout = setTimeout(() => controller.abort(), NARRATION_TIMEOUT_MS);
+    try {
+      // Preparation shares the request budget, but stays awaited so expired work
+      // cannot abandon the cached route or start another preparation in parallel.
+      const prepared = await (preparedPromise ??= prepareNarrationModel({
+        cfg: params.cfg,
+        agentId: params.agentId,
+      }));
+      // Failed or borrowed routes recheck credentials on the next narration.
+      if (!prepared || prepared.agentHarnessRuntimeOverride) {
+        preparedPromise = undefined;
+      }
+      const remainingTimeoutMs = deadline - performance.now();
+      if (signal.aborted || remainingTimeoutMs <= 0) {
+        return null;
+      }
+      if (!prepared) {
+        disableNarration();
+        return null;
+      }
+      const { provider, model, authProfileId } = prepared;
+      utilityModelLabel = `${provider}/${model}${authProfileId ? ` via ${authProfileId}` : ""}`;
+      const outcome = await generateNarrationWithUtilityModel({
+        cfg: params.cfg,
+        prepared,
+        input,
+        abortSignal: signal,
+        // Runtime timers require integer milliseconds; the outer deadline stays exact.
+        timeoutMs: Math.ceil(remainingTimeoutMs),
+      });
+      return signal.aborted || performance.now() >= deadline ? null : outcome;
+    } finally {
+      clearTimeout(timeout);
     }
-    if (abortSignal.aborted) {
-      return null;
-    }
-    if (!prepared) {
-      disableNarration();
-      return null;
-    }
-    const { provider, model, authProfileId } = prepared;
-    utilityModelLabel = `${provider}/${model}${authProfileId ? ` via ${authProfileId}` : ""}`;
-    return await generateNarrationWithUtilityModel({
-      cfg: params.cfg,
-      prepared,
-      input,
-      abortSignal,
-    });
   };
 
   const recordEvent = (

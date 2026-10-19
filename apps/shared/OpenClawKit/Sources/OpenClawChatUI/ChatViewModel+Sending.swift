@@ -43,11 +43,6 @@ extension OpenClawChatViewModel {
     @discardableResult
     public func send() -> Task<Void, Never>? {
         guard !self.usesWebConversation else { return nil }
-        logDiagnostic(
-            "chat.ui send invoked sessionKey=\(sessionKey) "
-                + "inputLen=\(input.count) attachments=\(attachments.count) "
-                + "pending=\(pendingRunCount) sending=\(isSending) "
-                + "health=\(healthOK)")
         // Reserve the accepted draft before scheduling work so initial route
         // hydration cannot retire its owner before asynchronous validation starts.
         guard let draft = captureSendDraft() else { return nil }
@@ -305,7 +300,6 @@ extension OpenClawChatViewModel {
         guard await self.prepareLiveRoute(for: draft) else { return }
         guard await self.validateAttachmentBudgetForSend(draft.attachments, session: draft.session) else { return }
         guard self.composerModelAvailabilityMessage == nil else {
-            logDiagnostic("chat.ui send ignored reason=model-auth sessionKey=\(sessionKey)")
             return
         }
         let attempt = self.beginLiveSend(draft)
@@ -314,27 +308,20 @@ extension OpenClawChatViewModel {
 
     private func captureSendDraft() -> SendDraft? {
         guard !isSubmittingDraft, !isSending else {
-            logDiagnostic("chat.ui send ignored reason=sending sessionKey=\(sessionKey)")
             return nil
         }
         guard self.attachmentStagingCount == 0 else {
             // File reads and image processing suspend before publishing the
             // attachment. Do not let a programmatic send overtake that owner.
-            logDiagnostic("chat.ui send ignored reason=attachment-staging sessionKey=\(sessionKey)")
             return nil
         }
         guard !self.hasBlockingRunActivity else {
-            logDiagnostic(
-                "chat.ui send ignored reason=pending sessionKey=\(sessionKey) "
-                    + "pending=\(pendingRunCount) "
-                    + "activeWithoutSnapshot=\(hasActiveSessionRunWithoutChatSnapshot)")
             return nil
         }
         let input = self.input
         let attachments = self.attachments
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty || !attachments.isEmpty else {
-            logDiagnostic("chat.ui send ignored reason=empty sessionKey=\(sessionKey)")
             return nil
         }
         return SendDraft(
@@ -375,15 +362,12 @@ extension OpenClawChatViewModel {
     }
 
     private func prepareLiveRoute(for draft: SendDraft) async -> Bool {
-        let sessionKey = draft.session.key
         if !healthOK {
             await pollHealthIfNeeded(force: true, sessionSnapshot: draft.session)
             guard isCurrentSession(draft.session) else { return false }
             // Offline capture: queue the full draft durably instead of
             // dropping user text or attachment bytes.
             if !healthOK, outbox != nil {
-                logDiagnostic(
-                    "chat.ui send queued offline sessionKey=\(sessionKey) inputLen=\(draft.trimmed.count)")
                 await self.enqueueOutboxDraft(draft)
                 return false
             }
@@ -417,8 +401,6 @@ extension OpenClawChatViewModel {
         if outbox != nil,
            shouldPersistAttachmentDraft || mustPreserveOutboxOrder
         {
-            logDiagnostic(
-                "chat.ui send routed behind outbox sessionKey=\(sessionKey) inputLen=\(draft.trimmed.count)")
             await self.enqueueOutboxDraft(draft)
             return false
         }
@@ -476,9 +458,6 @@ extension OpenClawChatViewModel {
         let runId = UUID().uuidString
         let storedThinkingLevel = preferredThinkingLevel
         pendingRuns.insert(runId)
-        logDiagnostic(
-            "chat.ui send queued sessionKey=\(draft.session.key) "
-                + "localRunId=\(runId) pending=\(pendingRunCount)")
         self.clearStreamingActivity()
 
         // Production attachment sends enter the durable outbox above. Fixture,
@@ -562,9 +541,6 @@ extension OpenClawChatViewModel {
             guard isCurrentSession(attempt.draft.session) else { return }
             let sendSessionSettingsExpectation = self.composerSessionSettingsExpectation()
             durableSessionSettingsExpectation = self.durableSessionSettingsExpectation()
-            logDiagnostic(
-                "chat.ui transport send start sessionKey=\(sessionKey) "
-                    + "localRunId=\(attempt.runId)")
             let thinkingLevel = effectiveThinkingLevelForSend(attempt.storedThinkingLevel)
             let response = try await transport.sendMessage(
                 sessionKey: sessionKey,
@@ -595,10 +571,6 @@ extension OpenClawChatViewModel {
         _ response: OpenClawChatSendResponse,
         attempt: LiveSendAttempt) async
     {
-        let sessionKey = attempt.draft.session.key
-        logDiagnostic(
-            "chat.ui transport send accepted sessionKey=\(sessionKey) "
-                + "localRunId=\(attempt.runId) remoteRunId=\(response.runId)")
         if response.status != "error", response.status != "timeout" {
             haptics.perform(.messageSent)
             self.finishAcceptedComposerSend(attempt.draft)

@@ -150,7 +150,7 @@ function assertPinnedIdentityUnchanged(file: PinnedFile): void {
   }
 }
 
-function copySourceFile(
+export function copySourceFile(
   sourcePath: string,
   targetPath: string,
   expectedSourceIdentity?: DatabaseFileIdentity,
@@ -347,6 +347,11 @@ function* createStableReadOnlyCopyInTempDirectory(
         yield { sourcePath: `${pathname}${suffix}`, targetPath: `${snapshotPath}${suffix}` };
       }
       yield { sourcePath: pathname, targetPath: snapshotPath, expectedSourceIdentity };
+      if (!sourceMatchesCopy(pathname, snapshotPath, expectedSourceIdentity)) {
+        throw new SqliteSourceChangedError(
+          `SQLite main database changed while copying: ${pathname}`,
+        );
+      }
       for (const suffix of sidecarSuffixes) {
         if (!sourceMatchesCopy(`${pathname}${suffix}`, `${snapshotPath}${suffix}`)) {
           const label = suffix === "-wal" ? "WAL" : "rollback journal";

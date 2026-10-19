@@ -107,9 +107,6 @@ export async function readSessionEntryMaintenanceAgeAfterWriterRelease(
       ageChanges: pending.changes,
     },
   });
-  if (result.kind !== "maintenance-age" && result.kind !== "maintenance-plan-stale") {
-    throw new Error("SQLite automatic maintenance returned another age result");
-  }
   pending.acknowledge();
   return result;
 }
@@ -624,9 +621,6 @@ export async function finalizeSessionEntryMaintenancePlansAfterWriterReleaseBest
               });
         },
       );
-      if (result.kind !== "maintenance-finalize") {
-        throw new Error("SQLite maintenance returned another operation's result");
-      }
       archivedTranscripts = result.value.archivedTranscripts;
       const committedIndices = new Set(result.value.committedEntryIndices);
       changedEntryRemovals = removalOutcomes.filter((_, index) => !committedIndices.has(index));

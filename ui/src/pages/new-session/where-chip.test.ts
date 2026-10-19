@@ -1,15 +1,31 @@
 /* @vitest-environment jsdom */
 import { describe, expect, it, vi } from "vitest";
+import type { DraftEnvironment } from "./discovery.ts";
 import { renderPicker } from "./where-chip.test-support.ts";
 
+function device(id: string, label: string, overrides: Partial<DraftEnvironment> = {}) {
+  return {
+    id: `node:${id}`,
+    type: "node",
+    label,
+    status: "available",
+    sessionHost: true,
+    workerSlots: { total: 2, available: 1 },
+    ...overrides,
+  } satisfies DraftEnvironment;
+}
+
+function option(container: ParentNode, value: string) {
+  return container.querySelector<HTMLButtonElement>(`[data-value="${value}"]`);
+}
+
 function hoverDetails(row: Element | null | undefined) {
-  return [
-    ...(row
+  return Array.from(
+    row
       ?.closest("openclaw-tooltip")
-      ?.querySelectorAll('[slot="content"] > div, [slot="content"] > span') ?? []),
-  ]
-    .map((detail) => detail.textContent?.trim())
-    .join(" · ");
+      ?.querySelectorAll('[slot="content"] > div, [slot="content"] > span') ?? [],
+    (detail) => detail.textContent?.trim(),
+  ).join(" · ");
 }
 
 function capacityCaption(row: Element | null | undefined) {
@@ -31,10 +47,9 @@ function expectIconShape(actual: SVGElement | null, paths: readonly string[]) {
   })) {
     expect(actual?.getAttribute(attribute)).toBe(value);
   }
-  expect(Array.from(actual?.children ?? [], (child) => child.tagName)).toEqual(
-    paths.map(() => "path"),
-  );
-  expect(Array.from(actual?.children ?? [], (child) => child.getAttribute("d"))).toEqual(paths);
+  expect(
+    Array.from(actual?.children ?? [], (child) => [child.tagName, child.getAttribute("d")]),
+  ).toEqual(paths.map((path) => ["path", path]));
 }
 
 describe("Where chip", () => {
@@ -49,7 +64,7 @@ describe("Where chip", () => {
         onAdoptSuggestedProfile,
       },
     );
-    const item = container.querySelector<HTMLButtonElement>('[data-value="suggested-cloud"]');
+    const item = option(container, "suggested-cloud");
     expect(item?.textContent?.trim()).toBe("Cloud");
     expect(item?.querySelector('[data-provider-icon="aws"]')).not.toBeNull();
     expect(container.querySelector('[data-action="manage-cloud-workers"]')).toBeNull();
@@ -71,7 +86,7 @@ describe("Where chip", () => {
           suggestedProfile: { id: "cloud", providerId: "crabbox", providerDisplayId: "aws" },
         },
       );
-      expect(container.querySelector('[data-value="suggested-cloud"]')).toBeNull();
+      expect(option(container, "suggested-cloud")).toBeNull();
     },
   );
 
@@ -88,69 +103,45 @@ describe("Where chip", () => {
   });
 
   it.each([
-    {
-      label: "Work MacBook Pro",
-      platform: "darwin",
-      form: "laptop",
-      paths: [
+    [
+      "Work MacBook Pro",
+      "darwin",
+      "laptop",
+      [
         "M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z",
         "M20.054 15.987H3.946",
       ],
-    },
-    {
-      label: "Office Mac-mini",
-      platform: "darwin",
-      form: "mini",
-      paths: [
+    ],
+    [
+      "Office Mac-mini",
+      "darwin",
+      "mini",
+      [
         "M2.212 11.577a2 2 0 0 0-.212.896V18a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-5.527a2 2 0 0 0-.212-.896L18.55 5.11A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z",
         "M21.946 12.013H2.054M6 16h.01M10 16h.01",
       ],
-    },
-    {
-      label: "Build Mac Studio",
-      platform: "macOS",
-      form: "studio",
-      paths: [
-        "m3 8 3-4h12l3 4v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z",
-        "M3 8h18M6 15h2M11 15h2M17 15h.01",
-      ],
-    },
-  ])(
-    "uses the same device outline in the selected row and trigger: $label / $platform",
-    ({ label, platform, paths, form }) => {
+    ],
+    [
+      "Build Mac Studio",
+      "macOS",
+      "studio",
+      ["m3 8 3-4h12l3 4v10a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2Z", "M3 8h18M6 15h2M11 15h2M17 15h.01"],
+    ],
+  ] as const)(
+    "uses the same device outline in the selected row and trigger: %s / %s",
+    (label, platform, form, paths) => {
       const container = renderPicker(true, undefined, {
         deviceId: "model-device",
-        environments: [
-          {
-            id: "node:model-device",
-            type: "node",
-            label,
-            platform,
-            status: "available",
-            sessionHost: true,
-            workerSlots: { total: 2, available: 1 },
-          },
-        ],
+        environments: [device("model-device", label, { platform })],
       });
 
-      expectIconShape(
-        container.querySelector('[data-value="device:model-device"] .session-menu__icon svg'),
-        paths,
-      );
-      expectIconShape(
-        container.querySelector("#new-session-where-trigger .new-session-page__target-icon svg"),
-        paths,
-      );
       for (const selector of [
         '[data-value="device:model-device"] .session-menu__icon',
         "#new-session-where-trigger .new-session-page__target-icon",
       ]) {
+        expectIconShape(container.querySelector(`${selector} svg`), paths);
         const marker = container.querySelector(`${selector} .new-session-page__device-icon`);
-        if (form) {
-          expect(marker?.getAttribute("data-form")).toBe(form);
-        } else {
-          expect(marker).toBeNull();
-        }
+        expect(marker?.getAttribute("data-form")).toBe(form);
       }
     },
   );
@@ -158,37 +149,10 @@ describe("Where chip", () => {
   it("places usable devices before disabled devices while preserving each group's order", () => {
     const container = renderPicker(true, undefined, {
       environments: [
-        {
-          id: "node:offline",
-          type: "node",
-          label: "Offline",
-          status: "offline",
-          sessionHost: true,
-        },
-        {
-          id: "node:ready",
-          type: "node",
-          label: "Ready",
-          status: "available",
-          sessionHost: true,
-          workerSlots: { total: 2, available: 1 },
-        },
-        {
-          id: "node:busy",
-          type: "node",
-          label: "Busy",
-          status: "available",
-          sessionHost: true,
-          workerSlots: { total: 2, available: 0 },
-        },
-        {
-          id: "node:ready2",
-          type: "node",
-          label: "Ready two",
-          status: "available",
-          sessionHost: true,
-          workerSlots: { total: 2, available: 1 },
-        },
+        device("offline", "Offline", { status: "offline", workerSlots: undefined }),
+        device("ready", "Ready"),
+        device("busy", "Busy", { workerSlots: { total: 2, available: 0 } }),
+        device("ready2", "Ready two"),
       ],
     });
     expect(
@@ -204,24 +168,8 @@ describe("Where chip", () => {
       undefined,
       {
         environments: [
-          {
-            id: "node:zulu",
-            type: "node",
-            label: "Zulu runner",
-            platform: "linux",
-            status: "available",
-            sessionHost: true,
-            workerSlots: { total: 2, available: 1 },
-          },
-          {
-            id: "node:alpha",
-            type: "node",
-            label: "Alpha runner",
-            platform: "linux",
-            status: "available",
-            sessionHost: true,
-            workerSlots: { total: 2, available: 1 },
-          },
+          device("zulu", "Zulu runner", { platform: "linux" }),
+          device("alpha", "Alpha runner", { platform: "linux" }),
         ],
         cloudProfiles: [{ id: "linux-worker", providerId: "crabbox", trust: "persistent" }],
       },
@@ -235,7 +183,7 @@ describe("Where chip", () => {
         ),
       ].map((row) => row.getAttribute("data-value")),
     ).toEqual(["gateway", "device:alpha", "device:zulu", "cloud:linux-worker"]);
-    expect(hoverDetails(container.querySelector('[data-value="device:alpha"]'))).toContain("Linux");
+    expect(hoverDetails(option(container, "device:alpha"))).toContain("Linux");
   });
 
   it("keeps explicit destinations selectable while Auto is enabled", () => {
@@ -261,9 +209,7 @@ describe("Where chip", () => {
     expect(onSelectDevice).toHaveBeenCalledTimes(4);
     expect(onSelectCloudProfile).toHaveBeenCalledExactlyOnceWith("aws", true);
 
-    expect(capacityCaption(container.querySelector('[data-value="device:runner"]'))).toBe(
-      "1 of 2 session slots in use",
-    );
+    expect(capacityCaption(option(container, "device:runner"))).toBe("1 of 2 session slots in use");
 
     const search = container.querySelector<HTMLInputElement>('input[type="search"]')!;
     expect(search.disabled).toBe(false);
@@ -277,101 +223,78 @@ describe("Where chip", () => {
     expect(onConnectMachine).toHaveBeenCalledOnce();
   });
 
-  it.each([
-    {
-      os: "windows/wsl2",
-      machineClass: "tiny",
-      label: "aws",
-      machine: "Tiny Windows",
-    },
-  ])(
-    "preserves $label while filtering its cloud card from search",
-    ({ os, machineClass, label, machine }) => {
-      const container = renderPicker(
-        true,
-        undefined,
-        {
-          cloudProfileId: "aws",
-          os,
-          machineClass,
-          cloudProfiles: [
-            {
-              id: "aws",
-              providerId: "crabbox",
-              operatingSystems: [
-                { id: "linux", label: "Linux", default: true },
-                { id: "windows/wsl2", label: "Windows (WSL2)" },
-              ],
-              machines: [
-                { id: "tiny", label: "Tiny Linux", os: "linux", default: true },
-                { id: "tiny", label: "Tiny Windows", os: "windows/wsl2", default: true },
-                { id: "custom", label: "Custom" },
-              ],
-            },
-          ],
-        },
-        { environmentQuery: "unmatched-environment" },
-      );
-      expect(container.querySelector('[data-value="cloud:aws"]')).toBeNull();
-      expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe(label);
-      expect(container.querySelector(".new-session-page__trigger-summary")?.textContent).toBe(
-        `${os === "windows/wsl2" ? "Windows (WSL2)" : "Linux"} · ${machine}`,
-      );
-      expect(container.querySelector("openclaw-select-picker")).toBeNull();
-    },
-  );
+  it("preserves aws while filtering its cloud card from search", () => {
+    const container = renderPicker(
+      true,
+      undefined,
+      {
+        cloudProfileId: "aws",
+        os: "windows/wsl2",
+        machineClass: "tiny",
+        cloudProfiles: [
+          {
+            id: "aws",
+            providerId: "crabbox",
+            operatingSystems: [
+              { id: "linux", label: "Linux", default: true },
+              { id: "windows/wsl2", label: "Windows (WSL2)" },
+            ],
+            machines: [
+              { id: "tiny", label: "Tiny Linux", os: "linux", default: true },
+              { id: "tiny", label: "Tiny Windows", os: "windows/wsl2", default: true },
+              { id: "custom", label: "Custom" },
+            ],
+          },
+        ],
+      },
+      { environmentQuery: "unmatched-environment" },
+    );
+    expect(option(container, "cloud:aws")).toBeNull();
+    expect(container.querySelector(".new-session-page__trigger-label")?.textContent).toBe("aws");
+    expect(container.querySelector(".new-session-page__trigger-summary")?.textContent).toBe(
+      "Windows (WSL2) · Tiny Windows",
+    );
+    expect(container.querySelector("openclaw-select-picker")).toBeNull();
+  });
 
   it("renders devices for writers while cloud and Connect remain admin-only", () => {
     const writer = renderPicker(false);
-    const autoRow = writer.querySelector('[data-value="auto-device"]');
+    const autoRow = option(writer, "auto-device");
     expect(autoRow?.querySelector(".session-menu__text")?.textContent).toBe("Any available device");
     expect(autoRow?.tagName).toBe("BUTTON");
     expect(autoRow?.getAttribute("aria-pressed")).toBe("false");
     expect(hoverDetails(autoRow)).toContain("Chooses the least-busy connected device");
     const remoteExec = renderPicker(false, "eligible-order");
-    expect(hoverDetails(remoteExec.querySelector('[data-value="auto-device"]'))).toContain(
+    expect(hoverDetails(option(remoteExec, "auto-device"))).toContain(
       "Chooses the first eligible connected device",
     );
-    expect(writer.querySelector('[data-value="device:runner"]')).not.toBeNull();
-    expect(writer.querySelector('[data-value="device:runner"] .session-menu__sub')).toBeNull();
-    expect(hoverDetails(writer.querySelector('[data-value="device:alpha-device"]'))).toContain(
-      "alpha-de",
-    );
-    expect(hoverDetails(writer.querySelector('[data-value="device:beta-device"]'))).toContain(
-      "beta-dev",
-    );
+    expect(option(writer, "device:runner")).not.toBeNull();
+    expect(option(writer, "device:runner")?.querySelector(".session-menu__sub")).toBeNull();
+    expect(hoverDetails(option(writer, "device:alpha-device"))).toContain("alpha-de");
+    expect(hoverDetails(option(writer, "device:beta-device"))).toContain("beta-dev");
     expect(writer.querySelector(".session-menu__sub, .session-menu__description")).toBeNull();
-    expect(writer.querySelector('[data-value="cloud:aws"]')).toBeNull();
+    expect(option(writer, "cloud:aws")).toBeNull();
     expect(writer.querySelector('[data-action="connect-machine"]')).toBeNull();
 
     const admin = renderPicker(true);
-    expect(admin.querySelector('[data-value="device:runner"]')).not.toBeNull();
-    expect(admin.querySelector('[data-value="cloud:aws"]')).not.toBeNull();
+    expect(option(admin, "device:runner")).not.toBeNull();
+    expect(option(admin, "cloud:aws")).not.toBeNull();
     expect(admin.querySelector('[data-action="connect-machine"]')).not.toBeNull();
   });
 
   it("disables device placements when the selected runtime cannot dispatch to devices", () => {
     const container = renderPicker(true, undefined, {
-      environments: [
-        {
-          id: "node:macbook",
-          type: "node",
-          label: "MacBook",
-          status: "available",
-          sessionHost: true,
-          workerSlots: { total: 1, available: 1 },
-        },
-      ],
+      environments: [device("macbook", "MacBook", { workerSlots: { total: 1, available: 1 } })],
       cloudProfiles: [],
       deviceDisabledReason: "This runtime does not support paired devices",
     });
 
-    const device = container.querySelector<HTMLButtonElement>('[data-value="device:macbook"]');
-    expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(true);
-    expect(device?.querySelector(".session-menu__description")).toBeNull();
+    const row = option(container, "device:macbook");
+    expect(row?.matches(':disabled, [aria-disabled="true"]')).toBe(true);
+    expect(row?.querySelector(".session-menu__description")).toBeNull();
     // Unavailable cards show only the actionable reason.
-    expect(capacityCaption(device)).toBeUndefined();
-    expect(hoverDetails(device)).toContain("This runtime does not support paired devices");
+    expect(capacityCaption(row)).toBeUndefined();
+    expect(hoverDetails(row)).toContain("This runtime does not support paired devices");
   });
 
   it.each([
@@ -395,20 +318,13 @@ describe("Where chip", () => {
   ])("disables automatic selection with an actionable reason when $name", ({ issues, reason }) => {
     const container = renderPicker(false, undefined, {
       environments: [
-        { id: "node:other", type: "node", label: "Other", status: "offline", sessionHost: false },
-        {
-          id: "node:macbook",
-          type: "node",
-          label: "MacBook",
-          status: "available",
-          sessionHost: false,
-          ...(issues ? { issues } : {}),
-        },
+        device("other", "Other", { status: "offline", sessionHost: false, workerSlots: undefined }),
+        device("macbook", "MacBook", { sessionHost: false, workerSlots: undefined, issues }),
       ],
       cloudProfiles: [],
     });
 
-    const automatic = container.querySelector<HTMLButtonElement>('[data-value="auto-device"]');
+    const automatic = option(container, "auto-device");
     expect(automatic?.disabled).toBe(true);
     expect(hoverDetails(automatic)).toMatch(reason);
     expect(automatic?.querySelector(".session-menu__description")).toBeNull();
@@ -417,72 +333,43 @@ describe("Where chip", () => {
   it.each([
     {
       name: "allows enabled remote execution without a free worker slot",
-      devicePlacement: {
-        requiredNodeCommands: ["codex.exec-server.stdio.v1"],
-        consumesWorkerSlot: false,
-      },
       workerSlots: { total: 1, available: 0 },
       invocableCommands: ["codex.exec-server.stdio.v1"],
-      commandState: "invocable" as const,
+      state: "invocable" as const,
       disabled: false,
       label: "1 of 1 session slots in use",
     },
     {
       name: "disables a declared remote command that the Gateway has not enabled",
+      workerSlots: { total: 1, available: 1 },
+      invocableCommands: [],
+      state: "unauthorized" as const,
+      disabled: true,
+      reason:
+        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
+    },
+  ])("$name", ({ workerSlots, invocableCommands, state, disabled, reason, label }) => {
+    const container = renderPicker(true, undefined, {
+      environments: [
+        device("runner", "Build runner", {
+          workerSlots,
+          capabilities: ["codex.exec-server.stdio.v1"],
+          invocableCommands,
+          requiredNodeCommand: { command: "codex.exec-server.stdio.v1", state },
+        }),
+      ],
+      cloudProfiles: [],
       devicePlacement: {
         requiredNodeCommands: ["codex.exec-server.stdio.v1"],
         consumesWorkerSlot: false,
       },
-      workerSlots: { total: 1, available: 1 },
-      invocableCommands: [],
-      commandState: "unauthorized" as const,
-      disabled: true,
-      reason:
-        "Authorize codex.exec-server.stdio.v1 in the Gateway node command policy, or pick another device.",
-      label: "Slot utilization unavailable",
-    },
-  ])(
-    "$name in the New Session picker",
-    ({
-      devicePlacement,
-      workerSlots,
-      invocableCommands,
-      commandState,
-      disabled,
-      reason,
-      label,
-    }) => {
-      const container = renderPicker(true, undefined, {
-        environments: [
-          {
-            id: "node:runner",
-            type: "node",
-            label: "Build runner",
-            status: "available",
-            sessionHost: true,
-            workerSlots,
-            capabilities: ["codex.exec-server.stdio.v1"],
-            invocableCommands,
-            ...(commandState
-              ? {
-                  requiredNodeCommand: {
-                    command: "codex.exec-server.stdio.v1",
-                    state: commandState,
-                  },
-                }
-              : {}),
-          },
-        ],
-        cloudProfiles: [],
-        devicePlacement,
-      });
+    });
 
-      const device = container.querySelector<HTMLButtonElement>('[data-value="device:runner"]');
-      expect(device?.matches(':disabled, [aria-disabled="true"]')).toBe(disabled);
-      expect(capacityCaption(device)).toBe(disabled ? undefined : label);
-      if (reason) {
-        expect(hoverDetails(device)).toContain(reason);
-      }
-    },
-  );
+    const row = option(container, "device:runner");
+    expect(row?.matches(':disabled, [aria-disabled="true"]')).toBe(disabled);
+    expect(capacityCaption(row)).toBe(disabled ? undefined : label);
+    if (reason) {
+      expect(hoverDetails(row)).toContain(reason);
+    }
+  });
 });

@@ -1,4 +1,3 @@
-// Matrix tests cover transport plugin behavior.
 import http from "node:http";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { MatrixMediaSizeLimitError } from "../media-errors.js";
@@ -31,88 +30,115 @@ function requestMatrix(overrides: Partial<Parameters<typeof performMatrixRequest
   });
 }
 
+async function withServer(handler: http.RequestListener, run: (url: string) => Promise<void>) {
+  const server = http.createServer(handler);
+  await new Promise<void>((resolve) => {
+    server.listen(0, "127.0.0.1", resolve);
+  });
+  const address = server.address();
+  if (!address || typeof address === "string") {
+    throw new Error("expected loopback server address");
+  }
+  try {
+    await run(`http://127.0.0.1:${address.port}`);
+  } finally {
+    await new Promise<void>((resolve, reject) => {
+      server.close((error) => (error ? reject(error) : resolve()));
+    });
+  }
+}
+
+function stubResponse(body: BodyInit | null, headers?: HeadersInit) {
+  const runtimeFetch = vi.fn(
+    async (_input: RequestInfo | URL, _init?: RequestInit) =>
+      new Response(body, { status: 200, headers }),
+  );
+  stubRuntimeFetch(runtimeFetch);
+  return runtimeFetch;
+}
+
+async function expectIdleTimeout(raw: boolean, message: string) {
+  vi.useFakeTimers();
+  try {
+    stubResponse(
+      new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new Uint8Array([1, 2, 3]));
+        },
+      }),
+      raw ? undefined : { "content-type": "application/json" },
+    );
+    const request = requestMatrix({
+      raw,
+      maxBytes: 1024,
+      readIdleTimeoutMs: 50,
+      ...(raw ? { endpoint: "/_matrix/media/v3/download/example/id" } : {}),
+    });
+    const rejection = expect(request).rejects.toThrow(message);
+    await vi.advanceTimersByTimeAsync(60);
+    await rejection;
+  } finally {
+    vi.useRealTimers();
+  }
+}
+
+beforeEach(() => {
+  vi.unstubAllGlobals();
+  clearTestUndiciRuntimeDepsOverride();
+});
+afterEach(clearTestUndiciRuntimeDepsOverride);
+
 describe("performMatrixRequest", () => {
-  beforeEach(() => {
-    vi.unstubAllGlobals();
-    clearTestUndiciRuntimeDepsOverride();
-  });
-
-  afterEach(() => {
-    clearTestUndiciRuntimeDepsOverride();
-  });
-
   it("loads a profile through the real SDK default guarded fetch and closes the client", async () => {
     const { MatrixClient } = await import("../sdk.js");
     const { resolveRuntimeMatrixClientWithReadiness } = await import("../client-bootstrap.js");
     const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
     const profile = { displayname: "Matrix loopback fixture" };
-    const server = http.createServer((request, response) => {
-      requests.push({ url: request.url, authorization: request.headers.authorization });
-      response.writeHead(200, { "content-type": "application/json" });
-      response.end(JSON.stringify(profile));
-    });
-    let client: InstanceType<typeof MatrixClient> | undefined;
-    try {
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const address = server.address();
-      if (!address || typeof address === "string") {
-        throw new Error("expected loopback server address");
-      }
-      client = new MatrixClient(`http://127.0.0.1:${address.port}/matrix-proxy`, "fixture-token", {
-        encryption: false,
-        autoBootstrapCrypto: false,
-        ssrfPolicy: { allowPrivateNetwork: true },
-      });
-
-      const resolved = await resolveRuntimeMatrixClientWithReadiness({ client, readiness: "none" });
-      await expect(resolved.client.getUserProfile("@fixture:example.org")).resolves.toEqual(
-        profile,
-      );
-      expect(requests).toEqual([
-        {
-          url: "/matrix-proxy/_matrix/client/v3/profile/%40fixture%3Aexample.org",
-          authorization: "Bearer fixture-token",
-        },
-      ]);
-    } finally {
-      try {
-        await client?.stopWithoutPersist();
-      } finally {
-        await new Promise<void>((resolve, reject) => {
-          server.close((error) => (error ? reject(error) : resolve()));
+    await withServer(
+      (request, response) => {
+        requests.push({ url: request.url, authorization: request.headers.authorization });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify(profile));
+      },
+      async (url) => {
+        const client = new MatrixClient(`${url}/matrix-proxy`, "fixture-token", {
+          encryption: false,
+          autoBootstrapCrypto: false,
+          ssrfPolicy: { allowPrivateNetwork: true },
         });
-      }
-    }
+
+        try {
+          const resolved = await resolveRuntimeMatrixClientWithReadiness({
+            client,
+            readiness: "none",
+          });
+          await expect(resolved.client.getUserProfile("@fixture:example.org")).resolves.toEqual(
+            profile,
+          );
+          expect(requests).toEqual([
+            {
+              url: "/matrix-proxy/_matrix/client/v3/profile/%40fixture%3Aexample.org",
+              authorization: "Bearer fixture-token",
+            },
+          ]);
+        } finally {
+          await client.stopWithoutPersist();
+        }
+      },
+    );
   });
 
-  it.each([
-    {
-      name: "an encoded nested proxy prefix",
-      homeserverPath: "/proxy%20base/tenant/",
-      expectedPath: "/proxy%20base/tenant/_matrix/client/v3/account/whoami",
-    },
-  ])(
-    "preserves $name through the real HTTP transport",
-    async ({ homeserverPath, expectedPath }) => {
-      const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
-      const server = http.createServer((request, response) => {
-        requests.push({
-          url: request.url,
-          authorization: request.headers.authorization,
-        });
+  it("preserves an encoded nested proxy prefix through the real HTTP transport", async () => {
+    const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
+    await withServer(
+      (request, response) => {
+        requests.push({ url: request.url, authorization: request.headers.authorization });
         response.writeHead(200, { "content-type": "application/json" });
         response.end(JSON.stringify({ user_id: "@bot:example.org" }));
-      });
-      await new Promise<void>((resolve) => {
-        server.listen(0, "127.0.0.1", resolve);
-      });
-      const { port } = server.address() as { port: number };
-
-      try {
+      },
+      async (url) => {
         const result = await requestMatrix({
-          homeserver: `http://127.0.0.1:${port}${homeserverPath}`,
+          homeserver: `${url}/proxy%20base/tenant/`,
           accessToken: "test-token",
           qs: { via: "proxy path" },
         });
@@ -121,31 +147,18 @@ describe("performMatrixRequest", () => {
         expect(JSON.parse(result.text)).toEqual({ user_id: "@bot:example.org" });
         expect(requests).toEqual([
           {
-            url: `${expectedPath}?via=proxy+path`,
+            url: "/proxy%20base/tenant/_matrix/client/v3/account/whoami?via=proxy+path",
             authorization: "Bearer test-token",
           },
         ]);
-      } finally {
-        await new Promise<void>((resolve) => {
-          server.close(() => resolve());
-        });
-      }
-    },
-  );
+      },
+    );
+  });
 
   it("rejects malformed raw content-length before buffering the body", async () => {
-    const arrayBuffer = vi.fn(async () => new ArrayBuffer(0));
-    stubRuntimeFetch(
-      vi.fn(
-        async () =>
-          ({
-            ok: true,
-            status: 200,
-            headers: new Headers({ "content-length": "0x3" }),
-            arrayBuffer,
-          }) as unknown as Response,
-      ),
-    );
+    const response = new Response(null, { headers: { "content-length": "0x3" } });
+    const arrayBuffer = vi.spyOn(response, "arrayBuffer");
+    stubRuntimeFetch(vi.fn(async () => response));
 
     await expect(
       requestMatrix({
@@ -158,37 +171,7 @@ describe("performMatrixRequest", () => {
   });
 
   it("uses the matrix-specific idle-timeout error for stalled raw downloads", async () => {
-    vi.useFakeTimers();
-    try {
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array([1, 2, 3]));
-        },
-      });
-      stubRuntimeFetch(
-        vi.fn(
-          async () =>
-            new Response(stream, {
-              status: 200,
-            }),
-        ),
-      );
-
-      const requestPromise = requestMatrix({
-        endpoint: "/_matrix/media/v3/download/example/id",
-        raw: true,
-        maxBytes: 1024,
-        readIdleTimeoutMs: 50,
-      });
-
-      const rejection = expect(requestPromise).rejects.toThrow(
-        "Matrix media download stalled: no data received for 50ms",
-      );
-      await vi.advanceTimersByTimeAsync(60);
-      await rejection;
-    } finally {
-      vi.useRealTimers();
-    }
+    await expectIdleTimeout(true, "Matrix media download stalled: no data received for 50ms");
   }, 5_000);
 
   it("uses undici runtime fetch for pinned Matrix requests so the dispatcher stays bound", async () => {
@@ -197,20 +180,7 @@ describe("performMatrixRequest", () => {
       ambientFetchCalls += 1;
       throw new Error("expected pinned Matrix requests to avoid ambient fetch");
     }) as typeof fetch);
-    const runtimeFetch = vi.fn(async (_input: RequestInfo | URL, init?: RequestInit) => {
-      const requestInit = init as RequestInit & { dispatcher?: unknown };
-      expect(
-        (requestInit.dispatcher as { constructor?: { name?: string } } | undefined)?.constructor
-          ?.name,
-      ).toBe("MockAgent");
-      return new Response('{"ok":true}', {
-        status: 200,
-        headers: {
-          "content-type": "application/json",
-        },
-      });
-    });
-    stubRuntimeFetch(runtimeFetch);
+    const runtimeFetch = stubResponse('{"ok":true}', { "content-type": "application/json" });
 
     const result = await requestMatrix({});
 
@@ -228,18 +198,10 @@ describe("performMatrixRequest", () => {
   it("rejects oversized JSON responses via content-length before buffering the body", async () => {
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({ cancel });
-    stubRuntimeFetch(
-      vi.fn(
-        async () =>
-          new Response(stream, {
-            status: 200,
-            headers: {
-              "content-type": "application/json",
-              "content-length": String(16 * 1024 * 1024),
-            },
-          }),
-      ),
-    );
+    stubResponse(stream, {
+      "content-type": "application/json",
+      "content-length": String(16 * 1024 * 1024),
+    });
 
     await expect(requestMatrix({ maxBytes: 1024 })).rejects.toThrow(
       "Matrix JSON response exceeds configured size limit",
@@ -248,77 +210,41 @@ describe("performMatrixRequest", () => {
   });
 
   it("uses the JSON-specific idle-timeout error for stalled JSON downloads", async () => {
-    vi.useFakeTimers();
-    try {
-      const stream = new ReadableStream<Uint8Array>({
-        start(controller) {
-          controller.enqueue(new Uint8Array([1, 2, 3]));
-        },
-      });
-      stubRuntimeFetch(
-        vi.fn(
-          async () =>
-            new Response(stream, {
-              status: 200,
-              headers: { "content-type": "application/json" },
-            }),
-        ),
-      );
-
-      const requestPromise = requestMatrix({ maxBytes: 1024, readIdleTimeoutMs: 50 });
-
-      const rejection = expect(requestPromise).rejects.toThrow(
-        "Matrix JSON response stalled: no data received for 50ms",
-      );
-      await vi.advanceTimersByTimeAsync(60);
-      await rejection;
-    } finally {
-      vi.useRealTimers();
-    }
+    await expectIdleTimeout(false, "Matrix JSON response stalled: no data received for 50ms");
   }, 5_000);
 
   it("real HTTP server: rejects with MatrixMediaSizeLimitError when server declares over-cap Content-Length and maxBytes is omitted", async () => {
-    // MATRIX_SDK_RESPONSE_MAX_BYTES = 64 * 1024 * 1024 (64 MiB) — must match transport.ts constant
-    const overCapBytes = 64 * 1024 * 1024 + 1; // 67108865 bytes
+    const overCapBytes = 64 * 1024 * 1024 + 1;
 
-    const server = http.createServer((_req, res) => {
-      // Declare a body larger than the default cap but do not send it —
-      // enforceDeclaredResponseSize will abort before any bytes are read.
-      res.writeHead(200, { "content-length": String(overCapBytes) });
-      res.write(Buffer.alloc(1)); // one sentinel byte; transport cancels before reading more
-    });
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const { port } = server.address() as { port: number };
-
-    try {
-      // Do NOT call stubRuntimeFetch — real undici + SSRF dispatcher is used here
-      await expect(
-        requestMatrix({
-          homeserver: `http://127.0.0.1:${port}`,
-          endpoint: "/_matrix/media/v3/download/example/id",
-          timeoutMs: 10_000,
-          raw: true,
-          // intentionally omitting maxBytes — fix applies MATRIX_SDK_RESPONSE_MAX_BYTES as default
-        }),
-      ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+    await withServer(
+      (_req, res) => {
+        // Flush headers without sending the declared oversized body.
+        res.writeHead(200, { "content-length": String(overCapBytes) });
+        res.write(Buffer.alloc(1));
+      },
+      async (url) => {
+        await expect(
+          requestMatrix({
+            homeserver: url,
+            endpoint: "/_matrix/media/v3/download/example/id",
+            timeoutMs: 10_000,
+            raw: true,
+            // intentionally omitting maxBytes — fix applies MATRIX_SDK_RESPONSE_MAX_BYTES as default
+          }),
+        ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+      },
+    );
   });
 });
 
 describe("createMatrixGuardedFetch", () => {
-  beforeEach(() => {
-    vi.unstubAllGlobals();
-    clearTestUndiciRuntimeDepsOverride();
-  });
+  it.each(["not-a-url", ""])("rejects malformed URL %j before fetching", async (url) => {
+    const runtimeFetch = vi.fn<typeof fetch>();
+    stubRuntimeFetch(runtimeFetch);
+    const guardedFetch = createMatrixGuardedFetch({});
 
-  afterEach(() => {
-    clearTestUndiciRuntimeDepsOverride();
+    await expect(guardedFetch(url)).rejects.toBeInstanceOf(TypeError);
+    expect(runtimeFetch).not.toHaveBeenCalled();
   });
 
   it("preserves redirect success when the discarded body fails to cancel", async () => {
@@ -363,15 +289,7 @@ describe("createMatrixGuardedFetch", () => {
   it("rejects and cancels SDK responses above the declared size limit", async () => {
     const cancel = vi.fn();
     const stream = new ReadableStream<Uint8Array>({ cancel });
-    stubRuntimeFetch(
-      vi.fn(
-        async () =>
-          new Response(stream, {
-            status: 200,
-            headers: { "content-length": String(64 * 1024 * 1024 + 1) },
-          }),
-      ),
-    );
+    stubResponse(stream, { "content-length": String(64 * 1024 * 1024 + 1) });
 
     const guardedFetch = createMatrixGuardedFetch({
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -384,16 +302,7 @@ describe("createMatrixGuardedFetch", () => {
   });
 
   it("strips matrix-js-sdk state_after sync opt-in from /sync requests", async () => {
-    const runtimeFetch = vi.fn(
-      async (_input: RequestInfo | URL, _init?: RequestInit) =>
-        new Response("{}", {
-          status: 200,
-          headers: {
-            "content-type": "application/json",
-          },
-        }),
-    );
-    stubRuntimeFetch(runtimeFetch);
+    const runtimeFetch = stubResponse("{}", { "content-type": "application/json" });
 
     const guardedFetch = createMatrixGuardedFetch({
       ssrfPolicy: { allowPrivateNetwork: true },
@@ -412,82 +321,56 @@ describe("createMatrixGuardedFetch", () => {
 });
 
 describe("matrix transport streaming OOM guard — real HTTP server without Content-Length", () => {
-  // These tests use a real node:http server with NO Content-Length header so that
-  // enforceDeclaredResponseSize() is a no-op and readResponseWithLimit() is the
-  // sole byte-cap enforcement path. They prove the streaming bound cancels the
-  // connection before the full body is buffered (OOM guard).
-
-  beforeEach(() => {
-    vi.unstubAllGlobals();
-    clearTestUndiciRuntimeDepsOverride();
-  });
-
-  afterEach(() => {
-    clearTestUndiciRuntimeDepsOverride();
-  });
-
+  // No Content-Length: only the streaming byte cap can stop this response.
   it("rejects oversized streaming raw response before fully buffering 20 MiB (OOM guard)", async () => {
     const CHUNK = Buffer.alloc(1024 * 1024, 0x61); // 1 MiB per chunk
     const TOTAL_CHUNKS = 20; // 20 MiB total — above 16 MiB cap
     let chunksWritten = 0;
 
-    const server = http.createServer((_req, res) => {
-      // Deliberately omit Content-Length so enforceDeclaredResponseSize is a no-op.
-      res.writeHead(200, { "content-type": "application/octet-stream" });
-      let sent = 0;
-      let closed = false;
-      res.on("close", () => {
-        closed = true;
-      });
-      const sendChunk = () => {
-        if (closed) {
-          return;
-        }
-        if (sent >= TOTAL_CHUNKS) {
-          res.end();
-          return;
-        }
-        sent++;
-        chunksWritten++;
-        const ok = res.write(CHUNK);
-        const scheduleNextChunk = () => {
-          setTimeout(sendChunk, 5);
+    await withServer(
+      (_req, res) => {
+        res.writeHead(200, { "content-type": "application/octet-stream" });
+        let sent = 0;
+        let closed = false;
+        res.on("close", () => {
+          closed = true;
+        });
+        const sendChunk = () => {
+          if (closed) {
+            return;
+          }
+          if (sent >= TOTAL_CHUNKS) {
+            res.end();
+            return;
+          }
+          sent++;
+          chunksWritten++;
+          const ok = res.write(CHUNK);
+          const scheduleNextChunk = () => {
+            setTimeout(sendChunk, 5);
+          };
+          if (ok) {
+            scheduleNextChunk();
+          } else {
+            res.once("drain", scheduleNextChunk);
+          }
         };
-        if (ok) {
-          scheduleNextChunk();
-        } else {
-          res.once("drain", scheduleNextChunk);
-        }
-      };
-      sendChunk();
-    });
-
-    await new Promise<void>((resolve) => {
-      server.listen(0, "127.0.0.1", resolve);
-    });
-    const { port } = server.address() as { port: number };
-
-    try {
-      // Do NOT call stubRuntimeFetch — real undici + SSRF dispatcher is used here.
-      await expect(
-        requestMatrix({
-          homeserver: `http://127.0.0.1:${port}`,
-          endpoint: "/_matrix/media/v3/download/example/id",
-          timeoutMs: 30_000,
-          raw: true,
-          maxBytes: 16 * 1024 * 1024, // 16 MiB cap — readResponseWithLimit enforces this
-        }),
-      ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
-      // Mutation-control: bare response.arrayBuffer() would buffer all 20 MiB.
-      // readResponseWithLimit cancels the stream mid-flight so chunksWritten < TOTAL_CHUNKS.
-      expect(chunksWritten).toBeLessThan(TOTAL_CHUNKS);
-      console.log(
-        `[bound-proof] matrix streaming canceled at ${chunksWritten}/${TOTAL_CHUNKS} chunks`,
-      );
-    } finally {
-      await new Promise<void>((resolve) => {
-        server.close(() => resolve());
-      });
-    }
+        sendChunk();
+      },
+      async (url) => {
+        await expect(
+          requestMatrix({
+            homeserver: url,
+            endpoint: "/_matrix/media/v3/download/example/id",
+            timeoutMs: 30_000,
+            raw: true,
+            maxBytes: 16 * 1024 * 1024, // 16 MiB cap — readResponseWithLimit enforces this
+          }),
+        ).rejects.toBeInstanceOf(MatrixMediaSizeLimitError);
+        // Mutation-control: bare response.arrayBuffer() would buffer all 20 MiB.
+        // readResponseWithLimit cancels the stream mid-flight so chunksWritten < TOTAL_CHUNKS.
+        expect(chunksWritten).toBeLessThan(TOTAL_CHUNKS);
+      },
+    );
   }, 30_000);
 });

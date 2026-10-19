@@ -132,9 +132,7 @@ export function resolveEffectiveReplyRoute(params: {
   const liveChannel = params.ctx.OriginatingChannel;
   const canInheritPersistedTuple =
     params.ctx.InternalTurnSource !== undefined &&
-    (!liveChannel ||
-      normalizeMessageChannel(liveChannel) ===
-        normalizeMessageChannel(persistedDeliveryContext?.channel));
+    (!liveChannel || normalizeMessageChannel(liveChannel) === persistedDeliveryChannel);
   const chatType = liveChatType ?? (canInheritPersistedTuple ? persistedChatType : undefined);
   return {
     channel:

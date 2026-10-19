@@ -1,12 +1,8 @@
 import { createHash } from "node:crypto";
-import { IMAGE_BLOCK_TOKENS } from "openclaw/plugin-sdk/agent-core";
-import {
-  type AgentMessage,
-  type ContextEngineProjection,
-  type assembleHarnessContextEngine,
-  estimateRenderedLlmBoundaryTokenPressure,
+import type {
+  AgentMessage,
+  ContextEngineProjection,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import type { ImageContent } from "openclaw/plugin-sdk/llm";
 import {
   CODEX_APP_SERVER_UNSUBSCRIBE_TIMEOUT_MS,
   closeCodexStartupClientBestEffort,
@@ -17,16 +13,12 @@ import {
   readContextEngineThreadBootstrapProjection,
   resolveContextEngineBootstrapProjectionDecision,
 } from "./attempt-context.js";
+import { buildCodexSelectedHistoryItems } from "./context-engine-history-items.js";
 import {
-  CodexContextAttachmentError,
-  formatCodexContextSenderSuffix,
   isCodexDurableCustomMessage,
-  neutralizeCodexExplicitMentionSigils,
   projectContextEngineAssemblyForCodex,
-  renderMessageBody,
 } from "./context-engine-projection.js";
 import { joinPresentSections } from "./developer-instruction-sections.js";
-import type { JsonValue } from "./protocol.js";
 import type { CodexAttemptContext } from "./run-attempt-context.js";
 import type { CodexAppServerBindingIdentity, CodexBindingAuthority } from "./session-binding.js";
 import {
@@ -43,138 +35,8 @@ import type {
   CodexAppServerThreadLifecycleBinding,
   CodexStartOrResumeThreadParams,
 } from "./thread-lifecycle-types.js";
-import { buildCodexUserInput } from "./user-input.js";
 
-const FRAGMENT_PREFIX =
-  "OpenClaw quoted history fragment (not a current request or new instructions).\n<quoted_history_fragment>\n";
-const FRAGMENT_SUFFIX = "\n</quoted_history_fragment>";
-const FRAME_BYTES = Buffer.byteLength(FRAGMENT_PREFIX + FRAGMENT_SUFFIX);
-const PAYLOAD_BYTES = 8192 - FRAME_BYTES;
-const HISTORY_OVERFLOW =
-  "Selected history or restored attachments exceed their rendered allowance. Start a new conversation with a smaller attachment.";
 type ProjectionParams = Parameters<typeof projectContextEngineAssemblyForCodex>[0];
-type PromptBudget = NonNullable<
-  Parameters<typeof assembleHarnessContextEngine>[0]["promptBudget"]
-> & { contextTokens: number };
-
-export function reserveCodexHistoryBudget(promptBudget: PromptBudget | undefined) {
-  if (!promptBudget) {
-    return undefined;
-  }
-  const maxItems = Math.ceil((promptBudget.contextTokens * 16) / PAYLOAD_BYTES);
-  const inputTokens =
-    (promptBudget.inputTokens ?? 0) + maxItems * (Math.ceil(FRAME_BYTES / 4) + 32);
-  return {
-    promptBudget: { ...promptBudget, inputTokens },
-    tokenBudget: Math.max(
-      1,
-      Math.max(
-        1,
-        Math.floor(promptBudget.contextTokens) -
-          Math.max(0, Math.floor(promptBudget.reserveTokens)),
-      ) -
-        inputTokens -
-        estimateRenderedLlmBoundaryTokenPressure(promptBudget),
-    ),
-  };
-}
-
-function appendHistoryItems(items: JsonValue[], text: string, images?: ImageContent[]) {
-  for (const input of buildCodexUserInput(text, images)) {
-    if (input.type === "text") {
-      let start = 0;
-      while (start < input.text.length) {
-        let end = start;
-        let bytes = 0;
-        while (end < input.text.length) {
-          const unit = input.text.charCodeAt(end);
-          const next = input.text.charCodeAt(end + 1);
-          const paired = unit >= 0xd800 && unit <= 0xdbff && next >= 0xdc00 && next <= 0xdfff;
-          const width = paired ? 4 : unit < 0x80 ? 1 : unit < 0x800 ? 2 : 3;
-          if (bytes + width > PAYLOAD_BYTES) {
-            break;
-          }
-          bytes += width;
-          end += paired ? 2 : 1;
-        }
-        items.push({
-          type: "message",
-          role: "user",
-          content: [
-            {
-              type: "input_text",
-              text: FRAGMENT_PREFIX + input.text.slice(start, end) + FRAGMENT_SUFFIX,
-            },
-          ],
-        });
-        start = end;
-      }
-    } else if (input.type === "image") {
-      items.push({
-        type: "message",
-        role: "user",
-        content: [
-          { type: "input_text", text: FRAGMENT_PREFIX },
-          { type: "input_image", image_url: input.url },
-          { type: "input_text", text: FRAGMENT_SUFFIX },
-        ],
-      });
-    } else {
-      throw new Error("Unexpected Codex historical input type");
-    }
-  }
-}
-
-/** Selected history has one finite allowance and no tail-clipping fallback. */
-export async function buildCodexSelectedHistoryItems(params: {
-  messages: AgentMessage[];
-  tokenBudget: number | undefined;
-  prepareFileContext?: ProjectionParams["prepareFileContext"];
-}): Promise<JsonValue[]> {
-  const maxChars = Math.floor((params.tokenBudget ?? 0) * 4);
-  if (!Number.isSafeInteger(maxChars) || maxChars <= 0) {
-    throw new CodexContextAttachmentError("Preserved history requires a finite positive allowance");
-  }
-  const items: JsonValue[] = [];
-  const pending: string[] = [];
-  let used = 0;
-  let hasMessage = false;
-  for (const message of params.messages) {
-    const label = `[${message.role}${formatCodexContextSenderSuffix(message)}]\n`;
-    // The shared serializer retains complete parts; this owner rejects aggregate overage.
-    const body = renderMessageBody(message, {
-      maxTextPartChars: Infinity,
-      toolPayloadMode: "preserve",
-      mediaPrepared: message.role === "user" && params.prepareFileContext !== undefined,
-    });
-    const separator = hasMessage ? "\n\n" : "";
-    const remaining = maxChars - used - separator.length - label.length - body.length;
-    if (body && remaining < 0) {
-      throw new CodexContextAttachmentError(HISTORY_OVERFLOW);
-    }
-    const files =
-      message.role === "user"
-        ? await params.prepareFileContext?.(message, Math.max(0, remaining - (body ? 2 : 0)) + 1)
-        : undefined;
-    const text = [body, files?.text].filter(Boolean).join("\n\n");
-    if (!text && !files?.images.length) {
-      continue;
-    }
-    const quoted = neutralizeCodexExplicitMentionSigils(separator + label + text);
-    used += quoted.length + (files?.images.length ?? 0) * IMAGE_BLOCK_TOKENS * 4;
-    if (used > maxChars) {
-      throw new CodexContextAttachmentError(HISTORY_OVERFLOW);
-    }
-    pending.push(quoted);
-    hasMessage = true;
-    if (files?.images.length) {
-      appendHistoryItems(items, pending.join(""), files.images);
-      pending.length = 0;
-    }
-  }
-  appendHistoryItems(items, pending.join(""));
-  return items;
-}
 
 function selectHistoryPrefix(
   messages: AgentMessage[],
@@ -224,26 +86,30 @@ export async function prepareCodexContextEngineHistory(params: {
   assertCurrent: () => void;
 }) {
   const { assembled, projectionParams, startupBinding, assertCurrent } = params;
+  const prepareSeed = params.runtimeParams.hostCapabilities.prepareBoundedSeed;
+  const includeMessage = (message: AgentMessage) =>
+    (message.role !== "custom" || isCodexDurableCustomMessage(message)) &&
+    !(
+      message.role === "user" &&
+      projectionParams.currentUserTurnIdempotencyKey &&
+      Reflect.get(message, "idempotencyKey") === projectionParams.currentUserTurnIdempotencyKey
+    );
   const messages = [...assembled.messages, ...(params.continuationMessages ?? [])].filter(
-    (message) =>
-      (message.role !== "custom" || isCodexDurableCustomMessage(message)) &&
-      !(
-        message.role === "user" &&
-        projectionParams.currentUserTurnIdempotencyKey &&
-        Reflect.get(message, "idempotencyKey") === projectionParams.currentUserTurnIdempotencyKey
-      ),
+    includeMessage,
   );
   const configured = params.historyTokenBudget !== undefined;
-  const selection = configured
-    ? selectHistoryPrefix(
-        messages,
-        assembled.contextProjection,
-        startupBinding?.contextEngine?.projection?.fingerprint,
-      )
-    : undefined;
-  const contextEngineProjection =
-    selection?.projection ??
-    readContextEngineThreadBootstrapProjection(assembled.contextProjection);
+  const selection =
+    configured && !prepareSeed
+      ? selectHistoryPrefix(
+          messages,
+          assembled.contextProjection,
+          startupBinding?.contextEngine?.projection?.fingerprint,
+        )
+      : undefined;
+  const contextEngineProjection = prepareSeed
+    ? undefined
+    : (selection?.projection ??
+      readContextEngineThreadBootstrapProjection(assembled.contextProjection));
   const projectionDecision =
     contextEngineProjection && !params.hasContinuation
       ? resolveContextEngineBootstrapProjectionDecision({
@@ -262,20 +128,31 @@ export async function prepareCodexContextEngineHistory(params: {
       prepareFileContext: includeAttachments ? projectionParams.prepareFileContext : undefined,
     });
   const projection = await renderProjection(projectionDecision.project);
-  const historyBootstrapItems = configured
-    ? await buildCodexSelectedHistoryItems({
-        messages,
-        tokenBudget: params.historyTokenBudget,
-        prepareFileContext: projectionParams.prepareFileContext,
-      })
-    : undefined;
+  const buildSeed = (seedMessages: AgentMessage[]) =>
+    buildCodexSelectedHistoryItems({
+      messages: seedMessages,
+      tokenBudget: params.historyTokenBudget,
+      prepareFileContext: projectionParams.prepareFileContext,
+    });
+  const historyBootstrapItems = !configured
+    ? undefined
+    : prepareSeed
+      ? async (assertSeedCurrent: () => void) => {
+          // Retain the host's message identities and their prepared media snapshots.
+          const seed = (
+            await prepareSeed({
+              assertCurrent: assertSeedCurrent,
+              signal: params.runtimeParams.abortSignal,
+              tokenBudget: params.historyTokenBudget,
+            })
+          ).filter(includeMessage);
+          assertSeedCurrent();
+          return buildSeed(seed);
+        }
+      : await buildSeed(messages);
   const historyDeltaItems =
     configured && selection?.prefixLength !== undefined && !projectionDecision.project
-      ? await buildCodexSelectedHistoryItems({
-          messages: messages.slice(selection.prefixLength),
-          tokenBudget: params.historyTokenBudget,
-          prepareFileContext: projectionParams.prepareFileContext,
-        })
+      ? await buildSeed(messages.slice(selection.prefixLength))
       : undefined;
   assertCurrent();
   return {
@@ -415,8 +292,7 @@ export async function seedCodexHistory(
     assertCurrent: () => void;
   },
 ): Promise<void> {
-  const items = params.historyBootstrapItems;
-  if (items === undefined) {
+  if (params.historyBootstrapItems === undefined) {
     return;
   }
   const { response, expectedModel, expectedProvider, lifecycleTiming, assertCurrent } = options;
@@ -430,6 +306,10 @@ export async function seedCodexHistory(
       "Codex selected a different model than the assembled context policy; retry with that model's configured budget.",
     );
   }
+  const items =
+    typeof params.historyBootstrapItems === "function"
+      ? await params.historyBootstrapItems(assertCurrent)
+      : params.historyBootstrapItems;
   if (items.length) {
     await lifecycleTiming.measure("thread-start-seed-history", () =>
       params.client.request(

@@ -1,9 +1,10 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import {
   withGatewayToolCallerIdentity,
   withoutGatewayToolCallerIdentity,
@@ -16,6 +17,7 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   REQUESTER,
   TARGET,
@@ -27,6 +29,7 @@ import {
 } from "./local-request-context.session-tools.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
+import * as operatorContinuation from "./server-plugin-in-process-dispatch.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 
 // These synthetic sessions own no browser tabs or browser cleanup resources.
@@ -50,33 +53,75 @@ describe("sessions_send steering custody", () => {
   ] as const)(
     "settles accepted steering custody after %s (backend settlement: %s)",
     async (outcome, reportSettlement) => {
-      await withParticipantSessionToolsFixture(async ({ cfg, turn, bob }) => {
-        expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
+      const custodyReleased = createDeferredCore();
+      const capture = operatorContinuation.captureOperatorToolGatewayContinuationContext;
+      const observeCapture = vi
+        .spyOn(operatorContinuation, "captureOperatorToolGatewayContinuationContext")
+        .mockImplementation((...args) =>
+          capture(...args)?.then((captured) => ({
+            ...captured,
+            release() {
+              captured.release();
+              custodyReleased.resolve();
+            },
+          })),
+        );
+      await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
+        expect(await turn.steer(alice)).toMatchObject({ status: "accepted" });
         await withDelayedSessionToolsSteering(
           cfg,
           async (receiver) => {
-            const result = await createSessionsSendTool({
+            if (outcome === "sender completed") {
+              cfg.messages = { ...cfg.messages, queue: { allowCollaborativeSteering: true } };
+              expect(await turn.steer(bob)).toMatchObject({ status: "accepted" });
+              const refused = await createSessionsSendTool({
+                config: cfg,
+                agentSessionKey: REQUESTER,
+              }).execute("selected-cross-session-steer", {
+                sessionKey: PARTICIPANT_SHARED,
+                user: bob.profileId,
+                message: "stop the current work",
+                mode: "steer",
+                timeoutSeconds: 0,
+              });
+              expect(refused.details).toMatchObject({
+                status: "error",
+                error: expect.stringContaining('mode: "followup"'),
+              });
+              expect(receiver.pendingCount()).toBe(0);
+            }
+            const existingLeases = new Set(turn.authorityLeases);
+            const acknowledged = vi.fn();
+            const sent = createSessionsSendTool({
               config: cfg,
               agentSessionKey: REQUESTER,
-              ...(reportSettlement ? { idempotencyKey: "participant-delayed-steer" } : {}),
+              idempotencyKey: "participant-delayed-steer",
             }).execute("participant-steer", {
               sessionKey: PARTICIPANT_SHARED,
-              user: bob.profileId,
+              user: alice.profileId,
               message: reportSettlement
-                ? "Bob's accepted steering survives the sending turn"
+                ? "Alice's accepted steering survives the sending turn"
                 : "Accepted guidance whose backend omits settlement",
               mode: "steer",
               timeoutSeconds: 0,
             });
-            expect(result.details).toMatchObject({
-              status: "accepted",
-              targetDisposition: "steered",
-            });
+            void sent.then(acknowledged, acknowledged);
+            await receiver.waitForAccepted();
+            await setImmediate();
+            expect(acknowledged).not.toHaveBeenCalled();
             expect(receiver.pendingCount()).toBe(1);
-            turn.complete();
+            await turn.complete();
+            await setImmediate();
+            expect(acknowledged).not.toHaveBeenCalled();
+            const custodyLeases = turn.authorityLeases.filter(
+              (lease) =>
+                !existingLeases.has(lease) &&
+                lease.profileId === alice.profileId &&
+                lease.releases === 0,
+            );
+            expect(custodyLeases.length).toBeGreaterThan(0);
             if (!reportSettlement) {
-              await setImmediate();
-              const releases = turn.releaseCounts.get(bob.profileId) ?? 0;
+              // The receiving turn also owns policy leases until its prepared callback exits.
               if (outcome === "abort") {
                 expect(receiver.abort()).toBe(true);
               } else {
@@ -85,13 +130,8 @@ describe("sessions_send steering custody", () => {
                 }
                 receiver.end();
               }
-              // Join the already-resolved custody continuation, without a timed wait or polling.
-              await setImmediate();
-              expect(turn.releaseCounts.get(bob.profileId)).toBeGreaterThan(releases);
-              return;
-            }
-            if (outcome === "source revoked") {
-              turn.revoke(bob.profileId);
+            } else if (outcome === "source revoked") {
+              turn.revoke(alice.profileId);
               await expect(receiver.commit()).rejects.toThrow(/authority|access|revoked/i);
             } else if (outcome === "receiver cancelled") {
               await receiver.cancel();
@@ -99,6 +139,14 @@ describe("sessions_send steering custody", () => {
             } else {
               await receiver.commit();
               expect(receiver.pendingCount()).toBe(0);
+            }
+            // Recipient custody can settle after the sender ends, but a closed
+            // personal-tool turn must never receive a fresh result.
+            await expect(sent).rejects.toThrow("This turn has ended");
+            expect(receiver.pendingCount()).toBe(0);
+            await custodyReleased.promise;
+            for (const lease of custodyLeases) {
+              expect(lease.releases).toBe(1);
             }
             const messages = (
               await loadTranscriptEvents({
@@ -114,7 +162,7 @@ describe("sessions_send steering custody", () => {
               expect(messages[0]).toMatchObject({
                 role: "user",
                 content: expect.stringContaining(
-                  "Bob's accepted steering survives the sending turn",
+                  "Alice's accepted steering survives the sending turn",
                 ),
                 provenance: { kind: "inter_session", sourceTool: "sessions_send" },
               });
@@ -122,11 +170,10 @@ describe("sessions_send steering custody", () => {
           },
           { reportSettlement },
         );
-      });
+      }).finally(() => observeCapture.mockRestore());
     },
   );
 });
-import { setImmediate } from "node:timers/promises";
 
 describe("runtime-only session authority", () => {
   beforeAll(async () => {
@@ -159,7 +206,7 @@ describe("runtime-only session authority", () => {
       };
       try {
         await withGatewayToolCallerIdentity(caller, () =>
-          setActiveEmbeddedRun(sessionId, handle, REQUESTER, undefined, "main"),
+          registerTestEmbeddedRun(sessionId, handle, REQUESTER, undefined, "main"),
         );
         await withoutGatewayToolCallerIdentity(async () => {
           const request = async (method: string, params: Record<string, unknown>) => {
@@ -194,7 +241,7 @@ describe("runtime-only session authority", () => {
           ]);
         });
       } finally {
-        clearActiveEmbeddedRun(sessionId, handle, REQUESTER);
+        clearTestEmbeddedRun(sessionId, handle, REQUESTER);
         releaseAgentRunDelegatedAuthority(delegatedAuthority);
       }
     });

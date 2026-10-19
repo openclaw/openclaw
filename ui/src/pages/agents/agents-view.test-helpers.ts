@@ -44,6 +44,10 @@ export function createAgentViewTestProps(
       agents: [{ id: "alpha", name: "Alpha" } as never, { id: "beta", name: "Beta" } as never],
     },
     selectedAgentId: "beta",
+    memoryTarget: {
+      read: () => (overrides.selectedAgentId === undefined ? "beta" : overrides.selectedAgentId),
+      subscribe: () => () => {},
+    },
     activePanel: "overview",
     config: {
       configForm: null,
@@ -87,6 +91,7 @@ export function createAgentViewTestProps(
     overview: {
       identityDraft: { name: null, emoji: null, avatar: null },
       identitySaving: false,
+      identityScope: 0,
       identityError: null,
       modelCatalog: [],
       decisionModels: [],
@@ -98,6 +103,8 @@ export function createAgentViewTestProps(
       onModelCatalogOpen: () => undefined,
       onIdentityFieldChange: () => undefined,
       onIdentityAvatarSelect: () => undefined,
+      onIdentityAvatarSet: () => undefined,
+      onIdentityAvatarGenerate: async () => ({ name: "", description: "", svg: "" }),
       onIdentitySave: () => undefined,
     },
     agentSkills: {

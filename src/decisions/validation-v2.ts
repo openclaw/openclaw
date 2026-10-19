@@ -136,7 +136,9 @@ export function validateDecisionBatchV2(batch: unknown): batch is DecisionBatchV
       !isPlainDecisionRecord(q) ||
       !fields(
         q,
-        q.type === "sort" ? ["type", "instructions"] : ["type", "instructions", "criteria"],
+        q.type === "sort" || q.type === "box"
+          ? ["type", "instructions"]
+          : ["type", "instructions", "criteria"],
       ) ||
       (q.instructions !== undefined && !decisionEntry(q.instructions))
     ) {
@@ -165,6 +167,10 @@ export function validateDecisionBatchV2(batch: unknown): batch is DecisionBatchV
             ([key, entry]) => (key === "true" || key === "false") && decisionEntry(entry),
           ))
       ) {
+        throw new DecisionContractError();
+      }
+    } else if (q.type === "box") {
+      if (state.type !== "image" || q.instructions == null) {
         throw new DecisionContractError();
       }
     } else if (q.type !== "sort" || state.type !== "list") {
@@ -340,6 +346,22 @@ export function validateDecisionResultV2(
           (!Array.isArray(answer.probabilities) ||
             answer.probabilities.length !== q.criteria.length ||
             !answer.probabilities.every(probability))) ||
+        !confidence(answer.confidence)
+      ) {
+        return false;
+      }
+    } else if (q.type === "box") {
+      const box = answer.box;
+      if (
+        !fields(answer, ["type", "box", "confidence", "metadata"]) ||
+        !isPlainDecisionRecord(box) ||
+        !exactKeys(box, { top: 0, bottom: 0, left: 0, right: 0 }) ||
+        !probability(box.top) ||
+        !probability(box.bottom) ||
+        !probability(box.left) ||
+        !probability(box.right) ||
+        box.top >= box.bottom ||
+        box.left >= box.right ||
         !confidence(answer.confidence)
       ) {
         return false;

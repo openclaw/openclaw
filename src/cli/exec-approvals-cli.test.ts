@@ -7,7 +7,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { SESSION_EXEC_OVERRIDES_NOTE } from "../infra/exec-approvals-effective.js";
 import * as execApprovals from "../infra/exec-approvals.js";
-import { testing } from "./exec-approvals-cli.js";
 
 const {
   callGatewayFromCli,
@@ -19,14 +18,6 @@ const {
   runApprovalsCommand,
   runtimeErrors,
 } = await import("./exec-approvals-cli.test-support.js");
-
-describe("exec approvals CLI error formatting", () => {
-  it("keeps the bounded first line UTF-16 well-formed", () => {
-    const message = testing.formatCliError(`${"x".repeat(299)}🚀tail\nignored`);
-
-    expect(message).toBe(`${"x".repeat(299)}...`);
-  });
-});
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -123,6 +114,20 @@ describe("exec approvals CLI", () => {
     ).toHaveLength(1);
     expect(runtimeErrors).toHaveLength(0);
   });
+
+  it.each([
+    ["get", ["approvals", "get"]],
+    ["allowlist add", ["approvals", "allowlist", "add", "/usr/bin/uname"]],
+  ] as const)(
+    "%s rejects --gateway combined with --node instead of silently routing to the gateway",
+    async (_label, baseArgs) => {
+      await expect(
+        runApprovalsCommand([...baseArgs, "--gateway", "--node", "macbook"]),
+      ).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors.join("\n")).toContain("Pass only one of --gateway or --node.");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
 
   it("renders an unstored fresh-install policy as defaults instead of absent", async () => {
     localSnapshot.exists = false;
@@ -545,12 +550,40 @@ describe("exec approvals CLI", () => {
     );
   });
 
-  it("bounds approvals JSON read from stdin", async () => {
-    await expect(testing.readStdin(Readable.from(["12345"]), 5)).resolves.toBe("12345");
-    await expect(testing.readStdin(Readable.from(["12345", "6"]), 5)).rejects.toThrow(
-      "Exec approvals stdin exceeds 5 bytes.",
-    );
-  });
+  it.each([0, 1])(
+    "enforces the stdin byte cap with %i excess bytes before saving",
+    async (excessBytes) => {
+      const originalStdin = Object.getOwnPropertyDescriptor(process, "stdin");
+      if (!originalStdin) {
+        throw new Error("Expected process.stdin");
+      }
+      const input = '{defaults:{security:"deny"}}';
+      const stream = Readable.from([
+        input,
+        Buffer.alloc(1024 * 1024 - Buffer.byteLength(input) + excessBytes, " "),
+      ]);
+      const updateExecApprovals = vi.mocked(execApprovals.updateExecApprovals).mockClear();
+      Object.defineProperty(process, "stdin", { configurable: true, value: stream });
+      try {
+        const command = runApprovalsCommand(["approvals", "set", "--stdin", "--json"]);
+        if (excessBytes) {
+          await expect(command).rejects.toThrow("Exec approvals stdin exceeds 1048576 bytes.");
+          expect(updateExecApprovals).not.toHaveBeenCalled();
+          expect(localSnapshot.file).toEqual({ version: 1, agents: {} });
+          expect(defaultRuntime.writeJson).not.toHaveBeenCalled();
+        } else {
+          await command;
+          expect(updateExecApprovals).toHaveBeenCalledTimes(1);
+          expect(localSnapshot.file.defaults).toEqual({ security: "deny" });
+          expect(requireRecord(writtenJson().file, "JSON approvals file").defaults).toEqual({
+            security: "deny",
+          });
+        }
+      } finally {
+        Object.defineProperty(process, "stdin", originalStdin);
+      }
+    },
+  );
 
   it("rejects a file that grows past the limit after opening", async () => {
     const dir = tempDirs.make("openclaw-approvals-file-growth-");

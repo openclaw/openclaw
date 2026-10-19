@@ -1,6 +1,11 @@
 // Physical WebSocket ingress adapts into the shared Gateway connection owner.
 import type { WebSocketServer } from "ws";
 import { WORKER_PROTOCOL_MAX_PAYLOAD_BYTES } from "../../../packages/gateway-protocol/src/index.js";
+import {
+  hasInternalDiagnosticEventInterest,
+  onInternalDiagnosticEventInterest,
+} from "../../infra/diagnostic-event-listener-presence.js";
+import { emitTrustedDiagnosticEvent } from "../../infra/diagnostic-events.js";
 import { formatErrorMessage as formatError } from "../../infra/errors.js";
 import { touchPresence } from "../../infra/system-presence.js";
 import { logRejectedLargePayload } from "../../logging/diagnostic-payload.js";
@@ -20,6 +25,7 @@ import {
   type WorkerConnectionService,
 } from "./ws-connection/worker-connection.js";
 import { prepareGatewayReceiverHandoff } from "./ws-receiver.js";
+import { createGatewayWebSocketTransport } from "./ws-transport.js";
 import {
   GATEWAY_WS_CONNECTION_KIND_PROPERTY,
   GATEWAY_WS_PREAUTH_BUDGET_PROPERTY,
@@ -38,35 +44,46 @@ export type AttachGatewayWsConnectionHandlerParams = GatewayConnectionOptions & 
 export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnectionHandlerParams) {
   const originCheckMetrics: WsOriginCheckMetrics = { hostHeaderFallbackAccepted: 0 };
   let warnedDeflateCodec = false;
+  let operators = 0;
+  let connectionMetricsTimer: ReturnType<typeof setInterval> | undefined;
+  const publishConnections = () => {
+    if (!hasInternalDiagnosticEventInterest("gateway.ws.connections")) {
+      clearInterval(connectionMetricsTimer);
+      connectionMetricsTimer = undefined;
+      return;
+    }
+    // Refresh late exporters and dropped snapshots, including after diagnostics re-enable.
+    connectionMetricsTimer ??= setInterval(publishConnections, 30_000).unref();
+    emitTrustedDiagnosticEvent({ type: "gateway.ws.connections", operators });
+  };
+  const stopConnectionMetrics = onInternalDiagnosticEventInterest(
+    "gateway.ws.connections",
+    publishConnections,
+  );
+  params.wss.on("close", () => {
+    stopConnectionMetrics();
+    clearInterval(connectionMetricsTimer);
+  });
+  publishConnections();
   params.wss.on("connection", (socket, upgradeReq) => {
     if (params.connectionWork.isClosing) {
       socket.terminate();
       return;
     }
     // Install before ws parses the first frame; the upgrade emits synchronously.
-    if (!installGatewayDeflateCodec(socket) && !warnedDeflateCodec) {
+    const compression = installGatewayDeflateCodec(socket, upgradeReq.socket);
+    if (!compression && !warnedDeflateCodec) {
       warnedDeflateCodec = true;
       params.logWsControl.warn(
         "unsupported ws permessage-deflate extension; compressed frames use the slower ws path",
       );
     }
-    let batched = false;
-    Object.assign(socket, {
-      batchWrites() {
-        if (batched) {
-          return;
-        }
-        batched = true;
-        upgradeReq.socket.cork();
-        process.nextTick(() => {
-          batched = false;
-          upgradeReq.socket.uncork();
-        });
-      },
-      sendUncompressed(frame: string, callback?: (error?: Error) => void) {
-        socket.send(frame, { compress: false }, callback);
-      },
-    });
+    const transport = createGatewayWebSocketTransport(
+      socket,
+      upgradeReq.socket,
+      compression?.acceptsDeflatedSegments ?? false,
+      compression?.observeFrameBytes,
+    );
     const ingressSocket = socket as GatewayIngressWebSocket;
     const connectionKind = ingressSocket[GATEWAY_WS_CONNECTION_KIND_PROPERTY] ?? "gateway";
     const publicWorkerIngress =
@@ -92,7 +109,7 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
 
     attachGatewayConnection({
       ...params,
-      socket,
+      socket: transport,
       connectionKind,
       request: upgradeReq,
       ingressAttribution: readPreparedGatewayIngressAttribution(upgradeReq),
@@ -103,8 +120,26 @@ export function attachGatewayWsConnectionHandler(params: AttachGatewayWsConnecti
       originCheckMetrics,
       prepareAuthenticatedReceive: (role) => prepareGatewayReceiverHandoff(socket, role),
       onAuthenticated: (client, onHeartbeatTimeout) => {
+        client.socket = transport;
         client.webSocket = socket;
-        return startWebSocketKeepalive(socket, onHeartbeatTimeout, upgradeReq.socket);
+        const stopKeepalive = startWebSocketKeepalive(
+          socket,
+          onHeartbeatTimeout,
+          upgradeReq.socket,
+        );
+        const operator =
+          connectionKind === "gateway" && (client.connect.role ?? "operator") === "operator";
+        if (operator) {
+          operators++;
+          publishConnections();
+        }
+        return () => {
+          stopKeepalive();
+          if (operator) {
+            operators--;
+            publishConnections();
+          }
+        };
       },
       attachTransport: (lifecycle) => {
         socket.once("error", (err) => {

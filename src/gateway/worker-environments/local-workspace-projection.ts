@@ -22,6 +22,8 @@ import type { LocalWorkspaceOwner } from "./local-workspace-types.js";
 import { isLocalWorkspaceBaseRefreshRef } from "./workspace-result-inventory.js";
 
 type LocalWorkspaceCustody = {
+  worktreeId: string;
+  projectionPath?: string;
   prepareArchive?: (snapshot: string) => Promise<void>;
   canonicalPaths?: () => Promise<Set<string>>;
   assertCurrent: () => void;
@@ -49,6 +51,7 @@ export async function withSettledLocalWorkspace<T>(
       const row = store.get();
       if (!row) {
         return await operation({
+          worktreeId: params.worktree.id,
           assertCurrent: store.assertCurrent,
           workerAuthority: store.workerAuthority,
         });
@@ -103,12 +106,18 @@ export async function withSettledLocalWorkspace<T>(
         return await operation(
           state.current().baseline_ref
             ? {
+                worktreeId: worktree.id,
+                projectionPath: state.current().projection_path,
                 prepareArchive: state.prepareArchive,
                 canonicalPaths: state.canonicalPaths,
                 assertCurrent: state.current,
                 workerAuthority: state.workerAuthority,
               }
-            : { assertCurrent: store.assertCurrent, workerAuthority: store.workerAuthority },
+            : {
+                worktreeId: worktree.id,
+                assertCurrent: store.assertCurrent,
+                workerAuthority: store.workerAuthority,
+              },
         );
       });
     },

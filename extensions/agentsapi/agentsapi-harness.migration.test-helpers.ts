@@ -170,6 +170,11 @@ export function registerMigrationTests(
       expect(await store.lookup(params.sessionId)).toEqual(legacy);
       expectNoCalls(client.create, client.update, client.message);
       fetchMock.mockImplementationOnce(async ({ url }) =>
+        guardedResponse(url, Response.json({ ...legacySession(), id: "different-session" })),
+      );
+      await expect(harness.runAttempt(params)).rejects.toThrow("different session");
+      expect(await store.lookup(params.sessionId)).toEqual(legacy);
+      fetchMock.mockImplementationOnce(async ({ url }) =>
         guardedResponse(url, Response.json(legacySession())),
       );
       expect(await harness.runAttempt(params)).toMatchObject({ terminal: { kind: "ok" } });
@@ -177,7 +182,7 @@ export function registerMigrationTests(
         sessionId: legacy.sessionId,
         configFingerprint: expect.any(String),
       });
-      expect(fetchMock).toHaveBeenCalledTimes(6);
+      expect(fetchMock).toHaveBeenCalledTimes(7);
     }));
 
   it("fences legacy migration when generation, lease, or source changes during access validation", () =>

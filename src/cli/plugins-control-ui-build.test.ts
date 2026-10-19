@@ -93,7 +93,7 @@ console.log(JSON.stringify({ mode: (await fs.stat(manifest)).mode & 0o7777, cont
 });
 
 describe("native plugin browser builds", () => {
-  it.each([true, false, "settings-only"])(
+  it.each([true, false, "settings-only", "channel-settings"])(
     "builds runtime browser artifacts without changing authored plugin metadata (authored UI: %s)",
     async (authoredUi) => {
       const project = await fixture();
@@ -102,18 +102,28 @@ describe("native plugin browser builds", () => {
       packageJson.openclaw = { controlUi: project.source };
       await fs.writeFile(packagePath, JSON.stringify(packageJson));
       const manifestPath = path.join(project.rootDir, "openclaw.plugin.json");
+      const settingsViews =
+        authoredUi === "channel-settings"
+          ? [{ section: "channels", panel: "detail", channelId: "custom" }]
+          : authoredUi === "settings-only"
+            ? [
+                { section: "memory", panel: "overview" },
+                { section: "memory", panel: "memories" },
+              ]
+            : undefined;
       const authored = {
         id: "fixture",
+        ...(authoredUi === "channel-settings" ? { channels: ["custom"] } : {}),
         configSchema: { type: "object", properties: { token: { type: "string" } } },
         activation: { onStartup: true },
         ...(authoredUi
           ? {
               controlUi: {
                 entry: "dist/control-ui/authored/index.js",
-                ...(authoredUi === "settings-only"
+                ...(settingsViews
                   ? {
                       activation: "settings-only",
-                      settingsViews: [{ section: "memory", panel: "overview" }],
+                      settingsViews,
                     }
                   : {}),
               },
@@ -135,12 +145,8 @@ describe("native plugin browser builds", () => {
       expect(await fs.readFile(manifestPath, "utf8")).toBe(original);
       const generatedPath = path.join(project.rootDir, "dist/openclaw.plugin.json");
       const generated = JSON.parse(await fs.readFile(generatedPath, "utf8"));
-      expect(generated.controlUi.activation).toBe(
-        authoredUi === "settings-only" ? "settings-only" : undefined,
-      );
-      expect(generated.controlUi.settingsViews).toEqual(
-        authoredUi === "settings-only" ? [{ section: "memory", panel: "overview" }] : undefined,
-      );
+      expect(generated.controlUi.activation).toBe(settingsViews ? "settings-only" : undefined);
+      expect(generated.controlUi.settingsViews).toEqual(settingsViews);
       expect(await buildPluginControlUi({ ...project, check: true })).toEqual(generated.controlUi);
       generated.id = "previous-name";
       generated.configSchema = { type: "object", properties: {} };

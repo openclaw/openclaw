@@ -293,28 +293,29 @@ export async function synthesizeGoogleTtsPcmOnce(params: {
         throw err;
       }
     }
-    try {
-      const payload = await readProviderJsonResponse<
-        GoogleGenerateContentResponse & GoogleInteractionsSpeechResponse
-      >(res, "Google TTS response");
-      const encoded = interactions
-        ? readGoogleInteractionsAudioData(payload)
-        : payload.candidates
-            ?.flatMap((candidate) => candidate.content?.parts ?? [])
-            .map((part) => normalizeOptionalString((part.inlineData ?? part.inline_data)?.data))
-            .find((data): data is string => data !== undefined);
-      if (!encoded) {
-        throw new Error("Google TTS response missing audio data");
-      }
-      const canonicalAudio = canonicalizeGoogleProviderBase64(encoded);
-      if (!canonicalAudio) {
-        throw new Error("Google TTS response returned malformed base64 audio data");
-      }
-      return stripWavContainerToPcm(Buffer.from(canonicalAudio, "base64"));
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      throw new GoogleTtsRetryableError(message);
+    const payload = await readProviderJsonResponse<
+      GoogleGenerateContentResponse & GoogleInteractionsSpeechResponse
+    >(res, "Google TTS response", {
+      requestHeaders: headers,
+      onIdleTimeout: ({ chunkTimeoutMs }) =>
+        new GoogleTtsRetryableError(
+          `Google TTS response: response body stalled for ${chunkTimeoutMs}ms`,
+        ),
+    });
+    const encoded = interactions
+      ? readGoogleInteractionsAudioData(payload)
+      : payload.candidates
+          ?.flatMap((candidate) => candidate.content?.parts ?? [])
+          .map((part) => normalizeOptionalString((part.inlineData ?? part.inline_data)?.data))
+          .find((data): data is string => data !== undefined);
+    if (!encoded) {
+      throw new GoogleTtsRetryableError("Google TTS response missing audio data");
     }
+    const canonicalAudio = canonicalizeGoogleProviderBase64(encoded);
+    if (!canonicalAudio) {
+      throw new Error("Google TTS response returned malformed base64 audio data");
+    }
+    return stripWavContainerToPcm(Buffer.from(canonicalAudio, "base64"));
   } finally {
     await release();
   }

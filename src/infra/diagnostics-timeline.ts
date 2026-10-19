@@ -57,7 +57,7 @@ type DiagnosticsTimelineSpanOptions = DiagnosticsTimelineOptions &
     omitErrorMessage?: boolean;
   };
 
-type DiagnosticsTimelineOptions = {
+export type DiagnosticsTimelineOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 };

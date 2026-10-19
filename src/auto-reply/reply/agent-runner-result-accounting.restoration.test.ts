@@ -1,51 +1,17 @@
-import fs from "node:fs";
-import os from "node:os";
-import path from "node:path";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
-import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { loadTranscriptEvents } from "../../config/sessions/session-accessor.js";
-import { drainSessionStoreWriterQueuesForTest } from "../../config/sessions/store-writer-state.test-support.js";
 import * as transcript from "../../config/sessions/transcript.js";
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
-import { disposeOpenClawAgentDatabaseByPath } from "../../state/openclaw-agent-db-disposal.js";
-import { closeOpenClawAgentDatabasesAsync } from "../../state/openclaw-agent-db.js";
-import {
-  agentAccountingPersistenceDiagnostic as primary,
-  createAgentAccountingPersistenceFixture,
-} from "./agent-runner-result-accounting.persistence.test-support.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
+import { useAccountingFixture } from "./agent-runner-accounting.test-support.js";
+import { agentAccountingPersistenceDiagnostic as primary } from "./agent-runner-result-accounting.persistence.test-support.js";
 
-// Runtime outcomes are fixed fixtures; completion, source fencing and canonical transcript writes are real.
-let root: string;
-let storePath: string;
-let sequence = 0;
-const operations: ReplyOperation[] = [];
+const { database, createFixture } = useAccountingFixture("openclaw-restoration-");
 const fallback = { provider: "fallback-fixture", model: "available" };
-beforeAll(() => {
-  // openclaw-temp-dir: allow suite database root drains before removal
-  root = fs.mkdtempSync(path.join(fs.realpathSync.native(os.tmpdir()), "openclaw-restoration-"));
-  storePath = path.join(root, "openclaw-agent.sqlite");
-});
-afterEach(() => {
-  vi.restoreAllMocks();
-  for (const operation of operations.splice(0)) {
-    operation.complete();
-  }
-});
-afterAll(async () => {
-  await drainSessionStoreWriterQueuesForTest();
-  await disposeOpenClawAgentDatabaseByPath(storePath);
-  await closeOpenClawAgentDatabasesAsync(root);
-  fs.rmSync(root, { recursive: true, force: true });
-});
+afterEach(() => vi.restoreAllMocks());
 
 async function fixture(lane: "ordinary" | "followup" = "ordinary") {
-  const f = await createAgentAccountingPersistenceFixture({
-    root,
-    storePath,
-    fixtureId: ++sequence,
-    registerOperation: (operation) => operations.push(operation),
-  });
+  const f = await createFixture();
   f.context.execution.resolved = fallback;
   f.context.execution.fallback.attempts = [
     { provider: primary.provider, model: primary.model, reason: "rate_limit", error: "rate limit" },
@@ -62,7 +28,7 @@ async function fixture(lane: "ordinary" | "followup" = "ordinary") {
     (
       await loadTranscriptEvents({
         agentId: "main",
-        storePath,
+        storePath: database.storePath,
         sessionKey: f.context.sessionKey!,
         sessionId,
       })
@@ -102,6 +68,7 @@ it.each(["failed", "aborted", "error", "error payload", "exhausted", "synthetic"
   async (outcome) => {
     const f = await fixture();
     const execution = f.context.execution;
+    const successful = structuredClone(execution);
     if (outcome === "failed") {
       f.context.execution = {
         ...execution,
@@ -126,16 +93,8 @@ it.each(["failed", "aborted", "error", "error payload", "exhausted", "synthetic"
     expect(await f.notices()).toEqual([]);
     expect(f.read()?.fallbackNotice).toEqual(f.activeNotice);
 
-    f.context.execution = {
-      ...execution,
-      status: "ok",
-      terminalFailurePayload: undefined,
-      postCompactionModelFailure: undefined,
-    };
-    delete execution.result.meta.aborted;
-    delete execution.result.meta.error;
-    execution.result.payloads = [{ text: "recovered" }];
-    execution.fallback.exhausted = false;
+    f.context.execution = successful;
+    successful.result.payloads = [{ text: "recovered" }];
     delete f.context.followupRun.run.inputProvenance;
     await f.account("ordinary", primary);
     expect(await f.notices()).toHaveLength(1);

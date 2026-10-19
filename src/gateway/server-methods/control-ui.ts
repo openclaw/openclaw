@@ -9,8 +9,8 @@ import {
 import { getRuntimeConfigSnapshotMetadata } from "../../config/runtime-snapshot.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { ControlUiLinkReaderSection } from "../../shared/control-ui-link-reader.js";
+import { truncateOptionalText } from "../../shared/text-truncate.js";
 import { getSessionRepositoryWorkspaceStore } from "../../state/session-repository-workspaces.js";
-import { truncateUtf16Safe } from "../../utils.js";
 import type { ControlUiSessionPreview } from "../control-ui-contract.js";
 import { withControlUiSessionGitHubRead } from "../control-ui-session-github-read.js";
 import type {
@@ -18,7 +18,7 @@ import type {
   loadControlUiSessionPullRequestChecks,
 } from "../control-ui-session-pr-check-details.js";
 import {
-  prepareControlUiSessionPrRead,
+  createControlUiSessionPrRead,
   resolveControlUiSessionPrTarget,
   type ControlUiSessionPrReadContext,
   type ControlUiSessionPrTarget,
@@ -174,11 +174,6 @@ type SessionPreviewSource = {
 
 const SESSION_PREVIEW_TEXT_MAX_CHARS = 200;
 
-function boundedPreviewText(value: string | undefined, maxChars = SESSION_PREVIEW_TEXT_MAX_CHARS) {
-  const trimmed = value?.trim();
-  return trimmed ? truncateUtf16Safe(trimmed, maxChars) : undefined;
-}
-
 function parseSessionPreviewKey(params: unknown): string | null {
   if (!isRecord(params) || Object.keys(params).some((key) => key !== "sessionKey")) {
     return null;
@@ -191,11 +186,14 @@ function projectSessionPreview(source: SessionPreviewSource | null): ControlUiSe
   if (!source) {
     return { status: "unavailable" };
   }
-  const lastMessagePreview = boundedPreviewText(source.lastMessagePreview || undefined);
-  const title = boundedPreviewText(source.title);
-  const derivedTitle = boundedPreviewText(source.derivedTitle);
-  const kind = boundedPreviewText(source.kind, 64);
-  const channel = boundedPreviewText(source.channel, 80);
+  const lastMessagePreview = truncateOptionalText(
+    source.lastMessagePreview,
+    SESSION_PREVIEW_TEXT_MAX_CHARS,
+  );
+  const title = truncateOptionalText(source.title, SESSION_PREVIEW_TEXT_MAX_CHARS);
+  const derivedTitle = truncateOptionalText(source.derivedTitle, SESSION_PREVIEW_TEXT_MAX_CHARS);
+  const kind = truncateOptionalText(source.kind, 64);
+  const channel = truncateOptionalText(source.channel, 80);
   return {
     status: "ok",
     sessionKey: source.sessionKey,
@@ -387,11 +385,7 @@ const loadSessionCheckDetails: LoadSessionCheckDetails = async (params, deps) =>
   const { loadControlUiSessionPullRequests } = await import("../control-ui-session-prs.js");
   return loadControlUiSessionPullRequestChecks(params, {
     ...deps,
-    loadPullRequests: (request, options) =>
-      loadControlUiSessionPullRequests(request, {
-        ...options,
-        read: deps.read,
-      }),
+    loadPullRequests: (request) => loadControlUiSessionPullRequests(request, { read: deps.read }),
   });
 };
 
@@ -515,7 +509,7 @@ export function createControlUiHandlers(
       let preparedSession: Awaited<ReturnType<typeof prepareCheckDetailsSession>> = null;
       try {
         const reader = client
-          ? await prepareControlUiSessionPrRead({
+          ? createControlUiSessionPrRead({
               client,
               sessionKey: parsed.sessionKey,
               getRuntimeConfig: context.getRuntimeConfig,
@@ -609,10 +603,19 @@ export function createControlUiHandlers(
           parsed.sessionKeys,
           parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
           resolve,
+          parsed.passiveSessionKeys ? new Set(parsed.passiveSessionKeys) : undefined,
         );
-        void replacement.catch(() => {});
+        void replacement.catch((error: unknown) => {
+          context.logGateway.warn(
+            `Failed to prepare Control UI pull request subscriptions; retry the subscription: ${String(error)}`,
+          );
+        });
       });
-      respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
+      respond(
+        true,
+        { subscribed: parsed.sessionKeys.length > 0 || Boolean(parsed.passiveSessionKeys?.length) },
+        undefined,
+      );
     },
   };
 }

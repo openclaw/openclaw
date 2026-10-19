@@ -1,8 +1,9 @@
-import { createEffect, createSignal, For, onCleanup, Show } from "solid-js";
+import { createStore, For, onSettled, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/modal-dialog.ts";
 import { registerChatCameraEnglish } from "../../../i18n/locales/en-chat-camera.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
 import { useNativeAttachmentCapture } from "./chat-attachment-picker-policy.ts";
 import "./chat-camera-capture.css";
@@ -17,12 +18,11 @@ type CameraProps = {
   onNativeCapture?: (source: HTMLElement) => void;
 };
 export type OpenClawChatCameraCapture = SolidBridgeElement<CameraProps, { show(): void }>;
-const openCameras = new WeakMap<OpenClawChatCameraCapture, () => void>();
+const openCameras = new WeakMap<OpenClawChatCameraCapture, { show(): void; syncInputs(): void }>();
 
 /** One composer owns the camera, its pending permission request, and the chosen still. */
-function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCapture) {
-  const [revision, setRevision] = createSignal(0);
-  const state: {
+function CameraCaptureContent(_props: CameraProps, host: OpenClawChatCameraCapture) {
+  const [state, setState] = createStore<{
     nativeFallback: boolean;
     stage: CameraStage;
     error: string;
@@ -30,7 +30,7 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     cameras: MediaDeviceInfo[];
     cameraId: string;
     videoReady: boolean;
-  } = {
+  }>({
     nativeFallback: false,
     stage: "closed",
     error: "",
@@ -38,87 +38,93 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     cameras: [],
     cameraId: "",
     videoReady: false,
-  };
-  const publish = () => setRevision((value) => value + 1);
-  const view = () => {
-    revision();
-    return state;
-  };
+  });
   let generation = 0;
   let stream: MediaStream | undefined;
   let photo: File | undefined;
-  let activeSignal: AbortSignal | undefined;
+  let releasePhoto: (() => void) | undefined;
+  // This synchronous scope retires permission/encoding work before Solid commits the view.
+  let scope: { signal?: AbortSignal; release: () => void } | undefined;
+  let video: HTMLVideoElement | undefined;
+  let cancelButton!: HTMLButtonElement;
+  let releaseTrack: (() => void) | undefined;
   let captureDestination: CameraProps["onCapture"];
   let uploadDestination: CameraProps["onUpload"];
   let nativeCaptureDestination: CameraProps["onNativeCapture"];
-  let active = true;
   const isCurrent = (value: number) =>
     value === generation &&
-    state.stage !== "closed" &&
-    active &&
+    scope !== undefined &&
     host.isConnected &&
-    !props.disabled &&
-    activeSignal === props.readSignal &&
-    !activeSignal?.aborted;
+    !host.disabled &&
+    scope.signal === host.readSignal &&
+    !scope.signal?.aborted;
   const stopCamera = () => {
+    releaseTrack?.();
+    releaseTrack = undefined;
     stream?.getTracks().forEach((track) => track.stop());
     stream = undefined;
-    const video = host.querySelector("video");
     if (video) {
       video.srcObject = null;
     }
-    state.videoReady = false;
   };
   const clearPhoto = () => {
-    if (state.photoUrl) {
-      URL.revokeObjectURL(state.photoUrl);
-    }
-    state.photoUrl = "";
+    releasePhoto?.();
+    releasePhoto = undefined;
     photo = undefined;
   };
   const releaseCamera = () => {
     generation += 1;
     stopCamera();
     clearPhoto();
-    activeSignal?.removeEventListener("abort", close);
-    activeSignal = undefined;
+    scope?.release();
+    scope = undefined;
     captureDestination = uploadDestination = nativeCaptureDestination = undefined;
-    state.stage = "closed";
   };
   const close = () => {
     releaseCamera();
-    publish();
+    setState((draft) => {
+      draft.stage = "closed";
+      draft.photoUrl = "";
+      draft.videoReady = false;
+    });
   };
   const fail = (message: string, nativeFallback = false) => {
     generation += 1;
     stopCamera();
-    state.error = message;
-    state.nativeFallback = nativeFallback;
-    state.stage = "error";
-    publish();
+    setState((draft) => {
+      draft.videoReady = false;
+      draft.error = message;
+      draft.nativeFallback = nativeFallback;
+      draft.stage = "error";
+    });
   };
   const listCameras = async (value: number) => {
     try {
       const devices = await navigator.mediaDevices.enumerateDevices();
       if (isCurrent(value)) {
-        state.cameras = devices.filter((device) => device.kind === "videoinput");
-        publish();
+        setState((draft) => {
+          draft.cameras = devices.filter((device) => device.kind === "videoinput");
+        });
       }
     } catch {
       // Device enumeration is optional; a usable preview must not depend on it.
     }
   };
-  const startCamera = async () => {
+  const startCamera = async (cameraId = state.cameraId) => {
     if (!isCurrent(generation)) {
       return;
     }
     const value = ++generation;
     stopCamera();
     clearPhoto();
-    state.stage = "requesting";
-    state.error = "";
-    state.nativeFallback = false;
-    publish();
+    setState((draft) => {
+      draft.photoUrl = "";
+      draft.videoReady = false;
+      draft.stage = "requesting";
+      draft.cameraId = cameraId;
+      draft.error = "";
+      draft.nativeFallback = false;
+    });
     if (!globalThis.isSecureContext) {
       fail(t("chat.camera.insecure"), true);
       return;
@@ -130,8 +136,8 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     try {
       const nextStream = await navigator.mediaDevices.getUserMedia({
         audio: false,
-        video: state.cameraId
-          ? { deviceId: { exact: state.cameraId } }
+        video: cameraId
+          ? { deviceId: { exact: cameraId } }
           : { facingMode: { ideal: "environment" } },
       });
       // Permission prompts cannot be canceled. A late grant still belongs to the old draft.
@@ -145,7 +151,8 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
         fail(t("chat.camera.stopped"));
         return;
       }
-      track.addEventListener(
+      releaseTrack = listen(
+        track,
         "ended",
         () => {
           if (isCurrent(value) && stream === nextStream) {
@@ -154,24 +161,27 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
         },
         { once: true },
       );
-      state.cameraId = track.getSettings().deviceId ?? state.cameraId;
+      setState((draft) => {
+        draft.cameraId = track.getSettings().deviceId ?? draft.cameraId;
+      });
       void listCameras(value);
       await host.updateComplete;
       if (!isCurrent(value)) {
         return;
       }
-      const video = host.querySelector("video");
-      if (!video) {
+      const preview = video;
+      if (!preview) {
         return;
       }
-      video.srcObject = stream;
-      await video.play();
+      preview.srcObject = stream;
+      await preview.play();
       if (!isCurrent(value)) {
         return;
       }
-      state.videoReady = video.videoWidth > 0 && video.videoHeight > 0;
-      state.stage = "live";
-      publish();
+      setState((draft) => {
+        draft.videoReady = preview.videoWidth > 0 && preview.videoHeight > 0;
+        draft.stage = "live";
+      });
     } catch (error) {
       if (!isCurrent(value)) {
         return;
@@ -187,37 +197,33 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     }
   };
   const show = () => {
-    if (
-      !host.isConnected ||
-      props.disabled ||
-      props.readSignal?.aborted ||
-      state.stage !== "closed"
-    ) {
+    if (!host.isConnected || host.disabled || host.readSignal?.aborted || scope !== undefined) {
       return;
     }
-    if (props.onNativeCapture && useNativeAttachmentCapture()) {
-      props.onNativeCapture(host);
+    if (host.onNativeCapture && useNativeAttachmentCapture()) {
+      host.onNativeCapture(host);
       return;
     }
-    activeSignal = props.readSignal;
-    activeSignal?.addEventListener("abort", close, { once: true });
-    captureDestination = props.onCapture;
-    uploadDestination = props.onUpload;
-    nativeCaptureDestination = props.onNativeCapture;
-    state.cameraId = "";
-    state.cameras = [];
-    state.stage = "requesting";
+    const signal = host.readSignal;
+    scope = { signal, release: signal ? listen(signal, "abort", close, { once: true }) : () => {} };
+    captureDestination = host.onCapture;
+    uploadDestination = host.onUpload;
+    nativeCaptureDestination = host.onNativeCapture;
+    setState((draft) => {
+      draft.cameras = [];
+    });
     // Keep getUserMedia in the menu's user gesture, before the first rendered frame.
-    void startCamera();
+    void startCamera("");
   };
   const capture = async () => {
-    const video = host.querySelector("video");
     const value = generation;
     if (!isCurrent(value) || state.stage !== "live" || !video?.videoWidth || !video.videoHeight) {
       return;
     }
-    state.stage = "capturing";
-    publish();
+    setState((draft) => {
+      draft.stage = "capturing";
+      draft.videoReady = false;
+    });
     try {
       const canvas = document.createElement("canvas");
       canvas.width = video.videoWidth;
@@ -244,9 +250,12 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
         `camera-${Date.now()}.${blob.type === "image/png" ? "png" : "jpg"}`,
         { type: blob.type },
       );
-      state.photoUrl = URL.createObjectURL(blob);
-      state.stage = "review";
-      publish();
+      const photoUrl = URL.createObjectURL(blob);
+      releasePhoto = () => URL.revokeObjectURL(photoUrl);
+      setState((draft) => {
+        draft.photoUrl = photoUrl;
+        draft.stage = "review";
+      });
     } catch {
       if (isCurrent(value)) {
         fail(t("chat.camera.captureFailed"));
@@ -270,29 +279,33 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
     close();
     destination?.(host);
   };
-  createEffect(
-    () => [props.disabled, props.readSignal] as const,
-    ([disabled, readSignal]) => {
-      if (state.stage !== "closed" && (disabled || readSignal !== activeSignal)) {
-        close();
-      }
-    },
-  );
-  openCameras.set(host, show);
-  window.addEventListener("pagehide", close);
-  onCleanup(() => {
-    active = false;
-    releaseCamera();
-    openCameras.delete(host);
-    window.removeEventListener("pagehide", close);
+  onSettled(() => {
+    openCameras.set(host, {
+      show,
+      syncInputs: () => {
+        if (scope && (host.disabled || host.readSignal !== scope.signal)) {
+          close();
+        }
+      },
+    });
+    const releasePage = listen(window, "pagehide", close);
+    return () => {
+      releaseCamera();
+      openCameras.delete(host);
+      releasePage();
+    };
   });
-  const reviewing = () => view().stage === "review";
-  const failed = () => view().stage === "error";
+  const reviewing = () => state.stage === "review";
+  const failed = () => state.stage === "error";
   const nativeFallback = () =>
-    failed() && view().nativeFallback && Boolean(nativeCaptureDestination);
+    failed() && state.nativeFallback && Boolean(nativeCaptureDestination);
   return (
-    <Show when={view().stage !== "closed"}>
-      <openclaw-modal-dialog label={t("chat.camera.title")} onModal-cancel={close}>
+    <Show when={state.stage !== "closed"}>
+      <openclaw-modal-dialog
+        prop:initialFocus={() => cancelButton}
+        label={t("chat.camera.title")}
+        onModal-cancel={close}
+      >
         <section class="camera">
           <header>
             <div>
@@ -311,37 +324,41 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
           <div
             class="preview"
             aria-busy={
-              view().stage === "requesting" || view().stage === "capturing" ? "true" : "false"
+              state.stage === "requesting" || state.stage === "capturing" ? "true" : "false"
             }
           >
             <Show
               when={reviewing()}
               fallback={
                 <video
+                  ref={(element) => {
+                    video = element;
+                  }}
                   autoplay
                   muted
                   playsinline
                   aria-label={t("chat.composer.cameraPreview")}
                   onLoadedData={(event) => {
-                    const video = event.currentTarget;
-                    if (video.srcObject === stream && isCurrent(generation)) {
-                      state.videoReady = video.videoWidth > 0 && video.videoHeight > 0;
-                      publish();
+                    const preview = event.currentTarget;
+                    if (preview.srcObject === stream && isCurrent(generation)) {
+                      setState((draft) => {
+                        draft.videoReady = preview.videoWidth > 0 && preview.videoHeight > 0;
+                      });
                     }
                   }}
                 />
               }
             >
-              <img src={view().photoUrl} alt={t("chat.camera.photoAlt")} />
+              <img src={state.photoUrl} alt={t("chat.camera.photoAlt")} />
             </Show>
             <Show
               when={failed()}
               fallback={
-                <Show when={view().stage === "requesting" || view().stage === "capturing"}>
+                <Show when={state.stage === "requesting" || state.stage === "capturing"}>
                   <div class="notice" role="status">
                     <Icon name="camera" />
                     <p>
-                      {view().stage === "capturing"
+                      {state.stage === "capturing"
                         ? t("chat.camera.capturing")
                         : t("chat.camera.requesting")}
                     </p>
@@ -356,28 +373,28 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
                     ? t("chat.camera.previewUnavailable")
                     : t("chat.camera.errorTitle")}
                 </strong>
-                <p>{view().error}</p>
+                <p>{state.error}</p>
               </div>
             </Show>
           </div>
-          <Show when={!reviewing() && !failed() && view().cameras.length > 1}>
+          <Show when={!reviewing() && !failed() && state.cameras.length > 1}>
             <label class="camera-selector">
               {t("chat.composer.cameraInput")}
               <select
-                value={view().cameraId}
-                disabled={view().stage !== "live"}
+                value={state.cameraId}
+                disabled={state.stage !== "live"}
                 onChange={(event) => {
                   if (isCurrent(generation) && state.stage === "live") {
-                    state.cameraId = event.currentTarget.value;
-                    void startCamera();
+                    const cameraId = event.currentTarget.value;
+                    void startCamera(cameraId);
                   }
                 }}
               >
-                <For each={view().cameras} keyed={(camera) => camera.deviceId}>
+                <For each={state.cameras} keyed={(camera) => camera.deviceId}>
                   {(camera, index) => (
                     <option
                       value={camera().deviceId}
-                      selected={camera().deviceId === view().cameraId}
+                      selected={camera().deviceId === state.cameraId}
                     >
                       {camera().label ||
                         t("chat.composer.cameraFallback", { number: String(index() + 1) })}
@@ -402,6 +419,9 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
             <button
               type="button"
               autofocus
+              ref={(element) => {
+                cancelButton = element;
+              }}
               onClick={() => (reviewing() ? void startCamera() : close())}
             >
               {reviewing() ? t("chat.camera.retake") : t("common.cancel")}
@@ -409,9 +429,7 @@ function CameraCaptureContent(props: CameraProps, host: OpenClawChatCameraCaptur
             <button
               type="button"
               class="primary"
-              disabled={
-                !reviewing() && !failed() && (view().stage !== "live" || !view().videoReady)
-              }
+              disabled={!reviewing() && !failed() && (state.stage !== "live" || !state.videoReady)}
               onClick={() =>
                 reviewing()
                   ? usePhoto()
@@ -441,6 +459,12 @@ export const ChatCameraCapture = defineSolidBridge<CameraProps, { show(): void }
   "openclaw-chat-camera-capture",
   CameraCaptureContent,
   {
+    propertyChanged: (host, key) => {
+      if (key === "disabled" || key === "readSignal") {
+        // Native inputs can arrive during a parent render; retire the scope after that commit.
+        queueMicrotask(() => openCameras.get(host)?.syncInputs());
+      }
+    },
     properties: {
       disabled: { default: false },
       readSignal: { default: undefined, attribute: false },
@@ -448,7 +472,7 @@ export const ChatCameraCapture = defineSolidBridge<CameraProps, { show(): void }
       onUpload: { default: undefined, attribute: false },
       onNativeCapture: { default: undefined, attribute: false },
     },
-    methods: { show: (host) => openCameras.get(host)?.() },
+    methods: { show: (host) => openCameras.get(host)?.show() },
   },
 );
 

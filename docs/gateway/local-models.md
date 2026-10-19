@@ -195,6 +195,8 @@ Custom/local provider entries trust their exact configured `baseUrl` origin for 
 
 Set `input: ["text", "image"]` on local or proxied vision models so image attachments get injected into agent turns. Interactive custom-provider onboarding infers common vision model IDs and only asks about unknown names. Non-interactive onboarding uses the same inference, with `--custom-image-input` / `--custom-text-input` to override it.
 
+For text-only primaries, `agent` RPC image attachments use the same [image-understanding pipeline](/nodes/media-understanding) as `chat.send` by default. Configure a vision model with `agents.defaults.imageModel` or an entry in `tools.media.models` with `capabilities: ["image"]`; it receives the pixels, while your selected text model receives the description. The primary model and per-request model and prompt/context overrides stay unchanged. Image-capable primaries receive images inline. The shared attachment limits and per-attachment outcome markers still apply. If no image description can be produced, the request returns an error with the next step; configure or repair the vision provider, then retry.
+
 Use `models.providers.<id>.timeoutSeconds` for slow local/remote model servers before raising `agents.defaults.timeoutSeconds`. The provider timeout covers connect, headers, body streaming, and the total guarded-fetch abort for model HTTP requests only. If the agent or run-specific timeout is lower, raise that too: the provider timeout cannot extend the current model attempt's budget. Each configured fallback gets a fresh attempt budget.
 
 <Note>

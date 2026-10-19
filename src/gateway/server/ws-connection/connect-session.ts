@@ -13,7 +13,7 @@ import { upsertPresence } from "../../../infra/system-presence.js";
 import { loadVoiceWakeRoutingConfig } from "../../../infra/voicewake-routing.js";
 import { loadVoiceWakeConfig } from "../../../infra/voicewake.js";
 import { resolveLocalNodeId } from "../../../node-host/local-id.js";
-import { intersectOperatorScopes } from "../../../shared/operator-scope-compat.js";
+import { intersectOperatorScopes, roleScopesAllow } from "../../../shared/operator-scope-compat.js";
 import { recordRemoteNodeInfo, refreshRemoteNodeBins } from "../../../skills/runtime/remote.js";
 import { classifyTailscaleLogin } from "../../../state/user-profiles-tailscale-login.js";
 import {
@@ -208,9 +208,9 @@ export async function attachAuthenticatedGatewayConnect(
     (authMethod === "token" ||
       authMethod === "password" ||
       remoteIngressPrincipal?.operatorRoleActor.kind === "system");
-  // Synthetic callers bypass WS admission; ephemeral control-plane clients stay unprofiled.
+  // Authenticated inputs need durable identity even when their presence is omitted.
   const ownerProfileExpected =
-    shouldTrackPresence &&
+    (shouldTrackPresence || (authMethod !== undefined && authMethod !== "none")) &&
     shouldUseGatewayOwnerProfile({ role, authenticatedUserId, authMethod, rolesConfigured });
   const identityStartedAt = performance.now();
   const profileAdmission = remoteIngressPrincipal
@@ -235,7 +235,7 @@ export async function attachAuthenticatedGatewayConnect(
   // Configured roles fail closed if profile storage or provider verification is unavailable.
   const scopesStartedAt = performance.now();
   const effectiveScopes = remoteIngressPrincipal
-    ? { scopes: deviceScopes, addedIdentityScopes: [] }
+    ? deviceScopes
     : resolveEffectiveConnectionScopes({
         role,
         deviceScopes,
@@ -254,17 +254,19 @@ export async function attachAuthenticatedGatewayConnect(
         )
       : undefined;
   const scopes = rolePolicy
-    ? intersectOperatorScopes(effectiveScopes.scopes, rolePolicy.scopes)
-    : effectiveScopes.scopes;
+    ? intersectOperatorScopes(effectiveScopes, rolePolicy.scopes)
+    : effectiveScopes;
   state.scopes = scopes;
   connectParams.scopes = scopes;
-  const addedIdentityScopes = effectiveScopes.addedIdentityScopes.filter((scope) =>
-    scopes.includes(scope),
-  );
-  if (authenticatedUserId && addedIdentityScopes.length > 0) {
-    logGateway.info(
-      `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${addedIdentityScopes.join(",")} auth=${authMethod} conn=${connId}`,
+  if (role === "operator" && authenticatedUserId) {
+    const addedIdentityScopes = scopes.filter(
+      (scope) => !roleScopesAllow({ role, requestedScopes: [scope], allowedScopes: deviceScopes }),
     );
+    if (addedIdentityScopes.length > 0) {
+      logGateway.info(
+        `security audit: identity scope grant elevated connection identity=${formatForLog(authenticatedUserId)} addedScopes=${addedIdentityScopes.join(",")} auth=${authMethod} conn=${connId}`,
+      );
+    }
   }
 
   context.recordAttachTiming?.("scopeGrantMs", scopesStartedAt);

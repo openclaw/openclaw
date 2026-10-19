@@ -5,7 +5,7 @@ import {
   pathForPluginSettings,
   pathForRoute,
 } from "../../app-route-paths.ts";
-import { analyzeConfigSchema } from "../../components/config-form.ts";
+import { analyzeConfigSchema } from "../../components/config-form.analyze.ts";
 import { Icon } from "../../components/solid/icon.tsx";
 import { SettingsPage } from "../../components/solid/settings-ui.tsx";
 import { SettingsWorkspace } from "../../components/solid/settings-workspace.tsx";
@@ -120,6 +120,8 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
     return renderPluginSkillsSection(staticCatalog.detail.skills, onOpen);
   };
   const shared = createMemo(() => ({
+    registerRemovalHeading: page().registerRemovalHeading,
+    registerInstallAction: page().registerInstallAction,
     registerIcon: page().icons.register,
     connected: page().gateway.connected,
     loading: page().loading,
@@ -259,6 +261,8 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
                 <InstalledDetail pluginId={detailPluginId()!} />
               ) : (
                 <PluginCatalogDetail
+                  registerRemovalHeading={page().registerRemovalHeading}
+                  registerInstallAction={page().registerInstallAction}
                   registerIcon={page().icons.register}
                   onAskPlugin={onAskPlugin()}
                   connected={page().gateway.connected}
@@ -294,6 +298,7 @@ export function PluginsPageView(props: { page: PluginsPageModel }) {
             ) : (
               <SettingsPage wide carapace>
                 <PluginCatalogResults
+                  registerInstallAction={page().registerInstallAction}
                   {...discovery()}
                   registerIcon={page().icons.register}
                   connected={page().gateway.connected}

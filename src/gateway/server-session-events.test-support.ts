@@ -1,8 +1,17 @@
 import { expect, vi } from "vitest";
 import { buildProjectedAgentRunIndex } from "../infra/agent-run-registry.js";
-import type { ChatAbortControllerEntry } from "./chat-abort.js";
+import { tryClaimSessionControllerTask } from "../sessions/session-controller.mailbox.js";
+import { createReplyOperation } from "../sessions/session-controller.operation.js";
+import {
+  getRpcSourceIdentity,
+  setRpcSourceProjectSessionActive,
+  type RpcSourceRef,
+} from "../sessions/session-controller.rpc-sources.js";
+import { markReplyOperationExecutionStarted } from "../sessions/session-controller.state.js";
+import { rpcSourceTesting } from "../sessions/session-lifecycle-admission.test-support.js";
 import type { SessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
+import { createRpcSourceForTest } from "./test-helpers.rpc-source.js";
 
 const sessionRow = vi.hoisted(() => ({
   key: "agent:main:main",
@@ -16,7 +25,6 @@ const sessionRow = vi.hoisted(() => ({
   thinkingDefault: "medium",
   agentRuntime: { id: "openclaw", source: "model" },
 }));
-const resolveEmbeddedAgentSessionProgressStateMock = vi.hoisted(() => vi.fn());
 const loadGatewaySessionRowMock = vi.hoisted(() => vi.fn());
 const projectChatDisplayMessageMock = vi.hoisted(() => vi.fn((message: unknown) => message));
 const listAccessorSessionEntriesReadOnlyMock = vi.hoisted(() => vi.fn());
@@ -25,6 +33,7 @@ const loadGatewaySessionEntryReadOnlyMock = vi.hoisted(() => vi.fn());
 const readSessionMessageCountAsyncMock = vi.hoisted(() => vi.fn());
 const readSessionMessageByIdAsyncMock = vi.hoisted(() => vi.fn());
 const runtimeConfigState = vi.hoisted(() => ({ value: {} as Record<string, unknown> }));
+const sessionEventStorePath = "/tmp/session-events-fixture.sqlite";
 
 vi.mock("../config/io.js", () => ({ getRuntimeConfig: () => runtimeConfigState.value }));
 vi.mock("../config/sessions/session-accessor.js", async (importOriginal) => {
@@ -47,27 +56,20 @@ vi.mock("./session-transcript-readers.js", async (importOriginal) => {
     readSessionMessageByIdAsync: readSessionMessageByIdAsyncMock,
   };
 });
-vi.mock("../agents/embedded-agent-runner/runs.js", async () => {
-  const actual = await vi.importActual<typeof import("../agents/embedded-agent-runner/runs.js")>(
-    "../agents/embedded-agent-runner/runs.js",
-  );
-  return {
-    ...actual,
-    resolveEmbeddedAgentSessionProgressState: (...args: unknown[]) =>
-      resolveEmbeddedAgentSessionProgressStateMock(...args),
-  };
-});
 
-const {
-  createLifecycleEventBroadcastHandler: createLifecycleHandler,
-  createTranscriptUpdateBroadcastHandler: createTranscriptHandler,
-} = await import("./server-session-events.js");
+const { createLifecycleEventBroadcastHandler: createLifecycleHandler } =
+  await import("./server-session-lifecycle-events.js");
+const { createTranscriptUpdateBroadcastHandler: createTranscriptHandler } =
+  await import("./server-session-events.js");
 const { createGatewayBroadcaster } = await import("./server-broadcast.js");
 const { subscribePluginSessionsChanged } = await import("../plugins/services.test-support.js");
 
 const projection = {
   get state() {
-    return { rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() } };
+    return {
+      rowContext: { projectedAgentRuns: buildProjectedAgentRunIndex() },
+      scope: () => ({ path: sessionEventStorePath }),
+    };
   },
   ensureMaterialized: async () => {},
   ancestorRows: () => [],
@@ -124,9 +126,17 @@ const projection = {
   snapshot(query: { key: string; agentId: string }) {
     return { row: loadGatewaySessionRowMock(query.key, { agentId: query.agentId }) };
   },
-  describe(query: { key: string; agentId: string }) {
+  describe(query: { key: string; agentId: string; storePath?: string }) {
     const row = projection.snapshot(query).row;
-    return row ? { materialized: { row } } : undefined;
+    return row
+      ? {
+          materialized: { row },
+          storeTarget: {
+            agentId: query.agentId,
+            storePath: query.storePath ?? sessionEventStorePath,
+          },
+        }
+      : undefined;
   },
   present(record: Parameters<SessionRowProjection["present"]>[0]) {
     return record.materialized.row;
@@ -147,16 +157,39 @@ function createTranscriptUpdateBroadcastHandler(
 function createActiveRun(
   projectSessionActive: boolean,
   executionStarted = true,
-): ChatAbortControllerEntry {
-  return {
-    controller: new AbortController(),
-    sessionId: "sess-main",
-    sessionKey: "agent:main:main",
-    startedAtMs: Date.now(),
-    executionStarted,
-    expiresAtMs: Date.now() + 60_000,
-    projectSessionActive,
-  };
+  identity: {
+    sessionKey?: string;
+    sessionId?: string;
+    agentId?: string;
+    storePath?: string;
+  } = {},
+): RpcSourceRef {
+  const ref = createRpcSourceForTest(
+    { projectSessionActive },
+    {
+      sessionId: identity.sessionId ?? "sess-main",
+      sessionKey: identity.sessionKey ?? "agent:main:main",
+      agentId: identity.agentId,
+      storeScope: identity.storePath ?? sessionEventStorePath,
+    },
+  );
+  if (executionStarted) {
+    const claim = tryClaimSessionControllerTask(ref.input);
+    if (!claim) {
+      throw new Error("Fixture could not acquire its isolated turn");
+    }
+    const sourceIdentity = getRpcSourceIdentity(ref);
+    const operation = createReplyOperation({
+      sessionId: sourceIdentity.sessionId,
+      sessionKey: sourceIdentity.sessionKey,
+      resetTriggered: false,
+      mailboxClaim: claim,
+      target: ref.input.mailbox.owner.target,
+    });
+    markReplyOperationExecutionStarted(operation);
+    setRpcSourceProjectSessionActive(ref, projectSessionActive);
+  }
+  return ref;
 }
 
 function storedMessage(messageId: string, seq = 1) {
@@ -185,13 +218,13 @@ function createHandler(
   getSessionMessageSubscribers: SessionMessageSubscriberRegistry["get"] = () => new Set<string>(),
 ) {
   const broadcastToConnIds = vi.fn();
+  const source = createActiveRun(projectSessionActive, executionStarted);
+  // Preparation has controller custody, but acceptance owns its queued projection.
+  rpcSourceTesting.reset(executionStarted ? [["run-before-finalize", source]] : []);
   const handler = createTranscriptUpdateBroadcastHandler({
     broadcastToConnIds,
     sessionEventSubscribers: { getAll: () => new Set(["conn-1"]) },
     sessionMessageSubscribers: { get: getSessionMessageSubscribers },
-    chatAbortControllers: new Map([
-      ["run-before-finalize", createActiveRun(projectSessionActive, executionStarted)],
-    ]),
   });
   return { broadcastToConnIds, handler };
 }
@@ -253,7 +286,6 @@ export {
   projectChatDisplayMessageMock,
   readSessionMessageByIdAsyncMock,
   readSessionMessageCountAsyncMock,
-  resolveEmbeddedAgentSessionProgressStateMock,
   runtimeConfigState,
   sessionRow,
   storedMessage,

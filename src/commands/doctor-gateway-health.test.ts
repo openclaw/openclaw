@@ -240,7 +240,7 @@ describe("checkGatewayHealth", () => {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
     await expect(checkGatewayHealth({ runtime, cfg })).resolves.toMatchObject({ healthOk: true });
     expect(note).toHaveBeenCalledWith(
-      `Gateway runtime is stale after Node upgrade: child workers are using ${execPath}, which no longer exists. Restart the Gateway.`,
+      `The Node.js runtime this Gateway started with (${execPath}) can no longer start worker processes, likely because it was upgraded or removed. Restart the Gateway.`,
       "Gateway runtime",
     );
   });

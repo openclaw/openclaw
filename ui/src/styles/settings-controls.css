@@ -249,7 +249,6 @@ select.settings-select {
 
 select.settings-select:not([multiple]) {
   appearance: none;
-  -webkit-appearance: none;
   padding-right: 36px;
   background-image: var(--select-chevron);
   background-repeat: no-repeat;

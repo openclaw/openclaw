@@ -124,10 +124,11 @@ function harness(host = "github.com") {
     throw new Error("Unexpected route: " + url.href);
   };
   const snapshot = { pullRequests: [{ ...chip, url: pullUrl }], rateLimited: false };
+  const fetchImpl = vi.fn(fetchResponse);
+  vi.stubGlobal("fetch", fetchImpl);
   const deps = {
     sessionScope: "ci-test-" + ++scope,
     assertCurrent: vi.fn(),
-    fetchImpl: vi.fn(fetchResponse),
     loadPullRequests: vi.fn(async () => snapshot),
   };
   return {
@@ -135,6 +136,7 @@ function harness(host = "github.com") {
     host,
     state,
     ...deps,
+    fetchImpl,
     fetchResponse,
     load: (
       params: Partial<typeof target> = {},
@@ -182,6 +184,7 @@ afterEach(() => {
   clearRuntimeConfigSnapshot();
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
+  vi.unstubAllGlobals();
 });
 
 it.each(["github.com", "ghe.example.test"])(

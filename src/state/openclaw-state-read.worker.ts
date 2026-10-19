@@ -5,6 +5,7 @@ import {
   withDatabaseEngineSelection,
 } from "../infra/database-engine/context.js";
 import { bunSqliteNativeCleanupPending } from "../infra/node-sqlite.js";
+import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { withSqliteReaderOwner } from "../infra/sqlite-reader-lifecycle.js";
 import { runWithSqliteWorkerStateContext } from "../infra/sqlite-worker-state-context.js";
 import { serveOwnedWorkerTasks } from "../infra/worker-task-server.js";
@@ -12,9 +13,12 @@ import { pluginMetadataReadOperations } from "../plugins/plugin-metadata-state.r
 import { openClawStateDatabaseCache } from "./openclaw-state-db-cache.js";
 import {
   closeRetainedOpenClawStateReadConnections,
+  openOpenClawStateReadConnection,
   readOpenClawStateReadOnlyLocation,
   withOpenClawStateReadOnlyLocation,
 } from "./openclaw-state-db-read-connection.js";
+import { postgresStateReadSnapshot } from "./openclaw-state-postgres-snapshot-context.js";
+import { stateReadRegistry } from "./openclaw-state-read-operation-registry.js";
 import type {
   OpenClawStateReadReply,
   OpenClawStateReadRequest,
@@ -33,16 +37,23 @@ serveOwnedWorkerTasks(
         input.command.type === "gatewayOwnerLease.read"
           ? await import("../infra/gateway-owner-lease.worker.js")
           : undefined;
-      const handlers =
+      const registryReader =
+        input.command.type === "agentDatabaseRegistry.read"
+          ? await import("./openclaw-agent-db-registry.read.js")
+          : undefined;
+      const dedicatedRead =
         input.command.type === "admit" ||
         input.command.type === "plugins.metadata.read" ||
-        input.command.type === "gatewayOwnerLease.read"
-          ? undefined
-          : await import("./openclaw-state-read-handlers.js");
-      const prepared = handlers?.stateReadRegistry.prepare(input.command.type);
+        input.command.type === "gatewayOwnerLease.read" ||
+        input.command.type === "agentDatabaseRegistry.read";
+      const prepared = dedicatedRead ? undefined : stateReadRegistry.prepare(input.command.type);
       if (prepared) {
         return prepared.then(() => read(input, channel, control));
       }
+      const handlers =
+        dedicatedRead || stateReadRegistry.has(input.command)
+          ? undefined
+          : await import("./openclaw-state-read-handlers.js");
       const executeRead = async (): Promise<OpenClawStateReadReply> => {
         if (input.checkFreshAdmission) {
           openClawStateDatabaseCache.assertOpenClawStateDatabaseFreshOpenAllowedAtPath(
@@ -57,6 +68,39 @@ serveOwnedWorkerTasks(
         }
         const { command } = input;
         if (command.type === "admit") {
+          if (input.exportPostgresSnapshot) {
+            if (!channel) {
+              throw new Error("PostgreSQL discovery snapshot requires its retained receiver");
+            }
+            const connection = openOpenClawStateReadConnection(
+              input.databasePath,
+              input.location,
+              input.expectedIdentity,
+            );
+            const db = connection.database.db;
+            try {
+              if (!isPostgresSqlConnection(db)) {
+                throw new Error("PostgreSQL discovery snapshot requires PostgreSQL state");
+              }
+              // sqlite-allow-raw: This PostgreSQL transaction must outlive the asynchronous snapshot consumer.
+              db.exec("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY");
+              const snapshot =
+                /* sqlite-allow-raw: PostgreSQL exports the retained transaction's MVCC snapshot. */ db
+                  .prepare("SELECT pg_export_snapshot() AS snapshot")
+                  .get()?.snapshot;
+              const response = await channel.request(snapshot);
+              response.consumed();
+            } finally {
+              try {
+                if (db.isTransaction) {
+                  // sqlite-allow-raw: Release the exporting PostgreSQL transaction after its consumer settles.
+                  db.exec("ROLLBACK");
+                }
+              } finally {
+                connection.close();
+              }
+            }
+          }
           return { ok: true, type: "admit" };
         }
         const locationArgs = [
@@ -90,21 +134,24 @@ serveOwnedWorkerTasks(
           );
           return { ok: true, type: command.type, sourceAdmitted: true, lease };
         }
-        if (!handlers) {
-          throw new Error("State read command handlers are unavailable");
-        }
-        if (command.type === "subagents.restore" || command.type === "meetingTranscripts.export") {
-          return await control.runNativeSection(() =>
-            handlers.readStateStream(input, command, channel, () => {
+        if (stateReadRegistry.has(command)) {
+          const result = withOpenClawStateReadOnlyLocation(
+            ({ db }) => {
               sourceAdmitted = true;
-            }),
+              return stateReadRegistry.execute(command, db);
+            },
+            ...locationArgs,
           );
+          return { ok: true, sourceAdmitted: true, ...result };
         }
         if (command.type === "agentDatabaseRegistry.read") {
+          if (!registryReader) {
+            throw new Error("Agent database registry reader is unavailable");
+          }
           const result = readOpenClawStateReadOnlyLocation(
             ({ db }) => {
               sourceAdmitted = true;
-              return handlers.readRegisteredAgentDatabaseRows(db, input.databasePath, false);
+              return registryReader.readRegisteredAgentDatabaseRows(db, input.databasePath, false);
             },
             ...locationArgs,
           );
@@ -117,6 +164,16 @@ serveOwnedWorkerTasks(
                 ? { status: "available", entries: result.value }
                 : { status: "unavailable" },
           };
+        }
+        if (!handlers) {
+          throw new Error("State read command handlers are unavailable");
+        }
+        if (command.type === "subagents.restore" || command.type === "meetingTranscripts.export") {
+          return await control.runNativeSection(() =>
+            handlers.readStateStream(input, command, channel, () => {
+              sourceAdmitted = true;
+            }),
+          );
         }
         if (command.type === "subagents.sessionList") {
           const result = readOpenClawStateReadOnlyLocation(
@@ -158,10 +215,17 @@ serveOwnedWorkerTasks(
         return { ok: true, sourceAdmitted: true, ...result };
       };
       const selection = input.context.databaseEngineSelection ?? getDatabaseEngineSelection();
-      const run = () =>
+      const execute = () =>
         withSqliteReaderOwner({ operation: input.command.type, ownerKind: "worker" }, () =>
           runWithSqliteWorkerStateContext(input.context, executeRead),
         );
+      const run = () =>
+        input.postgresSnapshot
+          ? postgresStateReadSnapshot.run(
+              { path: input.databasePath, snapshot: input.postgresSnapshot },
+              execute,
+            )
+          : execute();
       const reply = await (selection ? withDatabaseEngineSelection(selection, run) : run());
       if (
         !getSqliteRuntimeCapabilities().explicitSqliteCloseReleasesNativeResources &&

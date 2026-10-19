@@ -49,7 +49,7 @@ function isSyntheticTranscriptRepairToolResult(message: unknown): boolean {
     return false;
   }
   const text = extractText(message);
-  return typeof text === "string" && text.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
+  return text?.trim() === SYNTHETIC_TRANSCRIPT_REPAIR_RESULT;
 }
 
 export function isHiddenAssistantStreamText(text: string): boolean {

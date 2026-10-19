@@ -23,6 +23,7 @@ import {
 } from "../test-helpers/gateway-client.ts";
 import "../test-helpers/app-sidebar-suite.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
+import { setStoredSessionCatalogHidden } from "./app-sidebar-session-types.ts";
 import "./app-sidebar.tsx";
 
 async function settle(sidebar: SidebarLifecycleState) {
@@ -73,6 +74,37 @@ describe("AppSidebar hidden catalog discovery", () => {
   beforeEach(() => vi.useFakeTimers());
   afterEach(() => vi.useRealTimers());
 
+  it("keeps catalog visibility current across moves, context replacement, and remounts", async () => {
+    const request = createGatewayRequestMock().mockResolvedValue(
+      catalogPage([{ threadId: "visible", name: "Visible catalog session" }]),
+    );
+    const { sidebar, provider, context, gatewayHarness } = await mountDiscovery(request);
+    const catalog = () => sidebar.querySelector('[data-session-section="catalog:codex"]');
+    expect(catalog()).not.toBeNull();
+    setStoredSessionCatalogHidden("codex", true);
+    await settle(sidebar);
+    expect(catalog()).toBeNull();
+
+    provider.setContext(createContext(gatewayHarness.gateway, context.sessions));
+    await settle(sidebar);
+    setStoredSessionCatalogHidden("codex", false);
+    await settle(sidebar);
+    expect(catalog()).not.toBeNull();
+
+    sidebar.hostElement.remove();
+    setStoredSessionCatalogHidden("codex", true);
+    provider.append(sidebar.hostElement);
+    await settle(sidebar);
+    expect(catalog()).toBeNull();
+
+    sidebar.hostElement.remove();
+    await settle(sidebar);
+    setStoredSessionCatalogHidden("codex", false);
+    provider.append(sidebar.hostElement);
+    await settle(sidebar);
+    expect(catalog()).not.toBeNull();
+  });
+
   it.each(["agent", "Gateway source"] as const)(
     "keeps the replacement scan active after discovery from the previous %s finishes",
     async (scope) => {
@@ -92,7 +124,7 @@ describe("AppSidebar hidden catalog discovery", () => {
         if (scope === "agent") {
           context.agentSelection.state.selectedId = "research";
           context.agentSelection.state.scopeId = "research";
-          sidebar.requestUpdate();
+          sidebar.invalidate();
         } else {
           const gateway = discoveryGateway(currentRequest);
           provider.setContext(createContext(gateway.gateway, context.sessions, TWO_AGENTS));
@@ -454,7 +486,7 @@ describe("AppSidebar expanded catalog refresh visibility", () => {
       expect(scrollBody).not.toBeNull();
       expect(observed.has(scrollBody!)).toBe(true);
 
-      sidebar.requestUpdate();
+      sidebar.invalidate();
       provider.remove();
       const timersAfterDetach = vi.getTimerCount();
       const observationsAfterDetach = observe.mock.calls.length;

@@ -11,11 +11,7 @@ import {
   rollbackStatelessClawPackages as rollbackPackages,
 } from "./packages.js";
 import * as pluginProbe from "./plugin-capability-probe.js";
-import type {
-  persistClawPackageRef,
-  readClawPackageRefs,
-  updateClawPackageRefStatus,
-} from "./provenance.js";
+import type { readClawPackageRefs } from "./provenance.js";
 
 type PackageBoundaryFixtures = {
   installPlugin?: (
@@ -31,14 +27,6 @@ type PackageBoundaryFixtures = {
   installSkill?: typeof skillLifecycle.installSkillFromClawHub;
   preflightPlugin?: typeof pluginPreflight.preflightPluginInstall;
   preflightSkill?: typeof skillLifecycle.preflightSkillFromClawHub;
-  persistPackageRef?: (
-    ...args: Parameters<typeof persistClawPackageRef>
-  ) => ReturnType<typeof persistClawPackageRef> | Promise<ReturnType<typeof persistClawPackageRef>>;
-  completePackageRef?: (
-    ...args: Parameters<typeof updateClawPackageRefStatus>
-  ) =>
-    | ReturnType<typeof updateClawPackageRefStatus>
-    | Promise<ReturnType<typeof updateClawPackageRefStatus>>;
   readPackageRefs?: (
     ...args: Parameters<typeof readClawPackageRefs>
   ) => ReturnType<typeof readClawPackageRefs> | Promise<ReturnType<typeof readClawPackageRefs>>;
@@ -50,7 +38,7 @@ export type PackageInstallFixtureOptions = InstallClawPackagesOptions & {
   deps?: PackageBoundaryFixtures;
 };
 
-async function withPackageBoundaries<T>(
+export async function withPackageBoundaries<T>(
   run: () => Promise<T>,
   deps: PackageBoundaryFixtures = {},
 ): Promise<T> {
@@ -112,22 +100,6 @@ async function withPackageBoundaries<T>(
           .mockImplementation(deps.preflightSkill),
       );
     }
-    if (deps.persistPackageRef) {
-      const persist = deps.persistPackageRef;
-      mocks.push(
-        vi
-          .spyOn(addState, "persistClawPackageRefForAdd")
-          .mockImplementation(async (...args) => await persist(...args)),
-      );
-    }
-    if (deps.completePackageRef) {
-      const complete = deps.completePackageRef;
-      mocks.push(
-        vi
-          .spyOn(addState, "updateClawPackageRefStatusForAdd")
-          .mockImplementation(async (...args) => await complete(...args)),
-      );
-    }
     if (deps.readPackageRefs) {
       const read = deps.readPackageRefs;
       mocks.push(
@@ -143,11 +115,11 @@ async function withPackageBoundaries<T>(
           .mockImplementation(deps.acquirePackageLease),
       );
     }
-    if (deps.resolvePlugin) {
+    if (deps.resolvePlugin || deps.installPlugin) {
       mocks.push(
         vi
           .spyOn(pluginPreflight, "resolveInstalledClawHubPlugin")
-          .mockImplementation(deps.resolvePlugin),
+          .mockImplementation(deps.resolvePlugin ?? (async () => ({ status: "missing" }))),
       );
     }
     if (deps.probePlugin || deps.inspectPluginCapabilities) {

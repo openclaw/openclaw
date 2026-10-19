@@ -1,9 +1,10 @@
 import { createComponent, createSignal } from "solid-js";
 import { afterEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
+import { createChatAttachmentInputHandle } from "../pages/chat/components/chat-attachment-inputs.ts";
 import { composerLibraryMenuItems } from "../pages/chat/components/chat-composer-library-menu.tsx";
-import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import "../pages/chat/components/browser-tab-card.tsx";
+import { renderComposerMenuOption as ComposerMenuOption } from "../pages/chat/components/chat-composer-menu.tsx";
 import { ChatComposerPlusMenu } from "../pages/chat/components/chat-composer-plus-menu.tsx";
 import { cleanupSolid, mountSolid } from "../test-helpers/mount-solid.ts";
 import { flush } from "../test-helpers/solid-settle.ts";
@@ -286,6 +287,51 @@ describe.skipIf(!hasPopoverApi)("submenu parent highlight", () => {
   });
 });
 
+describe.skipIf(!hasPopoverApi)("action menu typography", () => {
+  it.each([390, 1440])(
+    "keeps plain and session actions at the same text scale at %ipx",
+    async (width) => {
+      const { page } = await import("vitest/browser");
+      await page.viewport(width, 900);
+      const host = document.createElement("div");
+      host.style.fontSize = "20px";
+      host.style.setProperty("--control-ui-text-scale", "1");
+      document.body.append(host);
+      mountSolid(
+        () => (
+          <>
+            <Menu
+              id="plain-action-typography"
+              label="Workspace actions"
+              items={[{ id: "copy-path", label: "Copy path" }]}
+            />
+            <Menu
+              id="session-action-typography"
+              label="Session actions"
+              class="session-menu"
+              items={[{ id: "copy-session", label: "Copy session", class: "session-menu__item" }]}
+            />
+          </>
+        ),
+        { container: host },
+      );
+      flush();
+      const menu = host.querySelector<HTMLElement>(".oc-menu")!;
+      const plain = host.querySelector<HTMLElement>('[data-value="copy-path"]')!;
+      const session = host.querySelector<HTMLElement>('[data-value="copy-session"]')!;
+      await page.elementLocator(host.querySelector<HTMLElement>(".oc-menu-trigger")!).click();
+      await expect.poll(() => menu.dataset.phase).toBe("open");
+
+      for (const scale of [1, 1.4]) {
+        host.style.setProperty("--control-ui-text-scale", String(scale));
+        const size = (item: HTMLElement) => Number.parseFloat(getComputedStyle(item).fontSize);
+        expect(size(plain)).toBeCloseTo(13 * scale, 1);
+        expect(size(plain)).toBeCloseTo(size(session), 1);
+      }
+    },
+  );
+});
+
 describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
   function useTheme(theme: "dark" | "light") {
     document.documentElement.dataset.theme = theme;
@@ -311,11 +357,13 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       const host = document.createElement("div");
       host.style.padding = "400px 40px 0";
       document.body.append(host);
+      const inputHandle = createChatAttachmentInputHandle();
       mountSolid(
         () => (
           <ChatComposerPlusMenu
             menu={{
               attachments: {},
+              inputHandle,
               disabled: false,
               open: false,
               view: "root",
@@ -347,6 +395,7 @@ describe.skipIf(!hasPopoverApi)("platform menu hover", () => {
       );
       const { page } = await import("vitest/browser");
       await page.elementLocator(host.querySelector<HTMLElement>('[aria-haspopup="menu"]')!).click();
+      await expect.poll(() => host.querySelector('[data-value="photo"]')).not.toBeNull();
       const photo = host.querySelector<HTMLElement>('[data-value="photo"]')!;
       const skills = host.querySelector<HTMLElement>('[data-value="open-skills"]')!;
       await hoverBackground(photo, highlight);

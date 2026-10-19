@@ -4,7 +4,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { client as mockClient, createGatewayHarness } from "../app/overlays-access.test-support.ts";
 import { createSidebarAttentionStore } from "../app/sidebar-attention-store.ts";
 import { hiddenScopeUpgradeCapability } from "../test-helpers/application-context.ts";
-import { SidebarAttentionStoreController } from "./sidebar-attention-store.ts";
+import { SidebarAttentionStoreOwner } from "./sidebar-attention-store.ts";
 
 export type CompactCronPage = CronJobsListResult<CronCompactJob>;
 
@@ -82,7 +82,7 @@ export function startAuthenticatedStore(request: Parameters<typeof mockClient>[0
   const harness = createGatewayHarness(mockClient(request));
   harness.update({ selfUser: { id: "alice", name: "Alice" } });
   const store = createStore(harness.gateway);
-  store.activate(SidebarAttentionStoreController);
+  store.activate(SidebarAttentionStoreOwner);
   return { ...harness, attention: store };
 }
 

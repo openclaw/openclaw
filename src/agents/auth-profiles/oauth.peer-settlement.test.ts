@@ -297,6 +297,7 @@ describe("OAuth refresh peer settlement", () => {
 
     const { promise: started, resolve: markStarted } = createDeferredCore();
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
+    fx.settle(finishRefresh);
     fx.refresh.mockImplementation(async () => {
       markStarted();
       await finishRefreshGate;
@@ -390,6 +391,7 @@ describe("OAuth refresh peer settlement", () => {
 
     const { promise: started, resolve: markStarted } = createDeferredCore();
     const { promise: finishRefreshGate, resolve: finishRefresh } = createDeferredCore();
+    fx.settle(finishRefresh);
     fx.refresh.mockImplementation(async () => {
       markStarted();
       await finishRefreshGate;

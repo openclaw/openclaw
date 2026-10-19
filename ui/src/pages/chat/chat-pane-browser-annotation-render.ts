@@ -2,9 +2,21 @@ import { t } from "../../i18n/index.ts";
 import type { ChatAttachment } from "../../lib/chat/chat-types.ts";
 import { removeBrowserAnnotationWithUndo } from "./browser-annotation-removal.ts";
 import { ChatPaneHeader } from "./chat-pane-header.ts";
-import { CHAT_COMPOSER_TEXTAREA_SELECTOR } from "./chat-pane-shared.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 
 export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
+  private browserAnnotationFocus = new Map<string, HTMLButtonElement>();
+  protected readonly registerBrowserAnnotationFocus = (
+    attachmentId: string,
+    button: HTMLButtonElement,
+  ) => {
+    this.browserAnnotationFocus.set(attachmentId, button);
+    return () => {
+      if (this.browserAnnotationFocus.get(attachmentId) === button) {
+        this.browserAnnotationFocus.delete(attachmentId);
+      }
+    };
+  };
   protected readonly removeBrowserAnnotation = (attachment: ChatAttachment) => {
     const state = this.state;
     if (!state) {
@@ -12,7 +24,7 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
     }
     const sourceSessionKey = state.sessionKey;
     const focusAfterUpdate = (target: () => HTMLElement | null | undefined) => {
-      void this.updateComplete.then(() => {
+      void this.awaitDomCommit().then(() => {
         if (this.state === state && this.state.sessionKey === sourceSessionKey) {
           target()?.focus({ preventScroll: true });
         }
@@ -25,21 +37,13 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
         getAttachments: () => this.state?.chatAttachments ?? [],
         setAttachments: (attachments) => {
           if (this.state) {
-            this.state.chatAttachments = attachments;
+            this.chatState.attachmentInputProps(this.state).onAttachmentsChange(attachments);
           }
         },
-        requestUpdate: () => this.state?.requestUpdate?.(),
         focusComposer: () =>
-          focusAfterUpdate(() =>
-            this.element.querySelector<HTMLTextAreaElement>(CHAT_COMPOSER_TEXTAREA_SELECTOR),
-          ),
+          focusAfterUpdate(() => getChatComposerState(this.presentationId).composerTextarea),
         focusRestoredAnnotation: (attachmentId) =>
-          focusAfterUpdate(() => {
-            const card = [
-              ...this.element.querySelectorAll<HTMLElement>("[data-attachment-id]"),
-            ].find((candidate) => candidate.dataset.attachmentId === attachmentId);
-            return card?.querySelector<HTMLButtonElement>("button");
-          }),
+          focusAfterUpdate(() => this.browserAnnotationFocus.get(attachmentId)),
       },
       attachment,
       {

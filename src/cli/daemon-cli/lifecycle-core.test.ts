@@ -49,6 +49,11 @@ vi.mock("../../runtime.js", async (importOriginal) => ({
   defaultRuntime: lifecycleTestRuntime,
 }));
 
+// mock-isolation: These service tests use valid config; preflight has its own guard tests.
+vi.mock("./lifecycle-action-preflight.js", () => ({
+  getServiceActionPreflightFailure: async () => null,
+}));
+
 vi.mock("../../infra/restart-intent.js", () => ({
   prepareGatewayRestartIntentLegacyProcess: async () => undefined,
   clearGatewayRestartIntentSync: () => clearGatewayRestartIntentSync(),

@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { expect, it, vi } from "vitest";
 import { getWorkerPlacementStartupMocks } from "./server-worker-placement-startup.test-harness.js";
 
 const { runtimeFactoryMocks } = getWorkerPlacementStartupMocks();
@@ -18,322 +18,214 @@ import {
 } from "../test-utils/gateway-scheduler-clock.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { createGatewayWorkerPlacementRuntime } from "./server-worker-placement-startup.js";
+import {
+  createIdleDiskSpace,
+  createRuntimeFactory,
+  placementAsyncDefaults,
+  setDispatchMock,
+  startRuntime as startSidecar,
+} from "./server-worker-placement.test-support.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
+import { sessionIdentity } from "./worker-environments/placement-suite.test-support.js";
 
-describe("worker placement session events", () => {
-  it("retires changed placements after real placement and session writes without idle rescans", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-      const time = createGatewaySchedulerClock();
-      const placements = createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase(),
-      });
-      const identity = {
-        sessionId: "session-retirement-current",
-        sessionKey: "agent:main:retirement-current",
-        agentId: "main",
-      };
-      const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
-      await upsertSessionEntryCore(
-        { ...identity, storePath },
-        { sessionId: identity.sessionId, updatedAt: Date.now() },
-      );
-      const claim = await placements.claimTurn({
-        ...identity,
-        claimId: "retirement-current-claim",
-        runId: "retirement-current-run",
-        owner: { kind: "local" },
-      });
-      await placements.releaseTurn(claim);
-      const evidence = await vi.importActual<
-        typeof import("./server-worker-placement-session-evidence.js")
-      >("./server-worker-placement-session-evidence.js");
-      runtimeFactoryMocks.createSessionEvidenceResolver.mockImplementation(
-        evidence.createWorkerPlacementSessionEvidenceResolver,
-      );
-      const list = vi.spyOn(placements, "listAsync");
-      let reconciled = createDeferredCore();
-      runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-        read: vi.fn(),
-        version: () => 0,
-        invalidate: vi.fn(),
-        nextSweepAtMs: () => Infinity,
-        sweep: vi.fn().mockResolvedValue(undefined),
-      });
-      runtimeFactoryMocks.createDispatch.mockReturnValue({
-        dispatch: vi.fn(),
-        forceDestroyEnvironment: vi.fn(),
-        reclaim: vi.fn(),
-        reconcile: vi.fn().mockResolvedValue(undefined),
-        reconcileActive: vi.fn(async () => reconciled.resolve()),
-      });
-      const warn = vi.fn();
-      const runtime = createGatewayWorkerPlacementRuntime({
-        initialPlacements: [],
-        scheduler: createTestGatewayScheduler(time.clock),
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        cancelSessionWork: vi.fn(async () => {}),
-        placements,
-        environments: {
-          subscribeMachineShapeChanged: () => () => {},
-          installReconcileEnvironmentGuard: () => () => {},
-          start() {},
-          isStopping: () => false,
-          beginClose() {},
-          stop: async () => {},
-        } as never,
-        gatewayNamespace: "gateway-test",
-        revokeSessionAuthority: vi.fn(),
-        warn,
-      });
-      const sidecar = await runtime.startRuntime({
-        isClosePreludeStarted: () => false,
-        registerSidecar: vi.fn(),
-        unregisterSidecar: vi.fn(),
-      });
-      try {
-        await time.advanceBy(60_000);
-        await time.advanceBy(60_000);
-        expect(list).toHaveBeenCalledOnce();
-        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenCalledOnce();
-        expect(await placements.getAsync(identity.sessionId)).toMatchObject(identity);
+type RuntimeOptions = Parameters<typeof createGatewayWorkerPlacementRuntime>[0];
+const createRuntime = createRuntimeFactory(createGatewayWorkerPlacementRuntime, getRuntimeConfig);
 
-        sessionChanges.emit({ all: true, scope: "worker-placements" });
-        sessionChanges.emit({ all: true, scope: "config-presentation" });
-        sessionChanges.emit({
-          sessionKey: identity.sessionKey,
-          scope: "transcript",
-          factsInvalidated: true,
-        });
-        await time.advanceBy(60_000);
-        expect(list).toHaveBeenCalledOnce();
-        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenCalledOnce();
+async function releaseLocalTurn(
+  placements: RuntimeOptions["placements"],
+  identity: ReturnType<typeof sessionIdentity>,
+) {
+  await placements.releaseTurn(
+    await placements.claimTurn({
+      ...identity,
+      claimId: `${identity.sessionId}-claim`,
+      runId: `${identity.sessionId}-run`,
+      owner: { kind: "local" },
+    }),
+  );
+}
 
-        const invalidations: SessionRowChange[] = [
-          { all: true, scope: "config" },
-          { ...identity, factsInvalidated: true },
-        ];
-        for (const [index, change] of invalidations.entries()) {
-          sessionChanges.emit(change);
-          await time.advanceBy(60_000);
-          expect(list).toHaveBeenCalledTimes(2 + index);
-        }
-
-        const orphan = {
-          sessionId: "session-retirement-orphan",
-          sessionKey: "agent:main:retirement-orphan",
-          agentId: "main",
-        };
-        const orphanClaim = await placements.claimTurn({
-          ...orphan,
-          claimId: "retirement-orphan-claim",
-          runId: "retirement-orphan-run",
-          owner: { kind: "local" },
-        });
-        await placements.releaseTurn(orphanClaim);
-        await time.advanceBy(60_000);
-        expect(await placements.getAsync(orphan.sessionId)).toBeUndefined();
-        expect(await placements.getAsync(identity.sessionId)).toMatchObject(identity);
-        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith(
-          [expect.objectContaining(orphan)],
-          expect.any(AbortSignal),
-        );
-        expect(list).toHaveBeenCalledTimes(3);
-
-        reconciled = createDeferredCore();
-        await deleteSessionEntryLifecycle({
-          agentId: identity.agentId,
-          storePath,
-          archiveTranscript: false,
-          target: { canonicalKey: identity.sessionKey, storeKeys: [identity.sessionKey] },
-        });
-        await reconciled.promise;
-        expect(await placements.getAsync(identity.sessionId)).toBeUndefined();
-        expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith(
-          [expect.objectContaining(identity)],
-          expect.any(AbortSignal),
-        );
-        expect(list).toHaveBeenCalledTimes(3);
-        expect(warn).not.toHaveBeenCalled();
-      } finally {
-        await sidecar?.stop();
-      }
-    });
+function emitDeletion(databaseIdentity: symbol) {
+  emitSessionIdentityMutation({
+    kind: "delete",
+    agentId: "main",
+    databaseIdentity,
+    previous: { sessionId: "retired-session", sessionKeys: ["agent:main:retired"] },
   });
+}
 
-  it("finishes background reconciliation after the notifying session request closes", async () => {
-    await withOpenClawTestState({ scenario: "minimal" }, async () => {
-      const time = createGatewaySchedulerClock();
-      const scheduler = createTestGatewayScheduler(time.clock);
-      const placements = createWorkerSessionPlacementStore({
-        database: openOpenClawStateDatabase(),
-      });
-      let completed = createDeferredCore<boolean>();
-      const reconcileActive = vi.fn(async () => {
-        try {
-          await placements.readRecoveryCandidates();
-          completed.resolve(true);
-        } catch (error) {
-          completed.resolve(false);
-          throw error;
-        }
-      });
-      runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-        read: vi.fn(),
-        version: () => 0,
-        invalidate: vi.fn(),
-        nextSweepAtMs: () => Infinity,
-        sweep: vi.fn().mockResolvedValue(undefined),
-      });
-      runtimeFactoryMocks.createDispatch.mockReturnValue({
-        dispatch: vi.fn(),
-        forceDestroyEnvironment: vi.fn(),
-        reclaim: vi.fn(),
-        reconcile: vi.fn().mockResolvedValue(undefined),
-        reconcileActive,
-      });
-      const warn = vi.fn();
-      const runtime = createGatewayWorkerPlacementRuntime({
-        initialPlacements: [],
-        scheduler,
-        getCommittedRuntimeConfig: getRuntimeConfig,
-        cancelSessionWork: vi.fn(async () => {}),
-        placements: {
-          subscribeChanges: () => () => {},
-          workspaceResultInstanceId: () => "gateway-test",
-          getAsync: async () => undefined,
-          getManyAsync: async () => new Map(),
-          listAsync: async () => [],
-          retireSessionPlacementAsync: vi.fn(async () => {}),
-          pruneOrphanedWorkspaceReconciliations: async () => [],
-          listWorkspaceReconciliationOwners: async () => [],
-          listPendingWorkspaceResultsAsync: async () => [],
-        } as never,
-        environments: {
-          subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
-          installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
-          start: vi.fn(),
-          isStopping: () => false,
-          beginClose: vi.fn(),
-          stop: vi.fn().mockResolvedValue(undefined),
-        } as never,
-        gatewayNamespace: "gateway-test",
-        revokeSessionAuthority: vi.fn(),
-        warn,
-      });
-      const sidecar = await runtime.startRuntime({
-        isClosePreludeStarted: () => false,
-        registerSidecar: vi.fn(),
-        unregisterSidecar: vi.fn(),
-      });
-      try {
-        await time.advanceBy(60_000);
-        reconcileActive.mockClear();
-        completed = createDeferredCore<boolean>();
-        const request = new AsyncWorkScope();
-        request.run(() =>
-          emitSessionIdentityMutation({
-            kind: "delete",
-            agentId: "main",
-            databaseIdentity: Symbol("session-database"),
-            previous: { sessionId: "retired-session", sessionKeys: ["agent:main:retired"] },
-          }),
-        );
-        await request.drain();
-        expect(await completed.promise).toBe(true);
-        expect(reconcileActive).toHaveBeenCalledOnce();
-        expect(warn).not.toHaveBeenCalled();
-      } finally {
-        await sidecar?.stop();
-      }
-    });
+function startRuntime(
+  time: ReturnType<typeof createGatewaySchedulerClock>,
+  reconcileActive: () => Promise<void>,
+  warn: RuntimeOptions["warn"],
+  placements: RuntimeOptions["placements"] = placementAsyncDefaults() as never,
+) {
+  runtimeFactoryMocks.createDiskSpace.mockReturnValue({
+    ...createIdleDiskSpace(),
+    version: () => 0,
   });
-
-  it("reports a failed reconciliation queued by a session change without leaking rejection", async () => {
-    const time = createGatewaySchedulerClock();
-    const scheduler = createTestGatewayScheduler(time.clock);
-    const databaseIdentity = Symbol("worker-placement-database");
-    const releaseReconcile = createDeferredCore();
-    const reconcileStarted = createDeferredCore();
-    const failureReported = createDeferredCore();
-    const reconcileActive = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
-    runtimeFactoryMocks.createDiskSpace.mockReturnValue({
-      read: vi.fn(),
-      version: () => 0,
-      invalidate: vi.fn(),
-      nextSweepAtMs: () => Infinity,
-      sweep: vi.fn().mockResolvedValue(undefined),
-    });
-    runtimeFactoryMocks.createDispatch.mockReturnValue({
-      dispatch: vi.fn(),
-      forceDestroyEnvironment: vi.fn(),
-      reclaim: vi.fn(),
-      reconcile: vi.fn().mockResolvedValue(undefined),
-      reconcileActive,
-    });
-    const warn = vi.fn(() => failureReported.resolve());
-    const runtime = createGatewayWorkerPlacementRuntime({
-      initialPlacements: [],
-      scheduler,
-      getCommittedRuntimeConfig: getRuntimeConfig,
-      cancelSessionWork: vi.fn(async () => {}),
-      placements: {
-        subscribeChanges: () => () => {},
-        workspaceResultInstanceId: () => "gateway-test",
-        getAsync: async () => undefined,
-        getManyAsync: async () => new Map(),
-        listAsync: async () => [],
-        retireSessionPlacementAsync: vi.fn(async () => {}),
-        pruneOrphanedWorkspaceReconciliations: async () => [],
-        listWorkspaceReconciliationOwners: async () => [],
-        listPendingWorkspaceResultsAsync: async () => [],
-      } as never,
-      environments: {
-        subscribeMachineShapeChanged: vi.fn(() => vi.fn()),
-        installReconcileEnvironmentGuard: vi.fn(() => vi.fn()),
-        start: vi.fn(),
-        isStopping: () => false,
-        beginClose: vi.fn(),
-        stop: vi.fn().mockResolvedValue(undefined),
-      } as never,
-      gatewayNamespace: "gateway-test",
-      revokeSessionAuthority: vi.fn(),
+  setDispatchMock(runtimeFactoryMocks.createDispatch, { reconcileActive });
+  return startSidecar(
+    createRuntime({
+      scheduler: createTestGatewayScheduler(time.clock),
+      placements,
       warn,
+    }),
+  );
+}
+
+it("retires changed placements after real placement and session writes without idle rescans", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+    const time = createGatewaySchedulerClock();
+    const placements = createWorkerSessionPlacementStore({
+      database: openOpenClawStateDatabase(),
     });
-    const sidecar = await runtime.startRuntime({
-      isClosePreludeStarted: () => false,
-      registerSidecar: vi.fn(),
-      unregisterSidecar: vi.fn(),
-    });
-    let scheduledWake: void | Promise<void> = undefined;
+    const identity = sessionIdentity("retirement-current");
+    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    await upsertSessionEntryCore(
+      { ...identity, storePath },
+      { sessionId: identity.sessionId, updatedAt: Date.now() },
+    );
+    await releaseLocalTurn(placements, identity);
+    const evidence = await vi.importActual<
+      typeof import("./server-worker-placement-session-evidence.js")
+    >("./server-worker-placement-session-evidence.js");
+    runtimeFactoryMocks.createSessionEvidenceResolver.mockImplementation(
+      evidence.createWorkerPlacementSessionEvidenceResolver,
+    );
+    const list = vi.spyOn(placements, "listAsync");
+    let reconciled = createDeferredCore();
+    const warn = vi.fn();
+    const sidecar = await startRuntime(
+      time,
+      vi.fn(async () => reconciled.resolve()),
+      warn,
+      placements,
+    );
     try {
       await time.advanceBy(60_000);
-      expect(warn).not.toHaveBeenCalled();
-      reconcileActive.mockClear();
-      reconcileActive
-        .mockImplementationOnce(() => {
-          reconcileStarted.resolve();
-          return releaseReconcile.promise;
-        })
-        .mockRejectedValue(new Error("Worker environment inventory has closed"));
-      scheduledWake = time.advanceBy(60_000);
-      await reconcileStarted.promise;
-      expect(reconcileActive).toHaveBeenCalledOnce();
-      emitSessionIdentityMutation({
-        kind: "delete",
-        agentId: "main",
-        databaseIdentity,
-        previous: { sessionId: "retired-session", sessionKeys: ["agent:main:retired"] },
+      await time.advanceBy(60_000);
+      expect(list).toHaveBeenCalledOnce();
+      expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenCalledOnce();
+      expect(await placements.getAsync(identity.sessionId)).toMatchObject(identity);
+
+      sessionChanges.emit({ all: true, scope: "worker-placements" });
+      sessionChanges.emit({ all: true, scope: "config-presentation" });
+      sessionChanges.emit({
+        sessionKey: identity.sessionKey,
+        scope: "transcript",
+        factsInvalidated: true,
       });
-      releaseReconcile.resolve();
-      await failureReported.promise;
-      expect(reconcileActive).toHaveBeenCalledTimes(2);
-      expect(warn).toHaveBeenCalledWith(
-        "Worker placement reconcile sweep failed: Worker environment inventory has closed",
+      await time.advanceBy(60_000);
+      expect(list).toHaveBeenCalledOnce();
+      expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenCalledOnce();
+
+      const invalidations: SessionRowChange[] = [
+        { all: true, scope: "config" },
+        { ...identity, factsInvalidated: true },
+      ];
+      for (const [index, change] of invalidations.entries()) {
+        sessionChanges.emit(change);
+        await time.advanceBy(60_000);
+        expect(list).toHaveBeenCalledTimes(2 + index);
+      }
+
+      const orphan = sessionIdentity("retirement-orphan");
+      await releaseLocalTurn(placements, orphan);
+      await time.advanceBy(60_000);
+      expect(await placements.getAsync(orphan.sessionId)).toBeUndefined();
+      expect(await placements.getAsync(identity.sessionId)).toMatchObject(identity);
+      expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith(
+        [expect.objectContaining(orphan)],
+        expect.any(AbortSignal),
       );
+      expect(list).toHaveBeenCalledTimes(3);
+
+      reconciled = createDeferredCore();
+      await deleteSessionEntryLifecycle({
+        agentId: identity.agentId,
+        storePath,
+        archiveTranscript: false,
+        target: { canonicalKey: identity.sessionKey, storeKeys: [identity.sessionKey] },
+      });
+      await reconciled.promise;
+      expect(await placements.getAsync(identity.sessionId)).toBeUndefined();
+      expect(runtimeFactoryMocks.createSessionEvidenceResolver).toHaveBeenLastCalledWith(
+        [expect.objectContaining(identity)],
+        expect.any(AbortSignal),
+      );
+      expect(list).toHaveBeenCalledTimes(3);
+      expect(warn).not.toHaveBeenCalled();
     } finally {
-      releaseReconcile.resolve();
       await sidecar?.stop();
-      await scheduledWake;
     }
-  });
+  }));
+
+it("finishes background reconciliation after the notifying session request closes", () =>
+  withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const time = createGatewaySchedulerClock();
+    const placements = createWorkerSessionPlacementStore({
+      database: openOpenClawStateDatabase(),
+    });
+    let completed = createDeferredCore<boolean>();
+    const reconcileActive = vi.fn(async () => {
+      try {
+        await placements.readRecoveryCandidates();
+        completed.resolve(true);
+      } catch (error) {
+        completed.resolve(false);
+        throw error;
+      }
+    });
+    const warn = vi.fn();
+    const sidecar = await startRuntime(time, reconcileActive, warn);
+    try {
+      await time.advanceBy(60_000);
+      reconcileActive.mockClear();
+      completed = createDeferredCore<boolean>();
+      const request = new AsyncWorkScope();
+      request.run(() => emitDeletion(Symbol("session-database")));
+      await request.drain();
+      expect(await completed.promise).toBe(true);
+      expect(reconcileActive).toHaveBeenCalledOnce();
+      expect(warn).not.toHaveBeenCalled();
+    } finally {
+      await sidecar?.stop();
+    }
+  }));
+
+it("reports a failed reconciliation queued by a session change without leaking rejection", async () => {
+  const time = createGatewaySchedulerClock();
+  const releaseReconcile = createDeferredCore();
+  const reconcileStarted = createDeferredCore();
+  const failureReported = createDeferredCore();
+  const reconcileActive = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+  const warn = vi.fn(() => failureReported.resolve());
+  const sidecar = await startRuntime(time, reconcileActive, warn);
+  let scheduledWake: void | Promise<void> = undefined;
+  try {
+    await time.advanceBy(60_000);
+    expect(warn).not.toHaveBeenCalled();
+    reconcileActive.mockClear();
+    reconcileActive
+      .mockImplementationOnce(() => {
+        reconcileStarted.resolve();
+        return releaseReconcile.promise;
+      })
+      .mockRejectedValue(new Error("Worker environment inventory has closed"));
+    scheduledWake = time.advanceBy(60_000);
+    await reconcileStarted.promise;
+    expect(reconcileActive).toHaveBeenCalledOnce();
+    emitDeletion(Symbol("worker-placement-database"));
+    releaseReconcile.resolve();
+    await failureReported.promise;
+    expect(reconcileActive).toHaveBeenCalledTimes(2);
+    expect(warn).toHaveBeenCalledWith(
+      "Worker placement reconcile sweep failed: Worker environment inventory has closed",
+    );
+  } finally {
+    releaseReconcile.resolve();
+    await sidecar?.stop();
+    await scheduledWake;
+  }
 });

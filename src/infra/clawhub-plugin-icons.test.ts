@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { fetchClawHubPluginIconUrls } from "./clawhub-plugin-icons.js";
 
 const packageName = "@acme/calendar";
@@ -9,6 +9,8 @@ const packageMetadata = {
   isOfficial: false,
 };
 
+afterEach(() => vi.restoreAllMocks());
+
 describe("ClawHub plugin branding metadata", () => {
   it.each([null, `/api/v1/skill-icons/${"a".repeat(64)}`, "https://cdn.example/icon.png"])(
     "reads package icon %s and publisher image in order through one exact public request",
@@ -17,11 +19,11 @@ describe("ClawHub plugin branding metadata", () => {
       const fetchImpl = vi.fn(async () =>
         Response.json({ package: { ...packageMetadata, icon }, owner: { image } }),
       );
+      vi.spyOn(globalThis, "fetch").mockImplementation(fetchImpl);
       const result = await fetchClawHubPluginIconUrls({
         packageName,
         baseUrl: "https://clawhub.ai",
         skipAuth: true,
-        fetchImpl,
       });
       expect(result).toEqual(
         icon ? [icon.startsWith("/") ? `https://clawhub.ai${icon}` : icon, image] : [image],
@@ -34,12 +36,13 @@ describe("ClawHub plugin branding metadata", () => {
   );
 
   it("rejects a different returned package identity", async () => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () =>
+      Response.json({ package: { ...packageMetadata, name: "@other/calendar" } }),
+    );
     await expect(
       fetchClawHubPluginIconUrls({
         packageName,
         skipAuth: true,
-        fetchImpl: async () =>
-          Response.json({ package: { ...packageMetadata, name: "@other/calendar" } }),
       }),
     ).rejects.toThrow("changed the requested package identity");
   });

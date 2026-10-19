@@ -20,6 +20,7 @@ import type { CliOutput, CliTerminalInterruption } from "../cli-output-contracts
 import { transformCliResultText } from "../cli-output-results.js";
 import { createCliJsonlStreamingParser } from "../cli-output-stream.js";
 import { parseCliOutput } from "../cli-output.js";
+import { EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS } from "../embedded-agent-runner/run/lane-runtime.js";
 import type { FailoverError } from "../failover-error.js";
 import { CLI_PARTIAL_OUTPUT_REJECTED_ERROR_CODE } from "../failover/error.js";
 import type { CliExecuteDeps } from "./execute-deps.js";
@@ -91,7 +92,11 @@ export async function executeCliProcess(params: {
     sessionId: runParams.sessionId,
     lane: runParams.lane,
   };
-  const outputErrorContext = { ...failoverContext, runId: runParams.runId };
+  const outputErrorContext = {
+    ...failoverContext,
+    runId: runParams.runId,
+    classifyErrorCode: context.backendResolved.classifyErrorCode,
+  };
   // buildCliArgs emits this option only for an actual checkpointed resume.
   const resumeAtArg =
     params.useResume && runParams.cliSessionResumeAt ? params.backend.resumeAtArg : undefined;
@@ -177,7 +182,7 @@ export async function executeCliProcess(params: {
   // Only the core lifecycle owner may publish recovery facts. Plugin records
   // carry output, never the authority or deadline used to protect its execution.
   const reportStreamProgress = createModelCallStreamProgressReporter({
-    recordProgress: () => backendActivity?.observeOutput(true) ?? false,
+    recordProgress: () => backendActivity?.observeOutput(false) ?? false,
     target: {
       runId: runParams.runId,
       ...(runParams.sessionKey ? { sessionKey: runParams.sessionKey } : {}),
@@ -229,6 +234,9 @@ export async function executeCliProcess(params: {
   runParams.assertCurrent?.();
   params.diagnostics?.observeRequestPayload(params.stdin ?? params.argsPrompt ?? "");
   params.assertCurrent();
+  runParams.diagnosticOwner?.watchdogAttempt?.setExecutionDeadline(
+    Date.now() + runParams.timeoutMs + EMBEDDED_RUN_LANE_TIMEOUT_GRACE_MS,
+  );
   const backendActivity = runParams.diagnosticOwner
     ? beginDiagnosticBackendActivity({
         owner: runParams.diagnosticOwner,
@@ -276,10 +284,10 @@ export async function executeCliProcess(params: {
         onOutstandingWorkChange: backendActivity?.setOutstandingWork,
         activeToolCount: params.events.activeParsedToolCount,
         compactionActive: params.events.hasActiveCompaction,
-        onCompactionActiveChange: params.events.onCompactionActiveChange,
+        setOnCompactionActiveChange: params.events.setOnCompactionActiveChange,
         getActiveLoopbackAskUserDeadline: params.toolTracking.getActiveLoopbackAskUserDeadline,
-        onActiveLoopbackAskUserDeadlineChange:
-          params.toolTracking.onActiveLoopbackAskUserDeadlineChange,
+        setOnActiveLoopbackAskUserDeadlineChange:
+          params.toolTracking.setOnActiveLoopbackAskUserDeadlineChange,
         onNoOutputTimeout: (error) => {
           pluginTimeout.error = error;
         },
@@ -304,6 +312,8 @@ export async function executeCliProcess(params: {
         mcpCapture: {
           captureKey: params.initialGatewayCaptureKey,
           beginCapture: params.toolTracking.beginGatewayCapture,
+          registerTurnInterrupt: params.toolTracking.registerTurnInterrupt,
+          waitForTurnInterrupt: params.toolTracking.waitForTurnInterrupt,
         },
         ...(params.useManagedClaudeLiveSession
           ? {
@@ -560,6 +570,7 @@ export async function executeCliProcess(params: {
     const stderr = Buffer.concat(stderrCapture.chunks, stderrCapture.bytes).toString("utf8").trim();
     throw createCliExitFailoverError({
       context: failoverContext,
+      classifyErrorCode: context.backendResolved.classifyErrorCode,
       candidates: [stderr, readStdout(), stderrDiagnostic, stdoutDiagnostic],
       fallbackMessage: "CLI failed.",
       retryEmptyFailure,

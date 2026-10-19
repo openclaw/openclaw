@@ -3,7 +3,7 @@ import type { UserModelAccount } from "../../../../packages/gateway-protocol/src
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
-import { renderControl } from "./model-control.test-support.ts";
+import { renderControl, waitForModelControl } from "./model-control.test-support.ts";
 
 let releaseAccount: (() => void) | undefined;
 beforeEach(() => {
@@ -92,7 +92,13 @@ function accountTitleFixture(preview?: ReturnType<typeof createDeferred<ModelCat
     titleRequest,
     select,
     chooseAccount: async (account: UserModelAccount) => {
-      draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+      const container = await waitForModelControl(
+        place.modelControl,
+        context,
+        "main",
+        place.selectedAgent(),
+      );
+      container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.advanceTimersByTimeAsync(0);
       expect(draw().textContent).toContain(account.label);
       select(`account:${account.authProfileId}`);
@@ -121,7 +127,10 @@ it("keeps a title handoff on the selected draft account before update", async ()
     expect.objectContaining({
       model: `test/primary@${accounts[1].authProfileId}`,
     }),
-    { reconciliation: "background" },
+    {
+      reconciliation: "background",
+      signal: expect.any(AbortSignal),
+    },
   );
   expect(createdParams(context)).not.toHaveProperty("displayName");
 });
@@ -191,7 +200,10 @@ it.each(["explicit worktree", "pending", "incognito", "retry", "stale"] as const
           displayName: "Repair naming",
           worktreeName: "my-explicit-branch",
         }),
-        { reconciliation: "background" },
+        {
+          reconciliation: "background",
+          signal: expect.any(AbortSignal),
+        },
       );
     } else if (state === "retry") {
       await flow.submit();

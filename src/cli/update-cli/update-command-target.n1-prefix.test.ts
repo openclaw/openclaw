@@ -241,11 +241,7 @@ it.each([
       nodeService ? ["/old/node"] : [],
     );
     if (!nodeService) {
-      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(
-        runner,
-        undefined,
-        buildRuntimeProbeEnv(process.env),
-      );
+      expect(resolveBunRuntimeInfo).toHaveBeenCalledWith(runner, buildRuntimeProbeEnv(process.env));
     }
   },
 );

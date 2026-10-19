@@ -13,6 +13,7 @@ import {
 } from "../../admitted-run-context.js";
 import { shouldAllowProviderOwnedThinkingReplay } from "../../embedded-agent-helpers/turns.js";
 import { wrapStreamFnTextTransforms } from "../../plugin-text-transforms.js";
+import { resolveModelCallUrgency } from "../../run-trigger.js";
 import type { StreamFn } from "../../runtime/index.js";
 import { setInternalRepetitionGuard } from "../../runtime/internal-hooks.js";
 import { withSessionManagerWrite } from "../../sessions/session-manager-write-admission.js";
@@ -197,8 +198,15 @@ export function installEmbeddedAttemptStreamGuards(
     }
   };
   const providerPromptState = getProviderPromptState(attempt.runId);
+  // Turn facts attribute a prefix change to the kind of turn that caused it.
+  const turnFacts =
+    `trigger=${attempt.trigger ?? "unknown"} ` +
+    `provenance=${attempt.inputProvenance?.kind ?? "none"}${attempt.inputProvenance?.sourceTool ? `:${attempt.inputProvenance.sourceTool}` : ""} ` +
+    `replyMode=${attempt.sourceReplyDeliveryMode ?? "unset"} ` +
+    `senderIsOwner=${attempt.senderIsOwner ?? "unset"}`;
   const cacheObserver = createPromptCacheRequestObserver(
     {
+      turn: turnFacts,
       sessionId: attempt.sessionId,
       sessionKey: attempt.sessionKey,
       promptCacheKey: attempt.promptCacheKey,
@@ -216,6 +224,7 @@ export function installEmbeddedAttemptStreamGuards(
             `runId=${attempt.runId} request=${observation.requestIndex} for ${snapshot.provider}/${snapshot.modelId} via ${streamStrategy}; ${changes}; ` +
             `requestGapMs=${observation.requestGapMs ?? "unknown"} promptTokens=${observation.promptTokens ?? "unknown"} ` +
             `responseId=${observation.responseId ?? "unknown"} sessionId=${attempt.sessionId} ` +
+            `${turnFacts} ` +
             `providerPrefix=${observation.providerPrefix ?? "unavailable"} ` +
             `requests=${JSON.stringify(observation.requests)}`,
         );
@@ -400,6 +409,7 @@ export function installEmbeddedAttemptStreamGuards(
     config: attempt.config,
     runId: attempt.runId,
     agentId: sessionAgentId,
+    priority: resolveModelCallUrgency(attempt) === "foreground" ? "interactive" : "background",
     ...(attempt.sessionKey && { sessionKey: attempt.sessionKey }),
     ...(attempt.sessionId && { sessionId: attempt.sessionId }),
     provider: attempt.provider,
@@ -422,6 +432,7 @@ export function installEmbeddedAttemptStreamGuards(
     contentCapture: resolveDiagnosticModelContentCapturePolicy(attempt.config),
     nextCallId: () => `${attempt.runId}:model:${(modelCallSequence.value += 1)}`,
     ownerGeneration: callbacks.diagnosticOwner.generation,
+    diagnosticOwner: callbacks.diagnosticOwner,
     onAgentEvent: attempt.onAgentEvent,
     onSucceeded: contextGuards.recordCacheTouch,
     onTerminal: () => {

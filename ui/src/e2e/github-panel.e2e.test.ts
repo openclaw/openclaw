@@ -61,7 +61,7 @@ const issue = {
   commentsTotal: 1,
 } satisfies ControlUiLinkReaderDocument;
 const file = {
-  path: "ui/src/components/link-reader-panel.ts",
+  path: "ui/src/components/link-reader-panel.tsx",
   status: "modified",
   additions: 3,
   deletions: 1,

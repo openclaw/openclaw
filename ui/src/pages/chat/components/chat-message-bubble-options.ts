@@ -50,7 +50,7 @@ export type GroupedMessageOptions = {
   isToolExpanded?: (toolCardId: string) => boolean;
   onToggleToolExpanded?: (toolCardId: string, expanded?: boolean) => void;
   toolCardOverrides?: ReadonlyMap<ToolCard, ActivityOperationProps | null>;
-  onRequestUpdate?: () => void;
+  mediaOwner?: object;
   canvasPluginSurfaceUrl?: string | null;
   resourceBasePath?: string;
   mediaPolicyKey?: string;
@@ -75,8 +75,6 @@ export type GroupedMessageOptions = {
   fileLinkSessionKey?: string;
   avatar?: () => JSX.Element;
   entryId?: string;
-  /** Freshly submitted user turn: play the one-shot composer entry animation. */
-  entryRef?: (element?: Element) => void;
   /** This message's own "Replying to" line, drawn inside the bubble. */
   replyLine?: ReplyLine;
   onOpenReply?: (replyToId: string) => void;

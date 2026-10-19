@@ -1,10 +1,7 @@
 import type { IncomingMessage, ServerResponse } from "node:http";
 import { resolveHumanDelayConfig } from "openclaw/plugin-sdk/agent-runtime";
 import { pruneMapToMaxSize } from "openclaw/plugin-sdk/collection-runtime";
-import {
-  asDateTimestampMs,
-  resolveExpiresAtMsFromDurationMs,
-} from "openclaw/plugin-sdk/number-runtime";
+import { sendJson } from "openclaw/plugin-sdk/http-response-runtime";
 import { finalizeInboundContext } from "openclaw/plugin-sdk/reply-runtime";
 import { safeEqualSecret } from "openclaw/plugin-sdk/security-runtime";
 import type { ResolvedMattermostAccount } from "../mattermost/accounts.js";
@@ -80,9 +77,7 @@ const commandValidationFailureCache = new Map<string, { accountId: string; expir
 const commandValidationLookupRateLimit = new Map<string, CommandValidationRateLimitEntry>();
 
 export function sendSlashCommandResponse(res: ServerResponse, status: number, text: string) {
-  res.statusCode = status;
-  res.setHeader("Content-Type", "application/json; charset=utf-8");
-  res.end(JSON.stringify({ response_type: "ephemeral", text }));
+  sendJson(res, status, { response_type: "ephemeral", text });
 }
 
 export async function readSlashCommandBody(
@@ -154,14 +149,8 @@ export function clearMattermostSlashCommandValidationCacheForAccount(accountId: 
 }
 
 function sweepCommandValidationFailureCache(now = Date.now()): void {
-  const validNow = asDateTimestampMs(now);
-  if (validNow === undefined) {
-    commandValidationFailureCache.clear();
-    return;
-  }
   for (const [key, entry] of commandValidationFailureCache) {
-    const expiresAt = asDateTimestampMs(entry.expiresAt);
-    if (expiresAt === undefined || expiresAt <= validNow) {
+    if (entry.expiresAt <= now) {
       commandValidationFailureCache.delete(key);
     }
   }
@@ -176,29 +165,16 @@ function hasCachedCommandValidationFailure(key: string, now = Date.now()): boole
 function cacheCommandValidationFailure(key: string, accountId: string): void {
   const now = Date.now();
   sweepCommandValidationFailureCache(now);
-  const expiresAt = resolveExpiresAtMsFromDurationMs(COMMAND_VALIDATION_FAILURE_CACHE_MS, {
-    nowMs: now,
-  });
-  if (expiresAt === undefined) {
-    commandValidationFailureCache.delete(key);
-    return;
-  }
   commandValidationFailureCache.set(key, {
     accountId,
-    expiresAt,
+    expiresAt: now + COMMAND_VALIDATION_FAILURE_CACHE_MS,
   });
 }
 
 function sweepCommandValidationLookupRateLimit(now = Date.now()): void {
-  const validNow = asDateTimestampMs(now);
-  if (validNow === undefined) {
-    commandValidationLookupRateLimit.clear();
-    return;
-  }
   const staleAfterMs = COMMAND_VALIDATION_LOOKUP_REFILL_MS * COMMAND_VALIDATION_LOOKUP_BURST * 2;
   for (const [key, entry] of commandValidationLookupRateLimit) {
-    const updatedAt = asDateTimestampMs(entry.updatedAt);
-    if (updatedAt === undefined || validNow - updatedAt > staleAfterMs) {
+    if (now - entry.updatedAt > staleAfterMs) {
       commandValidationLookupRateLimit.delete(key);
     }
   }
@@ -211,14 +187,8 @@ function sweepCommandValidationLookupRateLimit(now = Date.now()): void {
 function reserveCommandValidationLookup(params: {
   key: string;
   accountId: string;
-  now?: number;
 }): { allowed: true } | { allowed: false; shouldLog: boolean } {
-  const rawNow = params.now ?? Date.now();
-  const now = asDateTimestampMs(rawNow);
-  if (now === undefined) {
-    commandValidationLookupRateLimit.clear();
-    return { allowed: true };
-  }
+  const now = Date.now();
   sweepCommandValidationLookupRateLimit(now);
   const existing = commandValidationLookupRateLimit.get(params.key);
   if (!existing) {

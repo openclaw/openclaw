@@ -164,7 +164,7 @@ describe("OpenAI-compatible image URL responses", () => {
   });
 
   it("rejects streamed downloads above the generated image download ceiling", async () => {
-    imageBytes = new Uint8Array(33 * 1024 * 1024);
+    imageBytes = new Uint8Array(65 * 1024 * 1024);
     await expect(generate()).rejects.toThrow(/exceeds|too large/i);
   });
 

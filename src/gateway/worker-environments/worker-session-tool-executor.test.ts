@@ -860,7 +860,7 @@ describe("worker spawn startup composition", () => {
             getPluginRegistry: () => registry,
             getPortalRuntime: () => undefined,
             resolveGatewayContext,
-            desktopSessionRegistry: createDesktopSessionRegistry({ lingerMs: 1 }),
+            desktopSessionRegistry: createDesktopSessionRegistry(),
             startup: { ...startup, placementStore: placements },
             log: { child: () => ({ info: () => {}, warn: () => {} }) },
           });

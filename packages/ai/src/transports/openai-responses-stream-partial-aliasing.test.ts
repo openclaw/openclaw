@@ -1,8 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { createResponsesAssistantOutput } from "../providers/openai-responses-shared.js";
-import type { AssistantMessage, AssistantMessageEvent, Model, TextContent } from "../types.js";
+import type { AssistantMessage, AssistantMessageEvent, Model } from "../types.js";
 import { AssistantMessageEventStream } from "../utils/event-stream.js";
 import { processResponsesStream } from "./openai-responses-stream-internal.js";
+import { expectReplaceAppendText, type TextOrDelta } from "./openai-stream-cases.test-support.js";
 
 // Regression for the responses-stream partial-snapshot aliasing defect
 // (observed in production 2026-10-14 as doubled first deltas on assistant
@@ -90,52 +91,6 @@ async function* sourceOf(events: readonly unknown[]) {
   }
 }
 
-type TextOrDelta = AssistantMessageEvent & {
-  partial?: AssistantMessage;
-  contentIndex?: number;
-  delta?: string;
-};
-
-/**
- * Mirrors the agent-core consumption contract
- * (agent-stream-response.ts resolveAssistantMessageUpdate): boundary events
- * with a partial replace the consumer state wholesale; text deltas append at
- * their content index. Deliberately guard-free — a correct stream never needs
- * the downstream replay guard. Returns the text observed before every append
- * so the caller can checkpoint intermediate states, not just the healed end.
- */
-function consumeLikeAgentCore(events: readonly AssistantMessageEvent[]): {
-  text: string;
-  prevBeforeAppend: string[];
-} {
-  let state: AssistantMessage | null = null;
-  const prevBeforeAppend: string[] = [];
-  for (const event of events) {
-    const typed = event as TextOrDelta;
-    if (typed.partial) {
-      state = typed.partial;
-      continue;
-    }
-    if (event.type === "text_delta") {
-      const content = [...(state?.content ?? [])];
-      const idx = typed.contentIndex ?? 0;
-      const current = content[idx] as TextContent | undefined;
-      const prev = current?.type === "text" ? current.text : "";
-      prevBeforeAppend.push(prev);
-      content[idx] =
-        current?.type === "text"
-          ? { ...current, text: prev + (typed.delta ?? "") }
-          : { type: "text", text: typed.delta ?? "" };
-      state = { ...(state ?? { content: [] }), content } as AssistantMessage;
-    }
-  }
-  const text = (state?.content ?? [])
-    .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
-    .map((block) => block.text)
-    .join("");
-  return { text, prevBeforeAppend };
-}
-
 describe("Responses stream partial snapshots", () => {
   it("consumer replace/append state stays byte-exact with the wire text", async () => {
     const run = async (firstDelta: string) => {
@@ -160,22 +115,7 @@ describe("Responses stream partial snapshots", () => {
 
     for (const firstDelta of [WIRE_TEXT.slice(0, 9), WIRE_TEXT.slice(0, 2)]) {
       const { emitted, output } = await run(firstDelta);
-      const consumer = consumeLikeAgentCore(emitted);
-      // Intermediate checkpoints: before each append, the consumer state must
-      // equal exactly the wire text emitted so far — a delta that already sat
-      // in an aliased block would surface here as a doubled prefix, not only
-      // in the healed final text.
-      const deltas = emitted
-        .filter((event): event is typeof event & { delta: string } => event.type === "text_delta")
-        .map((event) => event.delta);
-      expect(consumer.prevBeforeAppend).toHaveLength(deltas.length);
-      let accumulated = "";
-      for (const [index, prev] of consumer.prevBeforeAppend.entries()) {
-        expect(prev).toBe(accumulated);
-        accumulated += deltas[index];
-      }
-      expect(accumulated).toBe(WIRE_TEXT);
-      expect(consumer.text).toBe(WIRE_TEXT);
+      expectReplaceAppendText(emitted, WIRE_TEXT);
       const transportText = output.content
         .filter((block): block is Extract<typeof block, { type: "text" }> => block.type === "text")
         .map((block) => block.text)

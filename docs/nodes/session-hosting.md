@@ -436,6 +436,14 @@ Restart the node host after changing either setting. Isolation defaults to
 enforced locally on the node; the Gateway cannot silently disable it or fall
 back to an unisolated worker.
 
+Isolation applies only to sessions placed on this node. When `sessions.dispatch`
+to the node is refused (for example, because no container engine works), the
+session stays unplaced, and its turns run on the Gateway like any other
+undispatched session. To forbid Gateway-local execution entirely, set
+[`cloudWorkers.requiredProfile`](/gateway/config-cloud-workers#required-worker-profile)
+to a device profile for this node; turns then fail with an actionable error
+instead of running on the Gateway.
+
 Container isolation is supported on Linux and macOS node hosts; Windows is
 unsupported because native Windows paths cannot be mounted at their original
 paths inside the container. The node must have a working Docker-compatible

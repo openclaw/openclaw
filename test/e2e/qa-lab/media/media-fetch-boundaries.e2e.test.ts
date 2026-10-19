@@ -1,61 +1,25 @@
 import fs from "node:fs/promises";
-import { createServer, type IncomingMessage, type Server, type ServerResponse } from "node:http";
+import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
 import path from "node:path";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { MediaFetchError, saveRemoteMedia } from "../../../../src/media/fetch.js";
 import { withEnvAsync } from "../../../../src/test-utils/env.js";
 import { useAutoCleanupTempDirTracker } from "../../../helpers/temp-dir.js";
+import { listen } from "./media-http.test-support.js";
 
-type SeenRequest = {
-  headers: IncomingMessage["headers"];
-  url: string;
-};
+type SeenRequest = IncomingMessage["headers"];
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 const sourceRequests: SeenRequest[] = [];
 const targetRequests: SeenRequest[] = [];
 
-let sourceServer: Server;
+let sourceServer: Awaited<ReturnType<typeof listen>>;
 let sourceOrigin: string;
-let targetServer: Server;
+let targetServer: Awaited<ReturnType<typeof listen>>;
 let targetOrigin: string;
 
-async function listenOnLoopback(server: Server): Promise<string> {
-  await new Promise<void>((resolve, reject) => {
-    const onError = (error: Error) => {
-      server.off("error", onError);
-      reject(error);
-    };
-    server.once("error", onError);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", onError);
-      resolve();
-    });
-  });
-  const address = server.address();
-  if (!address || typeof address === "string") {
-    throw new Error("loopback media server did not expose a TCP port");
-  }
-  return `http://127.0.0.1:${address.port}`;
-}
-
-async function closeLoopbackServer(server: Server): Promise<void> {
-  const closed = new Promise<void>((resolve, reject) => {
-    server.close((error) => (error ? reject(error) : resolve()));
-  });
-  server.closeAllConnections();
-  await closed;
-}
-
-function recordRequest(request: IncomingMessage, requests: SeenRequest[]): void {
-  requests.push({
-    headers: request.headers,
-    url: request.url ?? "/",
-  });
-}
-
 function handleSourceRequest(request: IncomingMessage, response: ServerResponse): void {
-  recordRequest(request, sourceRequests);
+  sourceRequests.push(request.headers);
   switch (request.url) {
     case "/private":
       response.writeHead(200, { "content-type": "text/plain" });
@@ -84,7 +48,7 @@ function handleSourceRequest(request: IncomingMessage, response: ServerResponse)
 }
 
 function handleTargetRequest(request: IncomingMessage, response: ServerResponse): void {
-  recordRequest(request, targetRequests);
+  targetRequests.push(request.headers);
   if (request.url !== "/payload") {
     response.writeHead(404);
     response.end();
@@ -95,36 +59,26 @@ function handleTargetRequest(request: IncomingMessage, response: ServerResponse)
 }
 
 async function expectNoPublishedMediaFiles(stateDir: string): Promise<void> {
-  const mediaDir = path.join(stateDir, "media");
-  const files: string[] = [];
-
-  const visit = async (directory: string): Promise<void> => {
-    const entries = await fs.readdir(directory, { withFileTypes: true }).catch((error: unknown) => {
+  const entries = await fs
+    .readdir(path.join(stateDir, "media"), {
+      withFileTypes: true,
+      recursive: true,
+    })
+    .catch((error: unknown) => {
       if ((error as NodeJS.ErrnoException).code === "ENOENT") {
         return [];
       }
       throw error;
     });
-    for (const entry of entries) {
-      const entryPath = path.join(directory, entry.name);
-      if (entry.isDirectory()) {
-        await visit(entryPath);
-      } else {
-        files.push(path.relative(mediaDir, entryPath));
-      }
-    }
-  };
-
-  await visit(mediaDir);
-  expect(files.toSorted()).toStrictEqual([]);
+  expect(entries.filter((entry) => !entry.isDirectory())).toStrictEqual([]);
 }
 
 describe("media guarded fetch product boundaries", () => {
   beforeAll(async () => {
-    targetServer = createServer(handleTargetRequest);
-    targetOrigin = await listenOnLoopback(targetServer);
-    sourceServer = createServer(handleSourceRequest);
-    sourceOrigin = await listenOnLoopback(sourceServer);
+    targetServer = await listen(createServer(handleTargetRequest));
+    targetOrigin = targetServer.url;
+    sourceServer = await listen(createServer(handleSourceRequest));
+    sourceOrigin = sourceServer.url;
   });
 
   beforeEach(() => {
@@ -133,7 +87,7 @@ describe("media guarded fetch product boundaries", () => {
   });
 
   afterAll(async () => {
-    await Promise.all([closeLoopbackServer(sourceServer), closeLoopbackServer(targetServer)]);
+    await Promise.all([sourceServer.stop(), targetServer.stop()]);
   });
 
   it("rejects private targets before the network or media store is reached", async () => {
@@ -158,9 +112,8 @@ describe("media guarded fetch product boundaries", () => {
 
   it("revalidates redirect targets and strips sensitive cross-origin headers", async () => {
     const stateDir = tempDirs.make("openclaw-media-safe-redirect-");
-
-    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      const blocked = await saveRemoteMedia({
+    const redirect = (subdir: string, allowedOrigins: string[]) =>
+      saveRemoteMedia({
         url: `${sourceOrigin}/redirect`,
         requestInit: {
           headers: {
@@ -171,9 +124,14 @@ describe("media guarded fetch product boundaries", () => {
           },
         },
         maxBytes: 64,
-        subdir: "blocked-redirect",
-        ssrfPolicy: { allowedOrigins: [sourceOrigin] },
-      }).catch((caught: unknown) => caught);
+        subdir,
+        ssrfPolicy: { allowedOrigins },
+      });
+
+    await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
+      const blocked = await redirect("blocked-redirect", [sourceOrigin]).catch(
+        (caught: unknown) => caught,
+      );
 
       expect(blocked).toBeInstanceOf(MediaFetchError);
       expect(blocked).toMatchObject({
@@ -185,27 +143,14 @@ describe("media guarded fetch product boundaries", () => {
       await expectNoPublishedMediaFiles(stateDir);
 
       sourceRequests.length = 0;
-      const saved = await saveRemoteMedia({
-        url: `${sourceOrigin}/redirect`,
-        requestInit: {
-          headers: {
-            Accept: "text/plain",
-            Authorization: "Bearer private-token",
-            Cookie: "session=private",
-            "X-Api-Key": "private-key",
-          },
-        },
-        maxBytes: 64,
-        subdir: "safe-redirect",
-        ssrfPolicy: { allowedOrigins: [sourceOrigin, targetOrigin] },
-      });
+      const saved = await redirect("safe-redirect", [sourceOrigin, targetOrigin]);
 
-      expect(sourceRequests[0]?.headers.authorization).toBe("Bearer private-token");
+      expect(sourceRequests[0]?.authorization).toBe("Bearer private-token");
       expect(targetRequests).toHaveLength(1);
-      expect(targetRequests[0]?.headers.accept).toBe("text/plain");
-      expect(targetRequests[0]?.headers.authorization).toBeUndefined();
-      expect(targetRequests[0]?.headers.cookie).toBeUndefined();
-      expect(targetRequests[0]?.headers["x-api-key"]).toBeUndefined();
+      expect(targetRequests[0]).toMatchObject({ accept: "text/plain" });
+      expect(
+        ["authorization", "cookie", "x-api-key"].map((key) => targetRequests[0]?.[key]),
+      ).toEqual([undefined, undefined, undefined]);
       await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("redirected media");
     });
   });
@@ -215,31 +160,17 @@ describe("media guarded fetch product boundaries", () => {
     const allowedOrigins = [sourceOrigin];
 
     await withEnvAsync({ OPENCLAW_STATE_DIR: stateDir }, async () => {
-      await expect(
-        saveRemoteMedia({
-          url: `${sourceOrigin}/oversized-file`,
-          maxBytes: 16,
-          subdir: "oversized-file",
-          ssrfPolicy: { allowedOrigins },
-        }),
-      ).rejects.toMatchObject({
-        name: "MediaFetchError",
-        code: "max_bytes",
-      });
-      await expectNoPublishedMediaFiles(stateDir);
-
-      await expect(
-        saveRemoteMedia({
-          url: `${sourceOrigin}/oversized-stream`,
-          maxBytes: 16,
-          subdir: "oversized-stream",
-          ssrfPolicy: { allowedOrigins },
-        }),
-      ).rejects.toMatchObject({
-        name: "MediaFetchError",
-        code: "max_bytes",
-      });
-      await expectNoPublishedMediaFiles(stateDir);
+      for (const subdir of ["oversized-file", "oversized-stream"]) {
+        await expect(
+          saveRemoteMedia({
+            url: `${sourceOrigin}/${subdir}`,
+            maxBytes: 16,
+            subdir,
+            ssrfPolicy: { allowedOrigins },
+          }),
+        ).rejects.toMatchObject({ name: "MediaFetchError", code: "max_bytes" });
+        await expectNoPublishedMediaFiles(stateDir);
+      }
     });
   });
 });

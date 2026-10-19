@@ -23,23 +23,15 @@ const repoRoot = path.resolve(__dirname, "../..");
 const tempDirs = createTempDirTracker();
 
 type TaxonomyFixture = {
-  surfaces?: TaxonomySurfaceFixture[];
-};
-
-type TaxonomySurfaceFixture = {
-  id?: string;
-  archived?: boolean;
-  categories?: TaxonomyCategoryFixture[];
-};
-
-type TaxonomyCategoryFixture = {
-  id?: string;
-  name?: string;
-  features?: TaxonomyFeatureFixture[];
-};
-
-type TaxonomyFeatureFixture = {
-  coverageIds?: string[];
+  surfaces?: Array<{
+    id?: string;
+    archived?: boolean;
+    categories?: Array<{
+      id?: string;
+      name?: string;
+      features?: Array<{ coverageIds?: string[] }>;
+    }>;
+  }>;
 };
 
 type MaturityScoresFixture = {
@@ -84,6 +76,47 @@ function createMaturityInvocation(count: number) {
   });
 }
 
+function missingCounts(total = 0) {
+  return { total, fulfilled: 0, missing: total, fulfillmentPercent: 0 };
+}
+
+function partialCounts(total = 0) {
+  return { ...missingCounts(total), partial: 0 };
+}
+
+function writeYaml(file: string, value: unknown) {
+  fs.writeFileSync(file, stringifyYaml(value));
+}
+
+const fixtureSurface = {
+  id: "tools",
+  name: "Fixture tools",
+  family: "core",
+  level: "experimental",
+};
+const fixtureFeature = { name: "Fixture feature", coverageIds: ["tools.evidence"] };
+const experimentalLevel = { id: "experimental", code: "M1", label: "Experimental" };
+function writeScores(file: string, scores: object, category: object, authored = scores) {
+  writeYaml(file, {
+    version: 1,
+    process_version: 1,
+    counts: { active_surfaces: 1, category_scores: 1 },
+    rollups: { surface_average: scores, category_average: scores },
+    surfaces: [
+      {
+        id: fixtureSurface.id,
+        name: fixtureSurface.name,
+        level: fixtureSurface.level,
+        scores: authored,
+        categories: [
+          { ...authored, lts: { supported: false, human_override: false }, ...category },
+        ],
+        lts: { supported_categories: 0, total_categories: 1, status: "none" },
+      },
+    ],
+  });
+}
+
 function writeQaEvidence(params: {
   dir: string;
   entries: Array<{ id: string; status: "pass" | "fail" | "blocked" | "skipped" }>;
@@ -96,26 +129,9 @@ function writeQaEvidence(params: {
   const scorecard = params.scorecard ?? {
     filters: { surface: null, category: null },
     run: { evidenceEntryCount: params.entries.length },
-    categories: {
-      total: 0,
-      fulfilled: 0,
-      partial: 0,
-      missing: 0,
-      fulfillmentPercent: 0,
-    },
-    features: {
-      total: 0,
-      fulfilled: 0,
-      partial: 0,
-      missing: 0,
-      fulfillmentPercent: 0,
-    },
-    coverageIds: {
-      total: 0,
-      fulfilled: 0,
-      missing: 0,
-      fulfillmentPercent: 0,
-    },
+    categories: partialCounts(),
+    features: partialCounts(),
+    coverageIds: missingCounts(),
     categoryReports: [],
   };
   fs.mkdirSync(params.dir, { recursive: true });
@@ -179,20 +195,8 @@ function allProfileScorecardFixture(
         surfaceId: surface.id,
         name: category.name,
         status: "missing",
-        features: {
-          total: features.length,
-          fulfilled: 0,
-          partial: 0,
-          missing: features.length,
-          fulfillmentPercent: 0,
-        },
-        coverageIds: {
-          total: coverageIds.length,
-          fulfilled: 0,
-          missing: coverageIds.length,
-          fulfillmentPercent: 0,
-          secondaryOnly: 0,
-        },
+        features: partialCounts(features.length),
+        coverageIds: { ...missingCounts(coverageIds.length), secondaryOnly: 0 },
         missingCoverageIds: coverageIds,
       };
     }),
@@ -205,26 +209,9 @@ function allProfileScorecardFixture(
   return {
     filters: { surface: null, category: null },
     run: { evidenceEntryCount },
-    categories: {
-      total: categoryReports.length,
-      fulfilled: 0,
-      partial: 0,
-      missing: categoryReports.length,
-      fulfillmentPercent: 0,
-    },
-    features: {
-      total: featureCount,
-      fulfilled: 0,
-      partial: 0,
-      missing: featureCount,
-      fulfillmentPercent: 0,
-    },
-    coverageIds: {
-      total: coverageIdCount,
-      fulfilled: 0,
-      missing: coverageIdCount,
-      fulfillmentPercent: 0,
-    },
+    categories: partialCounts(categoryReports.length),
+    features: partialCounts(featureCount),
+    coverageIds: missingCounts(coverageIdCount),
     categoryReports,
   };
 }
@@ -541,56 +528,30 @@ describe("maturity docs renderer CLI", () => {
         ].map(([source, destination]) => ({ source, destination })),
       }),
     );
-    const surface = { id: "tools", name: "Fixture tools", family: "core", level: "experimental" };
-    fs.writeFileSync(
-      taxonomyPath,
-      stringifyYaml({
-        version: 1,
-        title: "Synthetic docs link fixture",
-        levels: [{ id: "experimental", code: "M1", label: "Experimental" }],
-        surfaces: [
-          {
-            ...surface,
-            categories: [
-              {
-                id: "links",
-                name: "Docs links",
-                category_note: "Synthetic fixture for renderer links",
-                features: [{ name: "Fixture feature", coverageIds: ["tools.evidence"] }],
-                docs: links.map(([doc]) => doc),
-              },
-            ],
-          },
-        ],
-      }),
-    );
+    writeYaml(taxonomyPath, {
+      version: 1,
+      title: "Synthetic docs link fixture",
+      levels: [experimentalLevel],
+      surfaces: [
+        {
+          ...fixtureSurface,
+          categories: [
+            {
+              id: "links",
+              name: "Docs links",
+              category_note: "Synthetic fixture for renderer links",
+              features: [fixtureFeature],
+              docs: links.map(([doc]) => doc),
+            },
+          ],
+        },
+      ],
+    });
     const scores = {
       quality: { score: 0, label: "Experimental" },
       completeness: { score: 0, label: "Experimental" },
     };
-    fs.writeFileSync(
-      scoresPath,
-      stringifyYaml({
-        version: 1,
-        process_version: 1,
-        counts: { active_surfaces: 1, category_scores: 1 },
-        rollups: { surface_average: scores, category_average: scores },
-        surfaces: [
-          {
-            ...surface,
-            scores,
-            categories: [
-              {
-                name: "Docs links",
-                ...scores,
-                lts: { supported: false, human_override: false },
-              },
-            ],
-            lts: { supported_categories: 0, total_categories: 1, status: "none" },
-          },
-        ],
-      }),
-    );
+    writeScores(scoresPath, scores, { name: "Docs links" });
     writeQaEvidence({
       dir: evidenceDir,
       entries: [{ id: "synthetic-docs-links", status: "skipped" }],
@@ -827,6 +788,35 @@ describe("maturity docs renderer CLI", () => {
     expect(scorecard).toContain("Coverage Experimental - 0%");
     expect(scorecard).toContain("Historical evidence: taxonomy identity mismatch");
     expect(scorecard).toContain("Readiness by area");
+    expect(scorecard).toContain("## QA scorecard gaps");
+    expect(scorecard).toContain("Profile: release. Taxonomy: current.");
+    expect(scorecard).not.toContain("Profile: all. Taxonomy: current.");
+  });
+
+  it("uses the same all-before-release selection for gap reporting without changing scores", () => {
+    const outputDir = tempDirs.make("openclaw-maturity-gap-output-");
+    const evidenceDir = tempDirs.make("openclaw-maturity-gap-evidence-");
+    for (const profile of ["all", "release"]) {
+      writeQaEvidence({
+        dir: path.join(evidenceDir, profile),
+        profile,
+        generatedAt:
+          profile === "release" ? "2099-01-01T00:00:00.000Z" : "2026-10-01T00:00:00.000Z",
+        entries: [{ id: "pass", status: "pass" }],
+        scorecard: allProfileScorecardFixture(),
+      });
+    }
+    const result = runCli("--output-dir", outputDir, "--evidence-dir", evidenceDir);
+    expect(result.status).toBe(0);
+    const scorecard = fs.readFileSync(path.join(outputDir, "maturity/scorecard.md"), "utf8");
+    expect(scorecard).toContain("Profile: all. Taxonomy: current.");
+    expect(scorecard).not.toContain("Profile: release. Taxonomy: current.");
+    expect(scorecard).toContain("UNKNOWN");
+    expect(scorecard).toContain("Coverage Experimental - 0%");
+    expect(scorecard).toContain(
+      `<span className="maturity-summary-value">${expectedMaturityScorePercent()}%</span>`,
+    );
+    expect(result.stderr).not.toContain("UNKNOWN");
   });
 
   it("renders passing evidence with unique section jump targets", () => {
@@ -855,60 +845,31 @@ describe("maturity docs renderer CLI", () => {
       /<div className="maturity-category-docs">[^\n]*\[[^\n]+\]\([^)]+\)[^\n]*<\/div>/,
     );
     const taxonomyDocument = parseDocsDocument(taxonomy);
-    for (const id of ["imessage", "imessage-and-bluebubbles"]) {
-      expect(
-        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-        id,
-      ).toHaveLength(1);
-    }
-    for (const id of ["control-ui", "gateway-web-app"]) {
-      expect(
-        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-        id,
-      ).toHaveLength(1);
-    }
-    for (const id of ["windows-app-node", "native-windows-companion-app"]) {
-      expect(
-        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-        id,
-      ).toHaveLength(1);
-    }
-    for (const [current, legacy] of [
-      [
-        "community-channel-cohort",
-        "mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat",
-      ],
-      [
-        "regional-channel-cohort",
-        "feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels",
-      ],
+    for (const id of [
+      "imessage",
+      "imessage-and-bluebubbles",
+      "control-ui",
+      "gateway-web-app",
+      "windows-app-node",
+      "native-windows-companion-app",
+      "community-channel-cohort",
+      "mattermost-line-irc-nextcloud-talk-nostr-twitch-tlon-synology-chat",
+      "regional-channel-cohort",
+      "feishu-qq-bot-wechat-yuanbao-zalo-zalo-personal-regional-channels",
+      "chromeos-raspberry-pi-and-small-linux-devices",
+      "raspberry-pi-and-small-linux-devices",
+      "automation-and-durable-work",
+      "automation-cron-hooks-tasks-polling",
     ]) {
-      for (const id of [current, legacy]) {
-        expect(
-          taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-          id,
-        ).toHaveLength(1);
-      }
+      expect(
+        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
+        id,
+      ).toHaveLength(1);
     }
     expect(taxonomy).toContain(
       "**Current catalog members:** [Buzz](/channels/buzz), [ClickClack](/channels/clickclack)",
     );
     expect(taxonomy).toContain("[WeChat](/channels/wechat), [WeCom](/channels/wecom)");
-    for (const id of [
-      "chromeos-raspberry-pi-and-small-linux-devices",
-      "raspberry-pi-and-small-linux-devices",
-    ]) {
-      expect(
-        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-        id,
-      ).toHaveLength(1);
-    }
-    for (const id of ["automation-and-durable-work", "automation-cron-hooks-tasks-polling"]) {
-      expect(
-        taxonomyDocument.ids.filter((candidate: string) => candidate === id),
-        id,
-      ).toHaveLength(1);
-    }
     for (const [markdown, id] of [
       [scorecard, "surface-explorer"],
       [taxonomy, "product-areas"],
@@ -951,62 +912,33 @@ describe("maturity docs renderer CLI", () => {
         decision: record(79),
       },
     };
-    fs.writeFileSync(
-      taxonomyPath,
-      stringifyYaml({
-        version: 1,
-        title: "Synthetic decision fixture",
-        levels: [
-          { id: "experimental", code: "M1", label: "Experimental" },
-          { id: "stable", code: "M4", label: "Stable" },
-        ],
-        surfaces: [
-          {
-            id: "tools",
-            name: "Fixture tools",
-            family: "core",
-            level: "experimental",
-            level_decision: record("stable"),
-            categories: [
-              {
-                id: "review",
-                name: "Review",
-                category_note: "Synthetic review",
-                features: [{ name: "Fixture feature", coverageIds: ["tools.evidence"] }],
-              },
-            ],
-          },
-        ],
-      }),
-    );
-    fs.writeFileSync(
+    writeYaml(taxonomyPath, {
+      version: 1,
+      title: "Synthetic decision fixture",
+      levels: [experimentalLevel, { id: "stable", code: "M4", label: "Stable" }],
+      surfaces: [
+        {
+          ...fixtureSurface,
+          level_decision: record("stable"),
+          categories: [
+            {
+              id: "review",
+              name: "Review",
+              category_note: "Synthetic review",
+              features: [fixtureFeature],
+            },
+          ],
+        },
+      ],
+    });
+    writeScores(
       scoresPath,
-      stringifyYaml({
-        version: 1,
-        process_version: 1,
-        counts: { active_surfaces: 1, category_scores: 1 },
-        rollups: { surface_average: bundle, category_average: bundle },
-        surfaces: [
-          {
-            id: "tools",
-            name: "Fixture tools",
-            level: "experimental",
-            scores: authored,
-            categories: [
-              {
-                name: "Review",
-                ...authored,
-                lts: {
-                  supported: false,
-                  human_override: false,
-                  decision: record(true),
-                },
-              },
-            ],
-            lts: { supported_categories: 0, total_categories: 1, status: "none" },
-          },
-        ],
-      }),
+      bundle,
+      {
+        name: "Review",
+        lts: { supported: false, human_override: false, decision: record(true) },
+      },
+      authored,
     );
     writeQaEvidence({
       dir: evidenceDir,

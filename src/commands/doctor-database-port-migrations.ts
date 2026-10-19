@@ -9,6 +9,7 @@ import {
 import { createPluginDoctorStateMigrationInput } from "../infra/state-migrations.plugin-doctor.js";
 import { listPluginDoctorStateMigrationEntries } from "../plugins/doctor-contract-registry.js";
 import { withArtifactPreservingStateReads } from "../state/artifact-preserving-state-reads.js";
+import type { DatabasePortFamily } from "./doctor-database-port-context.js";
 
 /** Legacy imports must finish while their destination family still accepts SQLite writes. */
 export async function assertDatabasePortPluginMigrationsComplete(params: {
@@ -16,6 +17,7 @@ export async function assertDatabasePortPluginMigrationsComplete(params: {
   env: NodeJS.ProcessEnv;
   stateDir: string;
   to: DatabaseEngineId;
+  family?: DatabasePortFamily;
 }): Promise<void> {
   const target = {
     ...params.config,
@@ -27,7 +29,9 @@ export async function assertDatabasePortPluginMigrationsComplete(params: {
         (store) =>
           store.postgres &&
           selectDatabaseEngine(store, params.config) === "sqlite" &&
-          selectDatabaseEngine(store, target) === "postgres",
+          (params.family
+            ? store.id === params.family && params.to === "postgres"
+            : selectDatabaseEngine(store, target) === "postgres"),
       )
       .map((store) => store.id),
   );

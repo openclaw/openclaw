@@ -1,12 +1,17 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import * as cliCredentials from "../agents/cli-credentials.js";
+import * as embeddedAgent from "../agents/embedded-agent.js";
 import { detectInferenceBackends } from "../commands/onboard-inference.js";
 import { readConfigFileSnapshot } from "../config/config.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
+import * as probes from "./probes.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import type { ActivateSetupInferenceDeps } from "./setup-inference-core.js";
+
+// mock-isolation: Setup probes replace model I/O without loading the embedded runtime.
+vi.mock("../agents/embedded-agent.js", () => ({ runEmbeddedAgent: vi.fn() }));
 
 // Mirrors OPENROUTER_DEFAULT_MODEL_REF from extensions/openrouter/onboard.ts.
 // Kept as a literal so this core test does not pull a bundled extension into
@@ -44,6 +49,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
   await temp?.restore();
 });
@@ -161,15 +167,14 @@ it.each([
     const snapshot = await readSnapshot();
     expect(snapshot.valid, JSON.stringify(snapshot.issues)).toBe(true);
 
+    vi.spyOn(probes, "probeLocalCommand").mockImplementation(async (command) => ({
+      found: false,
+      command,
+    }));
+    vi.spyOn(cliCredentials, "hasCodexCliAuthFile").mockReturnValue(false);
     const candidates = await detectInferenceBackends({
       config: snapshot.runtimeConfig,
       agentId: "main",
-      env: {},
-      platform: "linux",
-      deps: {
-        probeLocalCommand: async (command) => ({ found: false, command }),
-        hasCodexCliAuthFile: () => false,
-      },
     });
     const discovered = candidates.find((candidate) => candidate.kind === "existing-model");
     expect(discovered?.modelRef).toBe(expected);
@@ -181,15 +186,14 @@ it.each([
     );
     expect(route?.modelLabel).toBe(discovered?.modelRef);
 
-    const runEmbeddedAgent = vi.fn<NonNullable<ActivateSetupInferenceDeps["runEmbeddedAgent"]>>(
-      async () => ({
-        meta: {
-          durationMs: 1,
-          finalAssistantVisibleText: "OK",
-          executionTrace: { winnerProvider: "openrouter", winnerModel: expected },
-        },
-      }),
-    );
+    const runEmbeddedAgent = vi.fn<typeof embeddedAgent.runEmbeddedAgent>(async () => ({
+      meta: {
+        durationMs: 1,
+        finalAssistantVisibleText: "OK",
+        executionTrace: { winnerProvider: "openrouter", winnerModel: expected },
+      },
+    }));
+    vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(runEmbeddedAgent);
     const result = await activateSetupInference({
       kind: "existing-model",
       modelRef: discovered?.modelRef,
@@ -203,8 +207,6 @@ it.each([
       },
       deps: {
         readConfigFileSnapshot: readSnapshot,
-        createTempDir: () => fs.mkdtemp(path.join(temp.home, "probe-")),
-        runEmbeddedAgent,
       },
     });
     if (!result.ok) {

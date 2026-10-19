@@ -10,6 +10,7 @@ import {
   readFileWindowFully,
   root as openSafeFilesystemRoot,
 } from "openclaw/plugin-sdk/file-access-runtime";
+import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import { resolveCodexAppServerHomeDir } from "./auth-bridge.js";
 import { resolveProjectionPromptBudgetTokens } from "./context-engine-projection.js";
 import { isJsonObject, type JsonValue } from "./protocol.js";
@@ -40,11 +41,8 @@ type CodexAppServerRolloutFile = {
 };
 
 function parseCodexAppServerByteLimit(value: unknown): number | undefined {
-  if (typeof value === "number" && Number.isFinite(value) && value > 0) {
-    return Math.floor(value);
-  }
   if (typeof value !== "string") {
-    return undefined;
+    return floorPositiveFiniteNumber(value);
   }
   const match = value.trim().match(/^(\d+(?:\.\d+)?)\s*([a-z]+)?$/i);
   if (!match) {
@@ -244,10 +242,7 @@ function readCodexAppServerRolloutTokenSnapshotLine(
     const value = usage?.total_tokens ?? usage?.totalTokens;
     const totalTokens = typeof value === "number" && Number.isFinite(value) ? value : undefined;
     const windowValue = info.model_context_window ?? info.modelContextWindow;
-    const modelContextWindow =
-      typeof windowValue === "number" && Number.isFinite(windowValue) && windowValue > 0
-        ? Math.floor(windowValue)
-        : undefined;
+    const modelContextWindow = floorPositiveFiniteNumber(windowValue);
     return totalTokens !== undefined || modelContextWindow !== undefined
       ? { totalTokens, modelContextWindow }
       : undefined;

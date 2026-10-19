@@ -6,6 +6,7 @@
 import { normalizeProviderId } from "@openclaw/model-catalog-core/provider-id";
 import { safeParseJsonRecord } from "@openclaw/normalization-core/json-coercion";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { withPluginMetadataSnapshotScope } from "../plugins/current-plugin-metadata-snapshot.js";
 import type { PluginMetadataSnapshot } from "../plugins/plugin-metadata-snapshot.js";
 import type { ProviderCatalogOutcome } from "../plugins/provider-catalog.types.js";
 import type { PreparedProviderStaticCatalog } from "../plugins/provider-discovery.js";
@@ -19,13 +20,13 @@ import {
   type ExistingProviderConfig,
 } from "./models-config.merge.js";
 import {
-  enforceSourceManagedProviderSecrets,
   materializeConfiguredProviderCatalogModels,
   normalizeProviderCatalogModelsForConfig,
-  normalizeProviders,
-  resolveImplicitProviders,
-  type ProviderConfig,
-} from "./models-config.providers.js";
+} from "./models-config.providers.catalog.js";
+import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
+import { normalizeProviders } from "./models-config.providers.normalize.js";
+import type { ProviderConfig } from "./models-config.providers.secrets.js";
+import { enforceSourceManagedProviderSecrets } from "./models-config.providers.source-managed.js";
 import {
   encodePluginModelCatalogRelativePath,
   filterGeneratedPluginModelCatalogProviders,
@@ -45,10 +46,7 @@ export type PreparedModelsConfigContext = Readonly<{
   env: NodeJS.ProcessEnv;
   envFingerprint: NodeJS.ProcessEnv | string;
   workspaceDir?: string;
-  pluginMetadataSnapshot?: Pick<
-    PluginMetadataSnapshot,
-    "index" | "manifestRegistry" | "owners" | "pluginIds"
-  >;
+  pluginMetadataSnapshot?: PluginMetadataSnapshot;
   preparedStaticProviderCatalog?: PreparedProviderStaticCatalog;
   providerDiscoveryProviderIds?: readonly string[];
   providerDiscoveryTimeoutMs?: number;
@@ -269,8 +267,8 @@ export async function planOpenClawModelsJson(params: {
     context.pluginMetadataSnapshot?.pluginIds === undefined
       ? context.pluginMetadataSnapshot?.manifestRegistry
       : undefined;
-  const normalizedProviders =
-    (await normalizeProviders({
+  const normalize = () =>
+    normalizeProviders({
       providers,
       agentDir,
       env,
@@ -280,7 +278,13 @@ export async function planOpenClawModelsJson(params: {
       ...(providerPolicyManifestRegistry
         ? { manifestRegistry: providerPolicyManifestRegistry }
         : {}),
-    })) ?? providers;
+    });
+  // Configless auth-marker readers share the captured process metadata as well as policy hooks.
+  // A scoped inventory cannot supply their complete provider namespace.
+  const normalizedProviders =
+    (await (context.pluginMetadataSnapshot && providerPolicyManifestRegistry
+      ? withPluginMetadataSnapshotScope(context.pluginMetadataSnapshot, normalize)
+      : normalize())) ?? providers;
   const mergedProviders = resolveProvidersForMode({
     mode,
     existingParsed: {

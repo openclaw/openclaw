@@ -202,22 +202,16 @@ describe("question channel runtime", () => {
     const otherGateway = new AsyncWorkScope();
     const resolveQuestion = createDeferredCore();
     const releaseFinalizer = createDeferredCore();
-    const releaseLateRequest = createDeferredCore();
     const finalize = vi.fn(() => releaseFinalizer.promise);
     const otherFinalize = vi.fn();
     const staleFinalize = vi.fn();
     const otherRecord = { ...record, id: "ask_other" };
-    const lateRecord = { ...record, id: "ask_late" };
     let received: Promise<void> | undefined;
-    let lateRequest: Promise<void> | undefined;
     let drained = false;
     try {
       await gateway.track(() => {
         runtime.handleRequested(record, scheduler);
         deliver("held", finalize);
-        lateRequest = releaseLateRequest.promise.then(() =>
-          runtime.handleRequested(lateRecord, scheduler),
-        );
       });
       await otherGateway.track(() => {
         runtime.handleRequested(otherRecord, scheduler);
@@ -238,21 +232,15 @@ describe("question channel runtime", () => {
       releaseFinalizer.resolve();
       await closing;
       runtime.retireGateway(gateway.signal);
-      releaseLateRequest.resolve();
-      await lateRequest;
-      for (const questionId of [record.id, lateRecord.id]) {
-        runtime.registerDelivery({ questionId, deliveryId: "stale", finalize: staleFinalize });
-        runtime.handleResolved({ id: questionId, status: "expired" });
-      }
+      deliver("stale", staleFinalize);
+      runtime.handleResolved({ id: record.id, status: "expired" });
       expect(staleFinalize).not.toHaveBeenCalled();
       runtime.handleResolved({ id: otherRecord.id, status: "expired" });
       expect(otherFinalize).toHaveBeenCalledExactlyOnceWith("Expired");
     } finally {
       resolveQuestion.resolve();
       releaseFinalizer.resolve();
-      releaseLateRequest.resolve();
       await received;
-      await lateRequest;
       await Promise.all([gateway.drain(), otherGateway.drain()]);
       runtime.retireGateway(gateway.signal);
       runtime.retireGateway(otherGateway.signal);
@@ -392,7 +380,7 @@ describe("question channel runtime", () => {
     { binding: "unbound", retirement: "clear", deliveryOwner: "question" },
     { binding: "unbound", retirement: "gateway retirement", deliveryOwner: "question" },
   ] as const)(
-    "does not revive a captured $binding delivery from $deliveryOwner scope after $retirement",
+    "does not bind a captured $binding delivery from $deliveryOwner scope to a replacement after $retirement",
     async ({ binding, retirement, deliveryOwner }) => {
       const gateway = new AsyncWorkScope();
       const pluginCaller = new AsyncWorkScope();
@@ -434,12 +422,12 @@ describe("question channel runtime", () => {
         await delivery;
         deliver("new-message", nextFinalize);
         runtime.handleResolved({ id: record.id, status: "cancelled" });
-        if (retirement === "retention expiry") {
+        if (retirement === "gateway retirement" && deliveryOwner === "question") {
+          expect(staleFinalize).not.toHaveBeenCalled();
+        } else {
           expect(staleFinalize).toHaveBeenCalledExactlyOnceWith(
             "Unavailable: request a new question.",
           );
-        } else {
-          expect(staleFinalize).not.toHaveBeenCalled();
         }
         expect(nextFinalize).toHaveBeenCalledExactlyOnceWith("Cancelled");
       } finally {

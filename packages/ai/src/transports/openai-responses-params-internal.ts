@@ -174,7 +174,6 @@ export function buildOpenAIResponsesParams(
     (options?.replayResponsesItemIds ?? policyAllowsReplayIds);
   const messages = convertResponsesMessages(model, context, OPENAI_RESPONSES_TOOL_CALL_PROVIDERS, {
     includeSystemPrompt: !payloadPolicy.usesInstructionsField,
-    replayReasoningItems: true,
     replayResponsesItemIds,
     authProfileId: options?.authProfileId,
     sessionId: options?.sessionId,
@@ -263,11 +262,13 @@ export function buildOpenAIResponsesParams(
       });
       const summary =
         effort !== "none" &&
-        (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary)
-          ? options.reasoningSummary || "auto"
+        (options?.reasoningEffort || options?.reasoning || options?.reasoningSummary !== undefined)
+          ? options.reasoningSummary === undefined
+            ? "auto"
+            : options.reasoningSummary
           : undefined;
-      params.reasoning = { effort, ...(summary ? { summary } : {}) };
-      if (summary) {
+      params.reasoning = { effort, ...(summary !== undefined ? { summary } : {}) };
+      if (summary !== undefined) {
         params.include = ["reasoning.encrypted_content"];
       }
     }

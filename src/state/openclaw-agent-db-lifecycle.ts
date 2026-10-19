@@ -8,8 +8,7 @@ import { isPathInside } from "../infra/path-guards.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { setSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { getOrLoadSqliteDatabaseAdmissionForPath } from "../infra/sqlite-database-admission.js";
-import type { SqliteFileGeneration } from "../infra/sqlite-file-generation.js";
-import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
+import { resolveAgentDatabaseIdleHandleTtlMs } from "../infra/sqlite-handle-lifecycle.js";
 import type { SqliteIntegrityDiagnostics } from "../infra/sqlite-integrity.js";
 import {
   deferSqlitePostCommitPublication,
@@ -48,7 +47,6 @@ import {
   matchesAgentDatabaseClose,
   revokeAgentDatabaseResources,
   withAgentDatabaseCloseFence,
-  type AgentDatabaseCloseSelection,
 } from "./openclaw-agent-db-resources.js";
 import {
   assertSupportedAgentSchemaVersion,
@@ -293,7 +291,9 @@ export function refreshAgentDatabaseIdleTimer(database: OpenClawAgentDatabase): 
       timer.refresh();
     }
   };
-  const timer = runInDetachedAsyncContext(() => setTimeout(closeIdle, SQLITE_IDLE_HANDLE_TTL_MS));
+  const timer = runInDetachedAsyncContext(() =>
+    setTimeout(closeIdle, resolveAgentDatabaseIdleHandleTtlMs()),
+  );
   const cleanupListener = addAbortListener(cleanupSignal, refresh);
   timer.unref();
   cache.idleTimers.set(database.db, {
@@ -474,18 +474,11 @@ export function closeOpenClawAgentDatabases(rootPath?: string): void {
   }
 }
 
-/** Latch background verification damage so later opens fail without rescanning. */
-export function recordOpenClawAgentDatabaseOpenFailure(
-  pathname: string,
-  error: Error,
-  generation?: SqliteFileGeneration,
-): boolean {
-  const recorded = cache.terminal.record(pathname, error, generation);
-  if (recorded) {
-    // Quarantine revokes this process's trust because doctor may replace the file.
-    invalidateOpenClawAgentDatabaseValidation(pathname);
-  }
-  return recorded;
+/** Latch integrity refusals so later opens fail without rescanning. */
+export function recordOpenClawAgentDatabaseOpenFailure(pathname: string, error: Error): void {
+  cache.terminal.record(pathname, error);
+  // Quarantine revokes this process's trust because doctor may replace the file.
+  invalidateOpenClawAgentDatabaseValidation(pathname);
 }
 
 /** Release fixture handles and pathname trust before a test root is recreated. */
@@ -493,23 +486,6 @@ export function closeOpenClawAgentDatabasesForTest(rootPath?: string): void {
   closeOpenClawAgentDatabases(rootPath);
   clearOpenClawAgentDatabaseValidationCache(rootPath);
   cache.terminal.clearAll(rootPath);
-}
-
-async function drainPendingAgentDatabaseOpens(
-  selection: AgentDatabaseCloseSelection,
-): Promise<void> {
-  while (true) {
-    const pending = [...cache.activePending].filter((owner) =>
-      matchesAgentDatabaseClose(selection, owner),
-    );
-    if (pending.length === 0) {
-      return;
-    }
-    for (const owner of pending) {
-      revokePendingAgentDatabaseOpen(owner.path, selection.agentId);
-    }
-    await Promise.allSettled(pending.map((owner) => owner.promise));
-  }
 }
 
 /** Drain native opens before a lifecycle owner releases shared state or removes its root. */
@@ -546,7 +522,14 @@ export async function closeOpenClawAgentDatabaseByPathAsync(
   const selection = { path: path.resolve(pathname), agentId: expectedAgentId };
   revokePendingAgentDatabaseOpen(selection.path, expectedAgentId);
   return drainAgentDatabaseResources(selection, async () => {
-    await drainPendingAgentDatabaseOpens(selection);
+    // The close selection already refuses new matching opens at their producer.
+    const pending = [...cache.activePending].filter((owner) =>
+      matchesAgentDatabaseClose(selection, owner),
+    );
+    for (const owner of pending) {
+      revokePendingAgentDatabaseOpen(owner.path, expectedAgentId);
+    }
+    await Promise.allSettled(pending.map((owner) => owner.promise));
     const database = cache.databases.get(selection.path);
     if (database && (expectedAgentId === undefined || database.agentId === expectedAgentId)) {
       await database.walMaintenance.stop();

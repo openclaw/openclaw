@@ -41,7 +41,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
   }
   active = true;
   return withPromiseModalHost<void>({ signal: options.signal, value: undefined }, (modal) => {
-    const { host, finish, render } = modal;
+    const { finish, render } = modal;
     const [cwd, setCwd] = createSignal(options.defaults.cwd);
     const [worktree, setWorktree] = createSignal(false);
     let repositoryStatus: RepositoryStatus = "checking";
@@ -139,6 +139,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
 
     function Dialog() {
       let folderAnchor!: HTMLButtonElement;
+      let rootButton!: HTMLButtonElement;
       onCleanup(() => {
         browser.reset();
         repositoryRequestToken += 1;
@@ -172,10 +173,9 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
               ? "restricted"
               : "local";
       function Browser() {
+        let pathInput!: HTMLInputElement;
         onSettled(() => {
-          host
-            .querySelector<HTMLInputElement>(".new-session-page__browser-path")
-            ?.focus({ preventScroll: true });
+          pathInput.focus({ preventScroll: true });
         });
         const content = createMemo(() => ({
           browser: browserView(),
@@ -188,14 +188,12 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
           onApplyFolder: applyFolder,
           onRegisterProject: () => {},
         }));
-        return <PlaceBrowser params={content()} />;
+        return <PlaceBrowser params={content()} pathRef={(node) => (pathInput = node)} />;
       }
       function PickerRoot() {
         onSettled(() => {
           if (folderPopover?.overlay.open) {
-            folderPopover.overlay.surface
-              .querySelector<HTMLButtonElement>("button")
-              ?.focus({ preventScroll: true });
+            rootButton?.focus({ preventScroll: true });
           }
         });
         return (
@@ -207,7 +205,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
               data-popover="close"
               aria-pressed={!trimmedCwd() ? "true" : "false"}
               disabled={saving()}
-              ref={nativeListener("click", () => applyFolder(""))}
+              ref={[nativeListener("click", () => applyFolder("")), (el) => (rootButton = el)]}
             >
               <span class="session-menu__icon" aria-hidden="true">
                 <Icon name="folder" />
@@ -302,9 +300,7 @@ export function showSessionGroupDefaultsDialog(options: Options): Promise<void> 
                   }}
                   onOpenChange={(open) => {
                     if (open) {
-                      folderPopover?.overlay.surface
-                        .querySelector<HTMLButtonElement>("button")
-                        ?.focus({ preventScroll: true });
+                      rootButton?.focus({ preventScroll: true });
                     } else {
                       showPickerRoot();
                     }

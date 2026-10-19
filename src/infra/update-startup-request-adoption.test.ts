@@ -95,8 +95,8 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     await import("../gateway/server-startup-update-check.js");
   const { resolveGatewayUpdateAdmission } =
     await import("../gateway/server-methods/update-admission.js");
-  const { createGatewayUpdateCheck, getUpdateEffectiveChannel, resetUpdateAvailableStateForTest } =
-    await import("./update-startup.js");
+  const updateStartup = await import("./update-startup.js");
+  const { getUpdateEffectiveChannel, resetUpdateAvailableStateForTest } = updateStartup;
   const scheduler = createTestGatewayScheduler();
   resetUpdateAvailableStateForTest(scheduler);
   const ready = createDeferred();
@@ -107,10 +107,11 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     started.resolve(signal);
     return probe.promise;
   });
-  const factory = vi.fn(createGatewayUpdateCheck);
+  const factory = vi.spyOn(updateStartup, "createGatewayUpdateCheck");
   const owner = createDeferredGatewayUpdateCheck({
     scheduler,
-    createUpdateCheck: factory,
+    createUpdateCheck: async (...args) =>
+      (await import("./update-startup.js")).createGatewayUpdateCheck(...args),
     getConfig: () => ({}),
     getPluginRegistry: () => undefined,
     log: { info: vi.fn(), warn: vi.fn() },
@@ -149,6 +150,7 @@ it("aborts and joins early update requests before the post-ready scheduler loads
     probe.resolve(status);
     await requests;
     await (stopping ?? owner.stop());
+    factory.mockRestore();
     ready.resolve();
     resetUpdateAvailableStateForTest(scheduler);
     closeOpenClawStateDatabaseForTest();

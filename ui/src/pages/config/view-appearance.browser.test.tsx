@@ -25,22 +25,12 @@ describe("config appearance preferences", () => {
     return container.textContent?.replace(/\s+/g, " ").trim() ?? "";
   }
 
-  function findButtonByText(container: HTMLElement, text: string): HTMLButtonElement {
-    const button = Array.from(container.querySelectorAll("button")).find(
-      (btn) => btn.textContent?.trim() === text,
+  function findButtonByText(container: HTMLElement, text: string, exact = true): HTMLButtonElement {
+    const button = Array.from(container.querySelectorAll("button")).find((btn) =>
+      exact ? btn.textContent?.trim() === text : btn.textContent?.includes(text),
     );
     if (!button) {
       throw new Error(`Expected button with text "${text}"`);
-    }
-    return button;
-  }
-
-  function findButtonContainingText(container: HTMLElement, text: string): HTMLButtonElement {
-    const button = Array.from(container.querySelectorAll("button")).find((btn) =>
-      btn.textContent?.includes(text),
-    );
-    if (!button) {
-      throw new Error(`Expected button containing text "${text}"`);
     }
     return button;
   }
@@ -56,6 +46,24 @@ describe("config appearance preferences", () => {
       throw new Error(`Expected element matching "${selector}"`);
     }
     return element;
+  }
+
+  function pickerOption(picker: Element, value: string) {
+    return picker.querySelector(`[role="option"][data-value="${value}"]`);
+  }
+
+  function pressed(container: HTMLElement, label: string) {
+    return findButtonByText(container, label).getAttribute("aria-pressed");
+  }
+
+  function mediaDevice(deviceId: string, label: string) {
+    return {
+      devices: [{ deviceId, label }],
+      permissionRequired: false,
+      selectedDeviceId: deviceId,
+      loading: false,
+      error: null,
+    };
   }
 
   it("lets config pages grow with their content instead of creating an inner viewport", async () => {
@@ -101,17 +109,13 @@ describe("config appearance preferences", () => {
       }
       await openPicker(select);
       if (localeOverride) {
-        expect(
-          select.querySelector('[role="option"][data-value="fr"]')?.getAttribute("aria-selected"),
-        ).toBe("true");
+        expect(pickerOption(select, "fr")?.getAttribute("aria-selected")).toBe("true");
       } else {
         expect(
           select.querySelector('[role="option"][aria-selected="true"]')?.getAttribute("data-value"),
         ).toBe("system");
       }
-      expect(select.querySelector('[role="option"][data-value="system"]')?.textContent).toContain(
-        `System (${label})`,
-      );
+      expect(pickerOption(select, "system")?.textContent).toContain(`System (${label})`);
       for (const value of ["fr", "system"]) {
         await choosePickerValue(select, value);
       }
@@ -135,14 +139,10 @@ describe("config appearance preferences", () => {
       "openclaw-select-picker",
     )!;
     await openPicker(ui);
-    expect(ui.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
-      "Dash · DM Sans",
-    );
+    expect(pickerOption(ui, "theme")?.textContent).toContain("Dash · DM Sans");
     expect(ui.querySelectorAll('[role="option"]')).toHaveLength(11);
     await openPicker(chat);
-    expect(chat.querySelector('[role="option"][data-value="theme"]')?.textContent).toContain(
-      "Dash · Fraunces",
-    );
+    expect(pickerOption(chat, "theme")?.textContent).toContain("Dash · Fraunces");
     expect(ui.closest(".settings-row")?.textContent).toContain("Saved to your profile");
     expect(chat.querySelectorAll('[role="option"]')).toHaveLength(11);
     await choosePickerValue(ui, "lora");
@@ -201,9 +201,8 @@ describe("config appearance preferences", () => {
 
     expect(onOpenCustomThemeImport).toHaveBeenCalledTimes(1);
     props.customThemeImportExpanded = true;
-    props.customThemeImportFocusToken = 1;
     renderConfigInto(props, container);
-    const importButton = findButtonContainingText(container, "Import theme");
+    const importButton = findButtonByText(container, "Import theme", false);
 
     expect(importButton.disabled).toBe(true);
     required(container, ".settings-theme-import__input", HTMLInputElement);
@@ -225,8 +224,8 @@ describe("config appearance preferences", () => {
     importedButton.click();
     expect(props.setTheme).toHaveBeenCalledWith("custom");
 
-    const replaceButton = findButtonContainingText(container, "Replace Light Green");
-    const clearButton = findButtonContainingText(container, "Clear Light Green");
+    const replaceButton = findButtonByText(container, "Replace Light Green", false);
+    const clearButton = findButtonByText(container, "Clear Light Green", false);
     replaceButton.click();
     clearButton.click();
 
@@ -247,8 +246,8 @@ describe("config appearance preferences", () => {
     );
     props.theme = "custom";
     renderConfigInto(props, container);
-    expect(findButtonByText(container, "Light Green").getAttribute("aria-pressed")).toBe("true");
-    expect(findButtonByText(container, "Claw").getAttribute("aria-pressed")).toBe("false");
+    expect(pressed(container, "Light Green")).toBe("true");
+    expect(pressed(container, "Claw")).toBe("false");
   });
 
   it("focuses its own importer through unrelated updates and retires pending focus on disposal", () => {
@@ -257,6 +256,11 @@ describe("config appearance preferences", () => {
     document.body.append(otherInput);
     const { container, props } = renderAppearance({ customThemeImportUrl: "amethyst-haze" });
     document.body.append(container);
+    props.onOpenCustomThemeImport = () => {
+      props.customThemeImportExpanded = true;
+      renderConfigInto(props, container);
+    };
+    renderConfigInto(props, container);
     const frames = new Map<number, FrameRequestCallback>();
     let frameId = 0;
     const requestFrame = vi
@@ -276,8 +280,7 @@ describe("config appearance preferences", () => {
       container.remove();
     });
 
-    props.customThemeImportExpanded = true;
-    props.customThemeImportFocusToken = 1;
+    findButtonByText(container, "Import").click();
     renderConfigInto(props, container);
     props.textScale = 110;
     renderConfigInto(props, container);
@@ -291,7 +294,7 @@ describe("config appearance preferences", () => {
     expect(input.selectionStart).toBe(0);
     expect(input.selectionEnd).toBe("amethyst-haze".length);
 
-    props.customThemeImportFocusToken = 2;
+    findButtonByText(container, "Import").click();
     renderConfigInto(props, container);
     expect(frames.size).toBe(1);
     cleanupSolid();
@@ -312,8 +315,8 @@ describe("config appearance preferences", () => {
     onTestFinished(() => container.remove());
     const row = (title: string) => settingsRow(container, title);
 
-    expect(findButtonByText(container, "Knot").getAttribute("aria-pressed")).toBe("true");
-    expect(findButtonByText(container, "Claw").getAttribute("aria-pressed")).toBe("false");
+    expect(pressed(container, "Knot")).toBe("true");
+    expect(pressed(container, "Claw")).toBe("false");
     const textScaleButtons = [
       ...container.querySelectorAll<HTMLButtonElement>(".settings-text-scale__btn"),
     ];
@@ -396,9 +399,7 @@ describe("config appearance preferences", () => {
     expect(languageRow.textContent).toContain("Stored in this browser only");
     expect(languageRow.textContent).not.toContain("Synced across your devices");
     await openPicker(languageRow.querySelector("openclaw-select-picker")!);
-    expect(
-      languageRow.querySelector('[role="option"][data-value="fr"]')?.getAttribute("aria-selected"),
-    ).toBe("true");
+    expect(pickerOption(languageRow, "fr")?.getAttribute("aria-selected")).toBe("true");
     expect(themeDescription.textContent).toContain("Default: Claw");
     expect(themeDescription.textContent).toContain("Stored in this browser only");
     expect(themeDescription.textContent).not.toContain("Synced across your devices");
@@ -438,22 +439,10 @@ describe("config appearance preferences", () => {
     const onMicrophoneRefresh = vi.fn();
     const onCameraRefresh = vi.fn();
     const { container } = renderAppearance({
-      microphone: {
-        devices: [{ deviceId: "mic-1", label: "Desk Mic" }],
-        permissionRequired: false,
-        selectedDeviceId: "mic-1",
-        loading: false,
-        error: null,
-      },
+      microphone: mediaDevice("mic-1", "Desk Mic"),
       onMicrophoneSelect: vi.fn(),
       onMicrophoneRefresh,
-      camera: {
-        devices: [{ deviceId: "camera-1", label: "Desk Camera" }],
-        permissionRequired: false,
-        selectedDeviceId: "camera-1",
-        loading: false,
-        error: null,
-      },
+      camera: mediaDevice("camera-1", "Desk Camera"),
       onCameraSelect: vi.fn(),
       onCameraRefresh,
       composerHoldToRecord: true,

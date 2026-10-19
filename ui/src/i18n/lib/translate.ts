@@ -1,14 +1,15 @@
+import {
+  DEFAULT_LOCALE,
+  RTL_LOCALES,
+  SUPPORTED_LOCALES,
+  isSupportedLocale,
+  resolveNavigatorLocale,
+  type Locale,
+} from "../../../../src/shared/control-ui-locale.ts";
 import { getOrCreatePromise } from "../../../../src/shared/lazy-promise.ts";
 import { getSafeLocalStorage } from "../../local-storage.ts";
 import { en } from "../locales/en.ts";
-import {
-  DEFAULT_LOCALE,
-  SUPPORTED_LOCALES,
-  isSupportedLocale,
-  loadLazyLocaleTranslation,
-  resolveNavigatorLocale,
-  type Locale,
-} from "./registry.ts";
+import { loadLazyLocaleTranslation } from "./registry.ts";
 import type { TranslationMap } from "./types.ts";
 
 function lookupTranslation(map: TranslationMap | undefined, keys: readonly string[]): unknown {
@@ -31,14 +32,12 @@ type LocaleTranslationLoader = (locale: Locale) => Promise<TranslationMap | null
 
 export { SUPPORTED_LOCALES, isSupportedLocale };
 
-const RTL_LOCALES = new Set<Locale>(["ar", "fa"]);
-
 function syncDocumentLocale(locale: Locale): void {
   if (typeof document === "undefined") {
     return;
   }
   document.documentElement.lang = locale;
-  document.documentElement.dir = RTL_LOCALES.has(locale) ? "rtl" : "ltr";
+  document.documentElement.dir = RTL_LOCALES.includes(locale) ? "rtl" : "ltr";
 }
 
 class I18nManager {

@@ -270,7 +270,7 @@ async function verifyOverlappingRetainedWork(createRecoveryFixture: RecoveryFixt
 async function verifyExplicitDrainWait(
   createFixture: RecoveryFixtureFactory,
   kind: "retained work" | "retained consumer" | "active call",
-  outcome: "complete" | "cancel",
+  outcome: "complete" | "cancel" | "time out",
 ) {
   const controller = new AbortController();
   const fixture = await createFixture({
@@ -294,17 +294,29 @@ async function verifyExplicitDrainWait(
   const reloading = operation.result;
   try {
     await Promise.race([observation.entered, reloading]);
-    expect(fixture.owner.getReloadStatus()?.reason).toBeTruthy();
+    expect(fixture.owner.getReloadStatus()).toMatchObject({
+      deadlineAtMs: Date.now() + 600_000,
+      reason: expect.stringContaining("600s drain budget"),
+    });
     await vi.advanceTimersByTimeAsync(70_000);
     expect(operation.state.settled).toBe(false);
     expect(fixture.candidates).toHaveLength(0);
     expect(fixture.firstStop).not.toHaveBeenCalled();
     expect(instance.disposing).toBe(false);
-    if (outcome === "cancel") {
-      controller.abort(new Error("operator cancelled reload"));
-      await vi.advanceTimersByTimeAsync(0);
+    if (outcome !== "complete") {
+      if (outcome === "cancel") {
+        controller.abort(new Error("operator cancelled reload"));
+        await vi.advanceTimersByTimeAsync(0);
+      } else {
+        await vi.advanceTimersByTimeAsync(530_000);
+      }
       expect(operation.state.settled).toBe(true);
       expect(await reloading).toMatchObject(reloadFailure("drain"));
+      if (outcome === "time out") {
+        expect(await reloading).toMatchObject({
+          cause: { message: expect.stringContaining("admitted work did not settle within 600s") },
+        });
+      }
       expect(fixture.registryOwner.registry).toBe(fixture.previousRegistry);
       expect(instance.run(() => "still serving")).toBe("still serving");
       expect(instance.disposing).toBe(false);
@@ -383,10 +395,12 @@ export function registerPluginRetainedWorkReloadTests(
   it.each([
     ["retained work", "complete"],
     ["retained work", "cancel"],
+    ["retained work", "time out"],
     ["retained consumer", "complete"],
     ["retained consumer", "cancel"],
     ["active call", "complete"],
     ["active call", "cancel"],
+    ["active call", "time out"],
   ] as const)("explicit drain wait preserves %s beyond 60s and can %s", (kind, outcome) =>
     verifyExplicitDrainWait(createRecoveryFixture, kind, outcome),
   );

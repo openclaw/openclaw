@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createMemo, getOwner, runWithOwner } from "solid-js";
+import { createMemo, getOwner, runWithOwner, Show } from "solid-js";
 import { EDITOR_IDS, EDITOR_LABELS } from "../lib/editor-links.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { formatSessionSnoozeWakeTime, isSessionSnoozed } from "../lib/sessions/session-snooze.ts";
@@ -15,7 +15,7 @@ import { sessionArchiveShortcut } from "./session-menu-options.ts";
 import { useSessionSnoozeEntries } from "./session-menu-snooze.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
-import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
+import type { MenuControls, MenuEntry, MenuItem } from "./solid/menu.tsx";
 
 export function SessionMenuShortcut(props: {
   shortcut: string;
@@ -24,12 +24,14 @@ export function SessionMenuShortcut(props: {
   return (
     <span class="session-menu__shortcut" aria-hidden="true">
       <Kbd keys={props.shortcut.toUpperCase()} inline />
-      {props.alias ? (
-        <>
-          {" "}
-          / <KeyboardShortcut combo={props.alias} inline />
-        </>
-      ) : undefined}
+      <Show when={props.alias} keyed>
+        {(alias) => (
+          <>
+            {" "}
+            / <KeyboardShortcut combo={alias} inline />
+          </>
+        )}
+      </Show>
     </span>
   );
 }
@@ -62,7 +64,7 @@ const STANDARD_ITEMS = {
 export function useSessionMenuEntries(
   actions: SessionMenuActions,
   readState: () => MenuState,
-  options: { openInExtra?: () => readonly MenuEntry[] } = {},
+  options: { openInExtra?: () => readonly MenuEntry[]; controls?: MenuControls } = {},
 ) {
   const owner = getOwner();
   const state = readState();
@@ -74,8 +76,9 @@ export function useSessionMenuEntries(
     readState,
     (kind) => actions.actionDisabled(kind),
     (action) => actions.runAction(action),
+    options.controls?.ref,
   );
-  const details = useSessionMenuDetails(actions, readState, disabled);
+  const details = useSessionMenuDetails(actions, readState, disabled, options.controls);
   const multipleOwners = actions.ownerMenu.multipleOwners;
   const involvementAvailable = createMemo(() => actions.involvementAvailable);
   let appearanceContent: JSX.Element;

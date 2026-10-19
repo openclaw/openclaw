@@ -21,7 +21,7 @@ import {
 /** Generated blocks carry exactly these keys; credentials or request overrides mean authorship. */
 const GENERATED_PROVIDER_KEYS = ["api", "baseUrl", "models"];
 
-export type RootProviderCopy = Readonly<{
+type RootProviderCopy = Readonly<{
   providerId: string;
   /** Plugin whose generated catalog holds the identical block. */
   pluginId: string;

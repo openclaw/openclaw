@@ -1,6 +1,7 @@
 import { onSettled } from "solid-js";
 import type { ControlUiSessionPullRequest } from "../../../../../src/gateway/control-ui-contract.js";
 import type { ApplicationGateway } from "../../../app/gateway.ts";
+import { listen } from "../../../lib/reactive/listener.ts";
 
 export type ChatCiDisclosureProps = {
   gateway?: ApplicationGateway;
@@ -13,7 +14,7 @@ export type ChatCiDisclosureProps = {
 export function createCiDisclosure(
   host: HTMLElement & Pick<ChatCiDisclosureProps, "presented">,
   onVisibility: () => void,
-  dispose: () => void,
+  connect: () => () => void,
 ) {
   let disclosure: HTMLDetailsElement | null = null;
   let active = false;
@@ -32,14 +33,15 @@ export function createCiDisclosure(
         onVisibility();
       }
     };
-    disclosure?.addEventListener("toggle", toggle);
-    document.addEventListener("visibilitychange", onVisibility);
+    const stopToggle = disclosure && listen(disclosure, "toggle", toggle);
+    const stopVisibility = listen(document, "visibilitychange", onVisibility);
+    const disconnect = connect();
     onVisibility();
     return () => {
       active = false;
-      disclosure?.removeEventListener("toggle", toggle);
-      document.removeEventListener("visibilitychange", onVisibility);
-      dispose();
+      stopToggle?.();
+      stopVisibility();
+      disconnect();
     };
   });
   return {

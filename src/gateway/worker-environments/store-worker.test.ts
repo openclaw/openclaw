@@ -14,10 +14,9 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { OpenClawStateExternalOwnershipError } from "../../infra/sqlite-lifecycle-errors.js";
 import { createStateSchemaMigrationStep } from "../../infra/state-migrations.state-schema.js";
 import { createDeferredCore } from "../../shared/deferred.js";
-import {
-  clearOpenClawDatabaseQuarantine,
-  recordOpenClawDatabaseQuarantine,
-} from "../../state/openclaw-quarantine-store.js";
+import { clearOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.js";
+import { seedOpenClawDatabaseQuarantine } from "../../state/openclaw-quarantine-store.test-support.js";
+import { recordOpenClawStateDatabaseOpenFailure } from "../../state/openclaw-state-db-cache.js";
 import * as stateReads from "../../state/openclaw-state-db-readonly.js";
 import { withExistingOpenClawStateSchema } from "../../state/openclaw-state-db-schema-policy.js";
 import {
@@ -25,7 +24,6 @@ import {
   closeOpenClawStateDatabaseForTest,
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
-  recordOpenClawStateDatabaseOpenFailure,
   registerOpenClawStateDatabaseLifecycleListener,
   runOpenClawStateWriteTransaction,
   type OpenClawStateDatabase,
@@ -284,13 +282,11 @@ it("retires inventory when native admission discovers durable quarantine", async
     try {
       intent = await createIntent(store, "quarantined-environment");
       // A different verifier can publish this fact without notifying our process.
-      expect(
-        recordOpenClawDatabaseQuarantine({
-          kind: "state",
-          path: databasePath,
-          reason: "verified corrupt index",
-        }),
-      ).toBe(true);
+      seedOpenClawDatabaseQuarantine({
+        kind: "state",
+        path: databasePath,
+        reason: "verified corrupt index",
+      });
       expect(() => openOpenClawStateDatabase()).toThrow(
         expect.objectContaining({ name: "SqliteIntegrityError" }),
       );

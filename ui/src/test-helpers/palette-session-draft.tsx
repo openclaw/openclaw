@@ -19,7 +19,7 @@ export class PaletteDraftHost {
   readonly querySelector = this.element.querySelector.bind(this.element);
   readonly querySelectorAll = this.element.querySelectorAll.bind(this.element);
   private publish = () => {};
-  readonly requestUpdate = () => this.publish();
+  private readonly onDraftChange = () => this.publish();
   private readonly unmount: () => void;
   readonly context: ApplicationContext;
   paletteOpen = true;
@@ -43,7 +43,7 @@ export class PaletteDraftHost {
     this.element,
     () => ({ context: this.context, open: this.paletteOpen }),
     {
-      changed: this.requestUpdate,
+      changed: this.onDraftChange,
       updateComplete: () => this.updateComplete,
       onClose: () => this.started(),
     },
@@ -74,9 +74,9 @@ export class PaletteDraftHost {
             context.agentIdentity,
             context.sessions,
             context.config,
-          ].map((source) => source.subscribe(this.requestUpdate));
+          ].map((source) => source.subscribe(this.onDraftChange));
           this.draft.connect();
-          this.requestUpdate();
+          this.onDraftChange();
           return () => {
             this.publish = () => {};
             stops.forEach((stop) => stop());
@@ -124,7 +124,6 @@ export async function mount(options: Parameters<typeof createDraftFixture>[0] = 
       return () => listeners.delete(listener);
     },
   });
-  Object.assign(context.agents, { subscribe: () => () => {} });
   Object.assign(context.agents.state, { connected: true, client: context.gateway.snapshot.client });
   Object.assign(context.sessions, { subscribe: () => () => {} });
   Object.assign(context.config, { subscribe: () => () => {} });

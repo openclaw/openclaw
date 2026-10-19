@@ -1,5 +1,6 @@
 import { readdirSync } from "node:fs";
 import path from "node:path";
+import { isStringArray } from "openclaw/plugin-sdk/collection-input-runtime";
 import type {
   SpeechProviderConfig,
   SpeechProviderPlugin,
@@ -15,10 +16,6 @@ type SourceFormat = OutputFormat | "ogg" | "m4a";
 const DEFAULT_TIMEOUT_MS = 120_000;
 const MAX_AUDIO_OUTPUT_BYTES = 50 * 1024 * 1024;
 const MAX_CLI_STDERR_BYTES = 1024 * 1024;
-
-function asStringArray(value: unknown): string[] | undefined {
-  return Array.isArray(value) && value.every((v) => typeof v === "string") ? value : undefined;
-}
 
 function normalizeOutputFormat(value: unknown): OutputFormat {
   if (typeof value !== "string") {
@@ -40,7 +37,7 @@ function getConfig(cfg: SpeechProviderConfig, timeoutMs: number = DEFAULT_TIMEOU
   }
   return {
     command,
-    args: asStringArray(cfg.args) ?? [],
+    args: isStringArray(cfg.args) ? cfg.args : [],
     outputFormat: normalizeOutputFormat(cfg.outputFormat),
     timeoutMs: typeof cfg.timeoutMs === "number" ? cfg.timeoutMs : timeoutMs,
     cwd: typeof cfg.cwd === "string" ? cfg.cwd : undefined,

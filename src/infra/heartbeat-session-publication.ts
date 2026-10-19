@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
+import { asOptionalRecord, isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { truncateUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { prepareAgentRunTerminalReply } from "../agents/agent-run-terminal-reply.js";
@@ -144,9 +144,7 @@ export async function publishHeartbeatSessionReply(params: {
     );
     // Managed mirrors retain source identities separately from their display URLs.
     const receiptMedia =
-      displayMedia.length > 0 &&
-      Array.isArray(storedMedia) &&
-      storedMedia.every((source): source is string => typeof source === "string")
+      displayMedia.length > 0 && isStringArray(storedMedia)
         ? storedMedia
         : (answer.mediaUrls ?? []);
     // Runtime payloads carry original references even after delivery URLs change.

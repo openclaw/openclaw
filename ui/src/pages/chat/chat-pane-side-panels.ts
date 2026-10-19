@@ -30,23 +30,24 @@ import {
 } from "./sidebar-layout.ts";
 
 export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
+  sidebarRegionElement: HTMLElement | null = null;
+  sidebarRegionView: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
   protected sessionCompanionHydrationKey = "";
   protected sessionCompanionFocusGeneration = 0;
   private sessionCompanionPresented = false;
-  protected sessionCompanionFocusRequest?: () => boolean;
-  /** The subagent the Subagents panel was asked to show, or null for its list; taken once. */
-  protected subagentsShowRequest?: () => string | null | undefined;
-  /** The control a background panel was opened from in a narrow pane; the region takes it once. */
-  protected sideFocusOrigin?: () => HTMLElement | null;
-  protected readonly sessionCompanionThreads = new ChatSessionCompanionThreads(() => {
-    this.invalidate();
-  });
+  readonly companionIntents: {
+    focusRequest?: () => boolean;
+    /** The subagent requested by the panel, or null for its list; taken once. */
+    subagentsShowRequest?: () => string | null | undefined;
+    /** The narrow pane control to restore focus to; taken once by the region. */
+    sideFocusOrigin?: () => HTMLElement | null;
+  } = { focusRequest: undefined, subagentsShowRequest: undefined, sideFocusOrigin: undefined };
+  readonly sessionCompanionThreads = new ChatSessionCompanionThreads();
   protected readonly setSessionObserverVisibility = (visible: boolean) => {
     const state = this.state;
     if (state?.connected && state.client) {
       void sendSessionObserverVisibility(state.client, visible).catch(() => undefined);
     }
-    this.invalidate();
   };
 
   protected restorePaneSidebarLayout(layout: SidebarLayout): SidebarLayout {
@@ -104,14 +105,12 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
     // The pane owns the intent across the panel's lazy mount; the panel takes
     // it once, and only for the session that asked.
     const take = () => {
-      if (this.subagentsShowRequest === take) {
-        this.subagentsShowRequest = undefined;
-        this.invalidate();
+      if (this.companionIntents.subagentsShowRequest === take) {
+        this.companionIntents.subagentsShowRequest = undefined;
       }
       return this.state?.sessionKey === sessionKey ? subagentKey : undefined;
     };
-    this.subagentsShowRequest = take;
-    this.invalidate();
+    this.companionIntents.subagentsShowRequest = take;
     this.requestBackgroundPanel("subagents", "open");
     if (focus) {
       void this.focusSubagentsPanel();
@@ -120,23 +119,23 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
 
   private async focusSubagentsPanel(): Promise<void> {
     const state = this.state;
-    const sessionKey = state?.sessionKey;
+    if (!state) {
+      return;
+    }
+    const sessionKey = state.sessionKey;
     await customElements.whenDefined("openclaw-chat-sidebar-region");
-    this.invalidate();
-    await this.updateComplete;
-    const region = this.element.querySelector("openclaw-chat-sidebar-region");
+    await new Promise<void>((resolve) => {
+      state.renderLifecycle.afterCommit(() => resolve(), resolve);
+    });
+    const region = this.sidebarRegionView;
     await region?.updateComplete;
-    const tab = region?.parentElement?.querySelector<HTMLButtonElement>(
-      '[data-region-header="side"] .tabstrip-tab[aria-selected="true"]',
-    );
     if (
       this.isConnected &&
-      state &&
       this.state === state &&
       state.sessionKey === sessionKey &&
       this.isSlotShown(state.sidebarLayout, "subagents")
     ) {
-      tab?.focus({ preventScroll: true });
+      region?.focusActiveSideTab({ preventScroll: true });
     }
   }
 
@@ -168,12 +167,12 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       const active = this.element.ownerDocument.activeElement;
       const origin = active instanceof HTMLElement && this.element.contains(active) ? active : null;
       const take = () => {
-        if (this.sideFocusOrigin === take) {
-          this.sideFocusOrigin = undefined;
+        if (this.companionIntents.sideFocusOrigin === take) {
+          this.companionIntents.sideFocusOrigin = undefined;
         }
         return origin;
       };
-      this.sideFocusOrigin = take;
+      this.companionIntents.sideFocusOrigin = take;
     }
     this.commitSidebarLayout(
       closing ? closeSlot(state.sidebarLayout, slot) : openSlot(state.sidebarLayout, slot),
@@ -183,18 +182,18 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   protected syncSessionCompanionPresentation(presented: boolean): void {
     if (
       this.sessionCompanionPresented === presented &&
-      (presented || this.sessionCompanionFocusRequest === undefined)
+      (presented || this.companionIntents.focusRequest === undefined)
     ) {
       return;
     }
     this.sessionCompanionPresented = presented;
     if (presented && this.state) {
-      this.sessionCompanionFocusRequest ??= this.captureSessionCompanionFocus(
+      this.companionIntents.focusRequest ??= this.captureSessionCompanionFocus(
         this.state,
       ).requestFocus;
     } else {
       this.sessionCompanionFocusGeneration += 1;
-      this.sessionCompanionFocusRequest = undefined;
+      this.companionIntents.focusRequest = undefined;
     }
   }
 
@@ -222,9 +221,8 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
       this.visuallyPresented &&
       this.presented;
     const requestFocus = () => {
-      if (this.sessionCompanionFocusRequest === requestFocus) {
-        this.sessionCompanionFocusRequest = undefined;
-        this.invalidate();
+      if (this.companionIntents.focusRequest === requestFocus) {
+        this.companionIntents.focusRequest = undefined;
       }
       return ownsFocus();
     };
@@ -234,12 +232,10 @@ export abstract class ChatPaneSidePanels extends ChatPaneStateOwner {
   protected async openSessionCompanion(pageState: ChatPageHost, question: string): Promise<void> {
     const { ownsFocus, requestFocus } = this.captureSessionCompanionFocus(pageState);
     // The first lazy mount and the completed answer share the same input intent.
-    this.sessionCompanionFocusRequest = requestFocus;
-    this.invalidate();
+    this.companionIntents.focusRequest = requestFocus;
     await this.submitSessionCompanionQuestion(question);
     if (ownsFocus()) {
-      this.sessionCompanionFocusRequest = requestFocus;
-      this.invalidate();
+      this.companionIntents.focusRequest = requestFocus;
     }
   }
 

@@ -5,7 +5,10 @@ import {
   normalizeTrimmedStringList,
 } from "../../packages/normalization-core/src/string-normalization.js";
 import { isBlockedObjectKey } from "../infra/prototype-keys.js";
-import { PLUGIN_MANIFEST_CONTRACT_KEYS } from "./manifest-contract-keys.js";
+import {
+  PLUGIN_MANIFEST_CONTRACT_KEYS,
+  TRANSCRIPT_SOURCE_LOCATOR_FIELDS,
+} from "./manifest-contract-keys.js";
 import type {
   DecisionProviderCapabilities,
   PluginManifest,
@@ -22,6 +25,8 @@ import type {
   PluginManifestMcpServer,
   PluginManifestMediaUnderstandingCapability,
   PluginManifestMediaUnderstandingProviderMetadata,
+  PluginManifestOnboardingScope,
+  PluginManifestProviderAuthChoice,
   PluginManifestProviderBaseUrlGuard,
   PluginManifestSecretInputContracts,
   PluginManifestSecretInputPath,
@@ -29,6 +34,20 @@ import type {
   PluginManifestToolProfile,
   PluginManifestTranscriptSource,
 } from "./manifest-types.js";
+
+export function normalizeProviderAssistantVisibility(
+  value: unknown,
+): PluginManifestProviderAuthChoice["assistantVisibility"] {
+  return value === "visible" || value === "manual-only" || value === "detected-only"
+    ? value
+    : undefined;
+}
+
+export function isPluginManifestOnboardingScope(
+  value: unknown,
+): value is PluginManifestOnboardingScope {
+  return value === "text-inference" || value === "image-generation" || value === "music-generation";
+}
 
 // Accept only bounded declarative facts; unknown or malformed fields never enter tool guidance.
 function normalizeDecisionCapabilities(value: unknown): DecisionProviderCapabilities | undefined {
@@ -183,7 +202,6 @@ export function normalizeManifestTranscriptSources(
   value: unknown,
   ownedProviders: readonly string[] = [],
 ): Record<string, PluginManifestTranscriptSource> | undefined {
-  const locatorKeys = ["accountId", "guildId", "channelId", "meetingUrl"] as const;
   return normalizeNamedMetadataRecord(value, (entry, id) => {
     if (!ownedProviders.includes(id)) {
       return undefined;
@@ -194,7 +212,7 @@ export function normalizeManifestTranscriptSources(
       isRecord(raw) &&
       Object.entries(raw).every(
         ([key, mode]) =>
-          locatorKeys.some((locator) => locator === key) &&
+          TRANSCRIPT_SOURCE_LOCATOR_FIELDS.some((locator) => locator === key) &&
           (mode === "optional" || mode === "required"),
       )
         ? Object.fromEntries(Object.entries(raw))

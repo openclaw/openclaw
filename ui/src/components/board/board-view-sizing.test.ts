@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { exactBoardWidgetHeightPx } from "../../lib/board/grid.ts";
+import { exactBoardWidgetHeightPx, FINE_POINTER_QUERY } from "../../lib/board/grid.ts";
 // Side-effect import: test-support only type-imports the component, so the
 // custom element must be registered here for mount() to render anything.
 import "./board-view.ts";
@@ -36,6 +36,16 @@ describe("board widget sizing", () => {
   });
 
   it("lets a dashboard document fit tall HTML content without an inner scroll viewport", async () => {
+    vi.spyOn(window, "matchMedia").mockImplementation((media) => ({
+      media,
+      matches: media === FINE_POINTER_QUERY,
+      onchange: null,
+      addListener() {},
+      removeListener() {},
+      addEventListener() {},
+      removeEventListener() {},
+      dispatchEvent: () => true,
+    }));
     const view = await mount();
     view.fitAutoContent = true;
     await view.updateComplete;

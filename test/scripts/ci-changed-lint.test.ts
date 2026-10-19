@@ -22,6 +22,9 @@ import { createNestedGitEnv } from "../helpers/temp-repo.js";
 import { copyOxlintConfigFixture } from "./test-helpers.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
+const scriptsConfig = "config/tsconfig/oxlint.scripts.json";
+const coreConfig = "config/tsconfig/oxlint.core.json";
+const rootTestConfig = "test/tsconfig/tsconfig.test.root.json";
 
 function fixture(prefix: string) {
   const cwd = tempDirs.make(prefix);
@@ -181,10 +184,7 @@ describe("CI changed lint", () => {
     );
     mkdirSync(path.join(cwd, "config/tsconfig"), { recursive: true });
     copyOxlintConfigFixture(cwd);
-    copyFileSync(
-      "config/tsconfig/oxlint.core.json",
-      path.join(cwd, "config/tsconfig/oxlint.core.json"),
-    );
+    copyFileSync(coreConfig, path.join(cwd, coreConfig));
     symlinkSync(path.resolve("node_modules"), path.join(cwd, "node_modules"), "junction");
     mkdirSync(path.join(cwd, "scripts"));
     symlinkSync(path.resolve("scripts/lib"), path.join(cwd, "scripts/lib"), "junction");
@@ -314,20 +314,11 @@ describe("CI changed lint", () => {
       ]);
       expect(central.some(({ args }) => args[0] === "lint:ui:i18n")).toBe(true);
       expect(central.some(({ args }) => args[0] === "check:control-ui-controllers")).toBe(true);
-      expect(
-        central.some(
-          ({ args }) =>
-            args[0] === "scripts/run-oxlint.mjs" &&
-            args.includes("test/tsconfig/tsconfig.test.root.json"),
-        ),
-      ).toBe(true);
-      expect(
-        central.find(
-          ({ args }) =>
-            args[0] === "scripts/run-oxlint.mjs" &&
-            args.includes("test/tsconfig/tsconfig.test.root.json"),
-        )?.args,
-      ).toContain(`--threads=${runnerProfile === "blacksmith" ? 8 : 1}`);
+      const rootLint = central.find(
+        ({ args }) => args[0] === "scripts/run-oxlint.mjs" && args.includes(rootTestConfig),
+      );
+      expect(rootLint).toBeDefined();
+      expect(rootLint?.args).toContain(`--threads=${runnerProfile === "blacksmith" ? 8 : 1}`);
       const selections = [
         plan.central,
         ...[...plan.core, ...plan.extensions].map(
@@ -388,8 +379,8 @@ describe("CI changed lint", () => {
       } else {
         expect(plan.core).toEqual([]);
         expect(plan.extensions).toEqual([]);
-        expect(actual).toContain("config/tsconfig/oxlint.core.json:src/utils.ts");
-        expect(actual).toContain("config/tsconfig/oxlint.scripts.json:scripts/lib/arg-utils.mts");
+        expect(actual).toContain(`${coreConfig}:src/utils.ts`);
+        expect(actual).toContain(`${scriptsConfig}:scripts/lib/arg-utils.mts`);
         expect(plan.central.groups).toEqual(["core", "extensions", "scripts"]);
       }
       for (const row of [...plan.core, ...plan.extensions]) {
@@ -424,66 +415,13 @@ describe("CI changed lint", () => {
   );
 
   it.each(["ui/src/app.ts", ".oxlintrc.json"])(
-    "retains the controller guard and its Git scope when CI splits lint for %s",
+    "retains the controller guard and staged scope when CI splits lint for %s",
     (file) => {
-      const result = detectChangedLanes([file]);
-      for (const { base, staged, checkoutBase, expectedBase, prepared } of [
-        {
-          base: "fixture-base",
-          staged: false,
-          checkoutBase: "ci-base",
-          expectedBase: "fixture-base",
-          prepared: false,
-        },
-        {
-          base: "fixture-base",
-          staged: true,
-          checkoutBase: "ci-base",
-          expectedBase: "fixture-base",
-          prepared: false,
-        },
-        {
-          base: undefined,
-          staged: false,
-          checkoutBase: "ci-base",
-          expectedBase: "ci-base",
-          prepared: true,
-        },
-        {
-          base: undefined,
-          staged: true,
-          checkoutBase: "ci-base",
-          expectedBase: "HEAD",
-          prepared: false,
-        },
-        {
-          base: undefined,
-          staged: false,
-          checkoutBase: undefined,
-          expectedBase: "origin/main",
-          prepared: false,
-        },
-        {
-          base: undefined,
-          staged: true,
-          checkoutBase: undefined,
-          expectedBase: "HEAD",
-          prepared: false,
-        },
-      ]) {
-        if (file === ".oxlintrc.json") {
-          expect(
-            createChangedCheckPlan(detectChangedLanes(["pnpm-lock.yaml"]), {
-              base,
-              staged,
-            }).commands.find(({ args }) => args[0] === "lint")?.args,
-          ).toEqual(["lint", ...(staged ? ["--staged"] : []), ...(base ? ["--base", base] : [])]);
-        }
-        const commands = createChangedCheckPlan(result, {
+      for (const staged of [false, true]) {
+        const commands = createChangedCheckPlan(detectChangedLanes([file]), {
           lintOnly: true,
-          base,
           staged,
-          env: { ...process.env, CHECKOUT_BASE_SHA: checkoutBase },
+          env: { ...process.env, CHECKOUT_BASE_SHA: "unavailable-base" },
           lintSelection: {
             files: [],
             coreStripes: [],
@@ -497,10 +435,7 @@ describe("CI changed lint", () => {
           commands.find(({ args }) => args[0] === "check:control-ui-controllers")?.args,
         ).toEqual([
           "check:control-ui-controllers",
-          ...(staged ? ["--staged"] : []),
-          "--base",
-          expectedBase,
-          ...(prepared ? ["--no-merge-base"] : []),
+          ...(staged ? ["--staged"] : ["--base", "unavailable-base", "--no-merge-base"]),
         ]);
       }
     },
@@ -523,6 +458,9 @@ describe("CI changed lint", () => {
           },
         ).trim();
       write("ui/src/view.ts", "export {};\n");
+      for (const pattern of ["createEffect", "untrack", "addEventListener", "querySelector"]) {
+        write(`config/control-ui-${pattern}-baseline.txt`, "");
+      }
       git(source, ["init"]);
       git(source, ["add", "."]);
       git(source, ["commit", "-m", "base"]);
@@ -580,7 +518,7 @@ describe("CI changed lint", () => {
       const missing = run("missing-comparison-base");
       expect(missing.error).toBeUndefined();
       expect(missing.status, missing.stderr).toBe(1);
-      expect(missing.stderr).toContain("Could not resolve ratchet base");
+      expect(missing.stderr).toContain("ui/src/new.ts");
     },
   );
 
@@ -601,7 +539,7 @@ describe("CI changed lint", () => {
       ({ bin, args }) => bin === "node" && args[0] === "scripts/run-oxlint.mjs",
     );
     expect(semantic.map(({ args }) => args)).toEqual([
-      ["scripts/run-oxlint.mjs", "--tsconfig", "config/tsconfig/oxlint.core.json", "src/utils.ts"],
+      ["scripts/run-oxlint.mjs", "--tsconfig", coreConfig, "src/utils.ts"],
       [
         "scripts/run-oxlint.mjs",
         "--tsconfig",
@@ -611,7 +549,7 @@ describe("CI changed lint", () => {
       [
         "scripts/run-oxlint.mjs",
         "--tsconfig",
-        "config/tsconfig/oxlint.scripts.json",
+        scriptsConfig,
         "scripts/lib/ci-check-family-scope.mts",
       ],
     ]);

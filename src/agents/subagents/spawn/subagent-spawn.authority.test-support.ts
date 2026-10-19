@@ -1,16 +1,10 @@
-// Shared isolated ownership fixtures and real preparation adapters for native authority tests.
 import { promises as fs } from "node:fs";
 import { mkdtemp, realpath, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
-import {
-  captureRuntimeConfigAsyncReader,
-  clearConfigCache,
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-} from "../../../config/config.js";
+import * as config from "../../../config/config.js";
 import { callGateway } from "../../../gateway/call.js";
 import { registerChatAbortController } from "../../../gateway/chat-abort.js";
 import type { GatewayRecoveryRuntime } from "../../../gateway/server-instance-runtime.types.js";
@@ -24,25 +18,17 @@ import {
 } from "../../../infra/outbound/session-binding-service.js";
 import * as privateStores from "../../../infra/private-file-store.js";
 import { flushLogger, resetLogger } from "../../../logging/logger.js";
-import {
-  captureActivePluginRegistrySnapshot,
-  getActivePluginRegistry,
-  restoreActivePluginRegistrySnapshot,
-  setActivePluginRegistry,
-} from "../../../plugins/runtime.js";
+import * as plugins from "../../../plugins/runtime.js";
 import { bindGatewayContextResolver } from "../../../plugins/runtime/gateway-request-scope.js";
 import { getActiveGatewayRootWorkCount } from "../../../process/gateway-work-admission.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../../test-utils/channel-plugins.js";
 import { captureEnv, setTestEnvValue } from "../../../test-utils/env.js";
 import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cleanup.js";
-import {
-  createOperationalRunInstanceRef,
-  getAdmittedRunDelegatedAuthority,
-  prepareAgentRunAdmission,
-} from "../../admitted-run-context.js";
+import * as runContext from "../../admitted-run-context.js";
 import { loadAgentRuntimePluginRegistryHandle } from "../../runtime-plugins.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
@@ -62,37 +48,44 @@ vi.mock("../../runtime-plugins.js", () => ({
 }));
 vi.mock("../../../gateway/call.js", { spy: true });
 
-export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) {
-  const completed = createDeferred();
+export function observeSubagentRun(
+  runId: string,
+  matches: (entry: SubagentRunRecord) => boolean = () => true,
+) {
+  const completed = createDeferred<SubagentRunRecord>();
   const inspect = () => {
-    const current = subagentRuns.get(entry.runId);
-    if (isSameSubagentRun(current, entry) && typeof current?.cleanupCompletedAt === "number") {
-      completed.resolve();
+    const current = subagentRuns.get(runId);
+    if (current && matches(current)) {
+      completed.resolve(current);
     }
   };
-  const unsubscribe = subscribeSubagentRunChanges("persistence", inspect);
+  const stop = subscribeSubagentRunChanges("persistence", inspect);
+  inspect();
+  return { promise: completed.promise, stop };
+}
+
+export async function waitForSubagentCleanupCompleted(entry: SubagentRunRecord) {
+  const observed = observeSubagentRun(
+    entry.runId,
+    (current) =>
+      isSameSubagentRun(current, entry) && typeof current.cleanupCompletedAt === "number",
+  );
   try {
-    inspect();
-    await completed.promise;
+    await observed.promise;
   } finally {
-    unsubscribe();
+    observed.stop();
   }
 }
 
 export function installSpawnThreadBindingFixture(
   onBound?: (binding: SessionBindingRecord) => Promise<void>,
 ) {
-  setActivePluginRegistry(
-    createTestRegistry([
-      {
-        pluginId: "matrix",
-        source: "test",
-        plugin: {
-          ...createChannelTestPluginBase({ id: "matrix" }),
-          conversationBindings: { defaultTopLevelPlacement: "child" },
-        },
-      },
-    ]),
+  const plugin = {
+    ...createChannelTestPluginBase({ id: "matrix" }),
+    conversationBindings: { defaultTopLevelPlacement: "child" },
+  };
+  plugins.setActivePluginRegistry(
+    createTestRegistry([{ pluginId: "matrix", source: "test", plugin }]),
   );
   const bindings: SessionBindingRecord[] = [];
   const bind = vi.fn<NonNullable<SessionBindingAdapter["bind"]>>(async (input) => {
@@ -138,17 +131,13 @@ export function installSpawnThreadBindingFixture(
     bind,
     bindings,
     unregister: () =>
-      unregisterSessionBindingAdapter({
-        channel: adapter.channel,
-        accountId: adapter.accountId,
-        adapter,
-      }),
+      unregisterSessionBindingAdapter({ channel: "matrix", accountId: "default", adapter }),
   };
 }
 
 export function installSpawnAttachmentFixture(params: {
   stateDir: string;
-  admitted: Parameters<typeof getAdmittedRunDelegatedAuthority>[0];
+  admitted: Parameters<typeof runContext.getAdmittedRunDelegatedAuthority>[0];
   pauseAt?: "directory" | "files";
   entered: () => void | Promise<void>;
   release: Promise<void>;
@@ -156,17 +145,23 @@ export function installSpawnAttachmentFixture(params: {
   const root = path.join(params.stateDir, "attachments", "subagents", "main");
   const lateWrites: string[] = [];
   const attachmentDirs: string[] = [];
+  const recordWrite = (kind: string) => {
+    if (!runContext.getAdmittedRunDelegatedAuthority(params.admitted)) {
+      lateWrites.push(kind);
+    }
+  };
+  const pause = async () => {
+    await params.entered();
+    await params.release;
+  };
   const mkdir = fs.mkdir;
   const mkdirSpy = vi.spyOn(fs, "mkdir").mockImplementation(async (...args) => {
     const result = await mkdir(...args);
     if (typeof args[0] === "string" && path.dirname(path.dirname(args[0])) === root) {
       attachmentDirs.push(args[0]);
-      if (!getAdmittedRunDelegatedAuthority(params.admitted)) {
-        lateWrites.push("directory");
-      }
+      recordWrite("directory");
       if (params.pauseAt === "directory") {
-        await params.entered();
-        await params.release;
+        await pause();
       }
     }
     return result;
@@ -184,21 +179,16 @@ export function installSpawnAttachmentFixture(params: {
         if (!attachmentDirs.includes(attachmentDir)) {
           attachmentDirs.push(attachmentDir);
         }
-        if (!getAdmittedRunDelegatedAuthority(params.admitted)) {
-          lateWrites.push("content");
-        }
+        recordWrite("content");
         const result = await store.writeText(...args);
         expect(await fs.readFile(path.join(rootDir, args[0]), "utf8")).toBe("synthetic attachment");
         if (params.pauseAt === "directory" || params.pauseAt === "files") {
-          await params.entered();
-          await params.release;
+          await pause();
         }
         return result;
       },
       writeJson: async (...args) => {
-        if (!getAdmittedRunDelegatedAuthority(params.admitted)) {
-          lateWrites.push("manifest");
-        }
+        recordWrite("manifest");
         return await store.writeJson(...args);
       },
     };
@@ -219,38 +209,46 @@ export function installSpawnAuthorityFixture() {
   const groupId = "pending-spawn";
   const env = captureEnv(["OPENCLAW_STATE_DIR", "OPENCLAW_CONFIG_PATH"]);
   let stateDir = "";
-  let pluginSnapshot: ReturnType<typeof captureActivePluginRegistrySnapshot>;
+  let pluginSnapshot: ReturnType<typeof plugins.captureActivePluginRegistrySnapshot>;
   const settle = () => settleSubagentRegistryPersistenceWork();
+  const writeSession = (key: string, id: string, agentId = "main", revision?: string) =>
+    writeSubagentSessionEntry({
+      stateDir,
+      agentId,
+      sessionKey: key,
+      defaultSessionId: id,
+      lifecycleRevision: revision,
+    });
+  async function configure(cfg: ReturnType<typeof config.getRuntimeConfig>) {
+    await writeFile(path.join(stateDir, "openclaw.json"), JSON.stringify(cfg));
+    config.clearConfigCache();
+    config.clearRuntimeConfigSnapshot();
+    await config.captureRuntimeConfigAsyncReader()();
+  }
 
   beforeEach(async () => {
     // Failed cleanup retains the prior owner instead of replacing its live stores.
     if (stateDir) {
       throw new Error("Previous spawn authority fixture cleanup is incomplete");
     }
-    pluginSnapshot = captureActivePluginRegistrySnapshot();
+    pluginSnapshot = plugins.captureActivePluginRegistrySnapshot();
     stateDir = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-spawn-authority-")));
     setTestEnvValue("OPENCLAW_STATE_DIR", stateDir);
     setTestEnvValue("OPENCLAW_CONFIG_PATH", path.join(stateDir, "openclaw.json"));
-    await writeFile(
-      path.join(stateDir, "openclaw.json"),
-      JSON.stringify({
-        logging: { audit: { enabled: false } },
-        tools: {
-          swarm: { enabled: true, maxConcurrent: 1 },
-          sessions_spawn: { attachments: { enabled: true } },
-        },
-        agents: {
-          defaults: { workspace: stateDir, model: { primary: "openai/gpt-5.4" } },
-          entries: { main: { workspace: stateDir } },
-        },
-      }),
-    );
-    clearConfigCache();
-    clearRuntimeConfigSnapshot();
-    await captureRuntimeConfigAsyncReader()();
+    await configure({
+      logging: { audit: { enabled: false } },
+      tools: {
+        swarm: { enabled: true, maxConcurrent: 1 },
+        sessions_spawn: { attachments: { enabled: true } },
+      },
+      agents: {
+        defaults: { workspace: stateDir, model: { primary: "openai/gpt-5.4" } },
+        entries: { main: { workspace: stateDir } },
+      },
+    });
     await resetSubagentRegistryForTests({ persist: false });
     vi.mocked(loadAgentRuntimePluginRegistryHandle).mockImplementation(
-      () => getActivePluginRegistry() ?? createTestRegistry([]),
+      () => plugins.getActivePluginRegistry() ?? createTestRegistry([]),
     );
     vi.mocked(callGateway).mockImplementation(async (request) => {
       if (request.method !== "agent.wait") {
@@ -262,11 +260,10 @@ export function installSpawnAuthorityFixture() {
 
   afterEach(async () => {
     const failures: unknown[] = [];
-    try {
-      await settle();
-    } catch (error) {
+    const recordFailure = (error: unknown) => {
       failures.push(error);
-    }
+    };
+    await settle().catch(recordFailure);
     // Settled delivery failures still permit cleanup; live roots retain their stores.
     if (getActiveGatewayRootWorkCount() === 0) {
       try {
@@ -276,17 +273,13 @@ export function installSpawnAuthorityFixture() {
         vi.mocked(loadAgentRuntimePluginRegistryHandle).mockReset();
         vi.mocked(callGateway).mockReset();
         spawnTesting.setDepsForTest();
-        clearRuntimeConfigSnapshot();
-        clearConfigCache();
+        config.clearRuntimeConfigSnapshot();
+        config.clearConfigCache();
         await flushLogger();
         resetLogger();
         // Resource cleanup finished; removal failure must not retain a retired owner.
-        try {
-          await rm(stateDir, { recursive: true, force: true });
-        } catch (error) {
-          failures.push(error);
-        }
-        restoreActivePluginRegistrySnapshot(pluginSnapshot);
+        await rm(stateDir, { recursive: true, force: true }).catch(recordFailure);
+        plugins.restoreActivePluginRegistrySnapshot(pluginSnapshot);
         env.restore();
         stateDir = "";
       } catch (error) {
@@ -302,13 +295,11 @@ export function installSpawnAuthorityFixture() {
   });
 
   async function createBoundParent(runtime: "embedded" | "plugin-harness" = "embedded") {
-    const cfg = getRuntimeConfig();
-    const storePath = await writeSubagentSessionEntry({
-      stateDir,
-      agentId: "main",
-      sessionKey: parentSessionKey,
-      defaultSessionId: "parent-session",
-    });
+    const cfg = config.getRuntimeConfig();
+    const storePath = await writeSession(parentSessionKey, "parent-session");
+    const unexpectedRecovery = async () => {
+      throw new Error("Unexpected fixture recovery operation");
+    };
     const context = createChatAbortContext({
       getRuntimeConfig: () => cfg,
       getSessionEventSubscriberConnIds: () => new Set(),
@@ -316,28 +307,25 @@ export function installSpawnAuthorityFixture() {
       recoveryRuntime: {
         prepareRestartRecovery: () => undefined,
         waitForAgent: async () => await new Promise<never>(() => {}),
-        dispatchAgent: async () => {
-          throw new Error("Unexpected fixture recovery agent dispatch");
-        },
-        dispatchSessionMethod: async (method) => {
-          throw new Error(`Unexpected fixture recovery session method ${method}`);
-        },
-        sendRecoveryNotice: async () => {
-          throw new Error("Unexpected fixture recovery notice");
-        },
+        dispatchAgent: unexpectedRecovery,
+        dispatchSessionMethod: unexpectedRecovery,
+        sendRecoveryNotice: unexpectedRecovery,
+        resumeChatInput: unexpectedRecovery,
       } satisfies GatewayRecoveryRuntime,
     });
-    const admission = prepareAgentRunAdmission({
+    const admission = runContext.prepareSystemAgentRunAdmission(
       cfg,
-      operationalRunInstance: createOperationalRunInstanceRef(parentRunId),
-      facts: {
-        runId: parentRunId,
-        agentId: "main",
-        ingress: { kind: "system", boundary: "spawn-authority-test", state: "present" },
-      },
-    });
+      parentRunId,
+      "main",
+      "spawn-authority-test",
+    );
     const parent = registerChatAbortController({
-      chatAbortControllers: context.chatAbortControllers,
+      target: captureSessionTarget({
+        storeScope: storePath,
+        sessionKey: parentSessionKey,
+        incarnation: "parent-session",
+        agentId: "main",
+      }),
       runId: parentRunId,
       sessionKey: parentSessionKey,
       sessionId: "parent-session",
@@ -349,10 +337,10 @@ export function installSpawnAuthorityFixture() {
     const admitted = await admission.admit(runtime);
     // Match agent-run-execution-phase: bind the admitted owner before tools run.
     bindGatewayContextResolver(admitted, () => context as unknown as GatewayRequestContext);
-    const authority = getAdmittedRunDelegatedAuthority(admitted)!;
+    const authority = runContext.getAdmittedRunDelegatedAuthority(admitted)!;
     parent.bindAgentRunDelegatedAuthority(authority);
-    expect(parent.entry?.operationalRunInstance).toBe(admitted.operationalRunInstance);
-    expect(parent.entry?.agentRunDelegatedAuthority).toBe(authority);
+    expect(parent.entry?.adapter.operationalRunInstance).toBe(admitted.operationalRunInstance);
+    expect(parent.entry?.adapter.agentRunDelegatedAuthority).toBe(authority);
     expect(admitted.executionIdentityToken).toBeUndefined();
 
     return { cfg, storePath, context, admission, parent, admitted, authority };
@@ -364,6 +352,8 @@ export function installSpawnAuthorityFixture() {
     parentRunId,
     groupId,
     createBoundParent,
+    configure,
+    writeSession,
     get stateDir() {
       return stateDir;
     },

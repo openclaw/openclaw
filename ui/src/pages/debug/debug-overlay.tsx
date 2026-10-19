@@ -1,4 +1,4 @@
-import { createComponent, createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createComponent, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import type { ApplicationContext } from "../../app/context.ts";
 import {
   clearLazyShellAction,
@@ -12,8 +12,9 @@ import {
 } from "../../app/stale-chunk-reload.ts";
 import { DEBUG_OVERLAY_REQUEST_EVENT } from "../../components/panel-toggle-contract.ts";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
-import { useApplication } from "../../lib/reactive/context.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { DebugOverlayFrame } from "./debug-overlay-frame-view.tsx";
 import { DebugOverlayLoading } from "./debug-overlay-loading-view.tsx";
@@ -26,8 +27,11 @@ type Props = {
 };
 type Methods = { open(mode: DebugOverlayMode): void; toggle(): void };
 
+const synchronizers = new WeakMap<HTMLElement, () => void>();
+
 function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
-  const inherited = untrack(() => props.context) ? undefined : useApplication();
+  // A bridge's provider ancestry is fixed for this renderer lifetime.
+  const inherited = useOptionalApplication();
   const close = () => {
     host.mode = "closed";
   };
@@ -81,6 +85,7 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
       // Registration survives dismissal; a later open reuses this lazy renderer.
       if (!disposed) {
         setContent(() => module.DebugOverlayContent);
+        onSettled(() => synchronizers.get(host)?.());
       }
       if (request === current) {
         cancel();
@@ -98,24 +103,31 @@ function Overlay(props: Props, host: SolidBridgeElement<Props, Methods>) {
       close();
     }
   };
-  createEffect(
-    () => ({ mode: props.mode, key: props.contentKey, loaded: Boolean(Content()) }),
-    (current, previous) => {
-      if (current.mode === "closed") {
-        cancel();
-        setError(null);
-        return undefined;
-      }
-      document.addEventListener("keydown", keydown, true);
-      if (current.key !== previous?.key && !current.loaded) {
+  let previousKey: number | undefined;
+  let stopKeydown: (() => void) | undefined;
+  const synchronize = () => {
+    stopKeydown?.();
+    stopKeydown = undefined;
+    if (host.mode === "closed") {
+      cancel();
+      setError(null);
+    } else {
+      stopKeydown = listen(document, "keydown", keydown, true);
+      if (host.contentKey !== previousKey && !Content()) {
         cancel();
         recoveryActionPending = persistLazyShellAction({ eventType: DEBUG_OVERLAY_REQUEST_EVENT });
         void load();
       }
-      return () => document.removeEventListener("keydown", keydown, true);
-    },
-  );
+    }
+    previousKey = host.contentKey;
+  };
+  onSettled(() => {
+    synchronizers.set(host, synchronize);
+    synchronize();
+  });
   onCleanup(() => {
+    synchronizers.delete(host);
+    stopKeydown?.();
     disposed = true;
     cancel();
     if (!host.isConnected) {
@@ -181,6 +193,12 @@ export const DebugOverlay = defineSolidBridge<Props, Methods>("openclaw-debug-ov
     context: { default: undefined, attribute: false },
     mode: { default: "closed", attribute: false },
     contentKey: { default: 0, attribute: false },
+  },
+  propertyChanged: (host, key) => {
+    if (key === "mode" || key === "contentKey") {
+      // Settle both writes from open() and retire the previous keyed content first.
+      onSettled(() => synchronizers.get(host)?.());
+    }
   },
   methods: {
     open: (host, mode) => {

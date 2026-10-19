@@ -1,6 +1,4 @@
 /**
- * Shared realtime voice controls for active OpenClaw agent runs.
- *
  * This module owns the provider-facing control tool, conservative intent
  * classifier, and user-visible status/queue/cancel messages used by Talk.
  */
@@ -262,10 +260,13 @@ export function formatRealtimeVoiceAgentQueueRejection(
   if (reason === "guarded_injection_unsupported") {
     return "This agent runtime cannot safely accept scoped voice steering. Check status, cancel the run, or start a new explicit request. Update the runtime when guarded injection is supported.";
   }
+  if (reason === "tool_authority_mismatch") {
+    return "This agent runtime cannot safely accept scoped voice steering. Check status, cancel the run, or start a new explicit request.";
+  }
   if (reason === "compacting") {
     return "OpenClaw is compacting the active run and cannot accept voice steering yet.";
   }
-  if (reason === "not_streaming") {
+  if (reason === "injection_unavailable" || reason === "not_streaming") {
     return "OpenClaw has an active run, but it is not currently accepting steering.";
   }
   return mode === "followup"

@@ -13,6 +13,7 @@ import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state
 import type { OpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.types.js";
 import { withoutGatewayToolCallerIdentity } from "../../tools/gateway-caller-context.js";
 import { blockSubagentCompletionDelivery } from "../completion/subagent-completion-admission.store.js";
+import { retireSubagentControllerInputs } from "./subagent-controller-inputs.js";
 import { getDeliveryLastError, isDeliverySuspended } from "./subagent-delivery-state.js";
 import { resolveAnnounceDeliveryDeadline } from "./subagent-registry-cleanup.js";
 import {
@@ -76,7 +77,7 @@ export async function suspendPendingFinalDelivery(
   logAnnounceGiveUp(entry, args.reason);
   // Suspension settles this child for requester drain while cleanup stays incomplete.
   context.resumeAncestorCleanup(entry);
-  scheduleRequesterSettleWake(context, entry.runId, entry, undefined, true);
+  scheduleRequesterSettleWake(context, entry.runId, entry);
 }
 
 export function isSubagentCompletionDeliveryAllowed(
@@ -152,7 +153,10 @@ export function suspendReplacedStoreNotifications(
   if (!entries.length) {
     return Promise.all(pending).then(() => {});
   }
-  entries.forEach((entry) => subagentRuns.retireCompletionAuthority(entry));
+  for (const entry of entries) {
+    subagentRuns.retireCompletionAuthority(entry);
+    retireSubagentControllerInputs(entry);
+  }
   const work = runWithSubagentCleanupWorkAdmission(async () => {
     for (const entry of entries) {
       const current = getCurrentSubagentRunOwner(options.runs, entry);
@@ -281,6 +285,9 @@ export function runDetachedCleanupAttempt(
     (context.activeCleanupAttempts.get(identity) ?? 0) + 1,
   );
   const releaseReservation = () => {
+    if (!context.isCleanupGeneration(entry, cleanupGeneration)) {
+      return;
+    }
     context.cleanupReservations.delete(identity);
     if (!startCommitted) {
       params.resumedRuns.delete(identity);
@@ -318,6 +325,10 @@ export function runDetachedCleanupAttempt(
           throw err;
         }
         if (err instanceof SubagentRegistryWriteError && err.outcome === "committed") {
+          if (err.publication === "superseded") {
+            assertSubagentRegistryWriteSourceCurrent(stateContext);
+            await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
+          }
           throw err;
         }
         const current = getCurrentSubagentRunOwner(params.runs, entry);
@@ -328,6 +339,8 @@ export function runDetachedCleanupAttempt(
             ? context.isCleanupAttemptCurrent(entry, cleanupGeneration)
             : context.isCleanupGenerationCurrent(entry, cleanupGeneration))
         ) {
+          assertSubagentRegistryWriteSourceCurrent(stateContext);
+          await retireSupersededCleanupIfNeeded(context, entry, cleanupGeneration);
           return;
         }
         if (startCommitted) {

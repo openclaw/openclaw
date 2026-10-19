@@ -284,8 +284,16 @@ suite.define(() => {
     },
   );
 
-  it("reports unavailable and denied fullscreen requests", async () => {
+  it.each(["unavailable", "denied"])("reports %s fullscreen requests", async (mode) => {
     await suite.withPage({ serviceWorkers: "block" }, async ({ page }) => {
+      if (mode === "unavailable") {
+        await page.addInitScript(() => {
+          Object.defineProperty(document, "fullscreenEnabled", {
+            configurable: true,
+            value: false,
+          });
+        });
+      }
       await installMockGateway(page, {
         featureMethods: ["desktop.observe", "environments.list"],
         methodResponses: {
@@ -295,31 +303,28 @@ suite.define(() => {
       });
       const panel = await openDesktopPanel(page);
       const button = panel.locator(".desktop-fullscreen-button");
-      await panel.locator("section.bp").evaluate((element) => {
-        element.requestFullscreen = () =>
-          Promise.reject(new DOMException("Fullscreen permission denied", "NotAllowedError"));
-      });
-      await button.click();
+      if (mode === "denied") {
+        await panel.locator("section.bp").evaluate((element) => {
+          element.requestFullscreen = () =>
+            Promise.reject(new DOMException("Fullscreen permission denied", "NotAllowedError"));
+        });
+        await button.click();
+      } else {
+        expect(await button.getAttribute("aria-label")).toBe(
+          "Fullscreen is unavailable in this browser",
+        );
+        expect(await button.getAttribute("aria-disabled")).toBe("true");
+        await button.focus();
+        await button.press("Enter");
+      }
       await panel
         .getByRole("alert")
-        .filter({ hasText: "Could not change fullscreen mode: Fullscreen permission denied" })
-        .waitFor();
-
-      await page.evaluate(() => {
-        Object.defineProperty(document, "fullscreenEnabled", { configurable: true, value: false });
-      });
-      await panel.evaluate((element) =>
-        (element as HTMLElement & { requestUpdate(): void }).requestUpdate(),
-      );
-      await expect
-        .poll(() => button.getAttribute("aria-label"))
-        .toBe("Fullscreen is unavailable in this browser");
-      expect(await button.getAttribute("aria-disabled")).toBe("true");
-      await button.focus();
-      await button.press("Enter");
-      await panel
-        .getByRole("alert")
-        .filter({ hasText: "Fullscreen is unavailable in this browser" })
+        .filter({
+          hasText:
+            mode === "denied"
+              ? "Could not change fullscreen mode: Fullscreen permission denied"
+              : "Fullscreen is unavailable in this browser",
+        })
         .waitFor();
     });
   });

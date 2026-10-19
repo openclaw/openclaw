@@ -54,7 +54,7 @@ function resolvePluginOwnedAuthMode(
   }
 }
 
-/** @deprecated Use resolveModelAuthModeAsync. Supported through 2026-12-31. */
+/** @deprecated Use resolveModelAuthModeAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export function resolveModelAuthMode(
   provider?: string,
   cfg?: OpenClawConfig,

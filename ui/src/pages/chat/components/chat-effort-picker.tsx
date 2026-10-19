@@ -1,4 +1,4 @@
-import { For, Show, createMemo, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal, onCleanup } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
@@ -21,7 +21,6 @@ export type ChatEffortPickerParams = {
   thinkingDisabled: boolean;
   thinking: ChatThinkingSelectState;
   onFastModeSelect: (value: ChatFastModeSelectValue, sessionKey: string) => Promise<unknown>;
-  onRequestUpdate?: () => void;
   onThinkingSelect: (value: string, sessionKey: string) => Promise<unknown>;
   reserved?: boolean;
 };
@@ -30,12 +29,10 @@ function formatEffortLabel(label: string): string {
   return label.replace(/^Inherited:\s*/u, "");
 }
 
-function refreshAfterSelection(pending: Promise<unknown>, requestUpdate?: () => void) {
-  void pending.finally(() => requestUpdate?.());
-  requestUpdate?.();
-}
-
 export function ChatEffortPicker(props: ChatEffortPickerParams) {
+  const speedButtons = new Set<HTMLButtonElement>();
+  const previewLabels = new Set<HTMLSpanElement>();
+  let committedLabel: HTMLSpanElement | undefined;
   const view = createMemo(() => {
     const sliderStops = props.thinking.options;
     const showReasoning = sliderStops.length > 0;
@@ -149,7 +146,11 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     if (!(group instanceof HTMLElement)) {
       return;
     }
-    const options = [...group.querySelectorAll<HTMLButtonElement>("button:not(:disabled)")];
+    const options = [...speedButtons]
+      .filter((button) => !button.disabled)
+      .toSorted((left, right) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      );
     if (options.length === 0) {
       return;
     }
@@ -177,13 +178,9 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
       "aria-valuetext",
       preview ? formatEffortLabel(preview.label) : view().reasoningValueLabel,
     );
-    const panel = input.closest(".chat-controls__reasoning-panel");
-    panel?.querySelectorAll<HTMLElement>("[data-chat-thinking-preview-index]").forEach((label) => {
+    for (const label of previewLabels) {
       label.hidden = !preview || label.dataset.chatThinkingPreviewIndex !== input.value;
-    });
-    const committedLabel = panel?.querySelector<HTMLElement>(
-      "[data-chat-thinking-preview-committed]",
-    );
+    }
     if (committedLabel) {
       committedLabel.hidden = Boolean(preview);
     }
@@ -210,10 +207,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     if (props.thinkingDisabled || !stop || stop.value === view().selectedThinkingValue) {
       return;
     }
-    refreshAfterSelection(
-      props.onThinkingSelect(stop.value, props.sessionKey),
-      props.onRequestUpdate,
-    );
+    void props.onThinkingSelect(stop.value, props.sessionKey);
   };
   return (
     <Show when={visible()}>
@@ -222,7 +216,9 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
         const pickerOverlay = createChatPickerOverlay((details) => setOpen(details.open));
         return (
           <details
-            ref={pickerOverlay}
+            ref={pickerOverlay.details}
+            onClick={pickerOverlay.onClick}
+            onToggle={pickerOverlay.onToggle}
             class={[
               "chat-controls__inline-select chat-controls__effort-picker",
               {
@@ -233,6 +229,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
             inert={props.reserved === true}
           >
             <summary
+              ref={pickerOverlay.trigger}
               class={[
                 "chat-controls__inline-select-trigger chat-controls__effort-trigger",
                 {
@@ -307,7 +304,12 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                 <Icon name="chevronUp" />
               </span>
             </summary>
-            <div class="oc-overlay chat-picker-overlay" data-anchored-overlay popover="manual">
+            <div
+              ref={pickerOverlay.surface}
+              class="oc-overlay chat-picker-overlay"
+              data-anchored-overlay
+              popover="manual"
+            >
               <Show when={open()}>
                 <div
                   class="chat-controls__inline-select-menu chat-controls__effort-menu"
@@ -324,15 +326,29 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                           {t("chat.modelControls.effort")}
                         </span>
                         <span class="chat-controls__effort-value" aria-hidden="true">
-                          <span data-chat-thinking-preview-committed>
+                          <span
+                            ref={(element) => (committedLabel = element)}
+                            data-chat-thinking-preview-committed
+                          >
                             {view().reasoningValueText}
                           </span>
                           <For each={view().sliderStops} keyed={(stop) => stop.value}>
-                            {(stop, index) => (
-                              <span data-chat-thinking-preview-index={index()} hidden>
-                                {formatEffortLabel(stop().label)}
-                              </span>
-                            )}
+                            {(stop, index) => {
+                              let label: HTMLSpanElement;
+                              onCleanup(() => previewLabels.delete(label));
+                              return (
+                                <span
+                                  ref={(element) => {
+                                    label = element;
+                                    previewLabels.add(element);
+                                  }}
+                                  data-chat-thinking-preview-index={index()}
+                                  hidden
+                                >
+                                  {formatEffortLabel(stop().label)}
+                                </span>
+                              );
+                            }}
                           </For>
                         </span>
                       </div>
@@ -424,10 +440,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                             }
                             const stop = view().onlyStop;
                             if (stop) {
-                              refreshAfterSelection(
-                                props.onThinkingSelect(stop.value, props.sessionKey),
-                                props.onRequestUpdate,
-                              );
+                              void props.onThinkingSelect(stop.value, props.sessionKey);
                             }
                           }}
                         >
@@ -453,34 +466,39 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                         onKeyDown={onSpeedKeyDown}
                       >
                         <For each={view().speedOptions} keyed={(option) => option.value}>
-                          {(option, index) => (
-                            <button
-                              type="button"
-                              role="radio"
-                              class="chat-controls__speed-option"
-                              data-chat-speed-option={option().value}
-                              aria-checked={
-                                option().value === view().selectedSpeed ? "true" : "false"
-                              }
-                              tabindex={index() === view().tabbableSpeedIndex ? 0 : -1}
-                              disabled={props.fastMode.disabled || option().disabled}
-                              onClick={(event: MouseEvent) => {
-                                event.stopPropagation();
-                                if (
-                                  !props.fastMode.disabled &&
-                                  !option().disabled &&
-                                  option().value !== props.fastMode.persistedOverride
-                                ) {
-                                  refreshAfterSelection(
-                                    props.onFastModeSelect(option().value, props.sessionKey),
-                                    props.onRequestUpdate,
-                                  );
+                          {(option, index) => {
+                            let button: HTMLButtonElement;
+                            onCleanup(() => speedButtons.delete(button));
+                            return (
+                              <button
+                                ref={(element) => {
+                                  button = element;
+                                  speedButtons.add(element);
+                                }}
+                                type="button"
+                                role="radio"
+                                class="chat-controls__speed-option"
+                                data-chat-speed-option={option().value}
+                                aria-checked={
+                                  option().value === view().selectedSpeed ? "true" : "false"
                                 }
-                              }}
-                            >
-                              {option().label}
-                            </button>
-                          )}
+                                tabindex={index() === view().tabbableSpeedIndex ? 0 : -1}
+                                disabled={props.fastMode.disabled || option().disabled}
+                                onClick={(event: MouseEvent) => {
+                                  event.stopPropagation();
+                                  if (
+                                    !props.fastMode.disabled &&
+                                    !option().disabled &&
+                                    option().value !== props.fastMode.persistedOverride
+                                  ) {
+                                    void props.onFastModeSelect(option().value, props.sessionKey);
+                                  }
+                                }}
+                              >
+                                {option().label}
+                              </button>
+                            );
+                          }}
                         </For>
                       </div>
                     </div>

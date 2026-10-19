@@ -1,18 +1,16 @@
 import { createMessageReceiptFromOutboundResults } from "openclaw/plugin-sdk/channel-outbound";
+import { resolveMarkdownTableMode } from "openclaw/plugin-sdk/markdown-table-runtime";
+import { requireRuntimeConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { readProviderJsonResponse } from "openclaw/plugin-sdk/provider-http";
+import { ssrfPolicyFromPrivateNetworkOptIn } from "openclaw/plugin-sdk/ssrf-runtime";
+import { convertMarkdownTables } from "openclaw/plugin-sdk/text-chunking";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { fetchWithSsrFGuard } from "../runtime-api.js";
+import { resolveNextcloudTalkAccount } from "./accounts.js";
 import { readNextcloudTalkErrorBody } from "./guarded-response.js";
 import { stripNextcloudTalkTargetPrefix } from "./normalize.js";
-import {
-  convertMarkdownTables,
-  fetchWithSsrFGuard,
-  generateNextcloudTalkSignature,
-  getOptionalNextcloudTalkRuntime,
-  requireRuntimeConfig,
-  resolveMarkdownTableMode,
-  resolveNextcloudTalkAccount,
-  ssrfPolicyFromPrivateNetworkOptIn,
-} from "./send.runtime.js";
+import { getOptionalNextcloudTalkRuntime } from "./runtime.js";
+import { generateNextcloudTalkSignature } from "./signature.js";
 import type { CoreConfig, NextcloudTalkSendResult } from "./types.js";
 
 const NEXTCLOUD_TALK_ERROR_SNIPPET_MAX_CHARS = 200;

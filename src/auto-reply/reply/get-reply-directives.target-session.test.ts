@@ -1,4 +1,3 @@
-/** Tests directive handling for target-session command turns. */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { SessionEntry } from "../../config/sessions.js";
 import { SessionWorkStartInvalidatedError } from "../../config/sessions/lifecycle.js";
@@ -15,12 +14,8 @@ import {
   makeSessionEntry,
   makeTypingController,
   mockCallInput,
+  replyDirectiveParams,
 } from "./get-reply-directives.target-session.test-helpers.js";
-import type { InternalGetReplyOptions } from "./get-reply.types.js";
-import {
-  prepareReplyConversation,
-  type PreparedReplyConversation,
-} from "./prompt-session-context.js";
 import {
   REPLY_OPERATION_RUN_STATE,
   type ReplyOperationRunState,
@@ -38,139 +33,93 @@ const mocks = vi.hoisted(() => ({
 }));
 
 async function resolveHelloWithModelDefaults(params: {
-  defaultThinking?: "off" | "low" | "medium";
-  defaultThinkingByModel?: Record<string, "off" | "low" | "medium">;
-  defaultReasoning?: "on";
-  cfg?: Parameters<typeof resolveReplyDirectives>[0]["cfg"];
   body?: string;
   sessionEntry?: SessionEntry;
   sessionStore?: Record<string, SessionEntry>;
   agentCfg?: { reasoningDefault?: "off" | "on" | "stream" };
-  agentEntries?: Array<{ id?: string; thinkingDefault?: "off" | "low" }>;
-  hasConfiguredThinkingDefault?: boolean;
   commandAuthorized?: boolean;
-  selectedProvider?: string;
-  selectedModel?: string;
-  provider?: string;
-  model?: string;
   ctx?: Parameters<typeof buildTestCtx>[0];
   sessionCtx?: Partial<TemplateContext>;
   opts?: Parameters<typeof resolveReplyDirectives>[0]["opts"];
   modelError?: unknown;
-  conversation?: PreparedReplyConversation;
 }) {
-  const resolveDefaultThinkingLevel = vi.fn(
-    async (selection?: { model?: string }) =>
-      (selection?.model ? params.defaultThinkingByModel?.[selection.model] : undefined) ??
-      params.defaultThinking ??
-      "off",
-  );
-  const resolveDefaultReasoningLevel = vi.fn(async () => params.defaultReasoning ?? "on");
-  mocks.listAgentEntries.mockReturnValue(params.agentEntries ?? []);
+  const resolveDefaultReasoningLevel = vi.fn(async () => "on");
   if (params.modelError) {
     mocks.createModelSelectionState.mockRejectedValueOnce(params.modelError);
   } else {
     mocks.createModelSelectionState.mockResolvedValueOnce({
-      provider: params.selectedProvider ?? "openai",
-      model: params.selectedModel ?? "gpt-4o-mini",
+      provider: "openai",
+      model: "gpt-4o-mini",
       allowedModelKeys: new Set<string>(),
       allowedModelCatalog: [],
       resetModelOverride: false,
-      resolveDefaultThinkingLevel,
-      hasConfiguredThinkingDefault: params.hasConfiguredThinkingDefault,
+      resolveDefaultThinkingLevel: async () => "off",
       resolveDefaultReasoningLevel,
     });
   }
   const typing = makeTypingController();
-
+  const body = params.body ?? "hello";
   const sessionCtx = {
-    Body: params.body ?? "hello",
-    BodyStripped: params.body ?? "hello",
-    BodyForAgent: params.body ?? "hello",
-    CommandBody: params.body ?? "hello",
-    commandText: params.body ?? "hello",
-    agentText: params.body ?? "hello",
-    rawText: params.body ?? "hello",
+    Body: body,
+    BodyStripped: body,
+    BodyForAgent: body,
+    CommandBody: body,
+    commandText: body,
+    agentText: body,
+    rawText: body,
     Provider: "whatsapp",
     ...params.sessionCtx,
   } as TemplateContext;
 
   const sessionEntry = params.sessionEntry ?? makeSessionEntry();
 
-  const result = await resolveReplyDirectives({
-    ctx: buildTestCtx({
-      Body: params.body ?? "hello",
-      CommandBody: params.body ?? "hello",
-      ...params.ctx,
-    }),
-    cfg: params.cfg ?? {},
-    agentId: "main",
-    agentDir: "/tmp/main-agent",
-    workspaceDir: "/tmp",
-    agentCfg: params.agentCfg ?? {},
-    sessionCtx,
-    sessionEntry,
-    sessionStore: params.sessionStore ?? {},
-    sessionKey: "agent:main:whatsapp:+2000",
-    storePath: "/tmp/sessions.json",
-    sessionScope: "per-sender",
-    conversation:
-      params.conversation ??
-      prepareReplyConversation({
-        ctx: sessionCtx,
-        sessionEntry: params.sessionStore?.["agent:main:whatsapp:+2000"] ?? sessionEntry,
-        isHeartbeat: params.opts?.isHeartbeat,
+  const result = await resolveReplyDirectives(
+    replyDirectiveParams({
+      ctx: buildTestCtx({
+        Body: body,
+        CommandBody: body,
+        ...params.ctx,
       }),
-    isGroup: false,
-    triggerBodyNormalized: "hello",
-    resetTriggered: false,
-    commandAuthorized: params.commandAuthorized ?? false,
-    defaultProvider: "openai",
-    defaultModel: "gpt-4o-mini",
-    aliasIndex: { byAlias: new Map(), byKey: new Map() },
-    provider: params.provider ?? "openai",
-    model: params.model ?? "gpt-4o-mini",
-    hasResolvedHeartbeatModelOverride: false,
-    typing,
-    opts: params.opts,
-    skillFilter: undefined,
-  });
+      agentCfg: params.agentCfg ?? {},
+      sessionCtx,
+      sessionEntry,
+      sessionStore: params.sessionStore ?? {},
+      commandAuthorized: params.commandAuthorized ?? false,
+      typing,
+      opts: params.opts,
+    }),
+  );
 
-  return { result, resolveDefaultThinkingLevel, resolveDefaultReasoningLevel, typing };
+  return { result, resolveDefaultReasoningLevel, typing };
 }
 
+// mock-isolation: Use the synthetic target-session agent scope instead of operator configuration.
 vi.mock("../../agents/agent-scope.js", () => ({
-  listAgentEntries: (...args: unknown[]) => mocks.listAgentEntries(...args),
+  listAgentEntries: mocks.listAgentEntries,
 }));
 
 vi.mock("../../agents/defaults.js", () => ({
   DEFAULT_CONTEXT_TOKENS: 8192,
 }));
 
+// mock-isolation: Keep target-session selection independent of provider policy discovery.
 vi.mock("../../agents/fast-mode.js", () => ({
-  resolveFastModeState: (...args: unknown[]) => mocks.resolveFastModeState(...args),
+  resolveFastModeState: mocks.resolveFastModeState,
 }));
 
 vi.mock("../../agents/sandbox/runtime-status.js", () => ({
   resolveSandboxRuntimeStatus: vi.fn(() => ({ sandboxed: false })),
 }));
 
+// mock-isolation: Keep target-session selection independent of provider policy discovery.
 vi.mock("../../agents/thinking-runtime.js", () => ({
-  resolveEffectiveAgentRuntime: ({
-    cfg,
-    provider,
-    modelId,
-  }: {
-    cfg: Parameters<typeof resolveReplyDirectives>[0]["cfg"];
-    provider: string;
-    modelId: string;
-  }) =>
-    cfg.agents?.defaults?.models?.[`${provider}/${modelId}`]?.agentRuntime?.id ??
-    (provider === "openai" ? "codex" : "openclaw"),
+  resolveEffectiveAgentRuntime: ({ provider }: { provider: string }) =>
+    provider === "openai" ? "codex" : "openclaw",
 }));
 
+// mock-isolation: Control command eligibility for synthetic target-session turns.
 vi.mock("../commands-text-routing.js", () => ({
-  shouldHandleTextCommands: () => mocks.shouldHandleTextCommands(),
+  shouldHandleTextCommands: mocks.shouldHandleTextCommands,
 }));
 
 vi.mock("./commands-context.js", () => ({
@@ -199,31 +148,33 @@ vi.mock("./directive-handling.parse.js", async () => {
   };
 });
 
+// mock-isolation: Capture target-session directive application without mutating a real session.
 vi.mock("./get-reply-directives-apply.js", () => ({
-  applyInlineDirectiveOverrides: (...args: unknown[]) =>
-    mocks.applyInlineDirectiveOverrides(...args),
+  applyInlineDirectiveOverrides: mocks.applyInlineDirectiveOverrides,
 }));
 
 vi.mock("./runtime-policy-session-key.js", () => ({
   resolveRuntimePolicySessionKey: ({ sessionKey }: { sessionKey?: string }) => sessionKey,
 }));
 
+// mock-isolation: Observe execution overrides without modifying real session state.
 vi.mock("./get-reply-exec-overrides.js", () => ({
-  resolveReplyExecOverrides: (...args: unknown[]) => mocks.resolveReplyExecOverrides(...args),
+  resolveReplyExecOverrides: mocks.resolveReplyExecOverrides,
 }));
 
 vi.mock("./get-reply-fast-path.js", () => ({
   shouldUseReplyFastTestRuntime: vi.fn(() => false),
 }));
 
+// mock-isolation: Supply synthetic group activation without loading channel runtime policy.
 vi.mock("./groups.js", () => ({
   defaultGroupActivation: vi.fn(() => "always"),
-  resolveGroupRequireMention: (params: unknown) => mocks.resolveGroupRequireMention(params),
+  resolveGroupRequireMention: mocks.resolveGroupRequireMention,
 }));
 
 // mock-isolation: Directive routing uses prepared model state, not live catalog/auth discovery.
 vi.mock("./model-selection.js", () => ({
-  createModelSelectionState: (...args: unknown[]) => mocks.createModelSelectionState(...args),
+  createModelSelectionState: mocks.createModelSelectionState,
 }));
 
 vi.mock("./reply-elevated.js", () => ({
@@ -237,25 +188,12 @@ vi.mock("./reply-elevated.js", () => ({
 
 describe("resolveReplyDirectives", () => {
   beforeEach(() => {
-    mocks.createModelSelectionState.mockReset();
-    mocks.applyInlineDirectiveOverrides.mockReset();
-    mocks.listAgentEntries.mockReset();
-    mocks.resolveFastModeState.mockReset();
-    mocks.resolveReplyExecOverrides.mockReset();
-    mocks.resolveGroupRequireMention.mockReset().mockResolvedValue(false);
-    mocks.shouldHandleTextCommands.mockReset().mockReturnValue(false);
-
+    for (const mock of Object.values(mocks)) {
+      mock.mockReset();
+    }
+    mocks.resolveGroupRequireMention.mockResolvedValue(false);
+    mocks.shouldHandleTextCommands.mockReturnValue(false);
     mocks.listAgentEntries.mockReturnValue([]);
-    mocks.createModelSelectionState.mockResolvedValue({
-      provider: "openai",
-      model: "gpt-4o-mini",
-      allowedModelKeys: new Set<string>(),
-      allowedModelCatalog: [],
-      resetModelOverride: false,
-      resolveThinkingCatalog: vi.fn(async () => []),
-      resolveDefaultThinkingLevel: vi.fn(async () => "off"),
-      resolveDefaultReasoningLevel: vi.fn(async () => "off"),
-    });
     mocks.applyInlineDirectiveOverrides.mockImplementation(async (params) => ({
       kind: "continue",
       directives: params.directives,
@@ -269,7 +207,6 @@ describe("resolveReplyDirectives", () => {
       source: "session",
       fastAutoOnSeconds: 60,
     }));
-    mocks.resolveReplyExecOverrides.mockReturnValue(undefined);
   });
 
   it("passes persisted session identity into system-event group activation resolution", async () => {
@@ -294,30 +231,18 @@ describe("resolveReplyDirectives", () => {
     });
   });
 
-  it("returns a terminal retry when model preparation sees a rotated session", async () => {
-    const error = new SessionWorkStartInvalidatedError(
+  it.each([
+    new SessionWorkStartInvalidatedError(
       'Session "agent:main:whatsapp:+2000" changed while starting work. Retry.',
-    );
-    const { result, typing } = await resolveHelloWithModelDefaults({
-      modelError: error,
-    });
-
+    ),
+    new ModelSelectionLockedError(),
+  ])("returns a terminal reply for %s", async (error) => {
+    const text =
+      error instanceof ModelSelectionLockedError ? MODEL_SELECTION_LOCKED_MESSAGE : error.message;
+    const { result, typing } = await resolveHelloWithModelDefaults({ modelError: error });
     expect(result).toEqual({
       kind: "reply",
-      reply: { text: error.message, isError: true },
-    });
-    expect(typing.cleanup).toHaveBeenCalledOnce();
-    expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
-  });
-
-  it("returns a terminal rejection when locked model preparation cannot preserve its model", async () => {
-    const { result, typing } = await resolveHelloWithModelDefaults({
-      modelError: new ModelSelectionLockedError(),
-    });
-
-    expect(result).toEqual({
-      kind: "reply",
-      reply: { text: MODEL_SELECTION_LOCKED_MESSAGE, isError: true },
+      reply: { text, isError: true },
     });
     expect(typing.cleanup).toHaveBeenCalledOnce();
     expect(mocks.applyInlineDirectiveOverrides).not.toHaveBeenCalled();
@@ -326,7 +251,6 @@ describe("resolveReplyDirectives", () => {
   it("preserves combined directive rejection delivery and its invocation rejection fact", async () => {
     const reply = { text: 'Model "openai/REJECTED_PRIVATE_TOKEN" is not allowed.', isError: true };
     const runState: ReplyOperationRunState = {};
-    const opts: InternalGetReplyOptions = { [REPLY_OPERATION_RUN_STATE]: runState };
     mocks.applyInlineDirectiveOverrides.mockResolvedValueOnce({
       kind: "reply",
       reply: { ...reply },
@@ -336,7 +260,7 @@ describe("resolveReplyDirectives", () => {
     const { result } = await resolveHelloWithModelDefaults({
       body: "/model openai/REJECTED_PRIVATE_TOKEN\n/think high",
       commandAuthorized: true,
-      opts,
+      opts: { [REPLY_OPERATION_RUN_STATE]: runState },
     });
 
     expect(result).toEqual({ kind: "reply", reply });
@@ -372,49 +296,27 @@ describe("resolveReplyDirectives", () => {
     });
   });
 
-  it("ignores inline reasoning directives from untrusted senders", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      body: "/reasoning stream",
-    });
-
-    await expectContinueResult(result, {
-      resolvedReasoningLevel: "off",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("does not expose session reasoning state to untrusted senders", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      sessionEntry: makeSessionEntry({ reasoningLevel: "stream" }),
-    });
-
-    await expectContinueResult(result, {
-      resolvedReasoningLevel: "off",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("allows session reasoning state for authorized senders", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      sessionEntry: makeSessionEntry({ reasoningLevel: "stream" }),
-      commandAuthorized: true,
-    });
-
-    await expectContinueResult(result, {
-      resolvedReasoningLevel: "stream",
-    });
-    expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
-  });
-
-  it("allows configured reasoning defaults for operator gateway clients", async () => {
-    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults({
-      agentCfg: { reasoningDefault: "stream" },
-      ctx: { GatewayClientScopes: ["operator.admin"] },
-    });
-
-    await expectContinueResult(result, {
-      resolvedReasoningLevel: "stream",
-    });
+  const storedReasoning = () => makeSessionEntry({ reasoningLevel: "stream" });
+  it.each<[string, () => Parameters<typeof resolveHelloWithModelDefaults>[0], string]>([
+    ["untrusted inline directive", () => ({ body: "/reasoning stream" }), "off"],
+    ["untrusted stored level", () => ({ sessionEntry: storedReasoning() }), "off"],
+    [
+      "authorized stored level",
+      () => ({ sessionEntry: storedReasoning(), commandAuthorized: true }),
+      "stream",
+    ],
+    [
+      "operator default",
+      () => ({
+        agentCfg: { reasoningDefault: "stream" },
+        ctx: { GatewayClientScopes: ["operator.admin"] },
+      }),
+      "stream",
+    ],
+  ])("resolves reasoning for %s", async (_name, setup, expected) => {
+    const params = setup();
+    const { result, resolveDefaultReasoningLevel } = await resolveHelloWithModelDefaults(params);
+    await expectContinueResult(result, { resolvedReasoningLevel: expected });
     expect(resolveDefaultReasoningLevel).not.toHaveBeenCalled();
   });
 });

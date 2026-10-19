@@ -6,14 +6,14 @@ import fs from "node:fs";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import {
   SignatureKind,
   SymbolFlags,
   type Checker,
   type Project,
   type Symbol,
-} from "typescript/unstable/async";
+} from "typescript/async";
 import { listPluginCompatRecords } from "../src/plugins/compat/registry.js";
 import { booleanFlag, parseFlagArgs } from "./lib/arg-utils.mts";
 import { formatNativeTypeScriptDiagnostics } from "./lib/native-typescript-diagnostics.mts";
@@ -231,7 +231,8 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: the shared state-owner boundary for plugin CLIs.
       // +1: owner-approved service-bound remote Control UI ingress.
       // +2: shared database-engine host and worker adapters.
-      155,
+      // +1: maintainer-requested context-engine-transcript-runtime watermark subpath (2026-10-08).
+      156,
       env,
     ),
     publicExports: readPluginSdkSurfaceBudgetEnv(
@@ -282,7 +283,14 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +1: shared auth-patch application replaces manual plugin config merging.
       // +6: packaged Settings placement, snapshot, components, context, view, and
       // DoctorMemoryStatusPayload for the plugin-owned Memory overview.
-      3798,
+      // +2: MemorySearchResponse and AgentsWorkspaceGetResult type-only contracts
+      // for the plugin-owned indexed Memory search presentation.
+      // +5: maintainer-requested context-engine transcript watermark reader, its types, and fence error.
+      // +3: ControlUiChannelSettingsSnapshot, ControlUiChannelSettingsContext, and
+      // ControlUiChannelSettingsView for plugin-owned channel Settings presentations.
+      // +1: the shared message-tool source-reply finality resolver.
+      // +1: awaited web_search policy preparation for harnesses; the sync resolver stays.
+      3810,
       env,
     ),
     publicFunctionExports: readPluginSdkSurfaceBudgetEnv(
@@ -322,7 +330,10 @@ export function readPluginSdkSurfaceBudgets(env: NodeJS.ProcessEnv = process.env
       // +6: four lossless Decision codecs and two bounded V2 validators.
       // +1: the same boot-selected family lookup.
       // +1: the same shared auth-patch application.
-      2205,
+      // +1: maintainer-requested context-engine transcript watermark reader.
+      // +1: the shared message-tool source-reply finality resolver, so harnesses apply a run's default.
+      // +1: the same awaited web_search policy preparation.
+      2208,
       env,
     ),
     publicDeprecatedExports: readPluginSdkSurfaceBudgetEnv(

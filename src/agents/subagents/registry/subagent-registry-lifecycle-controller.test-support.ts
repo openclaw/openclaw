@@ -1,9 +1,13 @@
 import { AsyncLocalStorage } from "node:async_hooks";
 import { onTestFinished, vi } from "vitest";
+import { getRuntimeConfig } from "../../../config/config.js";
+import { ensureSessionEntrySync } from "../../../config/sessions/session-accessor.js";
 import type { SqliteWorkerCommand } from "../../../infra/sqlite-worker-contract.js";
 import type { OpenClawStateWorkerOperations } from "../../../state/openclaw-state-worker-contract.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
+import { resolveSubagentRequesterAgentId } from "../../subagent-requester-owner.js";
 import { createSubagentRunRecord } from "../../subagent-test-fixtures.test-helpers.js";
+import { resolveRequesterStoreKey } from "../announce/subagent-requester-store-key.js";
 import {
   SubagentLifecycleController,
   type SubagentLifecycleOptions,
@@ -201,6 +205,22 @@ export function createLifecycleControllerFixture(
   },
 ) {
   const initialRows = [...runs.values()];
+  if (!realWorker) {
+    const config = getRuntimeConfig();
+    for (const row of initialRows) {
+      if (row.expectsCompletionMessage !== true) {
+        continue;
+      }
+      const agentId = resolveSubagentRequesterAgentId(config, row);
+      if (agentId) {
+        const sessionKey = resolveRequesterStoreKey(config, row.requesterSessionKey, agentId);
+        ensureSessionEntrySync(
+          { agentId, sessionKey },
+          { sessionId: `lifecycle-requester:${sessionKey}`, updatedAt: 1 },
+        );
+      }
+    }
+  }
   for (const row of initialRows) {
     if (row.completion && row.delivery) {
       continue;
@@ -235,6 +255,7 @@ export function createLifecycleControllerFixture(
     notifyContextEngineSubagentEnded: vi.fn(async () => {}),
     retireSupersededRun: vi.fn(async () => {}),
     resumeSubagentRun: vi.fn(),
+    confirmProvisionalKill: vi.fn(),
     callGateway: dependencies.callGateway,
     captureSubagentCompletionReply: vi.fn(async () => "final completion reply"),
     cleanupBrowserSessionsForLifecycleEnd: dependencies.cleanupBrowserSessionsForLifecycleEnd,
@@ -277,8 +298,8 @@ export function createLifecycleControllerFixture(
     return fixtureScope.run(owner, () =>
       wake({
         ...request,
-        transitionBatch: runOwned(request.transitionBatch),
         completeBatch: runOwned(request.completeBatch),
+        transitionBatch: runOwned(request.transitionBatch),
       }),
     );
   };
@@ -294,13 +315,13 @@ export function createLifecycleControllerFixture(
   controller.settleRequesterTurnAfterSessionSpawns = runOwned(
     controller.settleRequesterTurnAfterSessionSpawns,
   );
-  controller.cancelRequesterSettleWake = runOwned(controller.cancelRequesterSettleWake);
+  controller.retireSubagentObligations = runOwned(controller.retireSubagentObligations);
   controller.resumeAncestorCleanup = runOwned(controller.resumeAncestorCleanup);
   controller.resumeRequesterSettleWake = runOwned(controller.resumeRequesterSettleWake);
   controller.runRequesterSettleWake = runOwned(controller.runRequesterSettleWake);
   controller.revokeTerminalSessionEffects = runOwned(
     controller.revokeTerminalSessionEffects.bind(controller),
   );
-  onTestFinished(() => controller.clearScheduledResumeTimers());
+  onTestFinished(() => controller.clearRuntimeState());
   return controller;
 }

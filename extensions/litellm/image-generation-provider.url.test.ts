@@ -166,7 +166,7 @@ describe("LiteLLM image URL responses", () => {
     fetchMock.mockImplementation(async (_url, init) =>
       init?.method === "POST"
         ? Response.json(payload)
-        : new Response(new Uint8Array(33 * 1024 * 1024), {
+        : new Response(new Uint8Array(65 * 1024 * 1024), {
             headers: { "Content-Type": "image/png" },
           }),
     );

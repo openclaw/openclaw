@@ -38,7 +38,7 @@ function createPickerClient() {
         ? terminalOpenResult("current-1")
         : method === "terminal.list"
           ? { sessions: [] }
-          : {}) as T,
+          : { ok: true }) as T,
     addEventListener: () => () => {},
   } satisfies TerminalGatewayClient;
 }
@@ -62,9 +62,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
     panel.embedded = true;
     document.body.append(panel);
     await panel.updateComplete;
-    const dock = panel.renderRoot.querySelector<HTMLButtonElement>(
-      '[aria-label="Dock to bottom"]',
-    )!;
+    const dock = panel.querySelector<HTMLButtonElement>('[aria-label="Dock to bottom"]')!;
     await waitForFast(() => {
       expect(panel.hostedTabs[0]?.className).toBe("is-live");
       expect(dock.disabled).toBe(false);
@@ -82,14 +80,10 @@ describe("OpenClawTerminalPanel accessibility", () => {
     const panel = createPanel(createPickerClient());
     panel.basePath = "/openclaw";
     await waitForFast(() =>
-      expect(
-        panel.renderRoot.querySelector('[aria-label="Open terminal in new window"]'),
-      ).not.toBeNull(),
+      expect(panel.querySelector('[aria-label="Open terminal in new window"]')).not.toBeNull(),
     );
 
-    panel.renderRoot
-      .querySelector<HTMLButtonElement>('[aria-label="Open terminal in new window"]')
-      ?.click();
+    panel.querySelector<HTMLButtonElement>('[aria-label="Open terminal in new window"]')?.click();
 
     expect(open).toHaveBeenCalledWith(
       "http://localhost:3000/openclaw/focus/terminal",
@@ -99,7 +93,7 @@ describe("OpenClawTerminalPanel accessibility", () => {
 
     panel.fullscreen = true;
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector('[aria-label="Open terminal in new window"]')).toBeNull();
+    expect(panel.querySelector('[aria-label="Open terminal in new window"]')).toBeNull();
     open.mockRestore();
   });
 
@@ -124,23 +118,17 @@ describe("OpenClawTerminalPanel accessibility", () => {
     for (let index = 0; index < 2; index += 1) {
       const panel = createPanel(createPickerClient(), true);
       await waitForFast(() =>
-        expect(
-          panel.renderRoot.querySelector('.tabstrip-tab[aria-selected="true"]'),
-        ).not.toBeNull(),
+        expect(panel.querySelector('.tabstrip-tab[aria-selected="true"]')).not.toBeNull(),
       );
-      const viewport = panel.renderRoot.querySelector(".tp-viewport")!;
-      const selectedTab = panel.renderRoot.querySelector('.tabstrip-tab[aria-selected="true"]')!;
+      const viewport = panel.querySelector(".tp-viewport")!;
+      const selectedTab = panel.querySelector('.tabstrip-tab[aria-selected="true"]')!;
       expect(document.getElementById(selectedTab.getAttribute("aria-controls")!)).toBe(viewport);
       expect(document.getElementById(viewport.getAttribute("aria-labelledby")!)).toBe(selectedTab);
 
-      const trigger = panel.renderRoot.querySelector<HTMLButtonElement>(
-        '[aria-label="Terminal sessions"]',
-      )!;
+      const trigger = panel.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!;
       trigger.click();
-      await waitForFast(() =>
-        expect(panel.renderRoot.querySelector(".tp-session-menu")).not.toBeNull(),
-      );
-      const menu = panel.renderRoot.querySelector(".tp-session-menu")!;
+      await waitForFast(() => expect(panel.querySelector(".tp-session-menu")).not.toBeNull());
+      const menu = panel.querySelector(".tp-session-menu")!;
       expect(document.getElementById(trigger.getAttribute("aria-controls")!)).toBe(menu);
       ids.push(viewport.id, selectedTab.id, menu.id);
       menu.dispatchEvent(new KeyboardEvent("keydown", { key: "Escape", bubbles: true }));
@@ -151,38 +139,34 @@ describe("OpenClawTerminalPanel accessibility", () => {
 
   it("keeps trigger focus inside the picker and dismisses after focus leaves", async () => {
     const panel = createPanel(createPickerClient());
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
+    await waitForFast(() => expect(panel.querySelector(".tp-actions")).not.toBeNull());
 
-    const trigger = panel.renderRoot.querySelector<HTMLButtonElement>(
-      '[aria-label="Terminal sessions"]',
-    )!;
+    const trigger = panel.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!;
     trigger.click();
-    await waitForFast(() =>
-      expect(panel.renderRoot.querySelector(".tp-session-menu")).not.toBeNull(),
-    );
+    await waitForFast(() => expect(panel.querySelector(".tp-session-menu")).not.toBeNull());
     trigger.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
     trigger.focus();
     await Promise.resolve();
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp-session-menu")).not.toBeNull();
+    expect(panel.querySelector(".tp-session-menu")).not.toBeNull();
     trigger.click();
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp-session-menu")).toBeNull();
+    expect(panel.querySelector(".tp-session-menu")).toBeNull();
 
     trigger.click();
     await waitForFast(() =>
-      expect(document.activeElement).toBe(panel.renderRoot.querySelector(".tp-session-refresh")),
+      expect(document.activeElement).toBe(panel.querySelector(".tp-session-refresh")),
     );
     trigger.focus();
     await Promise.resolve();
-    expect(panel.renderRoot.querySelector(".tp-session-menu")).not.toBeNull();
+    expect(panel.querySelector(".tp-session-menu")).not.toBeNull();
 
     const outside = document.createElement("button");
     document.body.append(outside);
     outside.focus();
     await Promise.resolve();
     await panel.updateComplete;
-    expect(panel.renderRoot.querySelector(".tp-session-menu")).toBeNull();
+    expect(panel.querySelector(".tp-session-menu")).toBeNull();
   });
 
   it("keeps shadow-DOM pointer actions inside the terminal session picker", async () => {
@@ -214,39 +198,33 @@ describe("OpenClawTerminalPanel accessibility", () => {
             seq: 0,
           } as T;
         }
-        return {} as T;
+        return { ok: true } as T;
       },
       addEventListener: () => () => {},
     };
     const panel = createPanel(client);
-    await waitForFast(() => expect(panel.renderRoot.querySelector(".tp-actions")).not.toBeNull());
+    await waitForFast(() => expect(panel.querySelector(".tp-actions")).not.toBeNull());
 
-    const trigger = panel.renderRoot.querySelector<HTMLButtonElement>(
-      '[aria-label="Terminal sessions"]',
-    )!;
+    const trigger = panel.querySelector<HTMLButtonElement>('[aria-label="Terminal sessions"]')!;
     trigger.click();
     await waitForFast(() =>
-      expect(panel.renderRoot.querySelector(".tp-session")?.textContent).toContain(
-        "detached-agent",
-      ),
+      expect(panel.querySelector(".tp-session")?.textContent).toContain("detached-agent"),
     );
 
-    const refresh = panel.renderRoot.querySelector<HTMLButtonElement>(".tp-session-refresh")!;
+    const refresh = panel.querySelector<HTMLButtonElement>(".tp-session-refresh")!;
     refresh.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
-    expect(panel.renderRoot.querySelector(".tp-session-menu")).not.toBeNull();
+    expect(panel.querySelector(".tp-session-menu")).not.toBeNull();
     refresh.click();
     await waitForFast(() => {
       expect(requests.filter(({ method }) => method === "terminal.list")).toHaveLength(2);
     });
     await waitForFast(() =>
-      expect(panel.renderRoot.querySelector(".tp-session")?.textContent).toContain(
-        "detached-agent",
-      ),
+      expect(panel.querySelector(".tp-session")?.textContent).toContain("detached-agent"),
     );
 
-    const attach = panel.renderRoot.querySelector<HTMLButtonElement>(".tp-session")!;
+    const attach = panel.querySelector<HTMLButtonElement>(".tp-session")!;
     attach.dispatchEvent(new MouseEvent("pointerdown", { bubbles: true, composed: true }));
-    expect(panel.renderRoot.querySelector(".tp-session-menu")).not.toBeNull();
+    expect(panel.querySelector(".tp-session-menu")).not.toBeNull();
     attach.click();
     await waitForFast(() =>
       expect(requests).toContainEqual({

@@ -207,6 +207,8 @@ describe("CommandPalette search", () => {
     expect(findPaletteOption(palette, "Needle old")).toBeDefined();
 
     harness.emit("chat.metadata.changed", { modelSelectionChanged: true });
+    await palette.updateComplete;
+    expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
     await settlePalette(palette);
     expect(query('.cmd-palette__search [role="status"]')?.textContent).toContain(
       "Model search unavailable",
@@ -251,7 +253,10 @@ describe("CommandPalette search", () => {
         harness.emit("chat.metadata.changed");
       }
       await palette.updateComplete;
-      if (replacement !== "publication") {
+      if (replacement === "connection") {
+        expect(findPaletteOption(palette, "Needle old")).toBeDefined();
+        expect(palette.textContent).toContain("Reconnect to search Gateway content.");
+      } else if (replacement !== "publication") {
         expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
       }
       if (replacement === "connection") {
@@ -271,6 +276,7 @@ describe("CommandPalette search", () => {
       stale.resolve(modelResult("stale", "Needle stale"));
       await settlePalette(palette);
       expect(findPaletteOption(palette, "Needle new")).toBeDefined();
+      expect(findPaletteOption(palette, "Needle old")).toBeUndefined();
       expect(findPaletteOption(palette, "Needle stale")).toBeUndefined();
       if (replacement === "agent") {
         expect(request).toHaveBeenLastCalledWith("models.list", {
@@ -431,17 +437,70 @@ describe("CommandPalette search", () => {
     }
   });
 
+  it("scrolls the current session result across search groups and stops after closing", async () => {
+    const listed = createSessionResult("agent:main:scroll-target", "Needle topic");
+    const transcript: SessionsSearchResult = {
+      sessions: listed.sessions,
+      results: [
+        {
+          sessionKey: listed.sessions[0]!.key,
+          sessionId: "scroll-target",
+          messageId: "scroll-message",
+          role: "assistant",
+          timestamp: 42,
+          snippet: "The payload appears in this conversation.",
+          score: 10,
+        },
+      ],
+    };
+    const { palette, query, queryAll } = await mountSearch(
+      {
+        methods: ["sessions.search"],
+        request: async (method) => (method === "sessions.search" ? transcript : { models: [] }),
+      },
+      vi.fn(async () => listed),
+    );
+    for (const search of ["needle", "payload", "needle"]) {
+      await searchPalette(palette, search);
+      expect(queryAll('[role="option"]')).toHaveLength(1);
+      expect(query(".cmd-palette__group-label")?.textContent?.includes("In messages")).toBe(
+        search === "payload",
+      );
+      const row = query<HTMLElement>('[role="option"]')!;
+      const scroll = vi.fn();
+      Object.defineProperty(row, "scrollIntoView", { configurable: true, value: scroll });
+      pressKey(paletteInput(palette), "ArrowDown");
+      await palette.updateComplete;
+      await vi.advanceTimersByTimeAsync(20);
+      expect(scroll).toHaveBeenCalledExactlyOnceWith({ block: "nearest" });
+    }
+    const row = query<HTMLElement>('[role="option"]')!;
+    const scroll = vi.fn();
+    Object.defineProperty(row, "scrollIntoView", { configurable: true, value: scroll });
+    pressKey(paletteInput(palette), "ArrowDown");
+    pressKey(paletteInput(palette), "Escape");
+    await palette.updateComplete;
+    await vi.advanceTimersByTimeAsync(20);
+    expect(palette.isOpen).toBe(false);
+    expect(scroll).not.toHaveBeenCalled();
+  });
+
   it.each(["retain", "navigate"])(
     "keeps selection actionable when a chosen session disappears and returns (%s)",
     async (interaction) => {
       const sessions = [0, 9].map(
         (id) => createSessionResult(`agent:main:qa-${id}`, `Agent QA ${id}`).sessions[0]!,
       );
-      const list = vi.fn(async () => ({
+      const roster = {
         ...createSessionResult("agent:main:qa-0", "Agent QA 0"),
         count: sessions.length,
         sessions,
-      }));
+      };
+      const list = vi
+        .fn<ApplicationContext["sessions"]["list"]>()
+        .mockResolvedValueOnce(roster)
+        .mockResolvedValueOnce({ ...roster, sessions: [], count: 0 })
+        .mockResolvedValue(roster);
       const { palette, query, setConnected } = await mountSearch({}, list);
       await searchPalette(palette, "agent");
       const session = findPaletteOption(palette, "Agent QA 9")!;
@@ -451,23 +510,31 @@ describe("CommandPalette search", () => {
 
       setConnected(false);
       await palette.updateComplete;
+      expect(findPaletteOption(palette, "Agent QA 9")).toBe(session);
+      expect(query('[aria-selected="true"]')).toBe(session);
+      const input = paletteInput(palette);
+      expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(session);
+      setConnected(true);
+      await settlePalette(palette);
+      expect(list).toHaveBeenCalledTimes(2);
       expect(findPaletteOption(palette, "Agent QA 9")).toBeUndefined();
       const first = query('[role="option"]');
       expect(query('[aria-selected="true"]')).toBe(first);
-      const input = paletteInput(palette);
       expect(document.getElementById(input.getAttribute("aria-activedescendant")!)).toBe(first);
       if (interaction === "navigate") {
         pressKey(input, "ArrowDown");
         await palette.updateComplete;
       }
-      const offlineSelection = query('[aria-selected="true"]')?.textContent;
+      const fallbackSelection = query('[aria-selected="true"]')?.textContent;
 
+      setConnected(false);
       setConnected(true);
       await palette.updateComplete;
       await settlePalette(palette);
+      expect(list).toHaveBeenCalledTimes(3);
       const active = query('[aria-selected="true"]');
       expect(active?.textContent).toEqual(
-        interaction === "retain" ? sessionText : offlineSelection,
+        interaction === "retain" ? sessionText : fallbackSelection,
       );
       pressKey(input, "Enter");
       expect(palette.isOpen).toBe(false);

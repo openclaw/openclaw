@@ -2,7 +2,6 @@ import { IDBFactory } from "fake-indexeddb";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.js";
 import { createStorageMock } from "../../test-helpers/storage.ts";
-import type { ChatSessionSnapshot } from "./session-message-cache.ts";
 import * as database from "./session-snapshot-database.ts";
 import {
   publishSnapshotInvalidation,
@@ -11,6 +10,7 @@ import {
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.runtime.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import * as snapshots from "./session-snapshot-store.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 const key = 'scope:["wss://cache.example","account-a"]\u0000agent:main:routed';
 const otherKey = 'scope:["wss://cache.example","account-a"]\u0000agent:main:other';
@@ -69,7 +69,7 @@ describe("routed transcript prewarm", () => {
   it("reads raw records without validation and rejects malformed prewarm when consumed", async () => {
     await seed();
     const invalid = {
-      projectionVersion: 2,
+      projectionVersion: 3,
       savedAt: Date.now(),
       sessionKey: key,
       sessionId: stored.sessionId,

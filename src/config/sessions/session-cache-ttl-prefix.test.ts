@@ -30,13 +30,24 @@ it.each([false, true])(
         message: { role: "user", content: `synthetic-${index}` },
       }));
       runOpenClawAgentWriteTransaction(
-        () =>
+        () => {
           appendTranscriptEventsInTransaction(
             database,
             scope,
             [{ type: "session", id: scope.sessionId, version: 3 }, checkpoint, ...messages],
             { scheduleProjectionReconcile: false },
-          ),
+          );
+          if (analyzed) {
+            // The same type-index seek must cover transcripts admitted without a backfill.
+            database.db
+              .prepare(`UPDATE transcript_events
+              SET navigation_type = NULL, navigation_custom_type = NULL,
+                  navigation_display = 0, message_role = NULL, navigation_last_type = NULL,
+                  navigation_last_custom_type = NULL, navigation_valid = 1
+              WHERE session_id = ?`)
+              .run(scope.sessionId);
+          }
+        },
         { agentId: database.agentId, path: database.path },
       );
       if (analyzed) {

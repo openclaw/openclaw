@@ -1,5 +1,5 @@
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
-import type { CommandOwnerReference } from "../state/user-channel-identities.js";
+import type { CommandOwnerReference } from "../state/user-channel-authorization-reference.js";
 
 const COMMAND_OWNER_AUTHORITY = Symbol("openclaw.commandOwnerAuthority");
 type CommandOwnerAuthority = Readonly<{
@@ -24,7 +24,7 @@ export function bindCommandOwnerAuthority(context: object, authority: CommandOwn
   const capability = {
     recoveryReference,
     operatorAuthority,
-    isCurrent: () => checkCurrent(),
+    isCurrent: checkCurrent,
   };
   Object.setPrototypeOf(capability, null);
   Object.freeze(capability);

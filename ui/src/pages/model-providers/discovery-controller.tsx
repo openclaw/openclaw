@@ -1,4 +1,4 @@
-import { createComponent, createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createComponent, createSignal, onCleanup, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { registerModelSetupEnglish } from "../../i18n/locales/en-model-setup.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
@@ -29,15 +29,14 @@ export function createModelProviderDiscovery(options: DiscoveryOptions) {
     setPhase("closed");
   }
 
-  createEffect(
-    () => options.getOwner().agentId,
-    (agentId) => {
-      // Reconnect can temporarily clear selection; the mounted setup owns recovery.
-      if (owner && agentId !== null && agentId !== owner.agentId) {
-        reset();
-      }
-    },
-  );
+  // Selection receipts retire a lazy setup request owned by another agent.
+  function synchronize() {
+    const { agentId } = options.getOwner();
+    // Reconnect can temporarily clear selection; the mounted setup owns recovery.
+    if (owner && agentId !== null && agentId !== owner.agentId) {
+      reset();
+    }
+  }
   onCleanup(() => {
     owner = null;
     loading = false;
@@ -127,6 +126,7 @@ export function createModelProviderDiscovery(options: DiscoveryOptions) {
       return phase() !== "closed";
     },
     cancelLoading,
+    synchronize,
     open,
     render,
   };

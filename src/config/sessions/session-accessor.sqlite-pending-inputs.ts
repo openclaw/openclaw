@@ -287,17 +287,17 @@ export function withSessionPendingInputRelocation<T>(
 /** Registration owns disposition even after operational cancellation; this check performs no SQL. */
 export function hasRegisteredSessionPendingInputOwner(
   databasePath: string,
-  row: Pick<
-    SessionPendingInputRow,
-    "input_id" | "session_key" | "session_id" | "lifecycle_generation"
-  >,
+  // Display reconciliation may hold an older page from before this exact input was recovered.
+  row: Pick<SessionPendingInputRow, "input_id" | "session_key" | "session_id"> &
+    Partial<Pick<SessionPendingInputRow, "lifecycle_generation">>,
 ): boolean {
   const owner = owners.live.get(row.input_id);
   return (
     owner?.workerDatabasePath === databasePath &&
     owner.sessionId === row.session_id &&
     owner.sessionKey === row.session_key &&
-    owner.lifecycleGeneration === row.lifecycle_generation &&
+    (row.lifecycle_generation === undefined ||
+      owner.lifecycleGeneration === row.lifecycle_generation) &&
     (owner.settling || isAgentEventLifecycleGenerationCurrent(owner.lifecycleGeneration))
   );
 }
@@ -505,13 +505,16 @@ export function resolveSessionPendingInputAppend(
   database: PendingInputDatabase,
   scope: ResolvedTranscriptScope,
   message: unknown,
+  preparedInputs?: ReadonlyMap<string, SessionPendingInputRow>,
 ): SessionPendingInputAppend | undefined {
   const record = asOptionalRecord(message);
   if (record?.role !== "user" || typeof record.idempotencyKey !== "string") {
     return undefined;
   }
   const idempotencyKey = record.idempotencyKey.trim();
-  const row = readSessionPendingInputByKey(database, scope, idempotencyKey);
+  const row = preparedInputs
+    ? preparedInputs.get(idempotencyKey)
+    : readSessionPendingInputByKey(database, scope, idempotencyKey);
   const owner = owners.current.getStore();
   // A bound-session mirror shares source correlation, never its pending custody.
   const ownsInput =
@@ -581,13 +584,11 @@ export function resolveSessionPendingInputAppend(
         }
       : undefined;
   if (owner.sources) {
-    const actor = readSessionActorTransactionState(database, scope);
+    const inputs =
+      preparedInputs ?? readSessionActorTransactionState(database, scope)?.pendingInputs;
     const acceptedByKey = new Map(
-      (actor
-        ? owner.sources.flatMap((source) => {
-            const accepted = actor.pendingInputs.get(source.idempotencyKey);
-            return accepted ? [{ ...accepted }] : [];
-          })
+      (inputs
+        ? owner.sources.flatMap((source) => inputs.get(source.idempotencyKey) ?? [])
         : executeSqliteQuerySync(
             database.db,
             getSessionKysely(database.db)

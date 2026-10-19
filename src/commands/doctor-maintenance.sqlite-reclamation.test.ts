@@ -2,7 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
-import { readUpdateDatabaseGenerations } from "../infra/update-database-generations.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { openOpenClawAgentDatabase } from "../state/openclaw-agent-db.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
@@ -26,7 +26,7 @@ it("drains an admitted custom agent outside the state root and retains original 
     const unrelatedEnv = { ...state.env, OPENCLAW_STATE_DIR: state.path("unrelated-state") };
     const unrelated = openOpenClawAgentDatabase({ agentId: "other", env: unrelatedEnv });
     const sharedPath = resolveOpenClawStateSqlitePath(state.env);
-    const generations = readUpdateDatabaseGenerations([sharedPath, pathname]);
+    const generations = await readUpdatePhysicalDatabaseGenerations([sharedPath, pathname]);
     const controller = new AbortController();
     const maintenance = await createDoctorMaintenanceState({
       params: {

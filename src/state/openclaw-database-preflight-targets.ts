@@ -159,17 +159,21 @@ export function collectAgentDatabasePreflightTargets(options: {
                   holdForDeletionRecovery: true as const,
                 }))
             : []
-          : candidates.filter(
-              (row) =>
-                (row.agentId === undefined || !retainedAgentIds.has(row.agentId)) &&
-                !(
-                  deletionJournal.status === "present" &&
-                  deletionJournal.held.some((target) => samePath(target.path, row.path)) &&
-                  !options.inspectHeldAgentDatabaseTargets?.some(
+          : candidates.filter((row) => {
+              if (
+                deletionJournal.status === "present" &&
+                deletionJournal.held.some((target) => samePath(target.path, row.path))
+              ) {
+                // Quarantine's retained tombstone must not hide a required hold
+                // from Doctor's final read-only verification.
+                return (
+                  options.inspectHeldAgentDatabaseTargets?.some(
                     (target) => target.agentId === row.agentId && samePath(target.path, row.path),
-                  )
-                ),
-            ),
+                  ) === true
+                );
+              }
+              return row.agentId === undefined || !retainedAgentIds.has(row.agentId);
+            }),
     isRetainedPath: (pathname: string) =>
       purpose === "runtime"
         ? typeof classifyDeletion(pathname) === "object"

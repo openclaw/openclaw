@@ -1,5 +1,3 @@
-// Media-understanding runner resolves providers/models, local roots, auth, and
-// per-capability execution decisions for message attachments.
 import { findNormalizedProviderValue } from "@openclaw/model-catalog-core/provider-id";
 import { ok } from "@openclaw/normalization-core/result";
 import {
@@ -684,9 +682,6 @@ export async function runCapability(params: {
     };
   };
   const handOffToNativeModel = async (provider: string): Promise<RunCapabilityResult> => {
-    if (shouldLogVerbose()) {
-      logVerbose(`Skipping ${capability} understanding: primary model supports it natively`);
-    }
     const attempt = {
       type: "provider" as const,
       provider,
@@ -845,8 +840,6 @@ export async function runCapability(params: {
   const { decision } = result;
   if (decision.outcome === "failed") {
     logWarn(`media-understanding: ${formatDecisionSummary(decision)}`);
-  } else if (shouldLogVerbose()) {
-    logVerbose(`Media understanding ${formatDecisionSummary(decision)}`);
   }
   return result;
 }

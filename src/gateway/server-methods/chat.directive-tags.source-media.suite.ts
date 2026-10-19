@@ -53,7 +53,11 @@ type SourceMediaFixture = {
     transcriptOwner?: true;
   }) => SourceReply;
   setAgentRunReplies: (replies: SourceReply[]) => void;
-  send: (params: { idempotencyKey: string; message: string }) => Promise<unknown>;
+  send: (params: {
+    idempotencyKey: string;
+    message: string;
+    expectBroadcast?: boolean;
+  }) => Promise<unknown>;
   sendLate: (params: {
     runId: string;
     payloads: ReplyPayload[];
@@ -219,6 +223,7 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
               ? await fixture.send({
                   idempotencyKey: runId,
                   message: "Send the probe attachment.",
+                  expectBroadcast: false,
                 })
               : await fixture.sendLate({
                   runId,
@@ -226,10 +231,13 @@ export function registerChatSourceMediaTests(fixture: SourceMediaFixture) {
                   canvas,
                   bufferCurrent: delivery === "late canvas",
                 });
-          expect(broadcast).toMatchObject({ state: "final", runId });
-          if (delivery === "late canvas") {
+          if (delivery === "direct") {
+            expect(broadcast).toBeUndefined();
+          } else if (delivery === "late canvas") {
+            expect(broadcast).toMatchObject({ state: "final", runId });
             expect(getMessageContent(broadcast)).toEqual([{ type: "canvas", ...canvas }]);
           } else {
+            expect(broadcast).toMatchObject({ state: "final", runId });
             expect(asOptionalRecord(broadcast)?.message).toBeUndefined();
           }
           expect(loadTranscriptEventsSync(scope)).toEqual(before);

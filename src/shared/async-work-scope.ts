@@ -38,6 +38,9 @@ export class AsyncWorkScope {
 
   private enter<T>(run: () => T): T {
     const owner = currentWorkScope.getStore();
+    if (owner === this) {
+      return run();
+    }
     const ancestry = currentWorkScopeAncestry.getStore();
     const parent = owner ? (ancestry?.scope === owner ? ancestry : { scope: owner }) : undefined;
     return currentWorkScopeAncestry.run({ scope: this, parent }, () =>
@@ -123,6 +126,76 @@ export class AsyncWorkScope {
   }
 }
 
+/** Retains accepted work across Gateway close handles and successor scope generations. */
+export class GatewayRetainedWorkScope {
+  private work = new AsyncWorkScope();
+  private readonly scopes = new Set([this.work]);
+  private gateways = 0;
+  private closing = false;
+
+  constructor(private readonly assertSettled?: () => void) {}
+
+  get scope(): AsyncWorkScope {
+    return this.work;
+  }
+
+  get isClosing(): boolean {
+    return this.closing;
+  }
+
+  get hasGateways(): boolean {
+    return this.gateways > 0;
+  }
+
+  reopen(): void {
+    this.work = new AsyncWorkScope();
+    this.scopes.add(this.work);
+    this.closing = false;
+  }
+
+  private drain(scope: AsyncWorkScope): Promise<void> {
+    return AsyncWorkScope.runWhenAllIdle(
+      () => [scope],
+      async () => {
+        await scope.drain();
+        this.assertSettled?.();
+        this.scopes.delete(scope);
+      },
+    );
+  }
+
+  beginDrainAll(): Promise<void[]> {
+    this.closing = true;
+    return Promise.all([...this.scopes].map((scope) => this.drain(scope)));
+  }
+
+  retainGateway() {
+    if (this.closing) {
+      this.reopen();
+    }
+    this.gateways += 1;
+    let released = false;
+    let pending: Promise<void> | undefined;
+    const beginClose = () => {
+      if (!released) {
+        released = true;
+        if (--this.gateways === 0) {
+          this.closing = true;
+          pending = this.drain(this.work);
+          void pending.catch(() => {});
+        }
+      }
+    };
+    return {
+      beginClose,
+      drain: () => {
+        beginClose();
+        return pending ?? Promise.resolve();
+      },
+    };
+  }
+}
+
 /** Inspect retained scopes by identity, including instances created by a released runtime. */
 export function isAsyncWorkScopeActiveHere(scope: AsyncWorkScope): boolean {
   const owner = currentWorkScope.getStore();
@@ -156,6 +229,11 @@ export function captureAsyncWorkTracker(): typeof trackAsyncWork {
 
 /** Starts work its caller does not own, so the caller's scope neither waits for it nor closes under it. */
 export function runOutsideAsyncWorkScope<T>(run: () => T): T {
+  if (currentWorkScope.getStore() === undefined) {
+    return currentWorkScopeAncestry.getStore() === undefined
+      ? run()
+      : currentWorkScopeAncestry.exit(run);
+  }
   return currentWorkScope.exit(() => currentWorkScopeAncestry.exit(run));
 }
 

@@ -6,6 +6,7 @@ import { logbookSqliteBackendEntrypoint } from "../../extensions/logbook/src/sql
 import { memoryForgetFaultEntrypoint } from "../../extensions/memory-core/src/memory-forget-fault-entrypoint.test-support.ts";
 import { memoryForgetPlanningObserverEntrypoint } from "../../extensions/memory-core/src/memory-forget-planning-observer-entrypoint.test-support.ts";
 import { memoryAdmissionRestartEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-admission-entrypoint.test-support.ts";
+import { memoryPublicationCrashEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-crash-entrypoint.test-support.ts";
 import { memoryPublicationFaultEntrypoint } from "../../extensions/memory-core/src/memory/manager-publication-fault-entrypoint.test-support.ts";
 import { vectorKnnParentEntrypoint } from "../../extensions/memory-core/src/memory/manager-search-knn-runtime.test-support.ts";
 import { realtimeAudioTestEntrypoints } from "../../extensions/openai/realtime-audio-worker-entrypoints.test-support.ts";
@@ -47,6 +48,7 @@ import { doctorConfigRuntimeEntrypoints } from "../../src/commands/doctor-config
 import { sessionNativeProcessEntrypoints } from "../../src/config/sessions/native-process-runtime.test-support.ts";
 import { cronOwnerHardeningEntrypoints } from "../../src/cron/owner-hardening-runtime.test-support.ts";
 import { serviceProcessEnvEntrypoints } from "../../src/daemon/service-process-env-runtime.test-support.ts";
+import { dashboardTitleRuntimeEntrypoints } from "../../src/gateway/dashboard-session-title-runtime.test-support.ts";
 import { sessionChildCacheRetentionEntrypoint } from "../../src/gateway/session-child-cache-retention-entrypoint.test-support.ts";
 import { sessionTitleRetentionEntrypoints } from "../../src/gateway/session-title-retention.test-support.ts";
 import { workspaceProcessTestEntrypoints } from "../../src/gateway/worker-environments/workspace-process-runtime.test-support.ts";
@@ -90,7 +92,6 @@ import { gitBackupCommandRuntimeEntrypoint } from "../../src/snapshot/git-backup
 import { stateNativeProcessEntrypoints } from "../../src/state/native-process-runtime.test-support.ts";
 import { agentDatabaseModuleIdentityEntrypoints } from "../../src/state/openclaw-agent-db-module-identity-runtime.test-support.ts";
 import { agentWorkerStoreFixtureEntrypoint } from "../../src/state/openclaw-agent-worker-store.runtime.test-support.ts";
-import { databaseVerifyHostRuntimeEntrypoint } from "../../src/state/openclaw-database-verify-runtime.test-support.ts";
 import {
   agentDatabaseHeldRuntimeEntrypoint,
   stateLeaseProcessExitRuntimeEntrypoint,
@@ -318,6 +319,7 @@ export const vitestWorkerBuildEntries = {
     nativeWorkerTestEntrypoint,
     agentWorkerStoreFixtureEntrypoint,
     memoryPublicationFaultEntrypoint,
+    memoryPublicationCrashEntrypoint,
     memoryAdmissionRestartEntrypoint,
     memoryForgetFaultEntrypoint,
     memoryForgetPlanningObserverEntrypoint,
@@ -375,6 +377,7 @@ export const vitestWorkerBuildEntries = {
       : []),
     ...Object.values(tuiPtyRuntimeEntrypoints),
     ...Object.values(sessionTitleRetentionEntrypoints),
+    ...Object.values(dashboardTitleRuntimeEntrypoints),
     sessionChildCacheRetentionEntrypoint,
     nodeHostConfigRuntimeEntrypoint,
     ...Object.values(workerBackgroundExecEntrypoints),
@@ -390,7 +393,6 @@ export const vitestWorkerBuildEntries = {
     stateLeaseProcessExitRuntimeEntrypoint,
     stateLeaseRetentionRuntimeEntrypoint,
     agentDatabaseHeldRuntimeEntrypoint,
-    databaseVerifyHostRuntimeEntrypoint,
     transcriptLibraryTimezoneEntrypoint,
   ]),
   // The real ulimit fixture must import its parent before imposing a file-size limit.

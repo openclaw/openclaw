@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/agent-harness-runtime";
 import type { ExecApprovalsFile } from "openclaw/plugin-sdk/exec-approvals-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
+import { runInHarnessToolAuthorityForTest } from "openclaw/plugin-sdk/plugin-test-runtime";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -2146,14 +2147,13 @@ describe("codex conversation binding", () => {
       });
     }
     const activeRun = {
+      runId: "active-source-run",
+      toolAuthorityFingerprint: undefined as string | undefined,
       queueMessage: async () => undefined,
       isStreaming: () => true,
       isCompacting: () => false,
       abort: vi.fn(),
     };
-    if (!exposeClient) {
-      setActiveEmbeddedRun(source.sessionId, activeRun, source.sessionKey);
-    }
     const { event, ctx } = boundConversationClaim(path.join(tempDir, "active-source.jsonl"));
     ctx.pluginBinding.data = {
       kind: "codex-app-server-session" as const,
@@ -2164,7 +2164,7 @@ describe("codex conversation binding", () => {
       start: { id: "start-active-source" },
     };
 
-    try {
+    const claimSource = async () => {
       const result = await handleCodexConversationInboundClaim(event, ctx, {
         config: { session: { store: storePath } },
         timeoutMs: 500,
@@ -2181,11 +2181,45 @@ describe("codex conversation binding", () => {
           bindingId: "binding-active-source",
         }),
       ).not.toHaveProperty("conversationSourceTransferComplete", true);
-    } finally {
-      if (!exposeClient) {
-        clearActiveEmbeddedRun(source.sessionId, activeRun, source.sessionKey);
-      }
+    };
+    if (exposeClient) {
+      await claimSource();
+      return;
     }
+    // A registered source run owns an admitted turn on its session, as in a Gateway run.
+    await runInHarnessToolAuthorityForTest(
+      {
+        ...source,
+        sessionFile: path.join(tempDir, "active-source.jsonl"),
+        workspaceDir: tempDir,
+        runId: activeRun.runId,
+        provider: "codex",
+        modelId: "fixture",
+      },
+      "codex",
+      async (prepared) => {
+        activeRun.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+        const cleanup = setActiveEmbeddedRun(
+          source.sessionId,
+          activeRun,
+          source.sessionKey,
+          prepared.sessionFile,
+          source.agentId,
+        );
+        try {
+          await claimSource();
+        } finally {
+          clearActiveEmbeddedRun(
+            source.sessionId,
+            activeRun,
+            source.sessionKey,
+            prepared.sessionFile,
+            undefined,
+            cleanup,
+          );
+        }
+      },
+    );
   });
 
   it("passes sandbox state when resolving bound turn policy", async () => {

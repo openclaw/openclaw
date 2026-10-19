@@ -1,3 +1,4 @@
+import { floorPositiveFiniteNumber } from "openclaw/plugin-sdk/number-runtime";
 import {
   normalizeOptionalString,
   normalizeUniqueTrimmedStringList,
@@ -58,7 +59,7 @@ export async function listCodexAppServerModels(
 export async function listAllCodexAppServerModels(
   options: CodexAppServerListModelsOptions & { maxPages?: number } = {},
 ): Promise<CodexAppServerModelListResult> {
-  const maxPages = normalizeMaxPages(options.maxPages);
+  const maxPages = floorPositiveFiniteNumber(options.maxPages) ?? 20;
   return await withCodexAppServerModelRequest(options, async (request) => {
     const models: CodexAppServerModel[] = [];
     let nextCursor: string | undefined;
@@ -159,8 +160,4 @@ function readCodexModel(value: CodexModel): CodexAppServerModel {
       ? { multiAgentVersion: value.multiAgentVersion }
       : {}),
   };
-}
-
-function normalizeMaxPages(value: number | undefined): number {
-  return value !== undefined && Number.isFinite(value) && value > 0 ? Math.floor(value) : 20;
 }

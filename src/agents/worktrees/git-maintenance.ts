@@ -360,7 +360,7 @@ async function consolidatePacks(
   return remainingNames.filter((name) => name.endsWith(".pack")).length;
 }
 
-export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.now) {
+export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv) {
   // Suspend failed tasks without letting graph failures stop bounded pack convergence.
   const failed = new Map<string, "objects" | "packs" | "maintenance">();
   const nextRunAt = new Map<string, number>();
@@ -406,12 +406,12 @@ export function createWorktreeGitMaintenance(env: NodeJS.ProcessEnv, now = Date.
         await report("suspended");
         continue;
       }
-      if (!params.retryDeferred && now() < (nextRunAt.get(repoRoot) ?? 0)) {
+      if (!params.retryDeferred && Date.now() < (nextRunAt.get(repoRoot) ?? 0)) {
         await report("throttled");
         continue;
       }
       // Archive notifications also run cleanup; repository housekeeping stays hourly.
-      nextRunAt.set(repoRoot, now() + 60 * 60_000);
+      nextRunAt.set(repoRoot, Date.now() + 60 * 60_000);
       let stage: "objects" | "packs" | "maintenance" = "packs";
       try {
         await report(stage);

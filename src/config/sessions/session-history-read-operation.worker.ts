@@ -161,7 +161,7 @@ async function prepareHistoryRead(
     case "board-widget-document": {
       const [
         { withScopedOpenClawAgentDatabaseReadOnly },
-        { runSqliteDeferredTransactionSync },
+        { runSqliteReadSnapshotSync },
         { readBoardSnapshotWithHtmlViewMetadata, readBoardWidgetDocument },
       ] = await Promise.all([
         import("../../state/openclaw-agent-db-readonly-scope.js"),
@@ -171,7 +171,7 @@ async function prepareHistoryRead(
       return () => {
         const read = withScopedOpenClawAgentDatabaseReadOnly(
           (database) =>
-            runSqliteDeferredTransactionSync(database.db, () =>
+            runSqliteReadSnapshotSync(database.db, () =>
               request.kind === "board-snapshot"
                 ? {
                     kind: request.kind,

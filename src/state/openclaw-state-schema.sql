@@ -36,9 +36,6 @@ CREATE TABLE IF NOT EXISTS skill_usage (
   last_agent_id TEXT
 ) STRICT;
 
-CREATE INDEX IF NOT EXISTS idx_skill_usage_key
-  ON skill_usage(skill_key, skill_file);
-
 -- Profile-owned skill library: additive, absent until first publication/import.
 CREATE TABLE IF NOT EXISTS skill_library_entries (
   skill_id TEXT NOT NULL PRIMARY KEY,
@@ -354,7 +351,7 @@ CREATE INDEX IF NOT EXISTS idx_state_leases_expiry
   WHERE expires_at IS NOT NULL;
 
 CREATE INDEX IF NOT EXISTS idx_state_leases_owner
-  ON state_leases(owner, updated_at DESC);
+  ON state_leases(owner);
 
 CREATE TABLE IF NOT EXISTS exec_approvals_config (
   config_key TEXT NOT NULL PRIMARY KEY,
@@ -1215,9 +1212,6 @@ CREATE TABLE IF NOT EXISTS acp_replay_events (
   PRIMARY KEY (session_id, seq),
   FOREIGN KEY (session_id) REFERENCES acp_replay_sessions(session_id) ON DELETE CASCADE
 ) STRICT;
-
-CREATE INDEX IF NOT EXISTS idx_acp_replay_events_session_seq
-  ON acp_replay_events(session_id, seq);
 
 CREATE TABLE IF NOT EXISTS agent_databases (
   agent_id TEXT NOT NULL,
@@ -2142,6 +2136,7 @@ CREATE TABLE IF NOT EXISTS github_repository_publication_requests (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   reported_at_ms INTEGER,
+  draft INTEGER,
   CHECK ((identity_source = 'personal' AND owner_profile_id IS NOT NULL AND connection_generation IS NOT NULL)
     OR (identity_source <> 'personal' AND owner_profile_id IS NULL AND connection_generation IS NULL)),
   CHECK ((checkpoint_ref IS NULL AND checkpoint_digest IS NULL) OR (checkpoint_ref IS NOT NULL AND checkpoint_digest IS NOT NULL)),
@@ -2453,6 +2448,7 @@ CREATE TABLE IF NOT EXISTS github_publication_requests (
   created_at_ms INTEGER NOT NULL,
   updated_at_ms INTEGER NOT NULL,
   reported_at_ms INTEGER,
+  draft INTEGER,
   UNIQUE (session_id, idempotency_key),
   CHECK (
     (claim_id IS NULL AND run_id IS NULL AND environment_id IS NULL
@@ -2525,6 +2521,7 @@ CREATE TABLE IF NOT EXISTS github_personal_publication_requests (
   created_at_ms INTEGER NOT NULL CHECK (created_at_ms >= 0),
   updated_at_ms INTEGER NOT NULL CHECK (updated_at_ms >= created_at_ms),
   reported_at_ms INTEGER,
+  draft INTEGER,
   UNIQUE (owner_profile_id, session_id, idempotency_key),
   CHECK ((status = 'publishing' AND gateway_instance_id IS NOT NULL AND execution_id IS NOT NULL) OR status <> 'publishing'),
   CHECK ((last_effect IS NULL AND effect_state IS NULL) OR (last_effect IS NOT NULL AND effect_state IS NOT NULL)),

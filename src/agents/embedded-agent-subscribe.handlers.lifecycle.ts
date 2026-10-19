@@ -1,6 +1,3 @@
-/**
- * Handles lifecycle and compaction events from subscribed embedded-agent sessions.
- */
 import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { projectChatErrorDetail } from "../../packages/gateway-protocol/src/schema/logs-chat.js";
 import { emitAgentEvent } from "../infra/agent-events.js";
@@ -12,13 +9,12 @@ import { sanitizeForConsole } from "./console-sanitize.js";
 import {
   buildApiErrorObservationFields,
   buildTextObservationFields,
-  shouldSuppressRawErrorConsoleSuffix,
 } from "./embedded-agent-error-observation.js";
+import { classifyAssistantFailoverReason } from "./embedded-agent-helpers/assistant-message-failures.js";
 import {
-  classifyAssistantFailoverReason,
   formatUserFacingAssistantErrorText,
   GENERIC_ASSISTANT_ERROR_TEXT,
-} from "./embedded-agent-helpers.js";
+} from "./embedded-agent-helpers/error-text.js";
 import { hasCommittedMessagingToolDeliveryEvidence } from "./embedded-agent-runner/delivery-evidence.js";
 import {
   hasAttemptTerminalState,
@@ -111,8 +107,7 @@ export function handleAgentEnd(
   // Classification must key on the same fact, otherwise a delivered reply is
   // recorded here as an abandoned, replay-invalid turn. Error and abort stop
   // reasons keep the streamed-only view because their raw text can describe an
-  // interrupted generation rather than a reply (mirrors
-  // resolveTerminalAssistantTexts).
+  // interrupted generation rather than a reply (mirrors attempt finalization).
   const hasStreamedAssistantVisibleText = ctx.state.assistantTexts.some((text) =>
     hasAssistantVisibleReply({ text }),
   );
@@ -210,23 +205,21 @@ export function handleAgentEnd(
     const safeRunId = sanitizeForConsole(ctx.params.runId) ?? "-";
     const safeModel = sanitizeForConsole(lastAssistant.model) ?? "unknown";
     const safeProvider = sanitizeForConsole(lastAssistant.provider) ?? "unknown";
-    const safeRawErrorPreview = sanitizeForConsole(observedError.rawErrorPreview);
-    const rawErrorConsoleSuffix =
-      safeRawErrorPreview &&
-      !shouldSuppressRawErrorConsoleSuffix(observedError.providerRuntimeFailureKind)
-        ? ` rawError=${safeRawErrorPreview}`
-        : "";
     ctx.log.warn("embedded run agent end", {
       event: "embedded_run_agent_end",
       tags: ["error_handling", "lifecycle", "agent_end", "assistant_error"],
       runId: ctx.params.runId,
       isError: true,
-      error: safeErrorText,
       failoverReason,
       model: lastAssistant.model,
       provider: lastAssistant.provider,
-      ...observedError,
-      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} error=${safeErrorText}${rawErrorConsoleSuffix}`,
+      rawErrorHash: observedError.rawErrorHash,
+      rawErrorFingerprint: observedError.rawErrorFingerprint,
+      httpCode: observedError.httpCode,
+      providerRuntimeFailureKind: observedError.providerRuntimeFailureKind,
+      providerErrorType: observedError.providerErrorType,
+      requestIdHash: observedError.requestIdHash,
+      consoleMessage: `embedded run agent end: runId=${safeRunId} isError=true model=${safeModel} provider=${safeProvider} failoverReason=${failoverReason ?? "unknown"}`,
     });
   }
 

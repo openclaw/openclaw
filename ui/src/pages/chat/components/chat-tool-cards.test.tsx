@@ -448,8 +448,10 @@ describe("tool-cards", () => {
     expect(rawToggle?.getAttribute("aria-expanded")).toBe("false");
     expect(rawBody?.hidden).toBe(true);
     rawToggle!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    expect(rawToggle?.getAttribute("aria-expanded")).toBe("true");
-    expect(rawBody?.hidden).toBe(false);
+    await waitForSolid(() => {
+      expect(rawToggle?.getAttribute("aria-expanded")).toBe("true");
+      expect(rawBody?.hidden).toBe(false);
+    });
 
     const code = container.querySelector("code.markdown-block-art");
     expect(code).not.toBeNull();
@@ -567,35 +569,51 @@ describe("tool-card outcomes", () => {
     },
   );
 
-  it("keeps a prepared nonzero exit failed without rewriting the raw tool result", async () => {
-    const host = createHost({ chatRunId: "command-run" });
-    const args = { command: "check-report" };
-    const result = {
-      content: [{ type: "text", text: "Validation report" }],
-      details: { status: "completed", exitCode: 2 },
-    };
-    const tool = { toolCallId: "check", name: "exec" };
-    const end = { phase: "result" as const, ...tool, isError: false, result };
-    handleAgentEvent(host, agentEvent("command-run", 1, "tool", { phase: "start", ...tool, args }));
-    handleAgentEvent(host, agentEvent("command-run", 2, "tool", end));
-    handleAgentEvent(
-      host,
-      agentEvent("command-run", 3, "item", projectAgentToolActivity({ ...end, args })),
-    );
-    const card = extractToolCardsCached(host.chatToolMessages[0])[0]!;
-    expect(card).toMatchObject({
-      isError: false,
-      completed: true,
-      outputText: "Validation report",
-      details: result.details,
-    });
+  it.each([
+    { exitCode: 2, status: "completed", isError: false, label: "Exit code 2" },
+    { exitCode: 0, status: "error", isError: true, label: "failed" },
+  ])(
+    "keeps a prepared failure visible with exit code $exitCode",
+    async ({ exitCode, status, isError, label }) => {
+      const host = createHost({ chatRunId: "command-run" });
+      const args = { command: "check-report" };
+      const result = {
+        content: [{ type: "text", text: "Validation report" }],
+        details: { status, exitCode },
+      };
+      const tool = { toolCallId: "check", name: "exec" };
+      const end = { phase: "result" as const, ...tool, isError, result };
+      handleAgentEvent(
+        host,
+        agentEvent("command-run", 1, "tool", { phase: "start", ...tool, args }),
+      );
+      handleAgentEvent(host, agentEvent("command-run", 2, "tool", end));
+      handleAgentEvent(
+        host,
+        agentEvent("command-run", 3, "item", projectAgentToolActivity({ ...end, args })),
+      );
+      const card = extractToolCardsCached(host.chatToolMessages[0])[0]!;
+      expect(card).toMatchObject({
+        isError,
+        exitCode,
+        completed: true,
+        outputText: "Validation report",
+        details: result.details,
+      });
 
-    const container = await mountCard(card, { messageKey: "result", runActive: true });
-    expect(textOf(container, ".chat-tool-card__outcome")).toBe("Exit code 2");
-    expect(container.querySelector(".chat-tool-row--running")).toBeNull();
-    expect(container.textContent).toContain("Validation report");
-    expect(container.textContent).toContain("check-report");
-  });
+      const container = await mountCard(card, {
+        messageKey: "result",
+        runActive: true,
+        expanded: false,
+      });
+      expect(textOf(container, ".chat-tool-msg-summary")).toContain(label);
+      await mountCard(card, { messageKey: "result", runActive: true }, container);
+      expect(textOf(container, ".chat-tool-card__outcome")).toBe(label);
+      expect(container.querySelector(".chat-tool-row--running")).toBeNull();
+      expect(container.textContent).toContain("Validation report");
+      expect(container.textContent).toContain("check-report");
+    },
+  );
 
   it.each([
     { name: "write", args: { path: "/workspace/operation.json", content: "{}" } },

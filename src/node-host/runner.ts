@@ -17,12 +17,13 @@ import {
   loadDeviceIdentityIfPresent,
   loadOrCreateDeviceIdentity,
 } from "../infra/device-identity.js";
+import { isTruthyEnvValue } from "../infra/env.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { getMachineDisplayName } from "../infra/machine-name.js";
 import { logInfo } from "../logger.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { VERSION } from "../version.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { configureNodeHost, loadNodeHostConfig, type NodeHostGatewayConfig } from "./config.js";
 import { startNodeHostConnection } from "./connection.js";
 import { canReuseNodeHostDeviceToken } from "./gateway-auth.js";
@@ -171,6 +172,19 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
   await initializeSqliteRuntimeCapabilities();
   ensureNodeHostStateReady();
   const cfg = await captureRuntimeConfigAsyncReader()();
+  if (
+    !isNodeHostLauncherChild() &&
+    !opts.ephemeral &&
+    /[/\\]dist[/\\]index\.(?:js|mjs)$/.test(process.argv[1] ?? "") &&
+    cfg.nodeHost?.autoUpdate?.enabled !== false &&
+    cfg.update?.checkOnStart !== false &&
+    !isTruthyEnvValue(process.env.OPENCLAW_NO_AUTO_UPDATE) &&
+    !isTruthyEnvValue(process.env.OPENCLAW_NO_RESPAWN)
+  ) {
+    writeStderrLine(
+      "node auto-update unavailable: this process bypasses the node launcher. Run openclaw doctor --fix to repair the installed node service, or start openclaw node run through the package CLI.",
+    );
+  }
   const savedConfig = await loadNodeHostConfig();
   const plannedGateway: NodeHostGatewayConfig = {
     host: opts.gatewayHost,
@@ -508,7 +522,7 @@ export async function runNodeHost(opts: NodeHostRunOptions): Promise<void> {
           failures.push(error);
         }
       }
-      throwNodeHostCleanupErrors(failures, "node host shutdown cleanup failed");
+      throwCollectedErrors(failures, "node host shutdown cleanup failed");
     } finally {
       clearInterval(lifetimeInterval);
     }

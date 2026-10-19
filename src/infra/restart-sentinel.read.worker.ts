@@ -7,12 +7,12 @@ import {
   type ManagedHandoffSentinelIdentity,
 } from "./restart-sentinel-store.js";
 import type { EngineConnection } from "./sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "./sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "./sqlite-transaction.js";
 import { readUpdateFailureReportReceiptRowSync } from "./update-failure-report-receipt-store.js";
 
 export const restartSentinelReadOperations = {
   "restartSentinel.managedHandoffInspect": (input: ManagedHandoffSentinelIdentity, db) =>
-    runSqliteDeferredTransactionSync(db, () => ({
+    runSqliteReadSnapshotSync(db, () => ({
       type: "restartSentinel.managedHandoffInspect" as const,
       snapshot: inspectManagedHandoffSentinelRowSync(db, input),
     })),
@@ -25,7 +25,7 @@ export const restartSentinelReadOperations = {
     state: readRestartSentinelRowSync(db),
   }),
   "restartSentinel.snapshot": (_input: undefined, db) =>
-    runSqliteDeferredTransactionSync(db, () => {
+    runSqliteReadSnapshotSync(db, () => {
       const { state, revision } = readRestartSentinelSnapshotSync(db);
       return {
         type: "restartSentinel.snapshot" as const,

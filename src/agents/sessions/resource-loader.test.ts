@@ -1,4 +1,3 @@
-// Prepared resource loader tests cover extension resources and diagnostics.
 import { chmod, mkdir, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Type } from "typebox";
@@ -9,12 +8,25 @@ import darkTheme from "../modes/interactive/theme/dark.json" with { type: "json"
 import type { ExtensionFactory } from "./extensions/types.js";
 import { loadPromptTemplates } from "./prompt-templates.js";
 import { DefaultResourceLoader } from "./resource-loader.js";
-import type { SourceScope } from "./source-info.js";
+import type { PathMetadata, SourceScope } from "./source-info.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-function sourceMetadata(path: string, source: string, scope: SourceScope) {
-  return { path, source, scope, origin: "package" as const, baseDir: path };
+function entry(
+  path: string,
+  source = "extension",
+  scope: SourceScope = "temporary",
+  extra: Partial<PathMetadata> = {},
+) {
+  return { path, metadata: { source, scope, origin: "package" as const, baseDir: path, ...extra } };
+}
+
+function linkDirectory(target: string, path: string) {
+  return symlink(target, path, process.platform === "win32" ? "junction" : "dir");
+}
+
+function sortedPaths(paths: (string | undefined)[]) {
+  return paths.toSorted((left, right) => (left ?? "").localeCompare(right ?? ""));
 }
 
 function createLoader(
@@ -39,14 +51,8 @@ describe("DefaultResourceLoader", () => {
     expect(loader.getPrompts()).toEqual({ prompts: [], diagnostics: [] });
     expect(loader.getThemes()).toEqual({ themes: [], diagnostics: [] });
     loader.extendResources({
-      promptPaths: paths.map((path) => ({
-        path,
-        metadata: sourceMetadata(path, "extension", "temporary"),
-      })),
-      themePaths: paths.map((path) => ({
-        path,
-        metadata: sourceMetadata(path, "extension", "temporary"),
-      })),
+      promptPaths: paths.map((path) => entry(path)),
+      themePaths: paths.map((path) => entry(path)),
     });
 
     expect(loader.getPrompts().prompts).toEqual([
@@ -78,12 +84,8 @@ describe("DefaultResourceLoader", () => {
     const alias = join(root, "linked-resources");
     const nested = join(resources, "nested");
     await mkdir(nested, { recursive: true });
-    await symlink(resources, alias, process.platform === "win32" ? "junction" : "dir");
-    await symlink(
-      nested,
-      join(resources, "linked-directory"),
-      process.platform === "win32" ? "junction" : "dir",
-    );
+    await linkDirectory(resources, alias);
+    await linkDirectory(nested, join(resources, "linked-directory"));
     for (const { extension, content } of [
       { extension: "md", content: (name: string) => `# ${name}\n` },
       { extension: "json", content: (name: string) => JSON.stringify({ ...darkTheme, name }) },
@@ -101,42 +103,30 @@ describe("DefaultResourceLoader", () => {
       await symlink(target, join(resources, `linked.${extension}`), "file");
       await symlink(join(root, "absent"), join(resources, `broken.${extension}`), "file");
     }
-    const loader = createLoader(root, {});
+    const loader = createLoader(root);
 
     await loader.reload();
-    const entry = { path: alias, metadata: sourceMetadata(alias, "extension", "temporary") };
-    loader.extendResources({ promptPaths: [entry], themePaths: [entry] });
+    loader.extendResources({ promptPaths: [entry(alias)], themePaths: [entry(alias)] });
 
     const expectedNames = [".hidden", "linked", "regular"];
-    expect(
-      loader
-        .getPrompts()
-        .prompts.map((prompt) => prompt.filePath)
-        .toSorted((left, right) => left.localeCompare(right)),
-    ).toEqual(expectedNames.map((name) => join(alias, `${name}.md`)));
-    expect(
-      loader
-        .getThemes()
-        .themes.map((theme) => theme.sourcePath)
-        .toSorted((left, right) => (left ?? "").localeCompare(right ?? "")),
-    ).toEqual(expectedNames.map((name) => join(alias, `${name}.json`)));
+    expect(sortedPaths(loader.getPrompts().prompts.map((prompt) => prompt.filePath))).toEqual(
+      expectedNames.map((name) => join(alias, `${name}.md`)),
+    );
+    expect(sortedPaths(loader.getThemes().themes.map((theme) => theme.sourcePath))).toEqual(
+      expectedNames.map((name) => join(alias, `${name}.json`)),
+    );
     expect(loader.getPrompts().diagnostics).toEqual([]);
     expect(loader.getThemes().diagnostics).toEqual([]);
 
-    await symlink(
-      resources,
-      join(root, "prompts"),
-      process.platform === "win32" ? "junction" : "dir",
+    await linkDirectory(resources, join(root, "prompts"));
+    const prompts = loadPromptTemplates({
+      cwd: root,
+      agentDir: root,
+      promptPaths: [join(root, "prompts")],
+    });
+    expect(prompts.map((prompt) => prompt.filePath).toSorted()).toEqual(
+      expectedNames.map((name) => join(root, "prompts", `${name}.md`)),
     );
-    expect(
-      loadPromptTemplates({
-        cwd: root,
-        agentDir: root,
-        promptPaths: [join(root, "prompts")],
-      })
-        .map((prompt) => prompt.filePath)
-        .toSorted(),
-    ).toEqual(expectedNames.map((name) => join(root, "prompts", `${name}.md`)));
   });
 
   it.skipIf(process.platform === "win32" || process.getuid?.() === 0)(
@@ -145,15 +135,11 @@ describe("DefaultResourceLoader", () => {
       const root = tempDirs.make("openclaw-resource-unreadable-");
       const resources = join(root, "resources");
       await mkdir(resources);
-      const loader = createLoader(root, {});
+      const loader = createLoader(root);
       await chmod(resources, 0);
       try {
         await loader.reload();
-        const entry = {
-          path: resources,
-          metadata: sourceMetadata(resources, "extension", "temporary"),
-        };
-        loader.extendResources({ promptPaths: [entry], themePaths: [entry] });
+        loader.extendResources({ promptPaths: [entry(resources)], themePaths: [entry(resources)] });
         expect(loader.getPrompts()).toEqual({ prompts: [], diagnostics: [] });
         expect(loader.getThemes()).toEqual({
           themes: [],
@@ -234,56 +220,29 @@ describe("DefaultResourceLoader", () => {
       await writeFile(themePaths[index]!, JSON.stringify({ ...darkTheme, name }));
     }
     await withMockedWindowsPlatform(async () => {
-      const loader = createLoader(root, {
-        agentDir: variantAgentDir,
-      });
+      const loader = createLoader(root, { agentDir: variantAgentDir });
       await loader.reload();
       loader.extendResources({
         themePaths: [
-          {
-            path: themePaths[0]!,
-            metadata: {
-              source: "local",
-              scope: "user",
-              origin: "top-level",
-              baseDir: join(variantAgentDir, "themes"),
-            },
-          },
-          {
-            path: variantPackageDir,
-            metadata: sourceMetadata(variantPackageDir, "package", "user"),
-          },
-          ...themePaths
-            .slice(1)
-            .map((path) => ({ path, metadata: sourceMetadata(path, "fallback", "temporary") })),
+          entry(themePaths[0]!, "local", "user", {
+            origin: "top-level",
+            baseDir: join(variantAgentDir, "themes"),
+          }),
+          entry(variantPackageDir, "package", "user"),
+          ...themePaths.slice(1).map((path) => entry(path, "fallback")),
         ],
       });
-      const sourceInfo = (name: string) =>
-        loader.getThemes().themes.find((theme) => theme.name === name)?.sourceInfo;
+      const expectSource = (name: string, source: string, scope: SourceScope, baseDir: string) => {
+        const info = loader.getThemes().themes.find((theme) => theme.name === name)?.sourceInfo;
+        expect(info).toMatchObject({ source, scope, baseDir });
+      };
 
-      expect(sourceInfo("default")).toMatchObject({
-        source: "local",
-        scope: "user",
-        baseDir: join(variantAgentDir, "themes"),
-      });
-      expect(sourceInfo("package")).toMatchObject({
-        source: "package",
-        scope: "user",
-        baseDir: variantPackageDir,
-      });
+      expectSource("default", "local", "user", join(variantAgentDir, "themes"));
+      expectSource("package", "package", "user", variantPackageDir);
       loader.extendResources({
-        themePaths: [
-          {
-            path: variantPackageDir,
-            metadata: sourceMetadata(variantPackageDir, "extension", "project"),
-          },
-        ],
+        themePaths: [entry(variantPackageDir, "extension", "project")],
       });
-      expect(sourceInfo("extra")).toMatchObject({
-        source: "extension",
-        scope: "project",
-        baseDir: variantPackageDir,
-      });
+      expectSource("extra", "extension", "project", variantPackageDir);
     });
   });
 });

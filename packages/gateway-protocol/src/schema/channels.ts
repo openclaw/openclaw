@@ -292,6 +292,20 @@ const TalkCatalogProviderSchema = closedObject({
   activeVoices: Type.Optional(Type.Array(Type.String())),
   activeVoiceSelectionPolicy: Type.Optional(Type.Literal("allowlist-default")),
   voicesByModel: Type.Optional(Type.Record(Type.String(), Type.Array(Type.String()))),
+  modelFamilySettings: Type.Optional(
+    closedObject({
+      // A normalized exact model name or hyphen-delimited family prefix.
+      family: NonEmptyString,
+      unlistedModelVoices: Type.Literal("active"),
+      unsupportedTransports: Type.Array(TalkTransportSchema),
+      gatewayRelayHandlesAgentConsult: Type.Boolean(),
+      hint: closedObject({
+        titleKey: NonEmptyString,
+        descriptionKey: NonEmptyString,
+        readyKey: NonEmptyString,
+      }),
+    }),
+  ),
   defaultModel: Type.Optional(Type.String()),
   modes: Type.Optional(Type.Array(TalkModeSchema)),
   transports: Type.Optional(Type.Array(TalkTransportSchema)),

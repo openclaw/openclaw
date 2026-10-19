@@ -56,8 +56,8 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
   it.each<TerminalCase>([
     ["current over stale", { kind: "ok" }, "stop", "stop", "success", { last: "aborted" }],
     ["normal completion", { kind: "ok" }, "length", "stop", "success", { completed: "stop" }],
-    // The fixture assistant carries visible text, which resolveTerminalAssistantTexts
-    // promotes to terminal text for a length stop, so this is a delivered partial
+    // The fixture assistant carries visible text, which finalization promotes
+    // to terminal text for a length stop, so this is a delivered partial
     // reply and the trajectory must record it as success.
     ["length truncation with visible text", { kind: "ok" }, "length", "length", "success", {}],
     [
@@ -75,6 +75,18 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
       "aborted",
       "interrupted",
       { last: "aborted", completed: "stop", yielded: true },
+    ],
+    [
+      "external abort over prompt failure",
+      {
+        kind: "aborted",
+        source: "external",
+        failure: { source: "prompt", error: new Error("prompt failed") },
+      },
+      "stop",
+      "aborted",
+      "interrupted",
+      {},
     ],
     ["partial provider error", { kind: "ok" }, "error", "error", "error", { texts: ["x"] }],
     [
@@ -115,6 +127,27 @@ describe("finalizeEmbeddedAttempt trajectory capture", () => {
       expect(events["trace.artifacts"]).toHaveProperty("stopReason", expectedStopReason);
       expect(events["trace.artifacts"]).toHaveProperty("finalStatus", expectedFinalStatus);
       expect(events["session.ended"]).toHaveProperty("stopReason", expectedStopReason);
+    },
+  );
+
+  it.each([false, true])(
+    "requires durable progress rather than tool metadata (accepted spawn=%s)",
+    (spawned) => {
+      const events = captureTrajectory({
+        currentAttemptAssistant: assistant("toolUse"),
+        toolMetas: [{ toolName: "read" }],
+        acceptedSessionSpawns: spawned
+          ? [{ runId: "run-child", childSessionKey: "agent:claude:subagent:child" }]
+          : undefined,
+      });
+      expect(events["trace.artifacts"]).toHaveProperty(
+        "finalStatus",
+        spawned ? "success" : "error",
+      );
+      expect(events["session.ended"]).toMatchObject({
+        status: spawned ? "success" : "error",
+        terminalError: spawned ? undefined : "non_deliverable_terminal_turn",
+      });
     },
   );
 

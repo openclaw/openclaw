@@ -13,8 +13,8 @@ import type { ThemeCatalogSnapshot } from "../../app/theme-catalog.ts";
 import type { ThemeMode, ThemeName } from "../../app/theme.ts";
 import type { TypefaceId } from "../../app/typography.ts";
 import type { WebPushSnapshot } from "../../app/web-push.ts";
+import type { ConfigSchemaAnalysis } from "../../components/config-form.analyze.ts";
 import type { JsonSchema } from "../../components/config-form.shared.ts";
-import type { ConfigSchemaAnalysis } from "../../components/config-form.ts";
 import type { Locale } from "../../i18n/index.ts";
 import type { RealtimeTalkInputDevice } from "../chat/talk/input.ts";
 import type { SessionObserverModelSelection } from "./session-observer-settings.ts";
@@ -50,7 +50,6 @@ export type ConfigViewState = {
   envRevealed: boolean;
   validityDismissed: boolean;
   revealedSensitivePaths: Set<string>;
-  lastCustomThemeImportFocusToken: number | null;
   rawDiffCache?: RawDiffCache;
   schemaAnalysisCache?: SchemaAnalysisCache;
   lastConfigContextKey: string | null;
@@ -154,7 +153,6 @@ export interface ConfigProps extends TabIconViewProps, AppearancePreferences {
   customThemeImportBusy: boolean;
   customThemeImportMessage: { kind: "success" | "error"; text: string } | null;
   customThemeImportExpanded?: boolean;
-  customThemeImportFocusToken?: number;
   onCustomThemeImportUrlChange: (next: string) => void;
   onImportCustomTheme: () => void;
   onClearCustomTheme: () => void;

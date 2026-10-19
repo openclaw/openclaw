@@ -1,5 +1,4 @@
 import fs from "node:fs";
-import Module from "node:module";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, describe, expect, it, vi } from "vitest";
@@ -216,28 +215,22 @@ describe("managed plugin public surfaces", () => {
   );
 
   it("resolves installed native filesystem dist APIs without losing their managed owner", () => {
-    const hooks = Reflect.get(Module, "registerHooks");
-    Reflect.set(Module, "registerHooks", undefined);
-    try {
-      const root = fs.realpathSync(temp.make("openclaw-native-public-dist-"));
-      writeSource(root, "library");
-      fs.rmSync(path.join(root, "api.ts"));
-      fs.rmSync(path.join(root, "runtime-api.ts"));
-      fs.mkdirSync(path.join(root, "dist"));
-      fs.writeFileSync(path.join(root, "dist/api.js"), 'export { read } from "../state.js";');
-      const active = prepare(root, "native-dist-fixture");
-      active.entry.default.register("registered");
-      active.publish();
-      const api = loadPluginPublicArtifactModuleSync<{ read(): string }>({
-        pluginRoot: root,
-        artifactBasename: "api.js",
-        origin: "global",
-      });
-      expect(api.read()).toBe("registered");
-      expect(getPluginValueInstance(api)).toBe(active.instance);
-    } finally {
-      Reflect.set(Module, "registerHooks", hooks);
-    }
+    const root = fs.realpathSync(temp.make("openclaw-native-public-dist-"));
+    writeSource(root, "library");
+    fs.rmSync(path.join(root, "api.ts"));
+    fs.rmSync(path.join(root, "runtime-api.ts"));
+    fs.mkdirSync(path.join(root, "dist"));
+    fs.writeFileSync(path.join(root, "dist/api.js"), 'export { read } from "../state.js";');
+    const active = prepare(root, "native-dist-fixture");
+    active.entry.default.register("registered");
+    active.publish();
+    const api = loadPluginPublicArtifactModuleSync<{ read(): string }>({
+      pluginRoot: root,
+      artifactBasename: "api.js",
+      origin: "global",
+    });
+    expect(api.read()).toBe("registered");
+    expect(getPluginValueInstance(api)).toBe(active.instance);
   });
 
   it("shares installed registration state with captured APIs, refreshes a retained facade, and fences old exports", async () => {

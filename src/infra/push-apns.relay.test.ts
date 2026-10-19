@@ -2,16 +2,13 @@
 import { generateKeyPairSync } from "node:crypto";
 import { MAX_TIMER_TIMEOUT_MS } from "@openclaw/normalization-core/number-coercion";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import * as identityRuntime from "./device-identity-async.js";
 import {
   deriveDeviceIdFromPublicKey,
   publicKeyRawBase64UrlFromPem,
   verifyDeviceSignature,
 } from "./device-identity.js";
-import {
-  type ApnsRelayRequestSender,
-  resolveApnsRelayConfigFromEnv,
-  sendApnsRelayPush,
-} from "./push-apns.relay.js";
+import { resolveApnsRelayConfigFromEnv, sendApnsRelayPush } from "./push-apns.relay.js";
 
 const relayGatewayIdentity = (() => {
   const { publicKey, privateKey } = generateKeyPairSync("ed25519");
@@ -23,6 +20,7 @@ const relayGatewayIdentity = (() => {
   }
   return {
     deviceId,
+    publicKeyPem,
     publicKey: publicKeyRaw,
     privateKeyPem: privateKey.export({ format: "pem", type: "pkcs8" }),
   };
@@ -34,6 +32,9 @@ afterEach(() => {
 });
 
 function sendPush(overrides: Partial<Parameters<typeof sendApnsRelayPush>[0]> = {}) {
+  vi.spyOn(identityRuntime, "loadOrCreateProcessDeviceIdentityAsync").mockResolvedValue(
+    relayGatewayIdentity,
+  );
   return sendApnsRelayPush({
     relayConfig: {
       baseUrl: "https://relay.example.com",
@@ -44,7 +45,6 @@ function sendPush(overrides: Partial<Parameters<typeof sendApnsRelayPush>[0]> = 
     payload: { aps: { "content-available": 1 } },
     pushType: "background" as const,
     priority: "5" as const,
-    gatewayIdentity: relayGatewayIdentity,
     ...overrides,
   });
 }
@@ -198,36 +198,38 @@ describe("push-apns.relay", () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it("signs relay payloads and forwards the request through the injected sender", async () => {
+    it("signs relay payloads in the HTTP request", async () => {
       vi.spyOn(Date, "now").mockReturnValue(123_456_789);
-      const sender = vi.fn<ApnsRelayRequestSender>().mockResolvedValue({
-        ok: true,
-        status: 200,
-        apnsId: "relay-apns-id",
-        environment: "production",
-        tokenSuffix: "abcd1234",
-      });
+      const timeout = vi.spyOn(AbortSignal, "timeout");
+      const { fetchMock } = mockRelayResponse(
+        JSON.stringify({
+          ok: true,
+          status: 200,
+          apnsId: "relay-apns-id",
+          environment: "production",
+          tokenSuffix: "abcd1234",
+        }),
+      );
 
       const result = await sendPush({
         payload: { aps: { alert: { title: "Wake", body: "Ping" } } },
         pushType: "alert",
         priority: "10",
-        requestSender: sender,
       });
 
-      expect(sender).toHaveBeenCalledTimes(1);
-      const sent = sender.mock.calls[0]?.[0];
-      expect(sent).toMatchObject({
-        relayConfig: { baseUrl: "https://relay.example.com", timeoutMs: 1000 },
-        sendGrant: "send-grant-123",
-        relayHandle: "relay-handle-123",
-        gatewayDeviceId: relayGatewayIdentity.deviceId,
-        signedAtMs: 123_456_789,
-        pushType: "alert",
-        priority: "10",
-      });
-      expect(sent?.payload).toEqual({ aps: { alert: { title: "Wake", body: "Ping" } } });
-      expect(sent?.bodyJson).toBe(
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0]?.[0]).toBe("https://relay.example.com/v1/push/send");
+      expect(timeout).toHaveBeenCalledWith(1000);
+      const fetchOptions = fetchMock.mock.calls[0]?.[1];
+      const headers = new Headers(fetchOptions?.headers);
+      const bodyJson = fetchOptions?.body;
+      if (typeof bodyJson !== "string") {
+        throw new Error("expected a serialized relay request body");
+      }
+      expect(headers.get("authorization")).toBe("Bearer send-grant-123");
+      expect(headers.get("x-openclaw-gateway-device-id")).toBe(relayGatewayIdentity.deviceId);
+      expect(headers.get("x-openclaw-gateway-signed-at-ms")).toBe("123456789");
+      expect(bodyJson).toBe(
         JSON.stringify({
           relayHandle: "relay-handle-123",
           pushType: "alert",
@@ -240,11 +242,11 @@ describe("push-apns.relay", () => {
           relayGatewayIdentity.publicKey,
           [
             "openclaw-relay-send-v1",
-            sent?.gatewayDeviceId,
-            String(sent?.signedAtMs),
-            sent?.bodyJson,
+            headers.get("x-openclaw-gateway-device-id"),
+            headers.get("x-openclaw-gateway-signed-at-ms"),
+            bodyJson,
           ].join("\n"),
-          sent?.signature ?? "",
+          headers.get("x-openclaw-gateway-signature") ?? "",
         ),
       ).toBe(true);
       expect(result).toMatchObject({

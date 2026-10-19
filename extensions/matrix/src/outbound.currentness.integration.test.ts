@@ -28,19 +28,46 @@ const ROOM_ID = "!room:example.org";
 const MEDIA_ROOT = "/matrix-currentness";
 const MEDIA_BYTES = Buffer.from("Matrix fixture attachment");
 
+function guardedCaller(caller: AbortController) {
+  return {
+    signal: caller.signal,
+    assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
+    onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
+  };
+}
+
+function expectAccepted(result: SendOutcome<unknown>, id: string) {
+  expect(result.error).toBeUndefined();
+  expect(result.value).toMatchObject({ messageId: id, receipt: { platformMessageIds: [id] } });
+}
+
+function queueForRoom(client: MatrixJsClient, roomId: string) {
+  const event = new MatrixEvent({
+    room_id: roomId,
+    type: "m.room.message",
+    content: { msgtype: "m.text", body: "fixture" },
+  });
+  return () =>
+    client
+      .getScheduler()
+      ?.getQueueForEvent(event)
+      ?.map((queued) => queued.getRoomId());
+}
+
+function observedSdkClient(sdkSend: { mock: { contexts: unknown[] } }) {
+  const client = sdkSend.mock.contexts[0];
+  if (!(client instanceof MatrixJsClient)) {
+    throw new Error("real Matrix SDK sender was not observed");
+  }
+  return client;
+}
+
 function registeredSenders(registration: Registration) {
-  const sendText =
-    registration === "outbound"
-      ? matrixPlugin.outbound?.sendText
-      : matrixPlugin.message?.send?.text;
-  const sendMedia =
-    registration === "outbound"
-      ? matrixPlugin.outbound?.sendMedia
-      : matrixPlugin.message?.send?.media;
-  const sendPayload =
-    registration === "outbound"
-      ? matrixPlugin.outbound?.sendPayload
-      : matrixPlugin.message?.send?.payload;
+  const outbound = matrixPlugin.outbound;
+  const message = matrixPlugin.message?.send;
+  const sendText = registration === "outbound" ? outbound?.sendText : message?.text;
+  const sendMedia = registration === "outbound" ? outbound?.sendMedia : message?.media;
+  const sendPayload = registration === "outbound" ? outbound?.sendPayload : message?.payload;
   if (!sendText || !sendMedia || !sendPayload) {
     throw new Error(`missing Matrix ${registration} sender`);
   }
@@ -89,6 +116,15 @@ async function readRequestJson(request: http.IncomingMessage): Promise<unknown> 
 type MatrixFixture = {
   senders: ReturnType<typeof registeredSenders>;
   context: Pick<ChannelOutboundContext, "cfg" | "to" | "deps" | "mediaLocalRoots">;
+  pendingText: (
+    text: string,
+    options?: Partial<
+      Pick<
+        ChannelOutboundContext,
+        "to" | "signal" | "assertDirectAdapterHandoff" | "onPlatformSendDispatch"
+      >
+    > & { onDeliveryResult?: () => void },
+  ) => Promise<SendOutcome<unknown>>;
   handlers: FixtureHandlers;
   uploads: string[];
   timeline: string[];
@@ -158,17 +194,20 @@ async function withMatrixFixture(
       ssrfPolicy: { allowPrivateNetwork: true },
     });
     client = resolvedClient;
-    await run({
-      senders: registeredSenders(registration),
-      context: {
-        cfg: {},
-        to: ROOM_ID,
-        mediaLocalRoots: [MEDIA_ROOT],
-        deps: {
-          matrix: (to: string, text: string | undefined, options: MatrixSendOpts) =>
-            sendMessageMatrix(to, text, { ...options, client: resolvedClient }),
-        },
+    const senders = registeredSenders(registration);
+    const context = {
+      cfg: {},
+      to: ROOM_ID,
+      mediaLocalRoots: [MEDIA_ROOT],
+      deps: {
+        matrix: (to: string, text: string | undefined, options: MatrixSendOpts) =>
+          sendMessageMatrix(to, text, { ...options, client: resolvedClient }),
       },
+    };
+    await run({
+      senders,
+      context,
+      pendingText: (text, options) => settle(senders.sendText({ ...context, text, ...options })),
       handlers,
       uploads,
       timeline,
@@ -188,182 +227,147 @@ async function withMatrixFixture(
 
 describe("registered Matrix sender currentness", () => {
   // The message adapter delegates to outbound; only receipt projection needs both surfaces.
-  describe("shared outbound path", () => {
-    const registration = "message";
-    it(`${registration} stops canceled media preparation before uploading`, async () => {
-      await withMatrixFixture(registration, async ({ senders, context, uploads, timeline }) => {
-        const mediaStarted = createDeferred<void>();
-        const media = createDeferred<Buffer>();
-        const caller = new AbortController();
-        const cancellation = new Error("Matrix caller canceled during media preparation");
-        const result = settle(
-          senders.sendMedia({
-            ...context,
-            text: "attachment",
-            mediaUrl: `${MEDIA_ROOT}/fixture.txt`,
-            mediaReadFile: async () => {
-              mediaStarted.resolve();
-              return await media.promise;
-            },
-            signal: caller.signal,
-            onPlatformSendDispatch: async () => {},
-          }),
-        );
-        try {
-          await waitForBoundary(mediaStarted.promise, result, "media preparation");
-          caller.abort(cancellation);
-          media.resolve(MEDIA_BYTES);
-          const settled = await result;
-          expect(settled.error).toMatchObject({
-            message: expect.stringContaining(cancellation.message),
-          });
-          expect(uploads).toHaveLength(0);
-          expect(timeline).toHaveLength(0);
-        } finally {
-          media.resolve(MEDIA_BYTES);
-          await result;
-        }
-      });
-    });
-
-    it(`${registration} rechecks caller retirement after awaited dispatch bookkeeping`, async () => {
-      await withMatrixFixture(registration, async ({ senders, context, timeline }) => {
-        let current = true;
-        const retirement = new Error("Matrix caller retired during dispatch bookkeeping");
-        const dispatchEntered = createDeferred<void>();
-        const resumeDispatch = createDeferred<void>();
-        const result = settle(
-          senders.sendText({
-            ...context,
-            text: "must remain unsent",
-            assertDirectAdapterHandoff: () => {
-              if (!current) {
-                throw retirement;
-              }
-            },
-            onPlatformSendDispatch: async () => {
-              dispatchEntered.resolve();
-              await resumeDispatch.promise;
-            },
-          }),
-        );
-        try {
-          await waitForBoundary(dispatchEntered.promise, result, "dispatch bookkeeping");
-          current = false;
-          resumeDispatch.resolve();
-          expect((await result).error).toMatchObject({
-            message: expect.stringContaining(retirement.message),
-          });
-          expect(timeline).toEqual([]);
-        } finally {
-          resumeDispatch.resolve();
-          await result;
-        }
-      });
-    });
-
-    it.each(["outbound", "message"] as const)(
-      "%s preserves an accepted final receipt after caller cancellation",
-      async (surface) => {
-        await withMatrixFixture(surface, async ({ senders, context, handlers, timeline }) => {
-          const caller = new AbortController();
-          const cancellation = new Error("Matrix caller canceled after request acceptance");
-          handlers.timeline = ({ response }) => {
-            caller.abort(cancellation);
-            respondJson(response, { event_id: "$accepted" });
-          };
-          const delivered: unknown[] = [];
-          const result = await senders.sendText({
-            ...context,
-            text: "accepted final body",
-            signal: caller.signal,
-            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-            onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
-            onDeliveryResult: (value: unknown) => {
-              delivered.push(value);
-            },
-          });
-          const accepted = {
-            messageId: "$accepted",
-            receipt: {
-              primaryPlatformMessageId: "$accepted",
-              platformMessageIds: ["$accepted"],
-              parts: [{ platformMessageId: "$accepted", kind: "text" }],
-            },
-          };
-          expect(result).toMatchObject(accepted);
-          expect(delivered).toMatchObject([accepted]);
-          if (surface === "outbound") {
-            expect(result).toMatchObject({ content: "accepted final body" });
-            expect(delivered).toMatchObject([{ content: "accepted final body" }]);
-          }
-          expect(timeline).toHaveLength(1);
-        });
-      },
-    );
-
-    it.each(["outbound", "message"] as const)(
-      "%s preserves the first attachment result and rejects the remaining payload",
-      async (surface) => {
-        await withMatrixFixture(
-          surface,
-          async ({ senders, context, handlers, uploads, timeline }) => {
-            const caller = new AbortController();
-            const cancellation = new Error("Matrix caller canceled after the first attachment");
-            const firstPath = `${MEDIA_ROOT}/first.txt`;
-            const secondPath = `${MEDIA_ROOT}/second.txt`;
-            const reads: string[] = [];
-            const delivered: unknown[] = [];
-            handlers.timeline = ({ response }) => {
-              caller.abort(cancellation);
-              respondJson(response, { event_id: "$first-attachment" });
-            };
-            const result = await settle(
-              senders.sendPayload({
-                ...context,
-                text: "first attachment caption",
-                payload: {
-                  text: "first attachment caption",
-                  mediaUrls: [firstPath, secondPath],
-                },
-                mediaReadFile: async (path) => {
-                  reads.push(path);
-                  return MEDIA_BYTES;
-                },
-                signal: caller.signal,
-                assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-                onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
-                onDeliveryResult: (value: unknown) => {
-                  delivered.push(value);
-                },
-              }),
-            );
-            expect(result.value).toBeUndefined();
-            expect(result.error).toMatchObject({
-              message: expect.stringContaining(cancellation.message),
-            });
-            expect(reads).toEqual([firstPath]);
-            expect(uploads).toHaveLength(1);
-            expect(timeline).toHaveLength(1);
-            expect(delivered).toMatchObject([
-              {
-                messageId: "$first-attachment",
-                receipt: {
-                  platformMessageIds: ["$first-attachment"],
-                  parts: [{ platformMessageId: "$first-attachment", kind: "media" }],
-                },
-              },
-            ]);
-            if (surface === "outbound") {
-              expect(delivered).toMatchObject([{ content: "first attachment caption" }]);
-            }
+  const registration = "message";
+  it(`${registration} stops canceled media preparation before uploading`, async () => {
+    await withMatrixFixture(registration, async ({ senders, context, uploads, timeline }) => {
+      const mediaStarted = createDeferred<void>();
+      const media = createDeferred<Buffer>();
+      const caller = new AbortController();
+      const cancellation = new Error("Matrix caller canceled during media preparation");
+      const result = settle(
+        senders.sendMedia({
+          ...context,
+          text: "attachment",
+          mediaUrl: `${MEDIA_ROOT}/fixture.txt`,
+          mediaReadFile: async () => {
+            mediaStarted.resolve();
+            return await media.promise;
           },
-        );
-      },
-    );
+          signal: caller.signal,
+          onPlatformSendDispatch: async () => {},
+        }),
+      );
+      try {
+        await waitForBoundary(mediaStarted.promise, result, "media preparation");
+        caller.abort(cancellation);
+        media.resolve(MEDIA_BYTES);
+        const settled = await result;
+        expect(settled.error).toMatchObject({
+          message: expect.stringContaining(cancellation.message),
+        });
+        expect(uploads).toHaveLength(0);
+        expect(timeline).toHaveLength(0);
+      } finally {
+        media.resolve(MEDIA_BYTES);
+        await result;
+      }
+    });
+  });
 
-    it(`${registration} retries a canceled DM mapping repair on the same client`, async () => {
-      await withMatrixFixture(registration, async ({ senders, context, handlers, timeline }) => {
+  it(`${registration} rechecks caller retirement after awaited dispatch bookkeeping`, async () => {
+    await withMatrixFixture(registration, async ({ pendingText, timeline }) => {
+      let current = true;
+      const retirement = new Error("Matrix caller retired during dispatch bookkeeping");
+      const dispatchEntered = createDeferred<void>();
+      const resumeDispatch = createDeferred<void>();
+      const result = pendingText("must remain unsent", {
+        assertDirectAdapterHandoff: () => {
+          if (!current) {
+            throw retirement;
+          }
+        },
+        onPlatformSendDispatch: async () => {
+          dispatchEntered.resolve();
+          await resumeDispatch.promise;
+        },
+      });
+      try {
+        await waitForBoundary(dispatchEntered.promise, result, "dispatch bookkeeping");
+        current = false;
+        resumeDispatch.resolve();
+        expect((await result).error).toMatchObject({
+          message: expect.stringContaining(retirement.message),
+        });
+        expect(timeline).toEqual([]);
+      } finally {
+        resumeDispatch.resolve();
+        await result;
+      }
+    });
+  });
+
+  it.each([
+    ["outbound", false],
+    ["message", false],
+    ["outbound", true],
+    ["message", true],
+  ] as const)("%s preserves accepted receipts with remaining media=%s", async (surface, media) => {
+    await withMatrixFixture(surface, async ({ senders, context, handlers, uploads, timeline }) => {
+      const caller = new AbortController();
+      const cancellation = new Error("Matrix caller canceled after request acceptance");
+      const id = media ? "$first-attachment" : "$accepted";
+      const text = media ? "first attachment caption" : "accepted final body";
+      const firstPath = `${MEDIA_ROOT}/first.txt`;
+      const reads: string[] = [];
+      const delivered: unknown[] = [];
+      handlers.timeline = ({ response }) => {
+        caller.abort(cancellation);
+        respondJson(response, { event_id: id });
+      };
+      const options = {
+        ...context,
+        text,
+        ...guardedCaller(caller),
+        onDeliveryResult: (value: unknown) => {
+          delivered.push(value);
+        },
+      };
+      const result = await settle(
+        media
+          ? senders.sendPayload({
+              ...options,
+              payload: { text, mediaUrls: [firstPath, `${MEDIA_ROOT}/second.txt`] },
+              mediaReadFile: async (path) => {
+                reads.push(path);
+                return MEDIA_BYTES;
+              },
+            })
+          : senders.sendText(options),
+      );
+      const accepted = {
+        messageId: id,
+        receipt: {
+          ...(!media ? { primaryPlatformMessageId: id } : {}),
+          platformMessageIds: [id],
+          parts: [{ platformMessageId: id, kind: media ? "media" : "text" }],
+        },
+      };
+      if (media) {
+        expect(result.value).toBeUndefined();
+        expect(result.error).toMatchObject({
+          message: expect.stringContaining(cancellation.message),
+        });
+        expect(reads).toEqual([firstPath]);
+        expect(uploads).toHaveLength(1);
+      } else {
+        expect(result.error).toBeUndefined();
+        expect(result.value).toMatchObject(accepted);
+        if (surface === "outbound") {
+          expect(result.value).toMatchObject({ content: text });
+        }
+      }
+      expect(delivered).toMatchObject([accepted]);
+      if (surface === "outbound") {
+        expect(delivered).toMatchObject([{ content: text }]);
+      }
+      expect(timeline).toHaveLength(1);
+    });
+  });
+
+  it(`${registration} retries a canceled DM mapping repair on the same client`, async () => {
+    await withMatrixFixture(
+      registration,
+      async ({ senders, context, pendingText, handlers, timeline }) => {
         const peer = "@peer:example.org";
         const roomId = "!dm:example.org";
         const accountDataPath = "/_matrix/client/v3/user/@bot:example.org/account_data/m.direct";
@@ -374,6 +378,15 @@ describe("registered Matrix sender currentness", () => {
         const mappingWrites: unknown[] = [];
         const mappingReadEntered = createDeferred<void>();
         const resumeMappingRead = createDeferred<void>();
+        const roomPath = `/_matrix/client/v3/rooms/${roomId}`;
+        const roomReads: Record<string, unknown> = {
+          "/_matrix/client/v3/joined_rooms": { joined_rooms: [roomId] },
+          [`${roomPath}/joined_members`]: { joined: { "@bot:example.org": {}, [peer]: {} } },
+          [`${roomPath}/state/m.room.member/@bot:example.org`]: {
+            membership: "join",
+            is_direct: true,
+          },
+        };
         handlers.request = async ({ request, response, path }) => {
           if (path === accountDataPath) {
             if (request.method === "GET") {
@@ -394,38 +407,18 @@ describe("registered Matrix sender currentness", () => {
               return true;
             }
           }
-          if (request.method === "GET" && path === "/_matrix/client/v3/joined_rooms") {
-            respondJson(response, { joined_rooms: [roomId] });
-            return true;
-          }
-          if (
-            request.method === "GET" &&
-            path === `/_matrix/client/v3/rooms/${roomId}/joined_members`
-          ) {
-            respondJson(response, { joined: { "@bot:example.org": {}, [peer]: {} } });
-            return true;
-          }
-          if (
-            request.method === "GET" &&
-            path === `/_matrix/client/v3/rooms/${roomId}/state/m.room.member/@bot:example.org`
-          ) {
-            respondJson(response, { membership: "join", is_direct: true });
+          if (request.method === "GET" && Object.hasOwn(roomReads, path)) {
+            respondJson(response, roomReads[path]);
             return true;
           }
           return false;
         };
         const caller = new AbortController();
         const cancellation = new Error("Matrix caller canceled during the DM mapping reread");
-        const canceled = settle(
-          senders.sendText({
-            ...context,
-            to: `user:${peer}`,
-            text: "canceled DM",
-            signal: caller.signal,
-            assertDirectAdapterHandoff: () => caller.signal.throwIfAborted(),
-            onPlatformSendDispatch: async () => caller.signal.throwIfAborted(),
-          }),
-        );
+        const canceled = pendingText("canceled DM", {
+          to: `user:${peer}`,
+          ...guardedCaller(caller),
+        });
         try {
           await waitForBoundary(mappingReadEntered.promise, canceled, "the DM mapping reread");
           caller.abort(cancellation);
@@ -442,9 +435,7 @@ describe("registered Matrix sender currentness", () => {
             ...context,
             to: `user:${peer}`,
             text: "valid DM after canceled repair",
-            signal: freshCaller.signal,
-            assertDirectAdapterHandoff: () => freshCaller.signal.throwIfAborted(),
-            onPlatformSendDispatch: async () => freshCaller.signal.throwIfAborted(),
+            ...guardedCaller(freshCaller),
           });
           expect(sent).toMatchObject({
             messageId: "$accepted",
@@ -457,329 +448,197 @@ describe("registered Matrix sender currentness", () => {
           resumeMappingRead.resolve();
           await canceled;
         }
-      });
-    });
-
-    it(`${registration} preserves a queued same-room send after the accepted caller retires`, async () => {
-      await withMatrixFixture(registration, async ({ senders, context, handlers, timeline }) => {
-        const firstCaller = new AbortController();
-        const secondCaller = new AbortController();
-        const firstRequestEntered = createDeferred<void>();
-        const resumeFirstResponse = createDeferred<void>();
-        handlers.timeline = async ({ response, index }) => {
-          if (index === 1) {
-            firstRequestEntered.resolve();
-            await resumeFirstResponse.promise;
-            respondJson(response, { event_id: "$first-accepted" });
-          } else {
-            respondJson(response, { event_id: "$second-accepted" });
-          }
-        };
-        const pluginSend = vi.spyOn(MatrixClient.prototype, "sendMessage");
-        const first = settle(
-          senders.sendText({
-            ...context,
-            text: "first sender",
-            signal: firstCaller.signal,
-            assertDirectAdapterHandoff: () => firstCaller.signal.throwIfAborted(),
-            onPlatformSendDispatch: async () => {},
-          }),
-        );
-        let second: Promise<SendOutcome<unknown>> | undefined;
-        try {
-          await waitForBoundary(firstRequestEntered.promise, first, "the first timeline request");
-          second = settle(
-            senders.sendText({
-              ...context,
-              text: "second sender",
-              signal: secondCaller.signal,
-              assertDirectAdapterHandoff: () => secondCaller.signal.throwIfAborted(),
-              onPlatformSendDispatch: async () => {},
-            }),
-          );
-          // The forwarding spy observes both admissions while the first request holds the room queue.
-          await expect.poll(() => pluginSend.mock.calls.length).toBe(2);
-          expect(timeline).toHaveLength(1);
-          firstCaller.abort(new Error("first Matrix caller retired after request acceptance"));
-          resumeFirstResponse.resolve();
-          const [firstResult, secondResult] = await Promise.all([first, second]);
-          expect(firstResult.error).toBeUndefined();
-          expect(firstResult.value).toMatchObject({
-            messageId: "$first-accepted",
-            receipt: { platformMessageIds: ["$first-accepted"] },
-          });
-          expect(secondResult.error).toBeUndefined();
-          expect(secondResult.value).toMatchObject({
-            messageId: "$second-accepted",
-            receipt: { platformMessageIds: ["$second-accepted"] },
-          });
-          expect(timeline).toHaveLength(2);
-          expect(timeline.every((path) => path.includes(`/rooms/${ROOM_ID}/`))).toBe(true);
-        } finally {
-          resumeFirstResponse.resolve();
-          await Promise.all([first, second]);
-          pluginSend.mockRestore();
-        }
-      });
-    });
-
-    it(`${registration} preserves a callback-free legacy send after an aware caller retires`, async () => {
-      await withMatrixFixture(registration, async ({ senders, context, handlers, timeline }) => {
-        const awareRoom = "!aware:example.org";
-        const legacyRoom = "!legacy:example.org";
-        const awareCaller = new AbortController();
-        const awareRequestEntered = createDeferred<void>();
-        const resumeAwareResponse = createDeferred<void>();
-        handlers.timeline = async ({ response, path }) => {
-          if (path.includes(`/rooms/${awareRoom}/`)) {
-            awareRequestEntered.resolve();
-            await resumeAwareResponse.promise;
-            respondJson(response, { event_id: "$aware-accepted" });
-            return;
-          }
-          if (path.includes(`/rooms/${legacyRoom}/`)) {
-            respondJson(response, { event_id: "$legacy-accepted" });
-            return;
-          }
-          throw new Error(`unexpected mixed-caller room: ${path}`);
-        };
-        const sdkSend = vi.spyOn(MatrixJsClient.prototype, "sendMessage");
-        const aware = settle(
-          senders.sendText({
-            ...context,
-            to: awareRoom,
-            text: "sender with currentness inputs",
-            signal: awareCaller.signal,
-            assertDirectAdapterHandoff: () => awareCaller.signal.throwIfAborted(),
-            onPlatformSendDispatch: async () => {},
-          }),
-        );
-        let legacy: Promise<SendOutcome<unknown>> | undefined;
-        try {
-          await waitForBoundary(awareRequestEntered.promise, aware, "the aware sender's request");
-          legacy = settle(
-            senders.sendText({
-              ...context,
-              to: legacyRoom,
-              text: "legacy sender without currentness callbacks",
-            }),
-          );
-          const sdkClient = sdkSend.mock.contexts[0];
-          if (!(sdkClient instanceof MatrixJsClient)) {
-            throw new Error("real Matrix SDK sender was not observed");
-          }
-          const legacyEvent = new MatrixEvent({
-            room_id: legacyRoom,
-            type: "m.room.message",
-            content: { msgtype: "m.text", body: "fixture" },
-          });
-          await expect
-            .poll(() =>
-              sdkClient
-                .getScheduler()
-                ?.getQueueForEvent(legacyEvent)
-                ?.map((event) => event.getRoomId()),
-            )
-            .toEqual([awareRoom, legacyRoom]);
-          expect(timeline).toHaveLength(1);
-          awareCaller.abort(new Error("aware Matrix caller retired after request acceptance"));
-          resumeAwareResponse.resolve();
-          const [awareResult, legacyResult] = await Promise.all([aware, legacy]);
-          expect(awareResult.error).toBeUndefined();
-          expect(awareResult.value).toMatchObject({
-            messageId: "$aware-accepted",
-            receipt: { platformMessageIds: ["$aware-accepted"] },
-          });
-          expect(legacyResult.error).toBeUndefined();
-          expect(legacyResult.value).toMatchObject({
-            messageId: "$legacy-accepted",
-            receipt: { platformMessageIds: ["$legacy-accepted"] },
-          });
-          expect(timeline).toHaveLength(2);
-          expect(timeline[0]).toContain(`/rooms/${awareRoom}/`);
-          expect(timeline[1]).toContain(`/rooms/${legacyRoom}/`);
-        } finally {
-          resumeAwareResponse.resolve();
-          await Promise.all([aware, legacy]);
-          sdkSend.mockRestore();
-        }
-      });
-    });
-
-    it.each([false, true])(
-      `${registration} preserves global FIFO after a rate-limited caller with canceled=%s`,
-      async (canceled) => {
-        await withMatrixFixture(registration, async ({ senders, context, handlers, timeline }) => {
-          const firstRoom = "!first:example.org";
-          const secondRoom = "!second:example.org";
-          const thirdRoom = "!third:example.org";
-          const firstCaller = new AbortController();
-          const secondCaller = new AbortController();
-          const thirdCaller = new AbortController();
-          const cancellation = new Error("first Matrix caller canceled before its SDK retry");
-          const firstRequestEntered = createDeferred<void>();
-          const resumeRateLimitResponse = createDeferred<void>();
-          const secondRequestEntered = createDeferred<void>();
-          const resumeSecondResponse = createDeferred<void>();
-          let firstRoomAttempts = 0;
-          const requestOrder: string[] = [];
-          const survivorResults: string[] = [];
-          handlers.timeline = async ({ response, path }) => {
-            if (path.includes(`/rooms/${firstRoom}/`)) {
-              requestOrder.push(firstRoom);
-              firstRoomAttempts += 1;
-              if (firstRoomAttempts === 1) {
-                firstRequestEntered.resolve();
-                await resumeRateLimitResponse.promise;
-                respondJson(
-                  response,
-                  {
-                    errcode: "M_LIMIT_EXCEEDED",
-                    error: "fixture rate limit",
-                    retry_after_ms: 1,
-                  },
-                  429,
-                );
-                return;
-              }
-              respondJson(response, { event_id: "$first-retried" });
-              return;
-            }
-            if (path.includes(`/rooms/${secondRoom}/`)) {
-              requestOrder.push(secondRoom);
-              secondRequestEntered.resolve();
-              await resumeSecondResponse.promise;
-              respondJson(response, { event_id: "$second-accepted" });
-              return;
-            }
-            if (path.includes(`/rooms/${thirdRoom}/`)) {
-              requestOrder.push(thirdRoom);
-              respondJson(response, { event_id: "$third-accepted" });
-              return;
-            }
-            throw new Error(`unexpected survivor room: ${path}`);
-          };
-          const sdkSend = vi.spyOn(MatrixJsClient.prototype, "sendMessage");
-          const first = settle(
-            senders.sendText({
-              ...context,
-              to: firstRoom,
-              text: "first sender awaiting retry",
-              signal: firstCaller.signal,
-              onPlatformSendDispatch: async () => {},
-            }),
-          );
-          let second: Promise<SendOutcome<unknown>> | undefined;
-          let third: Promise<SendOutcome<unknown>> | undefined;
-          try {
-            await waitForBoundary(firstRequestEntered.promise, first, "the first timeline request");
-            second = settle(
-              senders.sendText({
-                ...context,
-                to: secondRoom,
-                text: "current sender in another room",
-                signal: secondCaller.signal,
-                onPlatformSendDispatch: async () => {},
-                onDeliveryResult: () => {
-                  survivorResults.push(secondRoom);
-                },
-              }),
-            );
-            const sdkClient = sdkSend.mock.contexts[0];
-            if (!(sdkClient instanceof MatrixJsClient)) {
-              throw new Error("real Matrix SDK sender was not observed");
-            }
-            const secondRoomEvent = new MatrixEvent({
-              room_id: secondRoom,
-              type: "m.room.message",
-              content: { msgtype: "m.text", body: "fixture" },
-            });
-            // Admit B before starting C so asynchronous preparation cannot change their queue order.
-            await expect
-              .poll(
-                () =>
-                  sdkClient
-                    .getScheduler()
-                    ?.getQueueForEvent(secondRoomEvent)
-                    ?.some((event) => event.getRoomId() === secondRoom) ?? false,
-              )
-              .toBe(true);
-            third = settle(
-              senders.sendText({
-                ...context,
-                to: thirdRoom,
-                text: "next current sender in a third room",
-                signal: thirdCaller.signal,
-                onPlatformSendDispatch: async () => {},
-                onDeliveryResult: () => {
-                  survivorResults.push(thirdRoom);
-                },
-              }),
-            );
-            const queuedRooms = () =>
-              sdkClient
-                .getScheduler()
-                ?.getQueueForEvent(secondRoomEvent)
-                ?.map((event) => event.getRoomId());
-            await expect.poll(queuedRooms).toEqual([firstRoom, secondRoom, thirdRoom]);
-            expect(requestOrder).toEqual([firstRoom]);
-            expect(survivorResults).toEqual([]);
-            expect(timeline).toHaveLength(1);
-            if (canceled) {
-              firstCaller.abort(cancellation);
-            }
-            resumeRateLimitResponse.resolve();
-            const firstResult = await first;
-            if (canceled) {
-              expect(firstResult.error).toMatchObject({
-                message: expect.stringContaining(cancellation.message),
-              });
-            } else {
-              expect(firstResult.error).toBeUndefined();
-              expect(firstResult.value).toMatchObject({
-                messageId: "$first-retried",
-                receipt: { platformMessageIds: ["$first-retried"] },
-              });
-            }
-            await waitForBoundary(
-              secondRequestEntered.promise,
-              second,
-              "the first survivor request",
-            );
-            // B holds the same global queue after A settles; C must still wait for B's response.
-            await expect.poll(queuedRooms).toEqual([secondRoom, thirdRoom]);
-            expect(requestOrder).toEqual(
-              canceled ? [firstRoom, secondRoom] : [firstRoom, firstRoom, secondRoom],
-            );
-            expect(survivorResults).toEqual([]);
-            resumeSecondResponse.resolve();
-            const [secondResult, thirdResult] = await Promise.all([second, third]);
-            expect(secondResult.error).toBeUndefined();
-            expect(secondResult.value).toMatchObject({
-              messageId: "$second-accepted",
-              receipt: { platformMessageIds: ["$second-accepted"] },
-            });
-            expect(thirdResult.error).toBeUndefined();
-            expect(thirdResult.value).toMatchObject({
-              messageId: "$third-accepted",
-              receipt: { platformMessageIds: ["$third-accepted"] },
-            });
-            expect(firstRoomAttempts).toBe(canceled ? 1 : 2);
-            expect(requestOrder).toEqual(
-              canceled
-                ? [firstRoom, secondRoom, thirdRoom]
-                : [firstRoom, firstRoom, secondRoom, thirdRoom],
-            );
-            expect(survivorResults).toEqual([secondRoom, thirdRoom]);
-            expect(timeline).toHaveLength(canceled ? 3 : 4);
-          } finally {
-            resumeRateLimitResponse.resolve();
-            resumeSecondResponse.resolve();
-            await Promise.all([first, second, third]);
-            sdkSend.mockRestore();
-          }
-        });
       },
     );
   });
+
+  it.each([false, true])("preserves a queued send with legacy follower=%s", async (legacy) => {
+    await withMatrixFixture(registration, async ({ pendingText, handlers, timeline }) => {
+      const firstRoom = legacy ? "!aware:example.org" : ROOM_ID;
+      const secondRoom = legacy ? "!legacy:example.org" : ROOM_ID;
+      const firstId = legacy ? "$aware-accepted" : "$first-accepted";
+      const secondId = legacy ? "$legacy-accepted" : "$second-accepted";
+      const firstCaller = new AbortController();
+      const secondCaller = new AbortController();
+      const entered = createDeferred<void>();
+      const resume = createDeferred<void>();
+      handlers.timeline = async ({ response, path, index }) => {
+        if (index === 1 && path.includes(`/rooms/${firstRoom}/`)) {
+          entered.resolve();
+          await resume.promise;
+          respondJson(response, { event_id: firstId });
+        } else if (path.includes(`/rooms/${secondRoom}/`)) {
+          respondJson(response, { event_id: secondId });
+        } else {
+          throw new Error(`unexpected queued room: ${path}`);
+        }
+      };
+      const sendSpy = legacy
+        ? vi.spyOn(MatrixJsClient.prototype, "sendMessage")
+        : vi.spyOn(MatrixClient.prototype, "sendMessage");
+      const first = pendingText("first sender", {
+        to: firstRoom,
+        ...guardedCaller(firstCaller),
+        onPlatformSendDispatch: async () => {},
+      });
+      let second: Promise<SendOutcome<unknown>> | undefined;
+      try {
+        await waitForBoundary(entered.promise, first, "the first timeline request");
+        second = pendingText("second sender", {
+          to: secondRoom,
+          ...(legacy
+            ? {}
+            : { ...guardedCaller(secondCaller), onPlatformSendDispatch: async () => {} }),
+        });
+        if (legacy) {
+          await expect
+            .poll(queueForRoom(observedSdkClient(sendSpy), secondRoom))
+            .toEqual([firstRoom, secondRoom]);
+        } else {
+          // Both admissions must precede retiring the first caller while its request holds the queue.
+          await expect.poll(() => sendSpy.mock.calls.length).toBe(2);
+        }
+        expect(timeline).toHaveLength(1);
+        firstCaller.abort(new Error("first Matrix caller retired after request acceptance"));
+        resume.resolve();
+        const [firstResult, secondResult] = await Promise.all([first, second]);
+        expectAccepted(firstResult, firstId);
+        expectAccepted(secondResult, secondId);
+        expect(timeline).toHaveLength(2);
+        expect(timeline[0]).toContain(`/rooms/${firstRoom}/`);
+        expect(timeline[1]).toContain(`/rooms/${secondRoom}/`);
+      } finally {
+        resume.resolve();
+        await Promise.all([first, second]);
+        sendSpy.mockRestore();
+      }
+    });
+  });
+
+  it.each([false, true])(
+    `${registration} preserves global FIFO after a rate-limited caller with canceled=%s`,
+    async (canceled) => {
+      await withMatrixFixture(registration, async ({ pendingText, handlers, timeline }) => {
+        const firstRoom = "!first:example.org";
+        const secondRoom = "!second:example.org";
+        const thirdRoom = "!third:example.org";
+        const firstCaller = new AbortController();
+        const secondCaller = new AbortController();
+        const thirdCaller = new AbortController();
+        const cancellation = new Error("first Matrix caller canceled before its SDK retry");
+        const firstRequestEntered = createDeferred<void>();
+        const resumeRateLimitResponse = createDeferred<void>();
+        const secondRequestEntered = createDeferred<void>();
+        const resumeSecondResponse = createDeferred<void>();
+        let firstRoomAttempts = 0;
+        const requestOrder: string[] = [];
+        const survivorResults: string[] = [];
+        handlers.timeline = async ({ response, path }) => {
+          if (path.includes(`/rooms/${firstRoom}/`)) {
+            requestOrder.push(firstRoom);
+            firstRoomAttempts += 1;
+            if (firstRoomAttempts === 1) {
+              firstRequestEntered.resolve();
+              await resumeRateLimitResponse.promise;
+              respondJson(
+                response,
+                {
+                  errcode: "M_LIMIT_EXCEEDED",
+                  error: "fixture rate limit",
+                  retry_after_ms: 1,
+                },
+                429,
+              );
+              return;
+            }
+            respondJson(response, { event_id: "$first-retried" });
+            return;
+          }
+          if (path.includes(`/rooms/${secondRoom}/`)) {
+            requestOrder.push(secondRoom);
+            secondRequestEntered.resolve();
+            await resumeSecondResponse.promise;
+            respondJson(response, { event_id: "$second-accepted" });
+            return;
+          }
+          if (path.includes(`/rooms/${thirdRoom}/`)) {
+            requestOrder.push(thirdRoom);
+            respondJson(response, { event_id: "$third-accepted" });
+            return;
+          }
+          throw new Error(`unexpected survivor room: ${path}`);
+        };
+        const sdkSend = vi.spyOn(MatrixJsClient.prototype, "sendMessage");
+        const first = pendingText("first sender awaiting retry", {
+          to: firstRoom,
+          signal: firstCaller.signal,
+          onPlatformSendDispatch: async () => {},
+        });
+        let second: Promise<SendOutcome<unknown>> | undefined;
+        let third: Promise<SendOutcome<unknown>> | undefined;
+        try {
+          await waitForBoundary(firstRequestEntered.promise, first, "the first timeline request");
+          second = pendingText("current sender in another room", {
+            to: secondRoom,
+            signal: secondCaller.signal,
+            onPlatformSendDispatch: async () => {},
+            onDeliveryResult: () => {
+              survivorResults.push(secondRoom);
+            },
+          });
+          const queuedRooms = queueForRoom(observedSdkClient(sdkSend), secondRoom);
+          // Admit B before starting C so asynchronous preparation cannot change their queue order.
+          await expect.poll(() => queuedRooms()?.includes(secondRoom) ?? false).toBe(true);
+          third = pendingText("next current sender in a third room", {
+            to: thirdRoom,
+            signal: thirdCaller.signal,
+            onPlatformSendDispatch: async () => {},
+            onDeliveryResult: () => {
+              survivorResults.push(thirdRoom);
+            },
+          });
+          await expect.poll(queuedRooms).toEqual([firstRoom, secondRoom, thirdRoom]);
+          expect(requestOrder).toEqual([firstRoom]);
+          expect(survivorResults).toEqual([]);
+          expect(timeline).toHaveLength(1);
+          if (canceled) {
+            firstCaller.abort(cancellation);
+          }
+          resumeRateLimitResponse.resolve();
+          const firstResult = await first;
+          if (canceled) {
+            expect(firstResult.error).toMatchObject({
+              message: expect.stringContaining(cancellation.message),
+            });
+          } else {
+            expectAccepted(firstResult, "$first-retried");
+          }
+          await waitForBoundary(secondRequestEntered.promise, second, "the first survivor request");
+          // B holds the same global queue after A settles; C must still wait for B's response.
+          await expect.poll(queuedRooms).toEqual([secondRoom, thirdRoom]);
+          expect(requestOrder).toEqual(
+            canceled ? [firstRoom, secondRoom] : [firstRoom, firstRoom, secondRoom],
+          );
+          expect(survivorResults).toEqual([]);
+          resumeSecondResponse.resolve();
+          const [secondResult, thirdResult] = await Promise.all([second, third]);
+          expectAccepted(secondResult, "$second-accepted");
+          expectAccepted(thirdResult, "$third-accepted");
+          expect(firstRoomAttempts).toBe(canceled ? 1 : 2);
+          expect(requestOrder).toEqual(
+            canceled
+              ? [firstRoom, secondRoom, thirdRoom]
+              : [firstRoom, firstRoom, secondRoom, thirdRoom],
+          );
+          expect(survivorResults).toEqual([secondRoom, thirdRoom]);
+          expect(timeline).toHaveLength(canceled ? 3 : 4);
+        } finally {
+          resumeRateLimitResponse.resolve();
+          resumeSecondResponse.resolve();
+          await Promise.all([first, second, third]);
+          sdkSend.mockRestore();
+        }
+      });
+    },
+  );
 });

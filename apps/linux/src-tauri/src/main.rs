@@ -19,11 +19,15 @@ mod gateway_sleep;
 mod gateway_sleep_logind;
 #[cfg(target_os = "linux")]
 mod gateway_sleep_logind_listener;
+#[cfg(test)]
+mod gateway_sleep_tests;
 mod gateway_windows;
 mod gateway_ws;
 mod installer;
 mod keep_awake;
 mod keep_awake_platform;
+#[cfg(test)]
+mod keep_awake_tests;
 mod native_browser;
 mod native_browser_bridge;
 mod native_browser_platform;

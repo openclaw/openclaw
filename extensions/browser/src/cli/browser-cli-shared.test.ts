@@ -71,6 +71,6 @@ describe("callBrowserRequest", () => {
 
     const call = gatewayMocks.callGatewayFromCli.mock.calls[0];
     expect(call?.[1]).toMatchObject({ timeout: String(MAX_TIMER_TIMEOUT_MS) });
-    expect(call?.[2]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS - 10_000 });
+    expect(call?.[2]).toMatchObject({ timeoutMs: MAX_TIMER_TIMEOUT_MS - 130_000 });
   });
 });

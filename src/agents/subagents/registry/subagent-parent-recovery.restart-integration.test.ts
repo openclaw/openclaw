@@ -18,7 +18,6 @@ import { markCanonicalSessionValidationPending } from "../../../config/sessions/
 import { captureGatewayAuthPolicy } from "../../../gateway/auth-policy.js";
 import * as gatewayCall from "../../../gateway/call.js";
 import { captureGatewayOperatorRunAuthority } from "../../../gateway/operator-run-authority.js";
-import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import { captureOperatorToolGatewayContinuationContext } from "../../../gateway/server-plugin-in-process-authority.js";
 import {
   createContext,
@@ -59,7 +58,10 @@ import {
   loadSubagentRegistryFromSqlite,
   saveSubagentRegistryToSqlite,
 } from "./subagent-registry-state.fixture.test-support.js";
-import { writeSubagentSessionEntry } from "./subagent-registry.persistence.test-support.js";
+import {
+  prepareSubagentRecoveryFixture,
+  writeSubagentSessionEntry,
+} from "./subagent-registry.persistence.test-support.js";
 import {
   addSubagentRunForTests,
   activateSubagentRegistry,
@@ -181,8 +183,8 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           stateDir: fixture.stateDir,
           resolveGatewayContext: getGatewayContextResolver(gatewayRuntime)!,
           activeRuns: [
-            { sessionKey, sessionId, runId, lifecycleGeneration },
-            { sessionKey, sessionId, runId: "queued-child-announce", lifecycleGeneration },
+            { ...target, sessionId, runId, lifecycleGeneration },
+            { ...target, sessionId, runId: "queued-child-announce", lifecycleGeneration },
           ],
         }),
       ).toEqual({ marked: 1, skipped: 0 });
@@ -268,12 +270,10 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       },
     });
     let previousOpen = true;
-    const previousContext = {
-      ...createContext(),
+    const previousContext = Object.assign(createContext(), {
       recoveryRuntime: gatewayRuntime,
-      chatAbortControllers: new Map(),
       resolveGatewayContext: () => (previousOpen ? previousContext : undefined),
-    } as GatewayRequestContext;
+    });
     const client = createOperatorClient({
       profileName: "restart-child-owner",
       scopes: ["operator.write"],
@@ -329,12 +329,10 @@ describe("subagent parent recovery — durable yielded continuation", () => {
 
     let replacementOpen = true;
     const replacementRuntime = { ...gatewayRuntime };
-    const replacementContext = {
-      ...createContext(),
+    const replacementContext = Object.assign(createContext(), {
       recoveryRuntime: replacementRuntime,
-      chatAbortControllers: new Map(),
       resolveGatewayContext: () => (replacementOpen ? replacementContext : undefined),
-    } as GatewayRequestContext;
+    });
     bindGatewayContextResolver(replacementRuntime, replacementContext.resolveGatewayContext);
     await activateSubagentRegistry(() => replacementContext);
     await testing.sweepOnceForTests();
@@ -424,6 +422,17 @@ describe("subagent parent recovery — durable yielded continuation", () => {
       requesterTurnYielded: true,
       expectsCompletionMessage: true,
     });
+    if (scenario === "settled batch") {
+      await prepareSubagentRecoveryFixture(child, {
+        entries: {
+          [parentKey]: loadSessionEntryReadOnly({
+            storePath: parentStorePath,
+            sessionKey: parentKey,
+          })!,
+        },
+        storePath: parentStorePath,
+      });
+    }
     await addSubagentRunForTests(child);
     expect(
       await settleRequesterTurnAfterSessionSpawns({
@@ -463,6 +472,8 @@ describe("subagent parent recovery — durable yielded continuation", () => {
           resolveGatewayContext: getGatewayContextResolver(gatewayRuntime)!,
           activeRuns: [
             {
+              agentId: parentAgentId,
+              storePath: parentStorePath,
               runId: parentRunId,
               sessionKey: parentKey,
               sessionId: before.sessionId,
@@ -627,8 +638,6 @@ describe("subagent parent recovery — durable yielded continuation", () => {
     const result = await markStartupOrphanedMainSessionsForRecovery({
       cfg: getRuntimeConfig(),
       stateDir: fixture.stateDir,
-      activeSessionIds: [],
-      activeSessionKeys: [],
     });
     if (legacy) {
       const { settlement, dispatch, runtime } = recoveryFixture();
@@ -724,6 +733,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
             },
           },
         );
+        await prepareSubagentRecoveryFixture(child, { stateDir: fixture.stateDir });
         await addSubagentRunForTests(child);
         children.push(child);
       }
@@ -764,7 +774,7 @@ describe("subagent parent recovery — durable yielded continuation", () => {
             interruptionReason: "gateway-restart",
             outcome: { status: "error", error: expect.stringContaining("Gateway restart") },
           },
-          requesterSettleWake: { requesterYieldBatch: true },
+          requesterSettleWake: { status: "pending", attemptCount: 0, requesterYieldBatch: true },
         });
         expect((await getSubagentRunByChildSessionKey(child.childSessionKey))?.runId).toBe(
           child.runId,

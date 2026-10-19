@@ -112,7 +112,10 @@ vi.mock("openclaw/plugin-sdk/fetch-runtime", async (importOriginal) => ({
   ...(await importOriginal<typeof import("openclaw/plugin-sdk/fetch-runtime")>()),
   createNodeProxyAgent: ({ proxyUrl }: { proxyUrl: string }) => new HttpsProxyAgent(proxyUrl),
 }));
-vi.mock("../internal/ws-runtime.js", () => ({ WebSocket: MockWebSocket }));
+vi.mock("openclaw/plugin-sdk/websocket-runtime", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/websocket-runtime")>()),
+  WebSocket: MockWebSocket,
+}));
 vi.mock("openclaw/plugin-sdk/proxy-capture", () => ({
   captureHttpExchangeAsync: mocks.httpCapture,
   captureWsEventAsync: mocks.wsCapture,

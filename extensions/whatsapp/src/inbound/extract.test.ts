@@ -1,4 +1,3 @@
-// Whatsapp tests cover extract plugin behavior.
 import { generateWAMessageFromContent, type proto } from "baileys";
 import { describe, expect, it } from "vitest";
 import {
@@ -9,49 +8,34 @@ import {
   hasInboundUserContent,
 } from "./extract.js";
 
+function extended(contextInfo: proto.IContextInfo, text = "hello"): proto.IMessage {
+  return { extendedTextMessage: { text, contextInfo } };
+}
+
+function nativeFlow(paramsJson: string): proto.IMessage {
+  return {
+    interactiveResponseMessage: {
+      nativeFlowResponseMessage: { name: "single_select", paramsJson },
+    },
+  };
+}
+
+function expectUserContent(message: proto.IMessage | undefined, expected = true) {
+  expect(hasInboundUserContent(message)).toBe(expected);
+}
+
 describe("extractMentionedJids", () => {
   const botJid = "5511999999999@s.whatsapp.net";
   const otherJid = "5511888888888@s.whatsapp.net";
+  const quotedMessage = extended({ mentionedJid: [botJid] }, "Hey @bot");
 
   it("ignores mentionedJids from quoted messages", () => {
-    const message: proto.IMessage = {
-      extendedTextMessage: {
-        text: "I agree",
-        contextInfo: {
-          // The quoted message originally @mentioned the bot, but the
-          // current message does not — this should NOT leak through.
-          quotedMessage: {
-            extendedTextMessage: {
-              text: "Hey @bot what do you think?",
-              contextInfo: {
-                mentionedJid: [botJid],
-              },
-            },
-          },
-        },
-      },
-    };
+    const message = extended({ quotedMessage }, "I agree");
     expect(extractMentionedJids(message)).toBeUndefined();
   });
 
   it("returns direct mentions even when quoted message also has mentions", () => {
-    const message: proto.IMessage = {
-      extendedTextMessage: {
-        text: "Hey @other",
-        contextInfo: {
-          mentionedJid: [otherJid, otherJid],
-          quotedMessage: {
-            extendedTextMessage: {
-              text: "Hey @bot",
-              contextInfo: {
-                mentionedJid: [botJid],
-              },
-            },
-          },
-        },
-      },
-    };
-    // Should return only the direct mention, not the quoted one.
+    const message = extended({ mentionedJid: [otherJid, otherJid], quotedMessage }, "Hey @other");
     expect(extractMentionedJids(message)).toEqual([otherJid]);
   });
 
@@ -62,14 +46,7 @@ describe("extractMentionedJids", () => {
 
 describe("describeReplyContext", () => {
   it("preserves an unavailable reply reference without a quoted sender", () => {
-    expect(
-      describeReplyContext({
-        extendedTextMessage: {
-          text: "yes",
-          contextInfo: { stanzaId: "original-message" },
-        },
-      }),
-    ).toMatchObject({
+    expect(describeReplyContext(extended({ stanzaId: "original-message" }, "yes"))).toMatchObject({
       id: "original-message",
       body: "[quoted message unavailable]",
       sender: { label: "unknown sender" },
@@ -78,12 +55,7 @@ describe("describeReplyContext", () => {
 
   it("does not invent a reply from unrelated context metadata", () => {
     expect(
-      describeReplyContext({
-        extendedTextMessage: {
-          text: "hello",
-          contextInfo: { participant: "15555550123@s.whatsapp.net" },
-        },
-      }),
+      describeReplyContext(extended({ participant: "15555550123@s.whatsapp.net" })),
     ).toBeNull();
   });
 
@@ -120,149 +92,99 @@ describe("describeReplyContext", () => {
 });
 
 describe("extractText", () => {
-  it.each([
-    {
-      name: "list selection title",
-      message: {
-        listResponseMessage: { title: "Option A", singleSelectReply: { selectedRowId: "a" } },
-      },
-      expected: "Option A",
-    },
-    {
-      name: "template button identifier when display text is unavailable",
-      message: { templateButtonReplyMessage: { selectedId: "button-1" } },
-      expected: "button-1",
-    },
-    {
-      name: "interactive response body",
-      message: {
+  it.each<[proto.IMessage, string]>([
+    [
+      { listResponseMessage: { title: "Option A", singleSelectReply: { selectedRowId: "a" } } },
+      "Option A",
+    ],
+    [{ templateButtonReplyMessage: { selectedId: "button-1" } }, "button-1"],
+    [
+      {
         interactiveResponseMessage: {
           body: { text: "Continue" },
           nativeFlowResponseMessage: { name: "single_select", paramsJson: "{}" },
         },
       },
-      expected: "Continue",
-    },
-    {
-      name: "native-flow selection title when the interactive body is unavailable",
-      message: {
-        interactiveResponseMessage: {
-          nativeFlowResponseMessage: {
-            name: "single_select",
-            paramsJson: '{"id":"shipping-express","title":"Express shipping"}',
-          },
-        },
-      },
-      expected: "Express shipping",
-    },
-    {
-      name: "future-proof native poll",
-      message: {
+      "Continue",
+    ],
+    [nativeFlow('{"id":"shipping-express","title":"Express shipping"}'), "Express shipping"],
+    [
+      {
         pollCreationMessageV4: {
           message: {
-            pollCreationMessageV3: {
-              name: "Lunch?",
-              options: [{ optionName: "Pizza" }],
-            },
+            pollCreationMessageV3: { name: "Lunch?", options: [{ optionName: "Pizza" }] },
           },
         },
       },
-      expected: "Lunch?\n- Pizza",
-    },
-    {
-      name: "video-note caption",
-      message: { ptvMessage: { caption: "Watch this", mimetype: "video/mp4" } },
-      expected: "Watch this",
-    },
-  ])("preserves $name as inbound message text", ({ message, expected }) => {
-    expect(extractText(message as proto.IMessage)).toBe(expected);
+      "Lunch?\n- Pizza",
+    ],
+    [{ ptvMessage: { caption: "Watch this", mimetype: "video/mp4" } }, "Watch this"],
+  ])("extracts inbound text %j as %s", (message, expected) => {
+    expect(extractText(message)).toBe(expected);
   });
 
   it("ignores malformed native-flow response JSON", () => {
-    expect(
-      extractText({
-        interactiveResponseMessage: {
-          nativeFlowResponseMessage: { name: "single_select", paramsJson: "{" },
-        },
-      } as proto.IMessage),
-    ).toBeUndefined();
+    expect(extractText(nativeFlow("{"))).toBeUndefined();
   });
 
   it("ignores non-record native-flow response JSON", () => {
-    expect(
-      extractText({
-        interactiveResponseMessage: {
-          nativeFlowResponseMessage: { name: "single_select", paramsJson: "[]" },
-        },
-      } as proto.IMessage),
-    ).toBeUndefined();
+    expect(extractText(nativeFlow("[]"))).toBeUndefined();
   });
 });
 
 describe("hasInboundUserContent", () => {
   it("returns true for plain text conversation", () => {
-    expect(hasInboundUserContent({ conversation: "hello" })).toBe(true);
+    expectUserContent({ conversation: "hello" });
   });
 
   it("returns true for image message", () => {
-    expect(
-      hasInboundUserContent({ imageMessage: { mimetype: "image/png" } } as proto.IMessage),
-    ).toBe(true);
+    expectUserContent({ imageMessage: { mimetype: "image/png" } });
   });
 
   it("classifies captionless video notes as user-visible video media", () => {
     const message = { ptvMessage: { mimetype: "video/mp4" } } as proto.IMessage;
 
     expect(extractMediaKind(message)).toBe("video");
-    expect(hasInboundUserContent(message)).toBe(true);
+    expectUserContent(message);
   });
 
   it("returns true for sticker message", () => {
-    expect(
-      hasInboundUserContent({ stickerMessage: { mimetype: "image/webp" } } as proto.IMessage),
-    ).toBe(true);
+    expectUserContent({ stickerMessage: { mimetype: "image/webp" } });
   });
 
   it("returns true for location message with valid coords", () => {
-    expect(
-      hasInboundUserContent({
-        locationMessage: { degreesLatitude: 1, degreesLongitude: 2 },
-      } as proto.IMessage),
-    ).toBe(true);
+    expectUserContent({ locationMessage: { degreesLatitude: 1, degreesLongitude: 2 } });
   });
 
   it("returns true for buttons response wrapped in ephemeralMessage (regression for #73797 + greptile review)", () => {
-    expect(
-      hasInboundUserContent({
-        ephemeralMessage: {
-          message: {
-            buttonsResponseMessage: {
-              selectedButtonId: "ok",
-              selectedDisplayText: "OK",
-            },
+    expectUserContent({
+      ephemeralMessage: {
+        message: {
+          buttonsResponseMessage: {
+            selectedButtonId: "ok",
+            selectedDisplayText: "OK",
           },
         },
-      } as proto.IMessage),
-    ).toBe(true);
+      },
+    });
   });
 
   it("returns false for undefined message (regression for #73797)", () => {
-    expect(hasInboundUserContent(undefined)).toBe(false);
+    expectUserContent(undefined, false);
   });
 
   it("returns false for receipt-style senderKeyDistribution-only payload (regression for #73797)", () => {
-    expect(
-      hasInboundUserContent({
+    expectUserContent(
+      {
         senderKeyDistributionMessage: {
           groupId: "g@example",
         } as unknown as proto.Message.ISenderKeyDistributionMessage,
-      } as proto.IMessage),
-    ).toBe(false);
+      },
+      false,
+    );
   });
 
   it("returns false when extendedTextMessage has only empty text", () => {
-    expect(hasInboundUserContent({ extendedTextMessage: { text: "  " } } as proto.IMessage)).toBe(
-      false,
-    );
+    expectUserContent({ extendedTextMessage: { text: "  " } }, false);
   });
 });

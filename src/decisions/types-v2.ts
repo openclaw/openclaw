@@ -22,6 +22,7 @@ export type DecisionContentV2 =
 export type DecisionQuestionV2 =
   | DecisionQuestion
   | { readonly type: "sort"; readonly instructions?: DecisionEntry }
+  | { readonly type: "box"; readonly instructions: Exclude<DecisionEntry, null> }
   | {
       readonly type: "tags";
       readonly instructions?: DecisionEntry;
@@ -63,6 +64,17 @@ export type DecisionAnswerV2 =
           readonly score: number;
           /** An absent distribution must not be synthesized. */
           readonly probabilities?: readonly number[];
+          readonly confidence?: number | null;
+        }
+      | {
+          readonly type: "box";
+          /** Edges normalized to image width/height, measured from the top-left corner. */
+          readonly box: {
+            readonly top: number;
+            readonly bottom: number;
+            readonly left: number;
+            readonly right: number;
+          };
           readonly confidence?: number | null;
         }
       | {

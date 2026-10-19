@@ -1,10 +1,11 @@
-import { For, Show } from "solid-js";
+import { For, Show, useContext } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
-import { handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
+import { ChatModelSearchContext, handleModelOptionMouseEnter } from "./chat-model-picker-search.ts";
 import type { ChatModelAccountSectionViewProps } from "./chat-model-types.ts";
 
 export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewProps) {
+  const search = useContext(ChatModelSearchContext);
   return (
     <section
       class="chat-controls__provider-model-group"
@@ -12,6 +13,7 @@ export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewPr
       aria-label={t("chat.modelAccounts.section")}
     >
       <button
+        ref={search?.ref(search.groups)}
         class="chat-controls__provider-heading chat-controls__account-heading"
         type="button"
         data-chat-account-group-toggle
@@ -32,6 +34,7 @@ export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewPr
         </span>
       </button>
       <div
+        ref={search?.ref(search.lists)}
         class="chat-controls__provider-model-list"
         data-chat-model-list="true"
         role="listbox"
@@ -40,6 +43,7 @@ export function ChatModelAccountSectionView(props: ChatModelAccountSectionViewPr
         <For each={props.options} keyed={(option) => option.value}>
           {(option, index) => (
             <button
+              ref={search?.ref(search.rows)}
               class="chat-controls__inline-select-option chat-controls__model-option"
               type="button"
               role="option"

@@ -38,6 +38,7 @@ export function applyCompletionsAnthropicCacheControl(
   cacheOptOutIndexes: ReadonlySet<number> = new Set(),
   markTools = true,
   markMessages = true,
+  systemOnly = false,
 ): void {
   if (shapedPayloads.has(payload)) {
     return;
@@ -106,7 +107,7 @@ export function applyCompletionsAnthropicCacheControl(
     return false;
   };
 
-  if (markTools && lastToolIndex >= 0) {
+  if (!systemOnly && markTools && lastToolIndex >= 0) {
     // Request-specific markers must not mutate a reusable provider descriptor.
     tools[lastToolIndex] = { ...tools[lastToolIndex], cache_control: cacheControl };
   }
@@ -119,6 +120,11 @@ export function applyCompletionsAnthropicCacheControl(
   );
   if (isRecord(system)) {
     markText(system, true);
+  }
+  // OpenRouter Gemini uses only the last breakpoint. Keep it before the dynamic
+  // system suffix rather than superseding it with a tool/history checkpoint.
+  if (systemOnly) {
+    return;
   }
   for (let i = messages.length - 1; i >= 0; i--) {
     const message: unknown = messages[i];

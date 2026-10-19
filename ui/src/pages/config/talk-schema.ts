@@ -1,3 +1,4 @@
+import type { TalkCatalogResult } from "@openclaw/gateway-protocol";
 // Config-facts module for the curated Talk settings page. No lit imports: like
 // memory-schema.ts, settings search evaluates these facts from the startup
 // chunk and must not pull settings UI code in with them.
@@ -59,15 +60,17 @@ export function resolveTalkRealtimeSelection(
   };
 }
 
-/**
- * Mirrors the server-side gpt-live family contract
- * (extensions/openai/realtime-quicksilver.ts); the UI uses it for the ChatGPT
- * sign-in hint and to avoid retaining a transport the selected provider
- * positively rejects. It never gates a session.
- */
-export function isTalkGptLiveModel(model: string | null): boolean {
+/** Settings facts belong to the selected provider, including unlisted family models. */
+export function resolveTalkModelFamilySettings(
+  provider: TalkCatalogResult["realtime"]["providers"][number] | undefined,
+  model: string | null,
+) {
+  const settings = provider?.modelFamilySettings;
   const normalized = model?.trim().toLowerCase();
-  return normalized === "gpt-live" || normalized?.startsWith("gpt-live-") === true;
+  return settings &&
+    (normalized === settings.family || normalized?.startsWith(`${settings.family}-`))
+    ? settings
+    : undefined;
 }
 
 /** An empty or unavailable transport catalog is not evidence of incompatibility. */

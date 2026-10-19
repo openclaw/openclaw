@@ -1,246 +1,209 @@
 import type { OpenClawPluginCommandDefinition } from "openclaw/plugin-sdk/core";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { AnyAgentTool, OpenClawPluginToolFactory } from "openclaw/plugin-sdk/plugin-entry";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import type { SpeechVoiceOption } from "openclaw/plugin-sdk/speech";
+import { beforeEach, expect, it, vi } from "vitest";
 import type { PluginRuntime } from "./api.js";
 import register from "./index.js";
 
 const gatewayMocks = vi.hoisted(() => ({ callGatewayTool: vi.fn() }));
 vi.mock("openclaw/plugin-sdk/agent-harness-runtime", () => gatewayMocks);
 
-function createHarness(initialConfig: Record<string, unknown>) {
+type CommandContext = Parameters<OpenClawPluginCommandDefinition["handler"]>[0];
+type ConfigMutation = {
+  mutate: (draft: Record<string, unknown>) => void;
+  writeOptions?: { assertCurrent?: () => void };
+};
+
+function createHarness(
+  initialConfig: Record<string, unknown>,
+  voices?: SpeechVoiceOption[] | Error,
+) {
   let config = initialConfig;
-  let command: OpenClawPluginCommandDefinition | undefined;
-  let tool: AnyAgentTool | undefined;
+  const listVoices = vi.fn<PluginRuntime["tts"]["listVoices"]>();
+  if (voices instanceof Error) {
+    listVoices.mockRejectedValue(voices);
+  } else if (voices) {
+    listVoices.mockResolvedValue(voices);
+  }
   const runtime = {
     config: {
       current: vi.fn(() => config),
-      mutateConfigFile: vi.fn(
-        async ({
-          mutate,
-          writeOptions,
-        }: {
-          mutate: (draft: Record<string, unknown>) => void;
-          writeOptions?: { assertCurrent?: () => void };
-        }) => {
-          const draft = structuredClone(config);
-          mutate(draft);
-          writeOptions?.assertCurrent?.();
-          config = draft;
-          return {
-            path: "/tmp/openclaw.json",
-            previousHash: null,
-            persistedHash: null,
-            snapshot: {},
-            nextConfig: config,
-            afterWrite: { mode: "auto" },
-            followUp: { mode: "auto", requiresRestart: false },
-            result: undefined,
-          };
-        },
-      ),
+      mutateConfigFile: vi.fn(async ({ mutate, writeOptions }: ConfigMutation) => {
+        const draft = structuredClone(config);
+        mutate(draft);
+        writeOptions?.assertCurrent?.();
+        config = draft;
+      }),
     },
-    tts: {
-      listVoices: vi.fn(),
-    },
-  } as unknown as PluginRuntime;
-  const api = {
-    runtime,
-    registerCommand: vi.fn((definition: OpenClawPluginCommandDefinition) => {
-      command = definition;
-    }),
-    registerTool: vi.fn((definition: AnyAgentTool | OpenClawPluginToolFactory) => {
-      const created =
-        typeof definition === "function"
-          ? definition({ sessionKey: "agent:main:main" })
-          : definition;
-      if (!created || Array.isArray(created)) {
-        throw new Error("talk-voice requires one tool");
-      }
-      tool = created;
-    }),
+    tts: { listVoices },
   };
-  register.register(api as never);
-  if (!command || !tool) {
+  const registerCommand = vi.fn<(definition: OpenClawPluginCommandDefinition) => void>();
+  const registerTool = vi.fn<(definition: AnyAgentTool | OpenClawPluginToolFactory) => void>();
+  register.register({ runtime, registerCommand, registerTool } as never);
+  const command = registerCommand.mock.calls[0]?.[0];
+  const definition = registerTool.mock.calls[0]?.[0];
+  const tool =
+    typeof definition === "function" ? definition({ sessionKey: "agent:main:main" }) : definition;
+  if (!command || !tool || Array.isArray(tool)) {
     throw new Error("talk-voice command or tool not registered");
   }
-  return { command, tool, runtime };
+  return {
+    command,
+    tool,
+    runtime,
+    listVoices,
+    mutate: runtime.config.mutateConfigFile,
+    run: (args: string, context?: Partial<CommandContext>) =>
+      command.handler(createCommandContext(args, context)),
+  };
 }
 
 function talkConfig(provider: string, config: Record<string, unknown> = {}) {
   return { talk: { provider, providers: { [provider]: config } } };
 }
 
+const claudia = [{ id: "voice-a", name: "Claudia" }];
+const elevenlabs = talkConfig("elevenlabs", { apiKey: "sk-eleven" });
+
 function createCommandContext(
   args: string,
-  channel = "discord",
-  gatewayClientScopes?: string[],
-  senderIsOwner?: boolean,
-) {
+  overrides: Partial<CommandContext> = {},
+): CommandContext {
   return {
     args,
-    channel,
-    channelId: channel,
+    channel: "discord",
+    channelId: overrides.channel ?? "discord",
     isAuthorizedSender: true,
-    gatewayClientScopes,
-    senderIsOwner,
     commandBody: args ? `/voice ${args}` : "/voice",
     config: {},
     requestConversationBinding: vi.fn(),
     detachConversationBinding: vi.fn(),
     getCurrentConversationBinding: vi.fn(),
+    ...overrides,
   };
 }
 
-describe("talk-voice plugin", () => {
-  beforeEach(() => {
-    gatewayMocks.callGatewayTool.mockReset();
-  });
+beforeEach(() => {
+  gatewayMocks.callGatewayTool.mockReset();
+});
 
-  it.each([false, true])(
-    "rechecks owner authority after voice lookup (gateway admin: %s)",
-    async (gatewayAdmin) => {
-      const initialConfig = talkConfig("microsoft");
-      const { command, runtime } = createHarness(initialConfig);
-      let current = true;
-      const ctx = {
-        ...createCommandContext(
-          "set Ava",
-          "discord",
-          gatewayAdmin ? ["operator.admin"] : undefined,
-          gatewayAdmin ? undefined : true,
-        ),
-        assertOwnerCurrent: () => {
-          if (!current) {
-            throw new Error("original owner revoked");
-          }
-        },
-      };
-      vi.mocked(runtime.tts.listVoices).mockImplementationOnce(async () => {
-        current = false;
-        ctx.assertOwnerCurrent = () => {};
-        return [{ id: "en-US-AvaNeural", name: "Ava" }];
-      });
-      const pending = command.handler(ctx);
-      if (gatewayAdmin) {
-        await expect(pending).resolves.toMatchObject({
-          text: expect.stringContaining("Talk voice set to Ava"),
-        });
-        expect(runtime.config.current()).toStrictEqual({
-          talk: {
-            provider: "microsoft",
-            providers: { microsoft: { voiceId: "en-US-AvaNeural" } },
-          },
-        });
-      } else {
-        await expect(pending).rejects.toThrow("original owner revoked");
-        expect(runtime.config.current()).toEqual(initialConfig);
-      }
-    },
-  );
-
-  it.each([
-    { action: "list", method: "talk.voice.get", request: {} },
-    { action: "set", method: "talk.voice.set", request: { voice: "marin" } },
-  ])(
-    "executes $action for the host session despite model targets and waits for the Gateway result",
-    async ({ action, method, request }) => {
-      const { tool, runtime } = createHarness({});
-      const rpc = createDeferred<Record<string, unknown>>();
-      const started = createDeferred<void>();
-      gatewayMocks.callGatewayTool.mockImplementation(() => {
-        started.resolve();
-        return rpc.promise;
-      });
-      const controller = new AbortController();
-      const completed = vi.fn();
-      const pending = tool
-        .execute(
-          "voice-tool-call",
-          {
-            action,
-            voice: "marin",
-            sessionKey: "agent:other:main",
-            voiceSessionId: "other-call",
-            gatewayUrl: "wss://other.example.test",
-            gatewayToken: "test-override-token",
-          },
-          controller.signal,
-        )
-        .then((result) => {
-          completed();
-          return result;
-        });
-
-      await started.promise;
-      expect(gatewayMocks.callGatewayTool).toHaveBeenCalledOnce();
-      expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
-        method,
-        { timeoutMs: 65_000 },
-        { ...request, sessionKey: "agent:main:main" },
-        { requireAgentRuntimeIdentity: true, signal: controller.signal },
-      );
-      expect(completed).not.toHaveBeenCalled();
-      const response = {
-        voiceSessionId: "current-call",
-        sessionKey: "agent:main:main",
-        provider: "openai",
-        model: "gpt-live-1",
-        voice: "marin",
-        voices: ["marin", "cedar"],
-        canChange: true,
-        ...(action === "set" ? { status: "applied" } : {}),
-      };
-      rpc.resolve(response);
-
-      expect((await pending).details).toEqual(response);
-      expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
-      expect(runtime.tts.listVoices).not.toHaveBeenCalled();
-    },
-  );
-
-  function createElevenlabsVoiceSetHarness(channel: string, scopes?: string[]) {
-    const { command, runtime } = createHarness(talkConfig("elevenlabs", { apiKey: "sk-eleven" }));
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
-    return {
-      runtime,
-      run: async () => await command.handler(createCommandContext("set Claudia", channel, scopes)),
+it.each(["owner", "revoked owner", "gateway admin"])(
+  "checks write authority after voice lookup: %s",
+  async (authority) => {
+    const gatewayAdmin = authority === "gateway admin";
+    const initialConfig = talkConfig("microsoft");
+    const { command, runtime, listVoices } = createHarness(initialConfig);
+    expect(command.exposeSenderIsOwner).toBe(true);
+    let current = true;
+    const ctx = {
+      ...createCommandContext("set Ava", {
+        channel: authority === "owner" ? "telegram" : "discord",
+        gatewayClientScopes: gatewayAdmin ? ["operator.admin"] : undefined,
+        senderIsOwner: gatewayAdmin ? undefined : true,
+      }),
+      assertOwnerCurrent: () => {
+        if (!current) {
+          throw new Error("original owner revoked");
+        }
+      },
     };
-  }
-
-  it("reports active provider status", async () => {
-    const { command } = createHarness(
-      talkConfig("microsoft", { voiceId: "en-US-AvaNeural", apiKey: "secret-token" }),
-    );
-
-    const result = await command.handler(createCommandContext(""));
-
-    expect(result).toEqual({
-      text:
-        "Talk voice status:\n" +
-        "- provider: microsoft\n" +
-        "- talk.providers.microsoft.voiceId: en-US-AvaNeural\n" +
-        "- microsoft.apiKey: secret…",
+    listVoices.mockImplementationOnce(async () => {
+      current = authority === "owner";
+      ctx.assertOwnerCurrent = () => {};
+      return [{ id: "en-US-AvaNeural", name: "Ava" }];
     });
-  });
+    const pending = command.handler(ctx);
+    if (authority !== "revoked owner") {
+      await expect(pending).resolves.toEqual({
+        text: "✅ Microsoft Talk voice set to Ava\nen-US-AvaNeural",
+      });
+      expect(runtime.config.mutateConfigFile).toHaveBeenCalled();
+      expect(runtime.config.current()).toStrictEqual(
+        talkConfig("microsoft", { voiceId: "en-US-AvaNeural" }),
+      );
+    } else {
+      await expect(pending).rejects.toThrow("original owner revoked");
+      expect(runtime.config.current()).toEqual(initialConfig);
+    }
+  },
+);
 
-  it("does not coerce partial voice list limits", async () => {
-    const { command, runtime } = createHarness(talkConfig("elevenlabs", { apiKey: "sk-eleven" }));
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue(
-      Array.from({ length: 13 }, (_, index) => ({
-        id: `voice-${index}`,
-        name: `Voice ${index}`,
-      })),
+it.each([
+  { action: "list", method: "talk.voice.get", request: {} },
+  { action: "set", method: "talk.voice.set", request: { voice: "marin" } },
+])(
+  "executes $action for the host session despite model targets and waits for the Gateway result",
+  async ({ action, method, request }) => {
+    const { tool, runtime } = createHarness({});
+    const rpc = createDeferred<Record<string, unknown>>();
+    const started = createDeferred<void>();
+    gatewayMocks.callGatewayTool.mockImplementation(() => {
+      started.resolve();
+      return rpc.promise;
+    });
+    const controller = new AbortController();
+    const completed = vi.fn();
+    const pending = tool
+      .execute(
+        "voice-tool-call",
+        {
+          action,
+          voice: "marin",
+          sessionKey: "agent:other:main",
+          voiceSessionId: "other-call",
+          gatewayUrl: "wss://other.example.test",
+          gatewayToken: "test-override-token",
+        },
+        controller.signal,
+      )
+      .finally(completed);
+
+    await started.promise;
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledOnce();
+    expect(gatewayMocks.callGatewayTool).toHaveBeenCalledWith(
+      method,
+      { timeoutMs: 65_000 },
+      { ...request, sessionKey: "agent:main:main" },
+      { requireAgentRuntimeIdentity: true, signal: controller.signal },
     );
+    expect(completed).not.toHaveBeenCalled();
+    const response = {
+      voiceSessionId: "current-call",
+      voice: "marin",
+      ...(action === "set" ? { status: "applied" } : {}),
+    };
+    rpc.resolve(response);
 
-    const result = await command.handler(createCommandContext("list 1x"));
+    expect((await pending).details).toEqual(response);
+    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
+    expect(runtime.tts.listVoices).not.toHaveBeenCalled();
+  },
+);
 
-    expect(result.text).toContain("(showing first 12)");
+it("reports active provider status", async () => {
+  const { run } = createHarness(
+    talkConfig("microsoft", { voiceId: "en-US-AvaNeural", apiKey: "secret-token" }),
+  );
+  expect(await run("")).toEqual({
+    text: `Talk voice status:
+- provider: microsoft
+- talk.providers.microsoft.voiceId: en-US-AvaNeural
+- microsoft.apiKey: secret…`,
   });
+});
 
-  it("surfaces richer provider voice metadata when available", async () => {
-    const { command, runtime } = createHarness(talkConfig("microsoft"));
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([
+it.each([
+  {
+    name: "does not coerce partial voice list limits",
+    args: "list 1x",
+    voices: Array.from({ length: 13 }, () => ({ id: "voice", name: "Voice" })),
+    text: expect.stringContaining("(showing first 12)"),
+  },
+  {
+    name: "surfaces richer provider voice metadata when available",
+    args: "list",
+    voices: [
       {
         id: "en-US-AvaNeural",
         name: "Ava",
@@ -250,66 +213,40 @@ describe("talk-voice plugin", () => {
         personalities: ["Friendly", "Positive"],
         description: "Friendly, Positive",
       },
-    ]);
+    ],
+    text: `Microsoft voices: 1
 
-    const result = await command.handler(createCommandContext("list"));
+- Ava · General
+  id: en-US-AvaNeural
+  meta: en-US · Female · Friendly, Positive
+  note: Friendly, Positive`,
+  },
+  {
+    name: "returns provider lookup errors cleanly",
+    args: "list",
+    voices: new Error("speech provider microsoft does not support voice listing"),
+    text: "Microsoft voice list failed: speech provider microsoft does not support voice listing",
+  },
+])("$name", async ({ args, voices, text }) => {
+  const { run } = createHarness(talkConfig("microsoft"), voices);
+  expect(await run(args)).toEqual({ text });
+});
 
-    expect(result).toEqual({
-      text:
-        "Microsoft voices: 1\n\n" +
-        "- Ava · General\n" +
-        "  id: en-US-AvaNeural\n" +
-        "  meta: en-US · Female · Friendly, Positive\n" +
-        "  note: Friendly, Positive",
-    });
-  });
+it.each([
+  { channel: "telegram", scopes: ["operator.write"] },
+  { channel: "discord", scopes: undefined },
+])("rejects unauthorized voice writes on $channel", async ({ channel, scopes }) => {
+  const { mutate, run } = createHarness(elevenlabs, claudia);
+  const result = await run("set Claudia", { channel, gatewayClientScopes: scopes });
+  expect(result.text).toContain("requires operator.admin");
+  expect(mutate).not.toHaveBeenCalled();
+});
 
-  it.each([
-    { channel: "telegram", scopes: ["operator.write"] },
-    { channel: "discord", scopes: undefined },
-  ])("rejects unauthorized voice writes on $channel", async ({ channel, scopes }) => {
-    const { runtime, run } = createElevenlabsVoiceSetHarness(channel, scopes);
-    const result = await run();
-
-    expect(result.text).toContain("requires operator.admin");
-    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("keeps read-only voice commands available without operator.admin", async () => {
-    const { command, runtime } = createHarness(talkConfig("elevenlabs", { apiKey: "sk-eleven" }));
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
-
-    const status = await command.handler(createCommandContext("status", "telegram"));
-    const list = await command.handler(createCommandContext("list", "telegram"));
-
-    expect(status.text).toContain("Talk voice status:");
-    expect(list.text).toContain("ElevenLabs voices: 1");
-    expect(runtime.config.mutateConfigFile).not.toHaveBeenCalled();
-  });
-
-  it("allows /voice set from an owner non-gateway channel without scopes", async () => {
-    const { command, runtime } = createHarness(talkConfig("elevenlabs", { apiKey: "sk-eleven" }));
-    expect(command.exposeSenderIsOwner).toBe(true);
-    vi.mocked(runtime.tts.listVoices).mockResolvedValue([{ id: "voice-a", name: "Claudia" }]);
-
-    const result = await command.handler(
-      createCommandContext("set Claudia", "telegram", undefined, true),
-    );
-
-    expect(runtime.config.mutateConfigFile).toHaveBeenCalled();
-    expect(result.text).toContain("voice-a");
-  });
-
-  it("returns provider lookup errors cleanly", async () => {
-    const { command, runtime } = createHarness(talkConfig("microsoft"));
-    vi.mocked(runtime.tts.listVoices).mockRejectedValue(
-      new Error("speech provider microsoft does not support voice listing"),
-    );
-
-    const result = await command.handler(createCommandContext("list"));
-
-    expect(result).toEqual({
-      text: "Microsoft voice list failed: speech provider microsoft does not support voice listing",
-    });
-  });
+it("keeps read-only voice commands available without operator.admin", async () => {
+  const { mutate, run } = createHarness(elevenlabs, claudia);
+  const status = await run("status", { channel: "telegram" });
+  const list = await run("list", { channel: "telegram" });
+  expect(status.text).toContain("Talk voice status:");
+  expect(list.text).toContain("ElevenLabs voices: 1");
+  expect(mutate).not.toHaveBeenCalled();
 });

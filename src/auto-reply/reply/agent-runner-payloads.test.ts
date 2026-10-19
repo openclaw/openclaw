@@ -23,7 +23,6 @@ import { createReplyToModeFilterForChannel } from "./reply-threading.js";
 
 const baseParams = {
   isHeartbeat: false,
-  didLogHeartbeatStrip: false,
   blockStreamingEnabled: false,
   blockReplyPipeline: null,
   replyToMode: "off" as const,

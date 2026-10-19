@@ -157,7 +157,7 @@ function renderPluginMetaRow(label: string, value: JSX.Element | string, warning
   return (
     <SettingsRow
       title={label}
-      control={<span class={warning ? "plugins-consent__row--warning" : ""}> {value}</span>}
+      control={<span class={{ "plugins-consent__row--warning": warning }}> {value}</span>}
       stackedOnNarrow
       carapace
     />

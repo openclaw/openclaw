@@ -32,7 +32,7 @@ import { assertSessionWriterDeliveryAuthorized } from "./session-writer-delivery
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
-let resetReplyRunRegistry: typeof import("./reply-run-registry.test-support.js").testing.resetReplyRunRegistry;
+let resetSessionControllerForTest: typeof import("../../sessions/session-controller.test-support.js").testing.resetSessionControllerForTest;
 
 const progressDraft = { push: () => undefined, retire: () => undefined };
 function pendingFinalDelivery(text: string, intentId = "intent-1") {
@@ -63,13 +63,13 @@ beforeAll(async () => {
   ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
   ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
   ({
-    testing: { resetReplyRunRegistry },
-  } = await import("./reply-run-registry.test-support.js"));
+    testing: { resetSessionControllerForTest },
+  } = await import("../../sessions/session-controller.test-support.js"));
 });
 
 beforeEach(() => {
   clearAgentHarnesses();
-  resetReplyRunRegistry();
+  resetSessionControllerForTest();
   resetInboundDedupe();
   setDiscordTestRegistry();
   resetPluginTtsAndThreadMocks();
@@ -86,7 +86,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  resetReplyRunRegistry();
+  resetSessionControllerForTest();
   resetInboundDedupe();
   clearAgentHarnesses();
 });

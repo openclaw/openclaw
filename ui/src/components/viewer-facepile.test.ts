@@ -26,7 +26,6 @@ import {
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { SessionOwnerAvatar } from "./solid/session-owner-chip.tsx";
 import { ViewerAvatar } from "./solid/viewer-facepile.tsx";
-import "./viewer-facepile.ts";
 
 afterEach(() => {
   cleanupSolid();
@@ -431,17 +430,36 @@ it("links faces only when the host opts in, so nested facepiles stay plain", asy
 
   const navigate = vi.fn();
   const linked = await mount({ basePath: "", navigate });
-  expect(
-    [...linked.querySelectorAll<HTMLAnchorElement>("a.person-activity-avatar-link")].map((link) =>
-      link.getAttribute("href"),
-    ),
-  ).toEqual(["/activity/profile-ada", "/activity/profile-mira"]);
+  const links = [...linked.querySelectorAll<HTMLAnchorElement>("a.person-activity-avatar-link")];
+  expect(links.map((link) => link.getAttribute("href"))).toEqual([
+    "/activity/profile-ada",
+    "/activity/profile-mira",
+  ]);
+  const linkedTooltips = [...linked.querySelectorAll("openclaw-tooltip")];
+  await Promise.all(linkedTooltips.map((tooltip) => tooltip.updateComplete));
+  for (const [index, link] of links.entries()) {
+    const descriptionId = link.getAttribute("aria-describedby") ?? "";
+    expect(document.getElementById(descriptionId)?.textContent).toBe(users[index]?.label);
+    expect(
+      linkedTooltips[index]
+        ?.querySelector(".viewer-facepile__tooltip-anchor")
+        ?.hasAttribute("aria-describedby"),
+    ).toBe(false);
+  }
 
   // Sidebar rows and collapsed group headers render facepiles inside an anchor or button;
   // a nested link there would break the parent's click target.
   const plain = await mount();
   expect(plain.querySelector("a")).toBeNull();
   expect(plain.querySelectorAll("openclaw-viewer-avatar")).toHaveLength(2);
+  const plainTooltips = [...plain.querySelectorAll("openclaw-tooltip")];
+  await Promise.all(plainTooltips.map((tooltip) => tooltip.updateComplete));
+  for (const [index, tooltip] of plainTooltips.entries()) {
+    const descriptionId =
+      tooltip.querySelector(".viewer-facepile__tooltip-anchor")?.getAttribute("aria-describedby") ??
+      "";
+    expect(document.getElementById(descriptionId)?.textContent).toBe(users[index]?.label);
+  }
 });
 
 it.each([true])(

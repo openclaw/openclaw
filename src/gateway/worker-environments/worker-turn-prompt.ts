@@ -183,6 +183,7 @@ export async function prepareWorkerTurnPrompt(params: {
       availableTools: capabilityToolNames,
       citationsMode: turn.config?.memory?.citations,
       sandboxed: false,
+      memoryProjectKey: preparedModelRuntime.projectKey ?? undefined,
       isOpenAIResponsesApi: [
         "openai-responses",
         "azure-openai-responses",

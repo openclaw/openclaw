@@ -50,7 +50,7 @@ export function createTelegramTransportIngressMonitor(
     ...(params.onLog ? { onLog: params.onLog } : {}),
     ...(params.onError ? { onError: params.onError } : {}),
     ...(params.abortSignal ? { abortSignal: params.abortSignal } : {}),
-    // Core runs this after append commit and before claim, so callback acknowledgement
+    // Core runs this after append commit and before dispatch, so callback acknowledgement
     // cannot erase Telegram's redelivery path or wait behind the handler lane.
     onDurableAdmission: (update, context) => {
       const callbackQuery = isRecord(update) ? update.callback_query : undefined;

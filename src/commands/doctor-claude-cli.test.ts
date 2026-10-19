@@ -133,12 +133,34 @@ it("probes auth with the same cleared environment as Claude execution", () => {
   expect(authEnv).not.toHaveProperty("CLAUDE_CODE_OAUTH_TOKEN");
 });
 
-it("reports when Claude CLI owns no active login", () => {
-  mockClaudeAuthentication(false);
+it.each([0, 1])("reports when Claude CLI owns no active login (exit %i)", (status) => {
+  mockClaudeAuthentication(false).mockReturnValue({ ...authResult(false), status });
   const body = checkHealth();
   expect(body).toContain("Claude auth: not logged in.");
   expect(body).toContain("claude auth login");
   expect(body).not.toContain("openclaw models auth login");
+});
+
+it.each([
+  {
+    scenario: "a failed subprocess",
+    result: {
+      ...authResult(true),
+      status: null,
+      error: Object.assign(new Error("synthetic auth status timeout"), { code: "ETIMEDOUT" }),
+    },
+  },
+  { scenario: "invalid JSON", result: { ...authResult(true), stdout: "not JSON" } },
+  { scenario: "an inconclusive response", result: { ...authResult(true), stdout: "{}" } },
+  { scenario: "an unsuccessful status", result: { ...authResult(true), status: 1 } },
+])("does not report a logged-out login for $scenario", ({ result }) => {
+  vi.spyOn(childProcess, "spawnSync").mockReturnValue(result);
+  syncBuiltinESMExports();
+  const body = checkHealth();
+  expect(body).toContain("Claude auth: status check unavailable.");
+  expect(body).toContain("claude auth status --json");
+  expect(body).not.toContain("not logged in");
+  expect(body).not.toContain("claude auth login");
 });
 
 it("warns when the Claude binary is missing", () => {

@@ -17,7 +17,6 @@ import {
 } from "./session-actor-storage-binding.js";
 import type {
   PendingInputCustodyCandidate,
-  PendingInputHistoryGrant,
   PendingInputHistoryQuery,
   PendingInputHistoryReceipt,
   PendingInputHistorySnapshot,
@@ -35,25 +34,6 @@ type Scope = SessionAccessScope & { agentId: string; sessionId: string };
 
 function owns(path: string, row: PendingInputCustodyCandidate, currentSessionId?: string) {
   return row.session_id === currentSessionId && hasRegisteredSessionPendingInputOwner(path, row);
-}
-
-function admitCustody(
-  path: string,
-  stage: "transaction" | "commit",
-  facts: PendingInputHistoryGrant,
-) {
-  const protectedRows = facts.protected ? new Int32Array(facts.protected) : undefined;
-  if (stage === "transaction" && protectedRows?.length !== facts.candidates.length) {
-    throw new Error("Pending input history omitted its live custody response");
-  }
-  facts.candidates.forEach((row, index) => {
-    const protectedInput = owns(path, row, facts.currentSessionId);
-    if (protectedRows) {
-      Atomics.store(protectedRows, index, protectedInput ? 1 : 0);
-    } else if (protectedInput) {
-      throw new Error("Pending input acquired live custody before interruption committed");
-    }
-  });
 }
 
 function applyReceipt(snapshot: PendingInputHistorySnapshot, receipt: PendingInputHistoryReceipt) {
@@ -190,24 +170,23 @@ async function readPendingInputRows(
       source: readSource,
     });
     assertReadCurrent();
-    const ids = snapshot.rows
-      .filter(
-        (row) =>
-          row.state === "queued" && !owns(identity.canonicalPath, row, snapshot.currentSessionId),
-      )
-      .map((row) => row.input_id);
-    if (!ids.length) {
+    const unownedIds = () =>
+      snapshot.rows
+        .filter(
+          (row) =>
+            row.state === "queued" &&
+            (row.session_id !== snapshot.currentSessionId ||
+              !hasRegisteredSessionPendingInputOwner(identity.canonicalPath, {
+                input_id: row.input_id,
+                session_key: row.session_key,
+                session_id: row.session_id,
+              })),
+        )
+        .map((row) => row.input_id);
+    if (!unownedIds().length) {
       return snapshot;
     }
     let admitted: SessionWorkerReceiptAdmission | undefined;
-    const checkCustody = (stage: "transaction" | "commit", facts: unknown) => {
-      const publication = isRecord(facts) ? facts.publication : undefined;
-      if (!isRecord(publication) || publication.kind !== "pending-input-history-custody") {
-        throw new Error("Pending input history omitted custody facts");
-      }
-      // SAFETY: The paired bounded kernel owns these facts, never host authority.
-      admitCustody(identity.canonicalPath, stage, publication as PendingInputHistoryGrant);
-    };
     return withSessionEntryWorker(
       databaseOptions,
       readSource.databaseIdentity,
@@ -216,6 +195,11 @@ async function readPendingInputRows(
         owner.assertCurrent();
       },
       async (execution, source) => {
+        // Staging publishes owners inside this same physical writer FIFO.
+        const ids = unownedIds();
+        if (!ids.length) {
+          return snapshot;
+        }
         const result = await execution.runExisting(source, (worker) =>
           settleSessionWorkerReceipt(
             () =>
@@ -240,14 +224,9 @@ async function readPendingInputRows(
         }
         return result;
       },
-      (admission, retained, facts) => {
-        checkCustody("commit", facts);
+      (admission, retained) => {
         admitted = { admission, retained };
       },
-      undefined,
-      undefined,
-      undefined,
-      (facts) => checkCustody("transaction", facts),
     );
   });
 }

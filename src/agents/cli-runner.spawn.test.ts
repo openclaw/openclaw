@@ -58,23 +58,6 @@ vi.mock("./bash-tools.exec-approval-request.js", () => ({
   resolveRegisteredExecApprovalDecision: vi.fn(),
 }));
 
-// Gateway unit coverage owns quiet-admission timing. These spawn cases only
-// need to drain calls already in flight, so skip the repeated 250 ms quiet window.
-vi.mock("../gateway/mcp-http.loopback-runtime.js", async (importOriginal) => {
-  const actual = await importOriginal<typeof import("../gateway/mcp-http.loopback-runtime.js")>();
-  return {
-    ...actual,
-    waitForMcpLoopbackToolCallCaptureIdle: (
-      captureKey: string,
-      options: Parameters<typeof actual.waitForMcpLoopbackToolCallCaptureIdle>[1],
-    ) =>
-      actual.waitForMcpLoopbackToolCallCaptureIdle(captureKey, {
-        ...options,
-        admissionGraceMs: 0,
-      }),
-  };
-});
-
 beforeEach(() => {
   setDiagnosticsEnabledForProcess(true);
   resetAgentEventsForTest();
@@ -754,7 +737,7 @@ describe("runCliAgent spawn path", () => {
     await expectPathMissing(systemPromptPath);
   });
 
-  it("resends system prompts through a file for soft-resumed prompt-tool drift", async () => {
+  it("resends system prompts through a file for soft-resumed system-prompt drift", async () => {
     const writeSoftResumeSystemPromptFile = vi.fn(async () => ({
       filePath: "/tmp/openclaw-soft-resume-system-prompt.md",
       cleanup: async () => {},
@@ -779,7 +762,7 @@ describe("runCliAgent spawn path", () => {
     context.reusableCliSession = {
       mode: "reuse-with-drift",
       sessionId: "soft-cli-session",
-      drift: { reasons: ["prompt-tools"] },
+      drift: { reasons: ["system-prompt"] },
     };
 
     await executePreparedCliRun(context, "soft-cli-session");

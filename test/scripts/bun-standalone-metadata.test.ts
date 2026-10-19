@@ -91,8 +91,7 @@ function fixture({
   const doctorBytes = Buffer.from("export const contract = { version: 1 };\n");
   fs.writeFileSync(entry, "export default {};\n");
   fs.writeFileSync(doctor, doctorBytes);
-  fs.writeFileSync(sdkEntry, 'import "./schema.json";\n');
-  fs.writeFileSync(path.join(sdk, "schema.json"), "{}");
+  fs.writeFileSync(sdkEntry, "export {};\n");
   fs.writeFileSync(path.join(plugin, "package.json"), "{}");
   fs.writeFileSync(
     path.join(plugin, "openclaw.plugin.json"),
@@ -158,10 +157,6 @@ function fixture({
   fs.mkdirSync(path.dirname(bridge), { recursive: true });
   fs.writeFileSync(launcher, "export {};\n");
   fs.writeFileSync(bridge, "export {};\n");
-  fs.writeFileSync(
-    path.join(runtime, "dist/sdk-alias-fixture.js"),
-    String.raw`const JS_STATIC_RELATIVE_DEPENDENCY_PATTERN = /(?:import|export)\s*['"]([^'"]+)['"]/g;`,
-  );
   const embeddedPaths = Object.fromEntries(
     imageEntries.map((file) => [
       path.relative(runtime, file).split(path.sep).join("/"),
@@ -255,7 +250,6 @@ function fixture({
   for (const [file, name] of [
     ["src/plugins/plugin-cache-files.ts", undefined],
     ["src/plugins/plugin-registry-snapshot.ts", "fileContentMatches"],
-    ["src/plugins/sdk-alias.ts", "checkDistPluginSdkArtifact"],
     ["src/infra/openclaw-root.ts", "candidateDirsFromArgv1"],
     ["src/infra/openclaw-root.ts", "dedupeCandidates"],
     ["extensions/acpx/src/config.ts", undefined],
@@ -1336,8 +1330,8 @@ describe("standalone image metadata", () => {
     },
   );
 
-  it("preserves public file discovery and checks non-JavaScript SDK dependencies", () => {
-    const { plugin, sdk, sdkEntry, context } = fixture();
+  it("preserves public file discovery", () => {
+    const { plugin, context } = fixture();
     const entries = context.readPluginCacheDirectory(plugin);
     expect(entries.map((entry: fs.Dirent) => entry.name).toSorted()).toEqual([
       "doctor-contract-api.js",
@@ -1346,10 +1340,6 @@ describe("standalone image metadata", () => {
       "openclaw.plugin.json",
       "package.json",
     ]);
-    expect(context.checkDistPluginSdkArtifact(sdkEntry)).toBe(true);
-    fs.unlinkSync(path.join(sdk, "schema.json"));
-    // The owning metadata cache is stable for a process; use a fresh direct existence reader.
-    expect(context["__openclawStandaloneSdkComplete"](sdkEntry, fs.existsSync)).toBe(false);
   });
 
   it.each([false, true])(
@@ -1410,7 +1400,6 @@ describe("standalone image metadata", () => {
 
   it("resolves absent image-only directories without accepting symlink escapes", () => {
     const { runtime, sdk, sdkEntry, context, safeOpen } = fixture();
-    fs.unlinkSync(path.join(sdk, "schema.json"));
     fs.rmdirSync(sdk);
     expect(context.pluginCacheExistsSync(sdk)).toBe(true);
     expect(context.pluginCacheStatSync(sdk).isDirectory()).toBe(true);
@@ -1480,7 +1469,6 @@ describe("standalone image metadata", () => {
     fs.chmodSync(plugin, 0o777);
     expect(context.pluginCacheStatSync(plugin).mode & 0o777).toBe(0o777);
     expect(context.pluginCacheLstatSync(plugin).uid).toBe(fs.lstatSync(plugin).uid);
-    fs.unlinkSync(path.join(sdk, "schema.json"));
     fs.rmdirSync(sdk);
     const target = path.join(runtime, "sdk-target");
     fs.mkdirSync(target);

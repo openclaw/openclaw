@@ -3,10 +3,11 @@ import { normalizeOptionalString } from "@openclaw/normalization-core/string-coe
 import { getRuntimeConfig } from "../config/io.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { sha256Base64Url } from "../infra/crypto-digest.js";
+import { roleScopesAllow } from "../shared/operator-scope-compat.js";
 import type { GatewayAuthPolicy } from "./auth-policy.types.js";
 import { resolveGatewayAuthForConfig } from "./auth-resolve.js";
 import { resolveIdentityOperatorScopes } from "./operator-identity-scopes.js";
-import { sourceRolePolicies } from "./operator-role-source-policy.js";
+import { isOperatorScope } from "./operator-scopes.js";
 import { checkGatewayWsBrowserOrigin } from "./origin-check.js";
 
 const policies = new WeakMap<
@@ -36,7 +37,7 @@ export function captureGatewayAuthPolicy(
     const trustedProxy = gateway?.auth?.trustedProxy;
     cached = {
       global: stableStringify({
-        roles: sourceRolePolicies(gateway?.roles),
+        // Named roles are enforced per profile, independently of transport admission.
         trustedProxies: gateway?.trustedProxies?.toSorted(),
         allowRealIpFallback: gateway?.allowRealIpFallback,
         allowTailscale: gateway?.auth?.allowTailscale,
@@ -118,6 +119,50 @@ export function captureGatewayAuthPolicy(
   return policy;
 }
 
+/** Preserve persisted fingerprints while accepting equivalent identity-scope spellings. */
+function areGatewayAuthGrantsEquivalent(
+  previousGeneration: string,
+  nextGeneration: string,
+): boolean {
+  if (previousGeneration === nextGeneration) {
+    return true;
+  }
+  // Stable fingerprints include literal undefined values. Only their scope array is JSON;
+  // every surrounding byte must still match the current authority owner's fingerprint.
+  const grantPattern = /^(.*"grant":)(\[[^\]]*\])(,.*)$/u;
+  const previous = grantPattern.exec(previousGeneration);
+  const next = grantPattern.exec(nextGeneration);
+  if (!previous || !next || previous[1] !== next[1] || previous[3] !== next[3]) {
+    return false;
+  }
+  try {
+    const previousScopes: unknown = JSON.parse(previous[2]!);
+    const nextScopes: unknown = JSON.parse(next[2]!);
+    if (
+      !Array.isArray(previousScopes) ||
+      !previousScopes.every(isOperatorScope) ||
+      !Array.isArray(nextScopes) ||
+      !nextScopes.every(isOperatorScope)
+    ) {
+      return false;
+    }
+    return (
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: previousScopes,
+        allowedScopes: nextScopes,
+      }) &&
+      roleScopesAllow({
+        role: "operator",
+        requestedScopes: nextScopes,
+        allowedScopes: previousScopes,
+      })
+    );
+  } catch {
+    return false;
+  }
+}
+
 export function isGatewayAuthPolicyCurrent(
   policy: GatewayAuthPolicy | undefined,
   config?: OpenClawConfig | null,
@@ -130,7 +175,10 @@ export function isGatewayAuthPolicyCurrent(
     return false;
   }
   const next = captureGatewayAuthPolicy(current, policy);
-  return next.generation === policy.generation && next.grantGeneration === policy.grantGeneration;
+  return (
+    next.generation === policy.generation &&
+    areGatewayAuthGrantsEquivalent(policy.grantGeneration, next.grantGeneration)
+  );
 }
 
 /** Accepted work follows committed access grants, not a transport's need to reauthenticate. */
@@ -144,6 +192,9 @@ export function isGatewayAuthGrantCurrent(
   const current = config === undefined ? getRuntimeConfig() : config;
   return (
     current !== null &&
-    captureGatewayAuthPolicy(current, policy).grantGeneration === policy.grantGeneration
+    areGatewayAuthGrantsEquivalent(
+      policy.grantGeneration,
+      captureGatewayAuthPolicy(current, policy).grantGeneration,
+    )
   );
 }

@@ -218,6 +218,44 @@ describe("sessions.usage result cache and owner attribution", () => {
     expect(result.totals.totalTokens).toBe(20);
     expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
   });
+
+  it("shares population facts across pages and filters until an owner publishes new usage", async () => {
+    const entries = Array.from({ length: 60 }, (_, index) => ({
+      sessionId: `page-${index + 1}`,
+      updatedAt: index + 1,
+    }));
+    const tokens = Object.fromEntries(entries.map((entry, index) => [entry.sessionId, index + 1]));
+    const query = fixture(entries, tokens);
+    const first = await query({ projection: "overview", sort: "tokens", sortDirection: "desc" });
+    const second = await query({
+      projection: "overview",
+      sort: "tokens",
+      sortDirection: "desc",
+      offset: 50,
+    });
+    expect(first.sessions).toHaveLength(50);
+    expect(first.sessions[0]?.sessionId).toBe("page-60");
+    expect(second.sessions.map((row) => row.sessionId)).toEqual(
+      Array.from({ length: 10 }, (_, index) => `page-${10 - index}`),
+    );
+    const filtered = await query({ projection: "overview", query: "minTokens:55" });
+    expect(filtered.sessions).toHaveLength(6);
+    expect(filtered.totals.totalTokens).toBe(345);
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(1);
+    expect(mocks.discoverAllSessions).toHaveBeenCalledTimes(1);
+
+    tokens["page-1"] = 100;
+    publishSessionCostUsageUpdated("main");
+    const updated = await query({ projection: "overview", sort: "tokens", sortDirection: "desc" });
+    expect(updated.sessions[0]).toMatchObject({ sessionId: "page-1", usage: { totalTokens: 100 } });
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(2);
+
+    // Context predicates hydrate a different source snapshot, unlike usage-only filters.
+    expect((await query({ projection: "overview", query: "has:context" })).sessions).toEqual([]);
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(3);
+    expect((await query({ projection: "overview" })).sessions).toHaveLength(50);
+    expect(mocks.loadSessionCostSummariesFromCache).toHaveBeenCalledTimes(3);
+  });
 });
 
 function fixture(entries: SessionEntry[], tokens: Record<string, number>) {

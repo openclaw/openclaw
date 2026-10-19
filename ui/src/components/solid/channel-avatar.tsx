@@ -45,7 +45,7 @@ export function ChannelAvatarContent(props: ChannelAvatarProps & { children?: JS
   );
 }
 
-export type ChannelAvatarElement = SolidBridgeElement<ChannelAvatarProps>;
+type ChannelAvatarElement = SolidBridgeElement<ChannelAvatarProps>;
 export const ChannelAvatar = defineSolidBridge<ChannelAvatarProps>(
   "openclaw-channel-avatar",
   (props, host) => {

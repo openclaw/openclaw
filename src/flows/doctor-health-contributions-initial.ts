@@ -99,14 +99,9 @@ export function resolveInitialDoctorHealthContributions(params: {
       healthChecks: {
         description: "Selected database engines and experimental PostgreSQL limitations.",
         async detect(ctx) {
-          const {
-            collectDatabaseEngineHealthFindings,
-            collectStateRootDatabaseEngineHealthFindings,
-          } = await import("../commands/doctor-database-engine.js");
-          return [
-            ...collectDatabaseEngineHealthFindings(ctx.cfg),
-            ...(await collectStateRootDatabaseEngineHealthFindings(ctx.cfg, { env: ctx.env })),
-          ];
+          const { collectDoctorDatabaseEngineHealthFindings } =
+            await import("../commands/doctor-database-engine.js");
+          return collectDoctorDatabaseEngineHealthFindings(ctx.cfg, { env: ctx.env });
         },
       },
       async run(ctx) {

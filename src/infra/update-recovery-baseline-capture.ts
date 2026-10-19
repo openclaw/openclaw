@@ -14,20 +14,14 @@ import { resolveConfigPath, resolveStateDir } from "../config/paths.js";
 import type { PluginDoctorMigrationBackupWarning } from "../plugins/doctor-contract-module.js";
 import { preparePluginDoctorMigrationBackupResources } from "../plugins/doctor-contract-registry.js";
 import { ensurePrivateSnapshotRepositoryRoot } from "../snapshot/local-repository.js";
-import { isOpenClawAgentDatabaseOpen } from "../state/openclaw-agent-db.js";
-import { openClawStateDatabaseCache } from "../state/openclaw-state-db-cache.js";
 import {
   withArtifactPreservingStateReads,
   withOpenClawStateDatabaseReadSnapshot,
 } from "../state/openclaw-state-db-readonly.js";
-import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
-import {
-  getOpenClawDatabaseMaintenanceScope,
-  maintenanceOwnerHasSourceCustody,
-} from "../state/openclaw-state-maintenance-context.js";
 import { resolveBackupConfigCapture } from "./backup-config-capture.js";
 import { resolvePathViaExistingAncestorSync } from "./boundary-path.js";
 import { sha256Hex } from "./crypto-digest.js";
+import { resolveDatabaseFamilyEngines } from "./database-engine/registry.js";
 import {
   pinDirectory,
   publishFileExclusive,
@@ -52,7 +46,6 @@ import {
   UPDATE_CAPTURE_PRIVACY_MARKER_CONTENT,
 } from "./update-capture-privacy-marker.js";
 import { createUpdateDatabaseBackup } from "./update-database-backup.js";
-import { readUpdateDatabaseGenerations } from "./update-database-generations.js";
 import type { UpdateRecoveryCaptureAcquisition } from "./update-recovery-capture-acquisition.js";
 import { canonicalEntryPath } from "./update-recovery-path.js";
 import { readUpdateRunDriver, type UpdateRunDriver } from "./update-run-driver.js";
@@ -122,22 +115,6 @@ async function markPrivateCapture(directory: string): Promise<void> {
   requireDirectorySync(await syncDirectory(directory), "Private update capture marker");
 }
 
-function maintenanceOwnerMayReadGenerationsInProcess(
-  sharedStatePath: string,
-  databasePaths: ReadonlySet<string>,
-): boolean {
-  const scope = getOpenClawDatabaseMaintenanceScope();
-  // An open process-local source handle requires a child: a raw close here could release its POSIX locks.
-  return (
-    maintenanceOwnerHasSourceCustody(scope, sharedStatePath) &&
-    !openClawStateDatabaseCache.isOpenClawStateDatabaseOpen(sharedStatePath) &&
-    [...databasePaths].every(
-      (pathname) =>
-        maintenanceOwnerHasSourceCustody(scope, pathname) && !isOpenClawAgentDatabaseOpen(pathname),
-    )
-  );
-}
-
 /** Capture for manual recovery under the original invocation's live custody.
  * Sources may remain active; final revalidation is not authority to restore them. */
 export function captureUpdateRecoveryBaseline(params: {
@@ -150,6 +127,7 @@ export function captureUpdateRecoveryBaseline(params: {
   nodeRunner?: string;
   timeoutMs?: number;
   acquisition?: UpdateRecoveryCaptureAcquisition;
+  fullIntegrityCheck?: boolean;
 }) {
   // Sealed helpers consume retained evidence; the installed CLI owns fresh capture.
   if (typeof SEALED_RUNTIME_BUILD === "boolean" && SEALED_RUNTIME_BUILD) {
@@ -161,7 +139,6 @@ export function captureUpdateRecoveryBaseline(params: {
       throw new Error("Invalid original update capture run identity.");
     }
     const env = { ...params.env };
-    const sharedStatePath = resolveOpenClawStateSqlitePath(env);
     const assertCaller = params.assertCurrent;
     const rehearsal = createDoctorRehearsalDatabaseCoverage(params.env);
     const assertCurrent = () => {
@@ -232,7 +209,7 @@ export function captureUpdateRecoveryBaseline(params: {
         stateDir,
         warnings,
         requireLocalResources: true,
-        ...(snapshot.sourceConfig.database?.engine === "postgres"
+        ...(resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
           ? {
               manifestRegistry: (
                 await resolveConfigWidePluginMetadataSnapshotAsync({
@@ -248,7 +225,7 @@ export function captureUpdateRecoveryBaseline(params: {
       return plugins.resources;
     };
     const collectResources = () =>
-      snapshot.sourceConfig.database?.engine === "postgres"
+      resolveDatabaseFamilyEngines(snapshot.sourceConfig).state === "postgres"
         ? collect()
         : withOpenClawStateDatabaseReadSnapshot(collect, { env });
     const declared = await collectResources();
@@ -365,6 +342,8 @@ export function captureUpdateRecoveryBaseline(params: {
         nodeRunner: params.nodeRunner,
         timeoutMs: params.timeoutMs,
         acquisition: params.acquisition,
+        purpose: "original-state",
+        integrityCheck: params.fullIntegrityCheck ? "full" : "quick",
         preserveSourceArtifacts: true,
         additionalPaths: [...forcedSqlite],
         additionalFiles: [...files.keys()].filter((pathname) => !configPaths.has(pathname)),
@@ -417,10 +396,7 @@ export function captureUpdateRecoveryBaseline(params: {
           "Original database snapshot removal",
         );
         assertCurrent();
-        const content = await sha256File(payloadPath);
-        if (content.digest !== file.sha256 || content.bytes !== file.sizeBytes) {
-          throw new Error(`Original database payload changed: ${file.path}`);
-        }
+        // No-replace rename transfers the verified image without copying its bytes.
         const stat = files.get(file.path);
         if (!stat) {
           throw new Error(`Original database disappeared during capture: ${file.path}`);
@@ -489,12 +465,14 @@ export function captureUpdateRecoveryBaseline(params: {
         throw new Error("Original update migration resource inventory changed during capture.");
       }
       assertCurrent();
+      const originalCaptureSources = new Set(databases.originalCaptureSourcePaths);
+      const generationPaths = [...databasePaths].filter(
+        (pathname) => !originalCaptureSources.has(pathname),
+      );
       const generations =
-        params.acquisition?.mode === "maintenance-owner" &&
-        !databases.databases.some((entry) => entry.engine === "postgres") &&
-        maintenanceOwnerMayReadGenerationsInProcess(sharedStatePath, databasePaths)
-          ? readUpdateDatabaseGenerations([...databasePaths])
-          : await readUpdateDatabaseGenerationsIsolated([...databasePaths], {
+        generationPaths.length === 0
+          ? {}
+          : await readUpdateDatabaseGenerationsIsolated(generationPaths, {
               env,
               pluginOwners: databases.pluginOwners,
               signal: params.signal,
@@ -502,7 +480,7 @@ export function captureUpdateRecoveryBaseline(params: {
               acquisition: params.acquisition,
               retryAdvice: false,
             });
-      const unverified = [...databasePaths].flatMap((pathname): [string, string][] =>
+      const unverified = generationPaths.flatMap((pathname): [string, string][] =>
         !Object.hasOwn(databases.sourceGenerations, pathname)
           ? [[pathname, "no stable generation was recorded during its snapshot."]]
           : databases.sourceGenerations[pathname] !== generations[pathname]

@@ -360,11 +360,18 @@ suite.define(() => {
         await trigger.focus();
         await trigger.press("Enter");
         await expect.poll(() => details.getAttribute("role")).toBe("dialog");
+        expect(await details.locator(".chat-details__participants").count()).toBe(0);
         await page.keyboard.press("Tab");
         await expect
           .poll(() =>
-            details
-              .locator(".chat-details__environment > summary")
+            environment.locator(":scope > summary").evaluate((el) => el === document.activeElement),
+          )
+          .toBe(true);
+        await page.keyboard.press("Tab");
+        await expect
+          .poll(() =>
+            environment
+              .getByRole("button", { name: "Copy path", exact: true })
               .evaluate((el) => el === document.activeElement),
           )
           .toBe(true);

@@ -1,38 +1,22 @@
 /* @vitest-environment jsdom */
 
+import { expectDefined } from "@openclaw/normalization-core";
 import { createSignal, flush } from "solid-js";
 import { beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { ComposerDictationStatus } from "../chat/components/chat-composer-controls.tsx";
+import { ComposerDictationStatus } from "../chat/components/chat-voice-activity.tsx";
 import type * as ComposerDictationModule from "../chat/composer-dictation.ts";
-import { createNewSessionComposerTextarea } from "./composer-controller.ts";
 import { NewSessionDictationView } from "./composer-dictation-view.tsx";
+import { createNewSessionComposerTextarea } from "./composer-textarea.ts";
 
-const dictationHarness = vi.hoisted(() => ({
-  options: null as null | {
-    onCommit: (transcript: string) => void;
-  },
-  controllers: [] as Array<{
-    active: boolean;
-    finalizing: boolean;
-    transcript: string;
-    finishActive: ReturnType<typeof vi.fn>;
-    handleClick: ReturnType<typeof vi.fn>;
-    handlePointerDown: () => void;
-    startDirect: ReturnType<typeof vi.fn>;
-  }>,
-}));
-
-vi.mock("../chat/composer-dictation.ts", async (importOriginal) => ({
-  ...(await importOriginal<typeof ComposerDictationModule>()),
-  ComposerDictationOwner: class extends EventTarget {
+const dictationHarness = vi.hoisted(() => {
+  class Controller extends EventTarget {
     active = false;
     connecting = false;
     finalizing = false;
     transcript = "";
-    private options: { onCommit: (transcript: string) => void };
 
     get locksComposer() {
       return this.active;
@@ -55,11 +39,10 @@ vi.mock("../chat/composer-dictation.ts", async (importOriginal) => ({
       return true;
     });
 
-    constructor(options: { onCommit: (transcript: string) => void }) {
+    constructor(private options: { onCommit: (transcript: string) => void }) {
       super();
-      this.options = options;
-      dictationHarness.options = options;
-      dictationHarness.controllers.push(this);
+      this.update(options);
+      harness.controllers.push(this);
     }
     subscribe(listener: () => void) {
       this.addEventListener("change", listener);
@@ -67,7 +50,7 @@ vi.mock("../chat/composer-dictation.ts", async (importOriginal) => ({
     }
     update(options: { onCommit: (transcript: string) => void }) {
       this.options = options;
-      dictationHarness.options = options;
+      harness.options = options;
     }
     dispose() {
       this.active = false;
@@ -75,7 +58,17 @@ vi.mock("../chat/composer-dictation.ts", async (importOriginal) => ({
     handlePointerDown() {
       this.active = true;
     }
-  },
+  }
+  const harness = {
+    options: null as null | { onCommit: (transcript: string) => void },
+    controllers: [] as Controller[],
+  };
+  return Object.assign(harness, { Controller });
+});
+
+vi.mock("../chat/composer-dictation.ts", async (importOriginal) => ({
+  ...(await importOriginal<typeof ComposerDictationModule>()),
+  ComposerDictationOwner: dictationHarness.Controller,
 }));
 
 vi.mock("../chat/composer-microphone-picker.ts", async (importOriginal) => ({
@@ -99,6 +92,52 @@ vi.mock("../chat/composer-microphone-picker.ts", async (importOriginal) => ({
 
 import { NewSessionDictationControl } from "./composer-dictation-control.ts";
 
+function fixture(
+  options: Partial<ConstructorParameters<typeof NewSessionDictationControl>[0]> = {},
+  text = "spoken task",
+) {
+  const captureSelection = vi.fn();
+  const insertTranscript = vi.fn(() => text);
+  const onMessage = vi.fn();
+  const onError = vi.fn();
+  const onSubmit = vi.fn();
+  const control = new NewSessionDictationControl({
+    textarea: { captureSelection, insertTranscript } as never,
+    getClient: () => ({}) as never,
+    isConnected: () => true,
+    canCommit: () => true,
+    onMessage,
+    onError,
+    onSubmit,
+    ...options,
+  });
+  return { control, captureSelection, insertTranscript, onMessage, onError, onSubmit };
+}
+
+function mountControl(control: NewSessionDictationControl, showStatus = false) {
+  const [view, setView] = createSignal({ owner: "agent-a" });
+  const mounted = mountSolid(() => (
+    <>
+      {showStatus && (
+        <ComposerDictationStatus
+          readDictation={() => {
+            view();
+            return control.dictation;
+          }}
+        />
+      )}
+      <NewSessionDictationView control={control} ownerKey={view().owner} renderRevision={view()} />
+    </>
+  ));
+  return {
+    ...mounted,
+    update: (owner = view().owner) => {
+      setView({ owner });
+      flush();
+    },
+  };
+}
+
 describe("NewSessionDictationControl", () => {
   beforeEach(() => {
     dictationHarness.options = null;
@@ -107,17 +146,7 @@ describe("NewSessionDictationControl", () => {
 
   it("drops a final transcript when cloud placement claims the draft in flight", () => {
     let canCommit = true;
-    const insertTranscript = vi.fn(() => "spoken task");
-    const onMessage = vi.fn();
-    const control = new NewSessionDictationControl({
-      textarea: { captureSelection: vi.fn(), insertTranscript } as never,
-      getClient: () => ({}) as never,
-      isConnected: () => true,
-      canCommit: () => canCommit,
-      onMessage,
-      onError: vi.fn(),
-      onSubmit: vi.fn(),
-    });
+    const { control, insertTranscript, onMessage } = fixture({ canCommit: () => canCommit });
 
     control.prepare("agent-a");
     canCommit = false;
@@ -128,24 +157,8 @@ describe("NewSessionDictationControl", () => {
   });
 
   it("starts canonical dictation from a plain microphone click", () => {
-    const onError = vi.fn();
-    const captureSelection = vi.fn();
-    const control = new NewSessionDictationControl({
-      textarea: {
-        captureSelection,
-        insertTranscript: vi.fn(() => "spoken task"),
-      } as never,
-      getClient: () => ({}) as never,
-      isConnected: () => true,
-      canCommit: () => true,
-      onMessage: vi.fn(),
-      onError,
-      onSubmit: vi.fn(),
-    });
-    const container = document.createElement("div");
-    mountSolid(() => <NewSessionDictationView control={control} ownerKey="agent-a" />, {
-      container,
-    });
+    const { control, captureSelection, onError } = fixture();
+    const { container } = mountControl(control);
     const microphone = container.querySelector<HTMLButtonElement>(".chat-send-btn--voice");
 
     microphone?.click();
@@ -166,52 +179,22 @@ describe("NewSessionDictationControl", () => {
   it("keeps text from Stop and submits only after the Send check commits", async () => {
     const onMessage = vi.fn();
     const onSubmit = vi.fn();
-    const control = new NewSessionDictationControl({
+    const { control } = fixture({
       textarea: {
         captureSelection: vi.fn(),
         insertTranscript: vi.fn(() => "draft spoken task"),
         previewTranscript: vi.fn(() => "draft spoken"),
       } as never,
-      getClient: () => ({}) as never,
-      isConnected: () => true,
-      canCommit: () => true,
       onMessage,
-      onError: vi.fn(),
       onSubmit,
     });
-    const container = document.createElement("div");
     control.prepare("agent-a");
-    const controller = dictationHarness.controllers[0];
-    if (!controller) {
-      throw new Error("expected dictation controller");
-    }
+    const controller = expectDefined(dictationHarness.controllers[0], "dictation controller");
 
     controller.active = true;
     controller.transcript = "spoken";
     expect(control.previewDraft()).toBe("draft spoken");
-    const [revision, setRevision] = createSignal({});
-    const refresh = () => {
-      setRevision({});
-      flush();
-    };
-    mountSolid(
-      () => (
-        <>
-          <ComposerDictationStatus
-            readDictation={() => {
-              revision();
-              return control.dictation;
-            }}
-          />
-          <NewSessionDictationView
-            control={control}
-            ownerKey="agent-a"
-            renderRevision={revision()}
-          />
-        </>
-      ),
-      { container },
-    );
+    const { container, update } = mountControl(control, true);
     expect(container.querySelector(".agent-chat__dictation-status")?.textContent).toContain(
       "Listening",
     );
@@ -222,7 +205,7 @@ describe("NewSessionDictationControl", () => {
 
     controller.active = true;
     controller.finalizing = true;
-    refresh();
+    update();
     expect(container.querySelector(".agent-chat__dictation-phase--listening")).toBeNull();
     const stop = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictating");
     const send = container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit");
@@ -238,55 +221,35 @@ describe("NewSessionDictationControl", () => {
     const textarea = createNewSessionComposerTextarea();
     const client = createTestGatewayClient(async () => ({}));
     const onSubmit = vi.fn();
-    const control = new NewSessionDictationControl({
+    const { control } = fixture({
       textarea,
       getClient: () => client,
-      isConnected: () => true,
-      canCommit: () => true,
-      onMessage: vi.fn(),
-      onError: vi.fn(),
       onSubmit,
     });
     onTestFinished(() => {
       control.dispose();
       textarea.disconnect();
     });
-    const [owner, setOwner] = createSignal("agent-a");
-    const [revision, setRevision] = createSignal({});
-    const { container } = mountSolid(() => (
-      <NewSessionDictationView control={control} ownerKey={owner()} renderRevision={revision()} />
-    ));
-    const dictation = dictationHarness.controllers[0];
-    if (!dictation) {
-      throw new Error("Expected the initial draft's dictation controller");
-    }
+    const { container, update } = mountControl(control);
+    const dictation = expectDefined(
+      dictationHarness.controllers[0],
+      "initial dictation controller",
+    );
     dictation.active = true;
-    setRevision({});
-    flush();
+    update();
     const finishing = createDeferred<boolean>();
     dictation.finishActive.mockReturnValueOnce(finishing.promise);
     container.querySelector<HTMLButtonElement>(".chat-send-btn--dictation-commit")?.click();
     expect(dictation.finishActive).toHaveBeenCalledOnce();
 
-    setOwner("agent-b");
-    flush();
+    update("agent-b");
     finishing.resolve(true);
     await finishing.promise;
     expect(onSubmit).not.toHaveBeenCalled();
   });
 
   it("cancels active dictation and drops its late transcript when the route owner changes", () => {
-    const insertTranscript = vi.fn(() => "route B draft");
-    const onMessage = vi.fn();
-    const control = new NewSessionDictationControl({
-      textarea: { captureSelection: vi.fn(), insertTranscript } as never,
-      getClient: () => ({}) as never,
-      isConnected: () => true,
-      canCommit: () => true,
-      onMessage,
-      onError: vi.fn(),
-      onSubmit: vi.fn(),
-    });
+    const { control, insertTranscript, onMessage } = fixture({}, "route B draft");
 
     control.prepare("agent-a");
     const routeAController = dictationHarness.controllers[0];

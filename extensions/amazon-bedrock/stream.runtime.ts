@@ -389,7 +389,6 @@ function formatBedrockError(error: unknown): string {
   return message;
 }
 
-/** Stream a Bedrock Converse request from the generic OpenClaw stream options. */
 export const streamSimpleBedrock: StreamFunction<"bedrock-converse-stream", SimpleStreamOptions> = (
   model,
   context,

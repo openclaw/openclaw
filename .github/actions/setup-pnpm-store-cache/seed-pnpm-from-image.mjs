@@ -13,15 +13,15 @@ const imageNativeHashes = {
   arm64:
     "b7bd40540ecb46a88a4f2679c4c61a65cda7e437dda4c6dfa2466e8883971c138cd371029c5d2de226306810ea26056394a6143b0685fdb4506a318d038709e3",
 };
-// The repository already selects 12.11.1. Authenticate both stages of its
+// The repository already selects 12.12.1. Authenticate both stages of its
 // bootstrap without changing that pin or routing downloads through Node fetch.
-const currentVersion = "12.11.1";
+const currentVersion = "12.12.1";
 const currentWrapperHash =
-  "5b0e3288239a7ea4155d2094f547066e122a1376b3cd785a680c9112e116913e64aaaecf20dd83cc34030fa67013f5c5511f9cf430dd8384188b4c60b8a2ad1e";
+  "b7f98934c0b1f29a65f5da52f2d7f994e7faad573ffdddea1497fb4dcb5aec051590ee7c7d95a38172b4bfae103a5b83edf2ee866e11731c2cafa96063610ac5";
 const currentNativeHashes = {
-  x64: "73b921d30b63834e629f6c249a7e9faecfed722b9a1b0f1735952e82047cf26bd4be627cd63b023f532933ce704c5129b5d781e0e9e5446d0449465bbb8f6af1",
+  x64: "ddb27792f3227fb7257f178fa01678d051af539e0684bc10f9e6f18f11ae2981f0ac3c9231fca0815191d20618729aeae883c6cba0ab4cf8aa80fe533932c2e7",
   arm64:
-    "36845f449e9a1e9a61d9a60d7697b51accd34cda5f762aaab9a513cce341736bf8332cd67d0dd9b24106adfe09f322a793f32beb509a346fdac0ca60e05c160b",
+    "46c1ac0fb585d7141b4d4d4b5bfe4f2d189531d32440262b3a34db1dd69361e6de95160f823465c46f2ed2856d5530fad9e3cd0a3c10a7e0d213cabc13e77250",
 };
 const current = packageManager === `pnpm@${currentVersion}+sha512.${currentWrapperHash}`;
 const version = current ? currentVersion : imageVersion;

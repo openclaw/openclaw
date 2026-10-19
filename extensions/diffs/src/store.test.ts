@@ -15,17 +15,23 @@ import {
 } from "./test-helpers.js";
 import type { DiffArtifactBlobMetadata } from "./types.js";
 
-beforeAll(async () => {
-  await ensureCuratedViewerRuntimeForTests();
-});
+const context = {
+  agentId: "main",
+  sessionId: "session-123",
+  messageChannel: "discord",
+  agentAccountId: "default",
+};
+const fileMetadata = { version: 1, kind: "rendered_file", format: "png" } as const;
 
-describe("DiffArtifactStore", () => {
-  let rootDir: string;
-  let store: DiffArtifactStore;
-  let blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
-  let reopenStore: Awaited<ReturnType<typeof createDiffStoreHarness>>["reopen"];
-  let cleanupRootDir: () => Promise<void>;
+beforeAll(ensureCuratedViewerRuntimeForTests);
 
+let rootDir: string;
+let store: DiffArtifactStore;
+let blobStore: PluginBlobStoreWithReceipts<DiffArtifactBlobMetadata>;
+let reopenStore: Awaited<ReturnType<typeof createDiffStoreHarness>>["reopen"];
+let cleanupRootDir: () => Promise<void>;
+
+function setupStore(nativeKernel = false) {
   beforeEach(async () => {
     ({
       rootDir,
@@ -33,66 +39,56 @@ describe("DiffArtifactStore", () => {
       blobStore,
       reopen: reopenStore,
       cleanup: cleanupRootDir,
-    } = await createDiffStoreHarness("openclaw-diffs-store-", { nativeKernel: true }));
+    } = await createDiffStoreHarness("openclaw-diffs-store-", { nativeKernel }));
   });
 
   afterEach(async () => {
+    vi.restoreAllMocks();
     vi.useRealTimers();
     await cleanupRootDir();
   });
+}
 
-  describe("compression contract", () => {
-    const maximum = 64 * 1024 * 1024;
-    const params = { title: "Compression", inputKind: "patch", fileCount: 1 } as const;
+describe("DiffArtifactStore", () => {
+  setupStore(true);
+  const maximum = 64 * 1024 * 1024;
 
-    afterEach(() => {
-      vi.restoreAllMocks();
-    });
-
-    it("rejects oversized input before token creation, registration or cleanup", async () => {
-      const random = vi.spyOn(crypto, "randomBytes");
-      const register = vi.spyOn(blobStore, "registerIfAbsentWithReceipt");
-      const cleanup = vi.spyOn(store, "scheduleCleanup");
-      await expect(
-        store.createArtifact({ ...params, html: "x".repeat(maximum + 1) }),
-      ).rejects.toThrow(`Diff viewer HTML exceeds ${maximum} bytes.`);
-      expect(random).not.toHaveBeenCalled();
-      expect(register).not.toHaveBeenCalled();
-      expect(cleanup).not.toHaveBeenCalled();
-    });
-
-    it.each(["size-mismatch", "oversized-output"] as const)(
-      "rejects %s with valid authorized metadata",
-      async (kind) => {
-        const artifact = await store.createArtifact({ ...params, html: "viewer" });
-        const entry = await blobStore.lookup(artifact.id);
-        assert.isDefined(entry);
-        if (entry.metadata.kind !== "viewer") {
-          throw new Error("Expected viewer metadata");
-        }
-        const bytes =
-          kind === "oversized-output" ? gzipSync(Buffer.alloc(maximum + 1, 120)) : entry.bytes;
-        const decodedBytes =
-          kind === "oversized-output" ? maximum : Buffer.byteLength("viewer") + 1;
-        await blobStore.register(artifact.id, bytes, { ...entry.metadata, decodedBytes });
-        await expect(
-          store.readAuthorizedViewer(artifact.id, artifact.token),
-        ).rejects.toBeInstanceOf(Error);
-      },
+  it("rejects oversized input before token creation, registration or cleanup", async () => {
+    const random = vi.spyOn(crypto, "randomBytes");
+    const register = vi.spyOn(blobStore, "registerIfAbsentWithReceipt");
+    const cleanup = vi.spyOn(store, "scheduleCleanup");
+    await expect(createViewerArtifact(store, { html: "x".repeat(maximum + 1) })).rejects.toThrow(
+      `Diff viewer HTML exceeds ${maximum} bytes.`,
     );
+    expect(random).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+    expect(cleanup).not.toHaveBeenCalled();
   });
 
+  it.each(["size-mismatch", "oversized-output"] as const)(
+    "rejects %s with valid authorized metadata",
+    async (kind) => {
+      const artifact = await createViewerArtifact(store, { html: "viewer", inputKind: "patch" });
+      const entry = await blobStore.lookup(artifact.id);
+      assert.isDefined(entry);
+      if (entry.metadata.kind !== "viewer") {
+        throw new Error("Expected viewer metadata");
+      }
+      const bytes =
+        kind === "oversized-output" ? gzipSync(Buffer.alloc(maximum + 1, 120)) : entry.bytes;
+      const decodedBytes = kind === "oversized-output" ? maximum : Buffer.byteLength("viewer") + 1;
+      await blobStore.register(artifact.id, bytes, { ...entry.metadata, decodedBytes });
+      await expect(store.readAuthorizedViewer(artifact.id, artifact.token)).rejects.toBeInstanceOf(
+        Error,
+      );
+    },
+  );
   it("reopens compressed viewer bytes and retrieves them with one authorized lookup", async () => {
     await store.stopCleanup();
     const registrationLookup = vi.spyOn(blobStore, "lookup");
     const artifact = await createViewerArtifact(store, {
       html: "<html>demo é 🦀</html>",
-      context: {
-        agentId: "main",
-        sessionId: "session-123",
-        messageChannel: "discord",
-        agentAccountId: "default",
-      },
+      context,
     });
     expect(registrationLookup).not.toHaveBeenCalled();
     registrationLookup.mockRestore();
@@ -112,12 +108,7 @@ describe("DiffArtifactStore", () => {
     const lookup = vi.spyOn(blobStore, "lookup");
     const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
     expect(loaded?.artifact.id).toBe(artifact.id);
-    expect(loaded?.artifact.context).toEqual({
-      agentId: "main",
-      sessionId: "session-123",
-      messageChannel: "discord",
-      agentAccountId: "default",
-    });
+    expect(loaded?.artifact.context).toEqual(context);
     expect(Buffer.from(loaded!.html).toString("utf8")).toBe("<html>demo é 🦀</html>");
     expect(lookup).toHaveBeenCalledTimes(1);
     await expect(store.readAuthorizedViewer(artifact.id, "0".repeat(48))).resolves.toBeNull();
@@ -128,11 +119,7 @@ describe("DiffArtifactStore", () => {
     await store.stopCleanup();
     vi.useFakeTimers({ toFake: ["Date"] });
     vi.setSystemTime(8_640_000_000_000_000 - 1_000);
-    const artifact = await createViewerArtifact(store, {
-      html: "<html>demo</html>",
-      inputKind: "patch",
-      ttlMs: 60_000,
-    });
+    const artifact = await createViewerArtifact(store, { inputKind: "patch", ttlMs: 60_000 });
 
     expect(artifact.expiresAt).toBe("+275760-09-13T00:00:00.000Z");
     await expect(blobStore.lookup(artifact.id)).resolves.toMatchObject({
@@ -143,38 +130,26 @@ describe("DiffArtifactStore", () => {
 
   it("expires artifacts after the ttl", async () => {
     vi.useFakeTimers({ toFake: ["Date"] });
-    const artifact = await createViewerArtifact(store, {
-      html: "<html>demo</html>",
-      inputKind: "patch",
-      fileCount: 2,
-      ttlMs: 1_000,
-    });
+    const artifact = await createViewerArtifact(store, { ttlMs: 1_000 });
 
     await store.stopCleanup();
     await expireDiffArtifactForTest(rootDir, artifact.id, 1_000);
-    const loaded = await store.readAuthorizedViewer(artifact.id, artifact.token);
-    expect(loaded).toBeNull();
+    await expect(store.readAuthorizedViewer(artifact.id, artifact.token)).resolves.toBeNull();
     await expect(blobStore.deleteExpired()).resolves.toEqual([]);
   });
 
   it("creates standalone file artifacts with SQLite metadata and derived temp paths", async () => {
     const standalone = await store.createStandaloneFileArtifact({
-      context: {
-        agentId: "main",
-        sessionId: "session-123",
-      },
+      context: { agentId: "main", sessionId: "session-123" },
     });
     expect(standalone.filePath).toMatch(/preview\.png$/);
     expect(standalone.filePath).toContain(rootDir);
     expect(Date.parse(standalone.expiresAt)).toBeGreaterThan(Date.now());
-    expect(standalone.context).toEqual({
-      agentId: "main",
-      sessionId: "session-123",
-    });
+    expect(standalone.context).toEqual({ agentId: "main", sessionId: "session-123" });
     await expect(blobStore.lookup(standalone.id)).resolves.toMatchObject({
       key: standalone.id,
       sizeBytes: 0,
-      metadata: { version: 1, kind: "rendered_file", format: "png" },
+      metadata: fileMetadata,
     });
     await store.completeFileArtifact(standalone.id);
   });
@@ -215,9 +190,7 @@ describe("DiffArtifactStore", () => {
     const registerSpy = vi
       .spyOn(blobStore, "registerIfAbsentWithReceipt")
       .mockRejectedValueOnce(
-        Object.assign(new Error("physical quota reached"), {
-          code: "PLUGIN_BLOB_LIMIT_EXCEEDED",
-        }),
+        Object.assign(new Error("quota"), { code: "PLUGIN_BLOB_LIMIT_EXCEEDED" }),
       )
       .mockImplementation(registerIfAbsent);
     const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
@@ -246,28 +219,20 @@ describe("DiffArtifactStore", () => {
       const time = new Date(now.getTime() - directory.age);
       await fs.utimes(dir, time, time);
       if (directory.live) {
-        await blobStore.register(directory.id, new Uint8Array(), {
-          version: 1,
-          kind: "rendered_file",
-          format: "png",
-        });
+        await blobStore.register(directory.id, new Uint8Array(), fileMetadata);
       }
     }
     const lookup = vi.spyOn(blobStore, "lookup");
-    try {
-      await store.cleanupExpired();
+    await store.cleanupExpired();
 
-      await expect(fs.stat(path.join(rootDir, "a".repeat(20)))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
-      for (const id of ["b", "c", "d", "e"]) {
-        await expect(fs.stat(path.join(rootDir, id.repeat(20)))).resolves.toMatchObject({});
-      }
-      expect(lookup.mock.calls.length).toBeGreaterThan(0);
-      expect(lookup.mock.calls.length).toBeLessThanOrEqual(2);
-    } finally {
-      lookup.mockRestore();
+    await expect(fs.stat(path.join(rootDir, "a".repeat(20)))).rejects.toMatchObject({
+      code: "ENOENT",
+    });
+    for (const id of ["b", "c", "d", "e"]) {
+      await expect(fs.stat(path.join(rootDir, id.repeat(20)))).resolves.toMatchObject({});
     }
+    expect(lookup.mock.calls.length).toBeGreaterThan(0);
+    expect(lookup.mock.calls.length).toBeLessThanOrEqual(2);
   });
 
   it("retains an old directory registered while its age is being checked", async () => {
@@ -277,18 +242,11 @@ describe("DiffArtifactStore", () => {
     const oldTime = new Date(Date.now() - 25 * 60 * 60 * 1_000);
     await fs.utimes(dir, oldTime, oldTime);
     const stat = vi.spyOn(fs, "stat").mockImplementationOnce(async () => {
-      await blobStore.register(id, new Uint8Array(), {
-        version: 1,
-        kind: "rendered_file",
-        format: "png",
-      });
+      await blobStore.register(id, new Uint8Array(), fileMetadata);
       return await fs.lstat(dir);
     });
-    try {
-      await store.cleanupExpired();
-    } finally {
-      stat.mockRestore();
-    }
+    await store.cleanupExpired();
+    stat.mockRestore();
 
     await expect(fs.stat(dir)).resolves.toMatchObject({});
     await expect(blobStore.lookup(id)).resolves.toMatchObject({ key: id });
@@ -299,12 +257,8 @@ describe("DiffArtifactStore", () => {
     const now = new Date("2026-09-13T12:00:00Z");
     vi.setSystemTime(now);
     const schedule = vi.spyOn(store, "scheduleCleanup").mockImplementation(() => undefined);
-    let artifact: Awaited<ReturnType<DiffArtifactStore["createStandaloneFileArtifact"]>>;
-    try {
-      artifact = await store.createStandaloneFileArtifact({ format: "png", ttlMs: 1_000 });
-    } finally {
-      schedule.mockRestore();
-    }
+    const artifact = await store.createStandaloneFileArtifact({ format: "png", ttlMs: 1_000 });
+    schedule.mockRestore();
     await fs.writeFile(artifact.filePath, "rendering");
     const oldTime = new Date(now.getTime() - 25 * 60 * 60 * 1_000);
     await fs.utimes(path.dirname(artifact.filePath), oldTime, oldTime);
@@ -324,10 +278,7 @@ describe("DiffArtifactStore", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const now = new Date("2026-02-27T16:00:00Z");
     vi.setSystemTime(now);
-    store = new DiffArtifactStore({
-      rootDir,
-      blobStore,
-    });
+    store = new DiffArtifactStore({ rootDir, blobStore });
     const cleanupSpy = vi.spyOn(store, "cleanupExpired").mockResolvedValue();
 
     await createViewerArtifact(store, { html: "<html>one</html>", title: "One" });
@@ -344,126 +295,68 @@ describe("DiffArtifactStore", () => {
 
 describe("createDiffsHttpHandler", () => {
   const missingViewerPath = "/plugins/diffs/view/not-a-real-id/not-a-real-token";
-  let store: DiffArtifactStore;
-  let cleanupRootDir: () => Promise<void>;
+  setupStore();
 
-  async function handleLocalGet(url: string) {
-    const handler = createDiffsHttpHandler({ store, resolveAccessConfig: () => ({}) });
-    const res = createMockServerResponse();
-    const handled = await handler(
-      localReq({
+  function client(
+    access: ReturnType<Parameters<typeof createDiffsHttpHandler>[0]["resolveAccessConfig"]> = {},
+    remoteAddress = "127.0.0.1",
+  ) {
+    const handler = createDiffsHttpHandler({ store, resolveAccessConfig: () => access });
+    return (url: string, headers?: Record<string, string>) =>
+      get(handler, {
         method: "GET",
         url,
-      }),
-      res,
-    );
-    return { handled, res };
+        headers: headers ?? {},
+        socket: { remoteAddress },
+      } as unknown as IncomingMessage);
   }
-
-  beforeEach(async () => {
-    ({ store, cleanup: cleanupRootDir } = await createDiffStoreHarness("openclaw-diffs-http-"));
-  });
-
-  afterEach(async () => {
-    vi.useRealTimers();
-    await cleanupRootDir();
-  });
 
   it("serves a stored diff document", async () => {
     const artifact = await createViewerArtifact(store);
-    const { handled, res } = await handleLocalGet(artifact.viewerPath);
+    const res = await client()(artifact.viewerPath);
 
-    expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
-    expect(Buffer.from(res.body as unknown as Uint8Array).toString("utf8")).toBe(
-      "<html>viewer</html>",
-    );
+    expect(String(res.body)).toBe("<html>viewer</html>");
     expect(res.getHeader("content-security-policy")).toContain("default-src 'none'");
     expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
   });
 
   it("rejects invalid tokens", async () => {
     const artifact = await createViewerArtifact(store);
-    const { handled, res } = await handleLocalGet(
-      artifact.viewerPath.replace(artifact.token, "bad-token"),
-    );
+    const res = await client()(artifact.viewerPath.replace(artifact.token, "bad-token"));
 
-    expect(handled).toBe(true);
     expect(res.statusCode).toBe(404);
   });
 
   it("serves the shared viewer asset", async () => {
-    const { handled, res } = await handleLocalGet("/plugins/diffs/assets/viewer.js");
+    const res = await client()("/plugins/diffs/assets/viewer.js");
 
-    expect(handled).toBe(true);
     expect(res.statusCode).toBe(200);
     expect(String(res.body)).toContain("./viewer-runtime.js?v=");
     expect(res.getHeader("cache-control")).toBe("no-store, max-age=0");
   });
 
   it.each([
-    {
-      name: "blocks non-loopback viewer access by default",
-      request: remoteReq,
-      allowRemoteViewer: false,
-      expectedStatusCode: 404,
-    },
-    {
-      name: "blocks loopback requests that carry proxy forwarding headers by default",
-      request: localReq,
-      headers: { "x-forwarded-for": "203.0.113.10" },
-      allowRemoteViewer: false,
-      expectedStatusCode: 404,
-    },
-    {
-      name: "blocks trusted-proxy loopback requests without client-origin headers by default",
-      request: localReq,
-      trustedProxies: ["127.0.0.1"],
-      allowRemoteViewer: false,
-      expectedStatusCode: 404,
-    },
-    {
-      name: "blocks proxied loopback requests when trusted proxies are configured",
-      request: localReq,
-      headers: { "x-forwarded-for": "203.0.113.10" },
-      trustedProxies: ["127.0.0.1"],
-      allowRemoteViewer: false,
-      expectedStatusCode: 404,
-    },
-    {
-      name: "allows proxied loopback requests when allowRemoteViewer is enabled",
-      request: localReq,
-      headers: { "x-forwarded-for": "203.0.113.10" },
-      trustedProxies: ["127.0.0.1"],
-      allowRemoteViewer: true,
-      expectedStatusCode: 200,
-    },
-  ])(
-    "$name",
-    async ({ request, headers, trustedProxies, allowRemoteViewer, expectedStatusCode }) => {
+    ["blocks non-loopback viewer access by default", "203.0.113.10", false, false, false, 404],
+    ["blocks loopback with proxy headers by default", "127.0.0.1", true, false, false, 404],
+    ["blocks trusted proxy without client-origin headers", "127.0.0.1", false, true, false, 404],
+    ["blocks proxied loopback with trusted proxies", "127.0.0.1", true, true, false, 404],
+    ["allows proxied loopback with allowRemoteViewer", "127.0.0.1", true, true, true, 200],
+  ] as const)(
+    "%s",
+    async (_name, remoteAddress, forwarded, trusted, allowRemoteViewer, expectedStatusCode) => {
       const artifact = await createViewerArtifact(store);
 
-      const handler = createDiffsHttpHandler({
-        store,
-        resolveAccessConfig: () => ({ allowRemoteViewer, trustedProxies }),
-      });
-      const res = createMockServerResponse();
-      const handled = await handler(
-        request({
-          method: "GET",
-          url: artifact.viewerPath,
-          headers,
-        }),
-        res,
+      const request = client(
+        { allowRemoteViewer, trustedProxies: trusted ? ["127.0.0.1"] : undefined },
+        remoteAddress,
+      );
+      const res = await request(
+        artifact.viewerPath,
+        forwarded ? { "x-forwarded-for": "203.0.113.10" } : undefined,
       );
 
-      expect(handled).toBe(true);
       expect(res.statusCode).toBe(expectedStatusCode);
-      if (expectedStatusCode === 200) {
-        expect(Buffer.from(res.body as unknown as Uint8Array).toString("utf8")).toBe(
-          "<html>viewer</html>",
-        );
-      }
     },
   );
 
@@ -473,20 +366,7 @@ describe("createDiffsHttpHandler", () => {
     ["::ffff:127.0.0.2", 200],
   ] as const)("classifies viewer client address %s", async (remoteAddress, expectedStatusCode) => {
     const artifact = await createViewerArtifact(store);
-    const handler = createDiffsHttpHandler({
-      store,
-      resolveAccessConfig: () => ({ allowRemoteViewer: false }),
-    });
-    const res = createMockServerResponse();
-
-    await handler(
-      localReq({
-        method: "GET",
-        url: artifact.viewerPath,
-        remoteAddress,
-      }),
-      res,
-    );
+    const res = await client({ allowRemoteViewer: false }, remoteAddress)(artifact.viewerPath);
 
     expect(res.statusCode).toBe(expectedStatusCode);
   });
@@ -495,15 +375,11 @@ describe("createDiffsHttpHandler", () => {
     vi.useFakeTimers({ toFake: ["Date"] });
     const startedAt = new Date("2026-08-19T12:00:00Z").getTime();
     vi.setSystemTime(startedAt);
-    const handler = createDiffsHttpHandler({
-      store,
-      resolveAccessConfig: () => ({ allowRemoteViewer: true }),
-    });
+    const request = client({ allowRemoteViewer: true }, "203.0.113.10");
 
     const recordMisses = async (count: number) => {
       for (let i = 0; i < count; i++) {
-        const miss = createMockServerResponse();
-        await handler(remoteReq({ method: "GET", url: missingViewerPath }), miss);
+        const miss = await request(missingViewerPath);
         expect(miss.statusCode).toBe(404);
       }
     };
@@ -516,55 +392,35 @@ describe("createDiffsHttpHandler", () => {
     vi.setSystemTime(startedAt + 118_000);
     await recordMisses(20);
 
-    const limited = createMockServerResponse();
-    await handler(remoteReq({ method: "GET", url: missingViewerPath }), limited);
+    const limited = await request(missingViewerPath);
     expect(limited.statusCode).toBe(429);
   });
 
   it("keeps loopback viewer requests outside the remote failure limiter", async () => {
-    const handler = createDiffsHttpHandler({
-      store,
-      resolveAccessConfig: () => ({ allowRemoteViewer: true }),
-    });
+    const request = client({ allowRemoteViewer: true });
 
     for (let i = 0; i < 41; i++) {
-      const miss = createMockServerResponse();
-      await handler(localReq({ method: "GET", url: missingViewerPath }), miss);
+      const miss = await request(missingViewerPath);
       expect(miss.statusCode).toBe(404);
     }
   });
 });
 
+async function get(handler: ReturnType<typeof createDiffsHttpHandler>, request: IncomingMessage) {
+  const res = createMockServerResponse();
+  expect(await handler(request, res)).toBe(true);
+  return res;
+}
+
 async function createViewerArtifact(
-  store: DiffArtifactStore,
+  artifactStore: DiffArtifactStore,
   overrides: Partial<Parameters<DiffArtifactStore["createArtifact"]>[0]> = {},
 ) {
-  return await store.createArtifact({
+  return await artifactStore.createArtifact({
     html: "<html>viewer</html>",
     title: "Demo",
     inputKind: "before_after",
     fileCount: 1,
     ...overrides,
   });
-}
-
-function localReq(input: {
-  method: string;
-  url: string;
-  headers?: Record<string, string>;
-  remoteAddress?: string;
-}): IncomingMessage {
-  return {
-    ...input,
-    headers: input.headers ?? {},
-    socket: { remoteAddress: input.remoteAddress ?? "127.0.0.1" },
-  } as unknown as IncomingMessage;
-}
-
-function remoteReq(input: {
-  method: string;
-  url: string;
-  headers?: Record<string, string>;
-}): IncomingMessage {
-  return localReq({ ...input, remoteAddress: "203.0.113.10" });
 }

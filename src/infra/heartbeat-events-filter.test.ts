@@ -184,6 +184,8 @@ describe("heartbeat event classification", () => {
   it.each([
     { value: "   ", expected: false },
     { value: "NO_REPLY", expected: true },
+    { value: "no_r", expected: true },
+    { value: "NO_R", expected: true },
     { value: "no_reply: actual reminder", expected: true },
     { value: "HEARTBEAT_OK", expected: false },
     { value: "heartbeat_ok: already handled", expected: false },

@@ -23,8 +23,6 @@ import {
 
 const oid = /^[0-9a-f]{40}$/;
 const attemptId = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const attemptCapture =
-  /^merge-output\.[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\.log$/;
 const mergeCapture = /^merge-output(?:\..+)?\.log$/u;
 const positiveInteger = (value) => Number.isSafeInteger(value) && value > 0;
 const nonempty = (value) => typeof value === "string" && value.trim().length > 0;
@@ -135,34 +133,27 @@ function qualifyCaptureSet(source, label, expected, verify, allowExtra = false) 
   return files;
 }
 
-function qualifyProviderRejection(recordJson, source) {
+function qualifyProviderRejection(recordJson, outcome, source) {
   const record = JSON.parse(recordJson);
   requireEvidence(
-    isUnacceptedPriorCiRestSquash(record),
+    oid.test(outcome ?? "") && isUnacceptedPriorCiRestSquash(record),
     "provider rejection requires an unaccepted exact-head prior-CI admin REST squash intent",
   );
-  const capture = `merge-output.${record.attempt}.log`;
-  const inherited = record.recovery?.providerRejection;
-  const inheritedFiles = inherited === undefined ? {} : inherited?.files;
   requireEvidence(
-    inherited === undefined ||
-      (inherited?.kind === "github-base-modified-405" &&
-        inheritedFiles &&
-        typeof inheritedFiles === "object" &&
-        !Array.isArray(inheritedFiles) &&
-        attemptCapture.test(inherited.capture ?? "") &&
-        Object.hasOwn(inheritedFiles, inherited.capture) &&
-        Object.entries(inheritedFiles).every(
-          ([name, value]) =>
-            attemptCapture.test(name) && typeof value === "string" && oid.test(value),
-        )),
-    "invalid inherited provider-rejection captures",
+    git(["cat-file", "-t", outcome]).toString("utf8").trim() === "commit" &&
+      JSON.stringify(JSON.parse(git(["show", `${outcome}:outcome.json`]))) ===
+        JSON.stringify(record),
+    "provider rejection must consume the exact retained outcome",
   );
+  const capture = `merge-output.${record.attempt}.log`;
+  // The retained intent also owns earlier cancelled-auto captures. Their bytes
+  // remain evidence of those attempts, not provider rejection for this request.
+  const priorCaptures = readCaptures(`git:${outcome}`, "provider rejection");
   requireEvidence(
-    !Object.hasOwn(inheritedFiles, capture),
+    !priorCaptures.some((entry) => entry.name === capture),
     "provider rejection must name a new attempt capture",
   );
-  const expected = [capture, ...Object.keys(inheritedFiles)].toSorted();
+  const expected = [capture, ...priorCaptures.map((entry) => entry.name)].toSorted();
   // The request reached GitHub. This exact response qualifies provider rejection,
   // never a claim that dispatch did not happen or permission for an automatic retry.
   const response = Buffer.from(
@@ -174,13 +165,11 @@ function qualifyProviderRejection(recordJson, source) {
     expected,
     (name, bytes, blob) => {
       requireEvidence(
-        bytes.equals(response),
+        name !== capture || bytes.equals(response),
         "require the complete exact GitHub base-modified HTTP 405 rejection",
       );
-      requireEvidence(
-        !Object.hasOwn(inheritedFiles, name) || inheritedFiles[name] === blob,
-        "inherited provider-rejection capture changed",
-      );
+      const prior = priorCaptures.find((entry) => entry.name === name);
+      requireEvidence(!prior || prior.oid === blob, "inherited provider-rejection capture changed");
     },
     source !== ".local",
   );
@@ -793,7 +782,7 @@ async function verifyPriorCiAdmin({
     immutable.jobs
       ? [{ jobs: immutable.jobs, total_count: immutable.jobs.length }]
       : read(
-          `repos/${repository}/actions/runs/${evidence.runId}/attempts/${evidence.runAttempt}/jobs?per_page=100`,
+          `repos/${repository}/actions/runs/${evidence.runId}/attempts/${evidence.runAttempt}/jobs?per_page=20`,
           true,
         ),
   ]);
@@ -1057,7 +1046,7 @@ if (isDirectRunUrl(process.argv[1], import.meta.url)) {
                     })
                   : (() => {
                       throw new Error(
-                        "Expected delta <prior-head> <head>, unchanged <evidence> <sha256>, provider-rejection <.local|git:outcome> (record JSON on stdin), stale-head-retirement <outcome> <replacement-head> <.local|git:successor> (record JSON on stdin), or verify <evidence> <repo> <PR> <head> <actor> [main]",
+                        "Expected delta <prior-head> <head>, unchanged <evidence> <sha256>, provider-rejection <outcome> <.local|git:successor> (record JSON on stdin), stale-head-retirement <outcome> <replacement-head> <.local|git:successor> (record JSON on stdin), or verify <evidence> <repo> <PR> <head> <actor> [main]",
                       );
                     })();
     process.stdout.write(`${JSON.stringify(result)}\n`);

@@ -43,6 +43,14 @@ for (const platform of ["linux", "windows"]) {
     write(installed, `${native}/package.json`, { name: "@openai/codex" });
     write(installed, `${native}/vendor/codex`, "synthetic platform executable");
     write(work, "manifest.json", { files: { "bin/bun": "existing-runtime-hash" } });
+    const payloadWrites = [];
+    const writeFileSync = fs.writeFileSync;
+    t.mock.method(fs, "writeFileSync", (file, ...args) => {
+      if (typeof file === "string" && file.startsWith(`${work}${path.sep}package${path.sep}`)) {
+        payloadWrites.push(path.relative(work, file).split(path.sep).join("/"));
+      }
+      return writeFileSync(file, ...args);
+    });
     const added = stageInstalledPackage(installed, work, { platform, arch: "x64" }, {
       commit, pluginIds: ["codex"],
     });
@@ -61,6 +69,9 @@ for (const platform of ["linux", "windows"]) {
     });
     assert.equal(decode(`${native}/vendor/codex`).toString(), "synthetic platform executable");
     const manifest = read(work, "manifest.json");
+    assert.deepEqual(payloadWrites.toSorted(), platform === "linux"
+      ? Object.keys(manifest.files).filter((file) => file.startsWith("package/")).toSorted()
+      : []);
     assert.equal(fs.existsSync(path.join(work, "package", core, "dist/plugin-sdk/index.d.ts")), false);
     assert.equal(fs.existsSync(path.join(work, "package/node_modules/openai/index.d.ts")), false);
     assert.equal(fs.existsSync(path.join(work, "package/node_modules/openai/src/index.ts")), false);

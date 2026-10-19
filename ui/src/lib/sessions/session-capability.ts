@@ -25,15 +25,20 @@ import type {
   SessionWorkspaceListResult,
   SessionWorkspaceSetResult,
 } from "../../api/types.ts";
+import type { BootRecord } from "../../app/boot-record.ts";
 import type { ApplicationGatewayPhase, ApplicationGatewaySnapshot } from "../../app/gateway.ts";
 import type { AuthenticatedUser } from "../../app/user-profile.ts";
 import type { GatewayConnectionScope } from "../gateway-connection-lifecycle.ts";
-import type { SessionCreateOutcome, SessionCreateParams } from "./create.ts";
+import type {
+  SessionCreateOutcome,
+  SessionCreateParams,
+  SessionCreateRequestOptions,
+} from "./create.ts";
 import type { SessionGroupSettings } from "./custom-groups.ts";
 import type {
-  GitHubPublicationController,
+  GitHubPublicationOwner,
   GitHubPublicationPresentationBinding,
-} from "./github-publication-controller.ts";
+} from "./github-publication-owner.ts";
 import type { SessionArchivedFilter } from "./navigation.ts";
 import type { SessionPatchRoute } from "./patch.ts";
 import type { SessionReconcileOptions } from "./reconcile.ts";
@@ -57,6 +62,22 @@ export type SessionState = {
   /** Gateway-owned sidebar section order; pinned is intentionally absent. */
   sectionOrder: readonly string[];
 };
+
+export function createSessionState(
+  bootRecord?: Pick<BootRecord, "groups" | "sectionOrder"> | null,
+): SessionState {
+  return {
+    result: null,
+    agentId: null,
+    modelOverrides: {},
+    loading: false,
+    error: null,
+    deletedSessions: [],
+    groups: bootRecord?.groups.map((group) => group.name) ?? [],
+    groupSettings: bootRecord?.groups ?? [],
+    sectionOrder: bootRecord?.sectionOrder ?? [],
+  };
+}
 
 type SessionDeletionFact = {
   key: string;
@@ -219,8 +240,7 @@ export type SessionCapability = {
     // The lazy presentation supplies code; this session owner keeps operation custody.
     attach: (
       row: GatewaySessionRow,
-      changed: () => void,
-      Controller: typeof GitHubPublicationController,
+      Owner: typeof GitHubPublicationOwner,
     ) => GitHubPublicationBinding | null;
   };
   readonly state: SessionState;
@@ -306,9 +326,12 @@ export type SessionCapability = {
   capturePermissionObservation: (key: string, agentId?: string | null) => () => boolean;
   createResult: (
     params?: SessionCreateParams,
-    options?: { reconciliation?: SessionCreateReconciliation },
+    options?: SessionCreateRequestOptions & { reconciliation?: SessionCreateReconciliation },
   ) => Promise<SessionCreateOutcome | null>;
-  create: (params?: SessionCreateParams) => Promise<string | null>;
+  create: (
+    params?: SessionCreateParams,
+    options?: SessionCreateRequestOptions,
+  ) => Promise<string | null>;
   recover: (params: SessionsRecoverParams) => Promise<SessionsRecoverResult | null>;
   patch: SessionPatchRoute;
   patchMany: (

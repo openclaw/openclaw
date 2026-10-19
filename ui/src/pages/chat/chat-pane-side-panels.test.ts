@@ -27,7 +27,7 @@ function createPane() {
     hasActiveRun: true,
   };
   const roster = { rows: [] as GatewaySessionRow[], hydrated: true, pendingChildRead: false };
-  Reflect.set(fixture.pane, "swarmHydrator", roster);
+  Reflect.set(fixture.pane.swarm, "hydrator", roster);
   fixture.state.sessionKey = parent.key;
   fixture.state.sessionsResult = {
     ts: 1,

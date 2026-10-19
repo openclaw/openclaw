@@ -1,8 +1,13 @@
 import { expect, it } from "vitest";
 import {
+  chatFixture,
+  configResponse,
+  sendChat,
+  expectText,
+} from "./chat-flow-fixtures.test-support.ts";
+import {
   confirmIme,
   chatMessage,
-  newChatPage,
   createChatFlowE2eSuite,
   expectRequestCountStable,
   installMockGateway,
@@ -15,9 +20,17 @@ import { waitForCommittedComposerDraft } from "./settle.test-support.ts";
 const suite = createChatFlowE2eSuite();
 const defaultSessionKey = "agent:main:main";
 
-async function quotedChat(role: string, quote: string, id: string) {
-  const page = await newChatPage(suite);
-  const gateway = await installMockGateway(page, {
+async function openChat(options: Parameters<typeof installMockGateway>[1] = {}, route = "chat") {
+  const { page, gateway } = await chatFixture(suite, options);
+  await page.goto(`${suite.server.baseUrl}${route}`);
+  const pane = page.locator(".chat-pane-cache__pane--active");
+  const composer = page.locator(".agent-chat__composer-combobox textarea");
+  const button = (name: string) => pane.getByRole("button", { name, exact: true });
+  return { page, gateway, pane, composer, button };
+}
+
+function quotedChat(role: string, quote: string, id: string) {
+  return openChat({
     sessionKey: defaultSessionKey,
     historyMessages: [
       chatMessage(role, quote, {
@@ -26,24 +39,20 @@ async function quotedChat(role: string, quote: string, id: string) {
       }),
     ],
   });
-  await page.goto(`${suite.server.baseUrl}chat`);
-  const pane = page.locator(".chat-pane-cache__pane--active");
-  return { page, gateway, pane };
 }
 
 suite.define(() => {
   it("persists the chat send shortcut and keeps multiline and IME input safe", async () => {
-    const page = await newChatPage(suite);
-    const gateway = await installMockGateway(page);
-    await page.goto(`${suite.server.baseUrl}chat`);
-    const composer = page.locator(".agent-chat__composer-combobox textarea");
+    const { page, gateway, composer } = await openChat();
+    const expectUnsent = async (text: string) => {
+      expect(await composer.inputValue()).toBe(text);
+      expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    };
     await composer.waitFor({ state: "visible", timeout: 10_000 });
 
     await composer.fill("日本語");
-    const confirmationConsumed = await confirmIme(composer, "日本語");
-    expect(confirmationConsumed).toBe(false);
-    expect(await composer.inputValue()).toBe("日本語");
-    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    expect(await confirmIme(composer, "日本語")).toBe(false);
+    await expectUnsent("日本語");
     await composer.dispatchEvent("keyup", { key: "Enter" });
 
     // Software keyboards can commit text through input events without keydown.
@@ -60,15 +69,13 @@ suite.define(() => {
         new InputEvent("input", { bubbles: true, inputType: "insertText", data: "中文" }),
       );
     });
-    expect(await composer.inputValue()).toBe("中文");
-    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await expectUnsent("中文");
     await composer.dispatchEvent("keydown", {
       key: "Enter",
       keyCode: 229,
       isComposing: false,
     });
-    expect(await composer.inputValue()).toBe("中文");
-    expect(await gateway.getRequests("chat.send")).toHaveLength(0);
+    await expectUnsent("中文");
     await composer.dispatchEvent("keyup", { key: "Enter" });
     await composer.press("Shift+Enter");
     expect(await composer.inputValue()).toContain("\n");
@@ -78,8 +85,7 @@ suite.define(() => {
     await composer.fill("");
     await composer.pressSequentially("default enter send");
     await composer.press("Enter");
-    const defaultRequest = await gateway.waitForRequest("chat.send");
-    const defaultParams = requireRecord(defaultRequest.params);
+    const defaultParams = requireRecord((await gateway.waitForRequest("chat.send")).params);
     expect(defaultParams.message).toBe("default enter send");
     await gateway.emitChatFinal({
       runId: requireString(defaultParams.idempotencyKey, "default send idempotency key"),
@@ -121,7 +127,11 @@ suite.define(() => {
     const sessionKey = defaultSessionKey;
     const quote = "Review all 60 checklist items before sending the summary.";
     const draft = "Please explain the quoted checklist.";
-    const { page, gateway, pane } = await quotedChat("assistant", quote, "quoted-checklist");
+    const { page, gateway, pane, button } = await quotedChat(
+      "assistant",
+      quote,
+      "quoted-checklist",
+    );
     const composer = pane.getByRole("textbox", { name: "Chat composer" });
     const group = pane.locator(".chat-group.assistant").filter({ hasText: quote });
     await group.hover();
@@ -137,8 +147,8 @@ suite.define(() => {
     await expect.poll(() => composer.inputValue()).toBe(draft);
     await group.waitFor({ state: "visible" });
 
-    await expect.poll(() => preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
-    await pane.getByRole("button", { name: "Send message", exact: true }).click();
+    await expectText(preview.locator(".chat-reply-preview__text"), quote);
+    await button("Send message").click();
     const request = await gateway.waitForRequest("chat.send");
     await settledDraft(null, null);
     expect(requireRecord(request.params)).toMatchObject({
@@ -154,9 +164,7 @@ suite.define(() => {
       .locator(".chat-group.assistant")
       .getByText("The checklist is ready.", { exact: true })
       .waitFor();
-    await pane
-      .getByRole("button", { name: "Stop generating", exact: true })
-      .waitFor({ state: "detached" });
+    await button("Stop generating").waitFor({ state: "detached" });
     const unquotedDraft = "Keep the text without a quote.";
     await composer.fill(unquotedDraft);
     await settledDraft(unquotedDraft, null);
@@ -174,13 +182,15 @@ suite.define(() => {
 
   it("preserves IME reply before deliberate Escape abort", async () => {
     const quote = "Keep this persisted message as the reply source.";
-    const { page, gateway, pane } = await quotedChat("user", quote, "ime-reply-source");
-    const composer = pane.locator(".agent-chat__composer-combobox textarea");
+    const { page, gateway, pane, composer, button } = await quotedChat(
+      "user",
+      quote,
+      "ime-reply-source",
+    );
     const initialText = "Keep this run active while composing a reply.";
     await composer.fill(initialText);
-    await pane.getByRole("button", { name: "Send message", exact: true }).click();
-    const send = await gateway.waitForRequest("chat.send");
-    const sendParams = requireRecord(send.params);
+    await button("Send message").click();
+    const sendParams = requireRecord((await gateway.waitForRequest("chat.send")).params);
     const sessionKey = requireString(sendParams.sessionKey, "active session");
     const runId = requireString(sendParams.idempotencyKey, "active run");
     expect(sendParams).toMatchObject({
@@ -188,7 +198,7 @@ suite.define(() => {
       sessionKey: "agent:main:main",
       idempotencyKey: runId,
     });
-    const stop = pane.getByRole("button", { name: "Stop generating", exact: true });
+    const stop = button("Stop generating");
     await stop.waitFor({ state: "visible" });
     await expect.poll(() => composer.inputValue()).toBe("");
 
@@ -209,6 +219,8 @@ suite.define(() => {
     await menu.getByRole("menuitem", { name: "Reply to message", exact: true }).click();
     await menu.waitFor({ state: "detached" });
     const preview = pane.locator(".chat-reply-preview");
+    const expectQuote = async () =>
+      expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
     const expectDraft = async (text: string, aborts = 0) => {
       expect(await composer.inputValue()).toBe(text);
       expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
@@ -216,7 +228,7 @@ suite.define(() => {
       await expectRequestCountStable(gateway, "chat.abort", aborts);
     };
     await preview.waitFor({ state: "visible" });
-    expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
+    await expectQuote();
 
     expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
     const draft = "Preserve this unsent reply draft.";
@@ -224,7 +236,7 @@ suite.define(() => {
 
     // Synthetic IME events exercise the application flow, not native IME delivery.
     for (const mode of ["isComposing", "keyCode229"]) {
-      const fields = await composer.evaluate((element, compositionMode) => {
+      const prevented = await composer.evaluate((element, compositionMode) => {
         const event = new KeyboardEvent("keydown", {
           key: "Escape",
           bubbles: true,
@@ -233,24 +245,10 @@ suite.define(() => {
           keyCode: compositionMode === "keyCode229" ? 229 : 0,
         });
         element.dispatchEvent(event);
-        return {
-          key: event.key,
-          bubbles: event.bubbles,
-          cancelable: event.cancelable,
-          isComposing: event.isComposing,
-          keyCode: event.keyCode,
-          defaultPrevented: event.defaultPrevented,
-        };
+        return event.defaultPrevented;
       }, mode);
-      expect(fields).toEqual({
-        key: "Escape",
-        bubbles: true,
-        cancelable: true,
-        isComposing: mode === "isComposing",
-        keyCode: mode === "keyCode229" ? 229 : 0,
-        defaultPrevented: false,
-      });
-      expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
+      expect(prevented).toBe(false);
+      await expectQuote();
       await expectDraft(draft);
     }
 
@@ -258,7 +256,7 @@ suite.define(() => {
     await stop.waitFor({ state: "visible" });
     const primary = pane.locator(".agent-chat__composer-actions .chat-send-btn--send");
     expect(await primary.count()).toBe(0);
-    expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
+    await expectQuote();
     const composingDraft = "Preserve this composing reply draft.";
     await composer.evaluate((element, value) => {
       if (!(element instanceof HTMLTextAreaElement)) {
@@ -282,7 +280,7 @@ suite.define(() => {
     expect(await composer.inputValue()).toBe(composingDraft);
     expect(await composer.evaluate((element) => document.activeElement === element)).toBe(true);
     await page.keyboard.press("Escape");
-    expect(await preview.locator(".chat-reply-preview__text").textContent()).toBe(quote);
+    await expectQuote();
     await expectDraft(composingDraft);
 
     await composer.evaluate((element) => {
@@ -298,9 +296,7 @@ suite.define(() => {
     await interrupted.waitFor({ state: "visible" });
     expect(await interrupted.textContent()).toContain("Interrupted");
     expect(await pane.getByLabel("Run status: Interrupted").count()).toBe(0);
-    await expect
-      .poll(() => pane.locator(".agent-chat__run-status-announcement").textContent())
-      .toBe("Interrupted");
+    await expectText(pane.locator(".agent-chat__run-status-announcement"), "Interrupted");
     expect(requireRecord(abort.params)).toEqual({ sessionKey, runId });
     await stop.waitFor({ state: "detached" });
     await expectDraft(composingDraft, 1);
@@ -309,30 +305,21 @@ suite.define(() => {
   it.each(["queue", "steer", "collect", "followup"] as const)(
     "explains and submits the opposite of %s with modified Enter",
     async (followUpMode) => {
-      const page = await newChatPage(suite);
       const inheritsQueueMode = followUpMode === "collect" || followUpMode === "followup";
       const runtimeConfig = {
         messages: { queue: { mode: inheritsQueueMode ? followUpMode : "steer" } },
       };
-      const gateway = await installMockGateway(
-        page,
+      const { page, gateway, composer } = await openChat(
         inheritsQueueMode
           ? {
               methodResponses: {
-                "config.get": {
-                  config: runtimeConfig,
-                  hash: "composer-shortcut-config",
-                  issues: [],
-                  raw: JSON.stringify(runtimeConfig),
-                  runtimeConfig,
-                  valid: true,
-                },
+                "config.get": configResponse(runtimeConfig, "composer-shortcut-config"),
               },
             }
           : {},
+        "settings/appearance",
       );
 
-      await page.goto(`${suite.server.baseUrl}settings/appearance`);
       const followUp = page.locator("[data-settings-follow-up-mode]");
       await followUp.waitFor({ state: "visible" });
       if (!inheritsQueueMode) {
@@ -341,12 +328,9 @@ suite.define(() => {
       await page.locator("[data-settings-send-shortcut]").selectOption("enter");
       await page.goto(`${suite.server.baseUrl}chat`);
 
-      const composer = page.locator(".agent-chat__composer-combobox textarea");
       const initialText = "keep the shortcut run active";
-      await composer.fill(initialText);
-      await page.getByRole("button", { name: "Send message" }).click();
-      const initialSend = await gateway.waitForRequest("chat.send");
-      const runId = requireString(requireRecord(initialSend.params).idempotencyKey, "active run");
+      const initialSend = await sendChat(page, gateway, initialText);
+      const runId = requireString(initialSend.idempotencyKey, "active run");
       await page.getByRole("button", { name: "Stop generating" }).waitFor();
 
       const followUpText = "use the alternate follow-up action";

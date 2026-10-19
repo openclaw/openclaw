@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { createChannelReplyTransform } from "../../channels/message/reply-transform.js";
 import type { ChannelMessagingAdapter } from "../../channels/plugins/types.public.js";
 import type { ReplyPayload } from "../types.js";
-import { createBlockReplyCoalescer } from "./block-reply-coalescer.js";
+import { createBlockReplyPipeline } from "./block-reply-pipeline.js";
+import type { BlockStreamingCoalescing } from "./block-streaming.js";
 import { matchesMentionWithExplicit } from "./mentions.js";
 import { normalizeReplyPayload, normalizeReplyPayloadOutcome } from "./normalize-reply.js";
 import { parseReplyDirectives } from "./reply-directives.js";
@@ -316,14 +317,12 @@ describe("createTypingSignaler", () => {
 
 describe("block reply coalescer", () => {
   afterEach(() => vi.useRealTimers());
-  function createCoalescer(
-    config: Partial<Parameters<typeof createBlockReplyCoalescer>[0]["config"]> = {},
-  ) {
+  function createCoalescer(config: Partial<BlockStreamingCoalescing> = {}) {
     const flushes: ReplyPayload[] = [];
-    const coalescer = createBlockReplyCoalescer({
-      config: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " ", ...config },
-      shouldAbort: () => false,
-      onFlush: (payload) => {
+    const coalescer = createBlockReplyPipeline({
+      timeoutMs: 0,
+      coalescing: { minChars: 1, maxChars: 200, idleMs: 0, joiner: " ", ...config },
+      onBlockReply: (payload) => {
         flushes.push(payload);
       },
     });
@@ -402,6 +401,16 @@ describe("createReplyReferencePlanner", () => {
 });
 
 describe("createStreamingDirectiveAccumulator", () => {
+  it.each(["NO_REPLY", "no_reply", "No_Reply"])(
+    "strips a chunked leading %s control line",
+    (token) => {
+      const accumulator = createStreamingDirectiveAccumulator();
+      expect(accumulator.consume(token.slice(0, 4))).toBeNull();
+      expect(accumulator.consume(token.slice(4))).toBeNull();
+      expect(accumulator.consume("\nVisible reply")).toMatchObject({ text: "Visible reply" });
+    },
+  );
+
   it("handles reply tags split before the second bracket", () => {
     const accumulator = createStreamingDirectiveAccumulator();
     expect(accumulator.consume("[")).toBeNull();

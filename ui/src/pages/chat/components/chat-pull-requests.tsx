@@ -1,4 +1,4 @@
-import { createEffect, createMemo, createSignal, For, Show, useContext } from "solid-js";
+import { createMemo, createUniqueId, For, Show, useContext } from "solid-js";
 import type {
   ControlUiSessionBranch,
   ControlUiSessionPullRequest,
@@ -8,15 +8,17 @@ import type { ApplicationGateway } from "../../../app/gateway.ts";
 import { formatGitHubItemReference } from "../../../components/github-link-target.ts";
 import { SessionGitDiff } from "../../../components/session-git-diff.tsx";
 import { Icon } from "../../../components/solid/icon.tsx";
+import { Menu } from "../../../components/solid/menu.tsx";
 import { registerGitHubEnglish } from "../../../i18n/locales/en-github.ts";
 import "../../../components/tooltip.ts";
-import { PRESENTATION_CHANGED_EVENT, type PresentationValue } from "../../../lib/presentation.ts";
+import type { PresentationValue } from "../../../lib/presentation.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
+import { projectPresentation } from "../../../lib/reactive/presentation.ts";
 import {
   orderSessionPullRequests,
   sessionPullRequestStateIcons,
 } from "../../../lib/session-pull-request-presentation.ts";
-import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-controller.ts";
+import type { GitHubPublicationView } from "../../../lib/sessions/github-publication-owner.ts";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 import { GitHubPublicationAction, GitHubPublicationDetails } from "./chat-github-publication.tsx";
 import { ChatPullRequestChecks } from "./chat-pull-request-checks.tsx";
@@ -83,7 +85,7 @@ export function hasChatPullRequests(props: ChatPullRequestsProps): boolean {
 function ChecksRow(props: { label: string; count: number; modifier: string }) {
   return (
     <Show when={props.count !== 0}>
-      <div class={`chat-pr__checks-row chat-pr__checks-row--${props.modifier}`}>
+      <div class={["chat-pr__checks-row", `chat-pr__checks-row--${props.modifier}`]}>
         <span class="chat-pr__checks-row-dot" aria-hidden="true" />
         <span class="chat-pr__checks-row-label">{props.label}</span>
         <span class="chat-pr__checks-row-count">{props.count}</span>
@@ -106,30 +108,15 @@ function Checks(props: {
     const current = checks();
     return current ? t(CHECK_LABEL_KEYS[current.state]) : t("chat.pullRequests.ciMonitoring");
   };
-  const [revision, setRevision] = createSignal(0);
   const parentPresented = useContext(ContentPresentation);
-  createEffect(
-    () => props.presented,
-    (value) => {
-      if (typeof value !== "object") {
-        return undefined;
-      }
-      const changed = () => setRevision((current) => current + 1);
-      value.owner.addEventListener(PRESENTATION_CHANGED_EVENT, changed);
-      return () => value.owner.removeEventListener(PRESENTATION_CHANGED_EVENT, changed);
-    },
-  );
-  const presented = () => {
-    revision();
-    const value = props.presented ?? true;
-    return parentPresented() && (typeof value === "boolean" ? value : value.isPresented());
-  };
+  const presentation = createMemo(() => projectPresentation(props.presented ?? true));
+  const presented = () => parentPresented() && presentation().read();
   return (
     <ChatPullRequestChecks
       label={label()}
       showLabel={props.compact}
       checksState={checks()?.state ?? "none"}
-      presented={props.presented ?? true}
+      presented={presented()}
       dismissed={props.dismissed}
     >
       <div
@@ -344,6 +331,39 @@ export function ChatPullRequests(props: ChatPullRequestsProps) {
   );
 }
 
+function PullRequestActions(props: {
+  label: string;
+  dismissLabel: string;
+  disabled: boolean;
+  presented: PresentationValue;
+  dismissed?: boolean;
+  onDismiss: () => void;
+}) {
+  const id = createUniqueId();
+  const parentPresented = useContext(ContentPresentation);
+  const presentation = createMemo(() => projectPresentation(props.presented));
+  const presented = () => parentPresented() && !props.dismissed && presentation().read();
+  return (
+    <Menu
+      id={"chat-pr-actions-" + id}
+      class="chat-pr__actions"
+      label={props.label}
+      triggerClass="chat-pr__actions-trigger"
+      trigger={<Icon name="moreHorizontal" />}
+      placement="bottom-end"
+      disabled={props.disabled}
+      items={[{ id: "dismiss", label: props.dismissLabel, disabled: props.disabled }]}
+      open={presented() ? undefined : false}
+      onBeforeShow={(event) => {
+        if (!presented()) {
+          event.preventDefault();
+        }
+      }}
+      onSelect={() => props.onDismiss()}
+    />
+  );
+}
+
 function PullRequestRow(props: {
   pullRequest: ControlUiSessionPullRequest;
   owner: ChatPullRequestsProps;
@@ -366,11 +386,44 @@ function PullRequestRow(props: {
           .filter(Boolean)
           .join(" · ")
       : undefined;
+  const dismissLabel = () =>
+    t("chat.pullRequests.dismiss", { reference: formatGitHubItemReference(props.pullRequest) });
+  const disabled = () => props.published && props.owner.publication?.activity !== null;
+  const dismiss = () => {
+    if (props.published) {
+      props.owner.publication?.onNewAction?.();
+    }
+    props.owner.onDismiss(props.pullRequest);
+  };
   return (
     <article
-      class={props.owner.compact ? "chat-pr chat-pr--compact" : "chat-pr"}
+      class={["chat-pr", { "chat-pr--compact": props.owner.compact }]}
       data-state={props.pullRequest.state}
     >
+      <Show when={props.owner.compact}>
+        <div class="chat-pr__header">
+          <span class="chat-pr__icon" aria-hidden="true">
+            <Icon name={sessionPullRequestStateIcons[props.pullRequest.state]} />
+          </span>
+          <span
+            class="chat-pr__repo"
+            title={props.pullRequest.owner + "/" + props.pullRequest.repo}
+          >
+            {props.pullRequest.owner}/{props.pullRequest.repo}
+          </span>
+          <span class="chat-pr__number">#{props.pullRequest.number}</span>
+          <PullRequestActions
+            label={t("chat.pullRequests.actions", {
+              reference: formatGitHubItemReference(props.pullRequest),
+            })}
+            dismissLabel={dismissLabel()}
+            disabled={disabled()}
+            presented={props.owner.presented ?? true}
+            dismissed={props.owner.dismissed}
+            onDismiss={dismiss}
+          />
+        </div>
+      </Show>
       <a
         class="chat-pr__link"
         title={compactDescription()}
@@ -383,16 +436,18 @@ function PullRequestRow(props: {
           title: props.pullRequest.title,
         })}
       >
-        <span class="chat-pr__icon" aria-hidden="true">
-          <Icon name={sessionPullRequestStateIcons[props.pullRequest.state]} />
-        </span>
-        <span class="chat-pr__number">{formatGitHubItemReference(props.pullRequest)}</span>
+        <Show when={!props.owner.compact}>
+          <span class="chat-pr__icon" aria-hidden="true">
+            <Icon name={sessionPullRequestStateIcons[props.pullRequest.state]} />
+          </span>
+          <span class="chat-pr__number">{formatGitHubItemReference(props.pullRequest)}</span>
+        </Show>
         <span class="chat-pr__identity" title={compactDescription()}>
           <Show
             when={props.owner.compact}
             fallback={<span class="chat-pr__branch">{props.pullRequest.branch}</span>}
           >
-            <span class="chat-pr__repo">{props.pullRequest.title}</span>
+            <span class="chat-pr__title">{props.pullRequest.title}</span>
           </Show>
         </span>
       </a>
@@ -413,22 +468,17 @@ function PullRequestRow(props: {
         <Show when={props.pullRequest.state !== "merged" || props.owner.status === "unavailable"}>
           <StatusWarning status={props.owner.status} />
         </Show>
-        <button
-          class="chat-pr__dismiss"
-          type="button"
-          disabled={props.published && props.owner.publication?.activity !== null}
-          aria-label={t("chat.pullRequests.dismiss", {
-            reference: formatGitHubItemReference(props.pullRequest),
-          })}
-          onClick={() => {
-            if (props.published) {
-              props.owner.publication?.onNewAction?.();
-            }
-            props.owner.onDismiss(props.pullRequest);
-          }}
-        >
-          <Icon name="x" />
-        </button>
+        <Show when={!props.owner.compact}>
+          <button
+            class="chat-pr__dismiss"
+            type="button"
+            disabled={disabled()}
+            aria-label={dismissLabel()}
+            onClick={dismiss}
+          >
+            <Icon name="x" />
+          </button>
+        </Show>
       </span>
     </article>
   );
