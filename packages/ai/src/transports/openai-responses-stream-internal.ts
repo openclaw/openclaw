@@ -27,7 +27,10 @@ import { notifyLlmRequestActivity } from "../utils/llm-request-activity.js";
 import { withFirstStreamEventTimeout } from "../utils/stream-first-event-timeout.js";
 import { parseJsonObjectPreservingUnsafeIntegers } from "./json-unsafe-integers.js";
 import { createCompactionTracker } from "./openai-responses-compaction-replay.js";
-import { OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY } from "./openai-responses-contracts.js";
+import {
+  OPENAI_RESPONSES_REASONING_REPLAY_BLOCK_META_KEY,
+  isResponsesTerminalEventType,
+} from "./openai-responses-contracts.js";
 import { normalizeResponsesFailedEvent, ResponsesStreamFailure } from "./openai-responses-debug.js";
 import { encodeTextSignatureV1 } from "./openai-responses-replay-internal.js";
 import { normalizeOpenAIResponsesReasoningReplayItem } from "./openai-responses-replay.js";
@@ -326,13 +329,7 @@ export async function processResponsesStream<TApi extends Api>(
       }
       // A rejected call closes output admission; only drain terminal facts.
       // Later async tool completions must not authorize side effects.
-      if (
-        rejectedToolCall &&
-        event.type !== "response.completed" &&
-        event.type !== "response.incomplete" &&
-        event.type !== "response.failed" &&
-        event.type !== "error"
-      ) {
+      if (rejectedToolCall && !isResponsesTerminalEventType(event.type) && event.type !== "error") {
         continue;
       }
       if (event.type === "response.created") {
