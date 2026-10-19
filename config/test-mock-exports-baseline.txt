@@ -2606,7 +2606,6 @@
 ["src/agents/subagents/requester-cron-authority.test.ts","../../config/config.js","e4084293a4d590e53af4c73d8132a2df411c72a4e8113581fe5b24e370965689",1]
 ["src/agents/subagents/requester-cron-authority.test.ts","./registry/subagent-registry.js","5795501638ec8fa07f45afc0f7c8d1ef73bb627b88b94300a7c2b5202d89ca60",1]
 ["src/agents/subagents/requester-final-attachment.test.ts","../../infra/agent-events.js","9bc92eddb213f4b47832c6d3e70d0284912c2d4d51d6cc850eb8297ea05ceb1d",1]
-["src/agents/subagents/spawn/acp-spawn-parent-stream.test.ts","./acp-parent-stream-store.sqlite.js","7d6a92773ee97b246b3b60d4b77b1783a9eea549b36308c32b158b34b7903443",1]
 ["src/agents/subagents/spawn/acp-spawn.test.ts","../../../acp/control-plane/spawn.js","779a41a6724dda3cdd4ac03ff62669aee187560d4a344cb9748adc59610ae08a",1]
 ["src/agents/subagents/spawn/acp-spawn.test.ts","../../../channels/plugins/index.js","a337cb121758a76419e047fd9f886678cc198ffa554e104eedc51e5e81731e8e",1]
 ["src/agents/subagents/spawn/acp-spawn.test.ts","../../../channels/plugins/registry.js","a8f453c13c37ccbb29dcb4d40016e6b44a59853d36025c174d022c26463158e1",1]
