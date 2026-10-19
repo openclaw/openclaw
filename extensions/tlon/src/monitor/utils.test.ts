@@ -38,6 +38,49 @@ describe("extractMessageText code blocks", () => {
 // compare timezone-aware output deterministically.
 const SAMPLE_TS = Date.UTC(2026, 6, 1, 12, 0, 0);
 
+describe("extractMessageText nested inline content", () => {
+  it("renders legitimate nested inline styles", () => {
+    const text = extractMessageText([
+      { inline: [{ bold: [{ italics: ["deep "] }, { strike: ["text"] }] }] },
+    ]);
+    expect(text).toBe("***deep *~~text~~**");
+  });
+
+  it("truncates instead of crashing on pathologically deep nesting", () => {
+    let node: unknown = "x";
+    for (let i = 0; i < 2000; i += 1) {
+      node = { bold: [node] };
+    }
+    const text = extractMessageText([{ inline: [node] }]);
+    // Depth 2000 is far past MAX_INLINE_DEPTH: the extractor must return
+    // (possibly empty) text rather than throwing RangeError.
+    const surrounding = extractMessageText([{ inline: [node] }, { inline: ["visible"] }]);
+    expect(Array.isArray([text])).toBe(true);
+    expect(surrounding).toContain("visible");
+  });
+
+  it("keeps verses around the truncation boundary renderable", () => {
+    let poisoned: unknown = "x";
+    for (let i = 0; i < 500; i += 1) {
+      poisoned = { italics: [poisoned] };
+    }
+    const text = extractMessageText([
+      { inline: [poisoned] },
+      { inline: [{ bold: ["after the poison"] }] },
+    ]);
+    expect(text).toContain("after the poison");
+  });
+
+  it("caps mixed bold/italics/strike nesting without losing shallower content", () => {
+    let node: unknown = { strike: ["inner"] };
+    for (let i = 0; i < 150; i += 1) {
+      node = i % 2 === 0 ? { bold: [node] } : { italics: [node] };
+    }
+    const text = extractMessageText([{ inline: [node] }, { inline: ["tail"] }]);
+    expect(text).toContain("tail");
+  });
+});
+
 describe("formatSummarizationHistoryText", () => {
   it("shifts the local time relative to the UTC baseline when a non-UTC zone is configured", () => {
     const history = [{ author: "~a", content: "x", timestamp: SAMPLE_TS }];
