@@ -42,6 +42,7 @@ describe("worker bundle archive", () => {
   }
   const pack = (files: string[]) =>
     tar.create({ cwd: source, file: archive, gzip: true, noDirRecurse: true }, files);
+  const archiveManifest = () => readWorkerBundleArchiveManifest(archive, limits);
   const directoryManifest = (
     options: Partial<Parameters<typeof readWorkerBundleDirectoryManifest>[0]> = {},
   ) => readWorkerBundleDirectoryManifest({ root: source, limits, ...options });
@@ -73,9 +74,7 @@ describe("worker bundle archive", () => {
     await fs.symlink("target", path.join(source, "openclaw.mjs"));
     await pack(["openclaw.mjs"]);
 
-    await expect(readWorkerBundleArchiveManifest(archive, limits)).rejects.toThrow(
-      "Invalid worker bundle tar entry",
-    );
+    await expect(archiveManifest()).rejects.toThrow("Invalid worker bundle tar entry");
   });
 
   it.each([
@@ -143,7 +142,7 @@ describe("worker bundle archive", () => {
     await artifact("tail", randomBytes(2 * 1024 * 1024));
     await pack(["zeros", "tail"]);
 
-    const manifest = await readWorkerBundleArchiveManifest(archive, limits);
+    const manifest = await archiveManifest();
     expect(manifest.map(({ path: entryPath, size }) => ({ path: entryPath, size }))).toEqual([
       { path: "tail", size: 2 * 1024 * 1024 },
       { path: "zeros", size: 5 * 1024 * 1024 },
@@ -176,10 +175,7 @@ describe("worker bundle archive", () => {
       });
 
       const manifest = directoryManifest({
-        limits: {
-          maxEntries: 1,
-          maxExpandedBytes: kind === "oversized" ? 3 : 1024,
-        },
+        limits: { maxEntries: 1, maxExpandedBytes: kind === "oversized" ? 3 : 1024 },
       });
       if (kind === "replacement") {
         await expect(manifest).resolves.toEqual([entry("worker.mjs", contents)]);
@@ -223,9 +219,7 @@ describe("worker bundle archive", () => {
       await artifact(name, `export const name = ${JSON.stringify(name)};\n`, 0o700);
     }
     await pack(artifacts);
-    const bundleHash = hashWorkerBundleManifest(
-      await readWorkerBundleArchiveManifest(archive, limits),
-    );
+    const bundleHash = hashWorkerBundleManifest(await archiveManifest());
     vi.spyOn(process, "platform", "get").mockReturnValue("win32");
 
     await expect(extract(bundleHash)).resolves.toBeUndefined();

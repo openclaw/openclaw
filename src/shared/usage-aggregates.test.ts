@@ -7,12 +7,8 @@ import {
   usageModelIdentity,
 } from "./usage-aggregates.js";
 
-function usage(overrides: Partial<SessionCostSummary> = {}): SessionCostSummary {
-  return {
-    ...createEmptyCostUsageTotals(),
-    ...overrides,
-  };
-}
+const usage = (...parts: Partial<SessionCostSummary>[]): SessionCostSummary =>
+  Object.assign(createEmptyCostUsageTotals(), ...parts);
 
 const zeroMessages = { total: 0, user: 0, assistant: 0, toolCalls: 0, toolResults: 0, errors: 0 };
 function tools(read: number, write = 0) {
@@ -76,35 +72,28 @@ it("builds collision-free model identities with legacy unknown grouping", () => 
 
 it("accounts for every supplied row without conflating matching session IDs or mutating usage", () => {
   const accumulator = createUsageAggregateAccumulator();
-  const first = usage({
-    sessionId: "same-id",
-    firstActivity: 0,
-    durationMs: 500,
-    input: 10,
-    cacheRead: 3,
-    totalTokens: 13,
-    totalCost: 2,
-    inputCost: 1,
-    cacheReadCost: 1,
-    missingCostEntries: 1,
-    missingCostByModel: { "fixture/unpriced": 1 },
-    messageCounts: { total: 3, user: 1, assistant: 2, toolCalls: 3, toolResults: 2, errors: 1 },
-    toolUsage: tools(2, 1),
-  });
-  const second = usage({
-    sessionId: "same-id",
-    durationMs: 900,
-    output: 5,
-    cacheWrite: 2,
-    totalTokens: 7,
-    totalCost: 4,
-    outputCost: 3,
-    cacheWriteCost: 1,
-    missingCostEntries: 2,
-    missingCostByModel: { "fixture/unpriced": 2 },
-    messageCounts: { total: 2, user: 1, assistant: 1, toolCalls: 2, toolResults: 1, errors: 0 },
-    toolUsage: tools(2),
-  });
+  const first = usage(
+    { sessionId: "same-id", firstActivity: 0, durationMs: 500 },
+    { input: 10, inputCost: 1 },
+    { cacheRead: 3, cacheReadCost: 1 },
+    { totalTokens: 13, totalCost: 2 },
+    { missingCostEntries: 1, missingCostByModel: { "fixture/unpriced": 1 } },
+    {
+      messageCounts: { total: 3, user: 1, assistant: 2, toolCalls: 3, toolResults: 2, errors: 1 },
+      toolUsage: tools(2, 1),
+    },
+  );
+  const second = usage(
+    { sessionId: "same-id", durationMs: 900 },
+    { output: 5, outputCost: 3 },
+    { cacheWrite: 2, cacheWriteCost: 1 },
+    { totalTokens: 7, totalCost: 4 },
+    { missingCostEntries: 2, missingCostByModel: { "fixture/unpriced": 2 } },
+    {
+      messageCounts: { total: 2, user: 1, assistant: 1, toolCalls: 2, toolResults: 1, errors: 0 },
+      toolUsage: tools(2),
+    },
+  );
   const original = structuredClone([first, second]);
   accumulator.add({ usage: first, agentId: "first", channel: "discord", creatorKey: "person" });
   accumulator.add({ usage: second, agentId: "second", channel: "telegram", creatorKey: "person" });
@@ -112,20 +101,16 @@ it("accounts for every supplied row without conflating matching session IDs or m
   accumulator.add({ usage: null, agentId: "cold" });
 
   const aggregates = accumulator.finish();
-  expect(accumulator.totals).toEqual({
-    input: 10,
-    output: 5,
-    cacheRead: 3,
-    cacheWrite: 2,
-    totalTokens: 50,
-    totalCost: 6,
-    inputCost: 1,
-    outputCost: 3,
-    cacheReadCost: 1,
-    cacheWriteCost: 1,
-    missingCostEntries: 3,
-    missingCostByModel: { "fixture/unpriced": 3 },
-  });
+  expect(accumulator.totals).toEqual(
+    usage(
+      { input: 10, inputCost: 1 },
+      { output: 5, outputCost: 3 },
+      { cacheRead: 3, cacheReadCost: 1 },
+      { cacheWrite: 2, cacheWriteCost: 1 },
+      { totalTokens: 50, totalCost: 6 },
+      { missingCostEntries: 3, missingCostByModel: { "fixture/unpriced": 3 } },
+    ),
+  );
   expect(aggregates).toMatchObject({
     sessionCount: 2,
     longestSessionDurationMs: 900,
@@ -224,14 +209,11 @@ it("merges overlapping daily buckets and uses weighted latency summaries", () =>
     { date: earlier, ...usage({ totalTokens: 5, totalCost: 6 }) },
     {
       date: later,
-      ...usage({
-        input: 3,
-        cacheRead: 7,
-        totalTokens: 10,
-        totalCost: 12,
-        inputCost: 4,
-        cacheReadCost: 8,
-      }),
+      ...usage(
+        { input: 3, inputCost: 4 },
+        { cacheRead: 7, cacheReadCost: 8 },
+        { totalTokens: 10, totalCost: 12 },
+      ),
     },
   ]);
   expect(aggregates.modelDaily?.map(({ date, model }) => [date, model])).toEqual([
@@ -277,13 +259,10 @@ it("retains creator daily amounts and counts each multi-day session once", () =>
     totalTokens: 30,
     totalCost: 3,
     activityDates: [dates[1], dates[0], dates[1]],
-    dailyBreakdown: dates.slice(0, 2).map((date, index) =>
-      day(date, {
-        input: (index + 1) * 10,
-        totalTokens: (index + 1) * 10,
-        totalCost: index + 1,
-      }),
-    ),
+    dailyBreakdown: dates.slice(0, 2).map((date, index) => {
+      const input = (index + 1) * 10;
+      return day(date, { input, totalTokens: input, totalCost: input / 10 });
+    }),
     dailyMessageCounts: [{ ...zeroMessages, date: dates[2], total: 1, user: 1 }],
   });
   const original = structuredClone(summary);

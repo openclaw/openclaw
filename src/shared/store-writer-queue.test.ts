@@ -24,6 +24,11 @@ function makeGate() {
   releases.push(() => deferred.resolve());
   return deferred;
 }
+const siblingModule = (scope: string) =>
+  importFreshModule<typeof import("./store-writer-queue.js")>(
+    import.meta.url,
+    `./store-writer-queue.js?scope=${scope}`,
+  );
 afterEach(async () => {
   for (const release of releases.splice(0)) {
     release();
@@ -76,46 +81,32 @@ beforeEach(async () => {
   await nextTurn();
 });
 
-it("guards live writer ancestors without retaining completed admission", async () => {
-  const outer = createQueue("outer");
-  const inner = createQueue("inner");
-  let assertReleased = () => {};
+it.each(["outer", "inner"] as const)("guards only live %s writer ownership", async (target) => {
+  const outer = createQueue(),
+    inner = createQueue();
+  const check = () =>
+    assertStoreWriterReleased((target === "outer" ? outer : inner).queues, "close readers");
+  let retained = check;
+  const expectHeld = (held: boolean) =>
+    held
+      ? expect(retained).toThrow("while holding a store writer")
+      : expect(retained).not.toThrow();
   await outer.write("outer", async () => {
+    expectHeld(target === "outer");
     await inner.write("inner", async () => {
-      assertReleased = AsyncLocalStorage.bind(() =>
-        assertStoreWriterReleased(outer.queues, "close readers"),
-      );
-      expect(assertReleased).toThrow("while holding a store writer");
+      retained = AsyncLocalStorage.bind(check);
+      expectHeld(true);
     });
-    // The captured inner writer has settled, but its parent still holds admission.
-    expect(assertReleased).toThrow("while holding a store writer");
+    expectHeld(target === "outer");
   });
-  expect(assertReleased).not.toThrow();
-});
-
-it("allows cleanup under a different queue owner", async () => {
-  const database = createQueue();
-  const lifecycle = createQueue();
-  await lifecycle.write("lifecycle", async () => {
-    expect(() => assertStoreWriterReleased(database.queues, "close readers")).not.toThrow();
-    await database.write("database", async () => {
-      expect(() => assertStoreWriterReleased(database.queues, "close readers")).toThrow(
-        "while holding a store writer",
-      );
-    });
-    expect(() => assertStoreWriterReleased(database.queues, "close readers")).not.toThrow();
-  });
+  expectHeld(false);
 });
 
 it("marks synchronous idle and reentrant execution across runtime chunks", async () => {
-  const sibling = await importFreshModule<typeof import("./store-writer-queue.js")>(
-    import.meta.url,
-    "./store-writer-queue.js?scope=store-writer-timing",
-  );
-  const { queues, write } = createQueue();
+  const sibling = await siblingModule("store-writer-timing");
+  const { queues, write, order } = createQueue();
   const outerTiming: StoreWriterTiming = {};
   const innerTiming: StoreWriterTiming = {};
-  const order: string[] = [];
   let clock = 0;
   vi.spyOn(performance, "now").mockImplementation(() => clock);
   const siblingWrite = createQueue("store", queues, sibling.runQueuedStoreWrite).write;
@@ -189,10 +180,7 @@ it.each([
 });
 
 it("keeps I/O progressing across store backlogs in separate runtime chunks", async () => {
-  const sibling = await importFreshModule<typeof import("./store-writer-queue.js")>(
-    import.meta.url,
-    "./store-writer-queue.js?scope=shared-turn-budget",
-  );
+  const sibling = await siblingModule("shared-turn-budget");
   const queues = new Map<string, StoreWriterQueue>();
   const release = makeGate();
   const orders = Array.from({ length: 8 }, () => [] as number[]);
@@ -282,18 +270,17 @@ it.each([false, true])(
   "cancels waiting writers but retains caller context, active settlement and FIFO (keyed: %s)",
   async (keyed) => {
     const contexts = new AsyncLocalStorage<string>();
-    const { queues, write } = createQueue();
+    const { queues, write, order } = createQueue();
     const release = makeGate();
     const activeController = new AbortController();
     const waitingController = new AbortController();
     const denied = new Error("writer revoked before admission");
-    const order: string[] = [];
     const keys = keyed ? ["a"] : undefined;
     const enqueue = (
       owner: string,
-      wait = Promise.resolve(),
       signal?: AbortSignal,
       writerKeys = keys,
+      wait = Promise.resolve(),
     ) =>
       contexts.run(owner, () =>
         write(
@@ -308,31 +295,21 @@ it.each([false, true])(
             expect(context).toBe(owner);
             if (owner === "active") {
               order.push("settled");
-              return "committed";
             }
-            return context;
+            return owner === "active" ? "committed" : context;
           },
           { keys: writerKeys, signal },
         ),
       );
-    const active = enqueue("active", release.promise, activeController.signal);
-    const canceled = enqueue(
-      "canceled",
-      Promise.resolve(),
-      waitingController.signal,
-      keyed ? ["a", "b"] : undefined,
-    );
+    const active = enqueue("active", activeController.signal, keys, release.promise);
+    const canceled = enqueue("canceled", waitingController.signal, keyed ? ["a", "b"] : undefined);
     const outcome = canceled.catch((error: unknown) => error);
-    const independent = keyed
-      ? enqueue("independent", Promise.resolve(), undefined, ["b"])
-      : undefined;
+    const independent = keyed ? enqueue("independent", undefined, ["b"]) : undefined;
     const followers = ["first", "second"].map((name) => enqueue(name));
     activeController.abort(denied);
     waitingController.abort(denied);
     expect(await Promise.race([outcome, nextTurn().then(() => "still queued")])).toBe(denied);
-    await expect(enqueue("forbidden", Promise.resolve(), waitingController.signal)).rejects.toBe(
-      denied,
-    );
+    await expect(enqueue("forbidden", waitingController.signal)).rejects.toBe(denied);
     if (independent) {
       await expect(independent).resolves.toBe("independent");
     }
@@ -370,9 +347,8 @@ it("reenters only keys covered by the active writer", async () => {
 });
 
 it("queues ordinary nested writes behind the active writer", async () => {
-  const { queues, write } = createQueue();
+  const { queues, write, order } = createQueue();
   const releaseOuter = makeGate();
-  const order: string[] = [];
   let nested: Promise<unknown> | undefined;
   const outer = write("outer", async () => {
     order.push("outer:start");
@@ -387,7 +363,6 @@ it("queues ordinary nested writes behind the active writer", async () => {
   await nextTurn();
   expect(order).toEqual(["outer:start"]);
   releaseOuter.resolve();
-  await outer;
   await expect(Promise.all([outer, nested])).resolves.toEqual(["outer-result", "inner-result"]);
   expect(order).toEqual(["outer:start", "outer:end", "inner"]);
   expect(queues.size).toBe(0);
@@ -408,22 +383,17 @@ it.each(["clear", "drain"] as const)(
         ? Promise.resolve(clearStoreWriterQueuesForTest(queues, "test cleanup"))
         : drainStoreWriterQueuesForTest(queues, "test cleanup"),
     );
-    let laterStarted = false;
-    const later =
-      mode === "clear"
-        ? write("later", async () => {
-            laterStarted = true;
-          })
-        : undefined;
+    const laterWriter = vi.fn(async () => {});
+    const later = mode === "clear" ? write("later", laterWriter) : undefined;
     // A fresh lane would admit this writer while the active one still owns the store.
-    expect(laterStarted).toBe(false);
+    expect(laterWriter).not.toHaveBeenCalled();
     expect(activeDrain).toBeInstanceOf(Promise);
     await rejected;
     expect(pendingWriter).not.toHaveBeenCalled();
     gate.resolve();
     await Promise.all([active, activeDrain, cleanup, later]);
     expect(pendingWriter).not.toHaveBeenCalled();
-    expect(laterStarted).toBe(mode === "clear");
+    expect(laterWriter).toHaveBeenCalledTimes(Number(mode === "clear"));
     expect(queues.size).toBe(0);
   },
 );
