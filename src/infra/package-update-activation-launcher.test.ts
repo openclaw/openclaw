@@ -19,7 +19,7 @@ it.each([
     matches: false,
   },
 ] as const)("checks recorded launcher integrity for $name", (scenario) => {
-  const expectedType = "expectedType" in scenario ? scenario.expectedType : "symlink";
+  const expectedType = scenario.expectedType ?? "symlink";
   const contents = "../lib/node_modules/openclaw/openclaw.mjs";
   const recorded = JSON.stringify([
     expectedType,
@@ -35,7 +35,7 @@ it.each([
         mode: String(scenario.mode),
         uid: "501",
         gid: "80",
-        contents: "contents" in scenario ? scenario.contents : contents,
+        contents: scenario.contents ?? contents,
       },
       recorded,
     ),
