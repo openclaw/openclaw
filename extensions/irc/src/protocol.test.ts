@@ -6,7 +6,6 @@ describe("irc protocol", () => {
   it("parses PRIVMSG lines with prefix and trailing", () => {
     const parsed = parseIrcLine(":alice!u@host PRIVMSG #room :hello world");
     expect(parsed).toEqual({
-      raw: ":alice!u@host PRIVMSG #room :hello world",
       prefix: "alice!u@host",
       command: "PRIVMSG",
       params: ["#room"],

@@ -72,9 +72,20 @@ async function withExecPeer(
           requestJson: string;
         };
         expect(envelope.type).toBe("exec");
-        expect(envelope.id).toMatch(/^[0-9a-f-]{36}$/);
+        expect(envelope.id).toMatch(
+          /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i,
+        );
         expect(envelope.nonce).toMatch(/^[0-9a-f]{32}$/);
+        expect(typeof envelope.ts).toBe("number");
         expect(Math.abs(Date.now() - envelope.ts)).toBeLessThan(10_000);
+        expect(Object.keys(envelope).toSorted()).toEqual([
+          "hmac",
+          "id",
+          "nonce",
+          "requestJson",
+          "ts",
+          "type",
+        ]);
         const hmac = crypto
           .createHmac("sha256", token)
           .update(`${envelope.nonce}:${envelope.ts}:${envelope.requestJson}`)

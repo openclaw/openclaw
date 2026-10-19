@@ -10,7 +10,6 @@ import {
   ContextNewSessionAction,
   renderNewSessionLink as NewSessionLink,
 } from "../components/solid/new-session-link.tsx";
-import type { ThemeModeChangeDetail } from "../components/theme-mode-toggle.ts";
 import {
   formatKeyboardShortcutCombo,
   KEYBOARD_SHORTCUT_COMBOS,
@@ -123,9 +122,6 @@ export function ApplicationShell(props: { host: ShellViewHost }): SolidJSX.Eleme
           "--shell-nav-expanded-width": `${view().expandedNavWidth}px`,
           "--shell-nav-rail-width": `${view().railWidth}px`,
         }}
-        onTheme-change={(event: CustomEvent<ThemeModeChangeDetail>) =>
-          props.host.handleThemeChange(event)
-        }
       >
         <a class="shell-skip-link" href="#control-ui-main" inert={view().navDrawerOpen}>
           {t("common.skipToMainContent")}

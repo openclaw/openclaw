@@ -205,7 +205,7 @@ describe("metadata notifications after publication", () => {
       entries: structuredClone(sessionManager.getEntries()),
       model: session.model,
       thinking: session.thinkingLevel,
-      defaultModel: settingsManager.getDefaultModel(),
+      defaultModel: settingsManager.getGlobalSettings().defaultModel,
       defaultThinking: settingsManager.getDefaultThinkingLevel(),
     };
     const entered = createDeferredCore();
@@ -234,7 +234,7 @@ describe("metadata notifications after publication", () => {
     expect.soft(sessionManager.getEntries()).toEqual(before.entries);
     expect.soft(session.model).toBe(before.model);
     expect.soft(session.thinkingLevel).toBe(before.thinking);
-    expect.soft(settingsManager.getDefaultModel()).toBe(before.defaultModel);
+    expect.soft(settingsManager.getGlobalSettings().defaultModel).toBe(before.defaultModel);
     expect.soft(settingsManager.getDefaultThinkingLevel()).toBe(before.defaultThinking);
     expect(failure).toBeInstanceOf(Error);
     expect(failure).toMatchObject({

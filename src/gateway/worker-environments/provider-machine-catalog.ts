@@ -25,7 +25,6 @@ export function createWorkerMachineCatalog(
     providerId: string;
     settings: WorkerProfile;
     requests: Partial<Record<keyof CatalogValues, Promise<CatalogValues[keyof CatalogValues]>>>;
-    warmup?: Promise<void>;
   } & Partial<CatalogValues>;
   const machineCatalogs = new Map<string, MachineCatalog>();
   const machineShapeNotifications = { onChanged: (_profileId: string) => {} };
@@ -95,24 +94,17 @@ export function createWorkerMachineCatalog(
 
   const loadMachineShape = async (profileId: string): Promise<void> => {
     const catalog = machineCatalogFor(profileId);
-    if (!catalog || catalog.warmup) {
-      return catalog?.warmup;
+    if (!catalog) {
+      return;
     }
-    const warmup = Promise.allSettled([
+    const results = await Promise.allSettled([
       catalog.machines === undefined ? listMachineOptions(profileId) : undefined,
       catalog.systems === undefined ? listOperatingSystems(profileId) : undefined,
-    ])
-      .then((results) => {
-        const failure = results.find((result) => result.status === "rejected");
-        if (failure) {
-          throw failure.reason;
-        }
-      })
-      .finally(() => {
-        catalog.warmup = undefined;
-      });
-    catalog.warmup = warmup;
-    return warmup;
+    ]);
+    const failure = results.find((result) => result.status === "rejected");
+    if (failure) {
+      throw failure.reason;
+    }
   };
 
   const readMachineShape = (

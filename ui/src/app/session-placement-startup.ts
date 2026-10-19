@@ -71,7 +71,7 @@ type PlacementStartupRecoveryAccess = Pick<
   "readSessionPlacementRecovery" | "pauseSessionPlacementRecovery"
 >;
 
-export type ApplicationPlacementStartupRuntime = {
+export type ApplicationPlacementStartup = {
   get: (sessionKey: string) => ApplicationPlacementStartupStatus | null;
   hasPendingTurn: (sessionKey: string) => boolean;
   resumeRecovery: () => void;
@@ -82,7 +82,7 @@ export type ApplicationPlacementStartupRuntime = {
   dispose: () => void;
 };
 
-export type ApplicationPlacementStartup = ApplicationPlacementStartupRuntime;
+export type ApplicationPlacementStartupRuntime = Omit<ApplicationPlacementStartup, "subscribe">;
 
 // Submitted display survives transport loss; a changed connection owner revokes it.
 export function capturePlacementStartupConnection(
@@ -277,9 +277,7 @@ export function createApplicationPlacementStartup(
         if (disposed) {
           return;
         }
-        runtime = createApplicationPlacementStartupRuntime(dependencies);
-        // Relay every status receipt; the lazy owner's disposal releases its listeners.
-        runtime.subscribe(publish);
+        runtime = createApplicationPlacementStartupRuntime(dependencies, publish);
         resumeRecovery();
       },
       (error: unknown) => {

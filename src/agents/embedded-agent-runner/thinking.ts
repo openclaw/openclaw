@@ -5,7 +5,8 @@ import { mapAssistantMessageStream } from "../../llm/utils/stream-wrapper.js";
 import { runPluginStreamConsumer } from "../../plugins/plugin-instance-scope.js";
 import { captureAsyncWorkTracker } from "../../shared/async-work-scope.js";
 import type { AgentMessage, StreamFn } from "../runtime/index.js";
-import { isAssistantMessageWithContent, isThinkingBlock } from "../thinking-signatures.js";
+import { isThinkingLikeBlock } from "../thinking-block.js";
+import { isAssistantMessageWithContent } from "../thinking-signatures.js";
 import { log } from "./logger.js";
 import { wrapStreamObjectSettlement } from "./run/stream-wrapper.js";
 
@@ -119,7 +120,7 @@ export function stripInvalidThinkingSignatures(
       ? message
       : filterAssistantContent(
           message,
-          (block) => !isThinkingBlock(block) || hasReplayableThinkingSignature(block),
+          (block) => !isThinkingLikeBlock(block) || hasReplayableThinkingSignature(block),
         ),
   );
 }
@@ -166,7 +167,7 @@ export function stripThinkingBlocksFromMessage(message: AgentMessage): AgentMess
   if (!isAssistantMessageWithContent(message)) {
     return message;
   }
-  return filterAssistantContent(message, (block) => !isThinkingBlock(block));
+  return filterAssistantContent(message, (block) => !isThinkingLikeBlock(block));
 }
 
 function stripAllThinkingBlocks(messages: AgentMessage[]): AgentMessage[] {
@@ -196,7 +197,7 @@ export function assessLastAssistantMessage(message: AgentMessage): RecoveryAsses
     if (!block || typeof block !== "object") {
       return "incomplete-thinking";
     }
-    if (isThinkingBlock(block)) {
+    if (isThinkingLikeBlock(block)) {
       if (!isSignedThinkingBlock(block)) {
         return "incomplete-thinking";
       }

@@ -374,7 +374,6 @@ extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	3
 extensions/line/src/auto-reply-delivery.ts	1
 extensions/line/src/flex-templates/basic-cards.ts	2
-extensions/line/src/flex-templates/media-control-cards.ts	1
 extensions/line/src/gateway.ts	1
 extensions/line/src/monitor.ts	1
 extensions/line/src/outbound.ts	3
@@ -1296,7 +1295,6 @@ src/agents/session-tool-result-guard.ts	3
 src/agents/session-transcript-repair.ts	2
 src/agents/sessions/agent-session-base.ts	3
 src/agents/sessions/agent-session-models.ts	1
-src/agents/sessions/agent-session-tree.ts	1
 src/agents/sessions/auth-storage.ts	1
 src/agents/sessions/extensions/loader.ts	2
 src/agents/sessions/extensions/runner.ts	14
@@ -1328,7 +1326,6 @@ src/agents/subagents/swarm/swarm-scheduler.ts	1
 src/agents/system-prompt-report.ts	1
 src/agents/system-prompt.ts	1
 src/agents/thinking-block.ts	1
-src/agents/thinking-signatures.ts	2
 src/agents/tool-call-id.ts	8
 src/agents/tool-catalog.ts	1
 src/agents/tool-display-common.ts	1
@@ -2430,8 +2427,7 @@ src/version.ts	4
 src/video-generation/capability-overlays.ts	1
 src/video-generation/runtime.ts	1
 src/web-fetch/runtime.ts	2
-src/web-search/runtime-execution.ts	1
-src/web-search/runtime.ts	2
+src/web-search/runtime.ts	1
 src/web/provider-runtime-shared.ts	1
 src/wizard/clack-navigation-prompts.ts	11
 src/wizard/clack-prompter.ts	2

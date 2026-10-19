@@ -4,7 +4,6 @@ import type { EngineConnection } from "../../infra/sql-connection.js";
 import { tableExists } from "../../state/openclaw-state-db-schema-helpers.js";
 import type { DB } from "../../state/openclaw-state-db.generated.js";
 import { getOpenClawStateFeatureSchemaSql } from "../../state/openclaw-state-feature-schema.js";
-import { localWorkspacePublication } from "./local-workspace-publication.js";
 
 const table = "local_workspace_projections";
 export type LocalWorkspaceProjection = Selectable<DB[typeof table]>;
@@ -74,17 +73,13 @@ export function mutateLocalWorkspaceProjection(
       // First-use additive admission preserves the existing numeric schema version.
       db.exec(getOpenClawStateFeatureSchemaSql(table)); // sqlite-allow-raw -- Canonical first-use schema admission.
     }
-    const created = executeSqliteQueryTakeFirstSync(
+    return executeSqliteQueryTakeFirstSync(
       db,
       query(db)
         .insertInto(table)
         .values({ ...mutation.row, revision: 0 })
         .returningAll(),
     );
-    if (created) {
-      localWorkspacePublication.stagePostimages(db, [created]);
-    }
-    return created;
   }
   if (!current || current.revision !== mutation.revision) {
     throw new Error("Local workspace binding changed");
@@ -97,10 +92,9 @@ export function mutateLocalWorkspaceProjection(
       db,
       query(db).deleteFrom(table).where("worktree_id", "=", id).returning("worktree_id"),
     );
-    localWorkspacePublication.stageDeletions(db, [id]);
     return undefined;
   }
-  const updated = executeSqliteQueryTakeFirstSync(
+  return executeSqliteQueryTakeFirstSync(
     db,
     query(db)
       .updateTable(table)
@@ -108,10 +102,6 @@ export function mutateLocalWorkspaceProjection(
       .where("worktree_id", "=", id)
       .returningAll(),
   );
-  if (updated) {
-    localWorkspacePublication.stagePostimages(db, [updated]);
-  }
-  return updated;
 }
 
 export const localWorkspaceReadOperations = {

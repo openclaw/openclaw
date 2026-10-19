@@ -241,7 +241,6 @@ export function createGatewayBroadcaster(params: {
     explicitPluginScope?: GatewayPluginEventScope,
     retained?: {
       client: GatewayWsClient;
-      socket: GatewayWsClient["socket"];
       frames: PreparedFrames;
       publication?: LiveTextPublication;
     },
@@ -350,7 +349,6 @@ export function createGatewayBroadcaster(params: {
       // Closing nodes remain discoverable until their owner drains admitted lifecycle work.
       if (
         !params.clients.has(c) ||
-        (retained && c.socket !== retained.socket) ||
         c.invalidated === true ||
         c.socket.readyState !== WEBSOCKET_OPEN_READY_STATE ||
         (modelWaitStatus &&
@@ -524,7 +522,6 @@ export function createGatewayBroadcaster(params: {
             if (previous) {
               delivery.takePending(state, previous);
             }
-            const socket = c.socket;
             const queuedPublication = delivery.coalescePublication(
               publication,
               previous?.publication,
@@ -539,7 +536,6 @@ export function createGatewayBroadcaster(params: {
               send: () =>
                 broadcastInternal(event, nextPayload, opts, targetConnIds, explicitPluginScope, {
                   client: c,
-                  socket,
                   frames: prepared,
                   publication: queuedPublication,
                 }),
@@ -558,7 +554,6 @@ export function createGatewayBroadcaster(params: {
         delivery.drain(state, live.group);
         broadcastInternal(event, payload, opts, targetConnIds, explicitPluginScope, {
           client: c,
-          socket: c.socket,
           frames,
           publication,
         });

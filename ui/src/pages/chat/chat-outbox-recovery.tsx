@@ -43,10 +43,14 @@ const draftStore = import("../../lib/chat/composer-draft-store.runtime.ts");
 type RecoveryProps = {
   host: RecoveryHost | undefined;
   identity: string;
+  onRestored?: () => void;
 };
 
 /** Recovery is owner-scoped and intentionally outside every automatic drain. */
-function createChatOutboxRecovery(props: RecoveryProps, element: HTMLElement) {
+function createChatOutboxRecovery(
+  props: RecoveryProps,
+  element: SolidBridgeElement<RecoveryProps>,
+) {
   const [entries, setEntries] = createSignal<ChatOutboxRecoveryEntry[]>([]);
   const [drafts, setDrafts] = createSignal<DurableComposerRecoveryEntry[]>([]);
   const [error, setError] = createSignal("");
@@ -255,7 +259,7 @@ function createChatOutboxRecovery(props: RecoveryProps, element: HTMLElement) {
             ).status;
       if (result === "restored" || result === "persisted") {
         if (active && props.host === host && props.identity === identity) {
-          element.dispatchEvent(new CustomEvent("outbox-restored", { bubbles: true }));
+          element.onRestored?.();
         }
         await refresh();
       } else {
@@ -478,6 +482,7 @@ defineSolidBridge<RecoveryProps>(
     properties: {
       host: { default: undefined, attribute: false },
       identity: { default: "" },
+      onRestored: { default: undefined, attribute: false },
     },
   },
 );
@@ -491,7 +496,7 @@ export function PaneOutboxRecovery(props: {
     <openclaw-chat-outbox-recovery
       prop:host={props.state}
       prop:identity={props.identity}
-      onOutbox-restored={() => props.onRestored()}
+      prop:onRestored={() => props.onRestored()}
     />
   );
 }
@@ -502,11 +507,7 @@ declare module "@solidjs/web" {
       "openclaw-chat-outbox-recovery": HTMLAttributes<
         HTMLElementTagNameMap["openclaw-chat-outbox-recovery"]
       > &
-        ElementProperties<
-          Pick<HTMLElementTagNameMap["openclaw-chat-outbox-recovery"], "host" | "identity">
-        > & {
-          "onOutbox-restored"?: () => void;
-        };
+        ElementProperties<RecoveryProps>;
     }
   }
 }

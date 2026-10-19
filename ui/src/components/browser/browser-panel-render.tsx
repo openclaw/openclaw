@@ -17,41 +17,6 @@ registerEnglishCatalog(registerBrowserEnglish);
 export type BrowserPanelDock = "bottom" | "right";
 type ControllerProps = { controller: BrowserPanel };
 
-function BrowserIconButton(props: {
-  label: string;
-  icon: Parameters<typeof Icon>[0]["name"] | "mousePointer";
-  onClick: () => void;
-  class?: JSX.IntrinsicElements["button"]["class"];
-  title?: string;
-  disabled?: boolean;
-  busy?: boolean;
-  newTab?: boolean;
-}) {
-  return (
-    <PanelIconButton
-      {...props}
-      class={props.class ?? "bp-icon"}
-      icon={
-        props.icon === "mousePointer" ? (
-          <svg
-            viewBox="0 0 24 24"
-            fill="none"
-            stroke="currentColor"
-            stroke-width="2"
-            stroke-linecap="round"
-            stroke-linejoin="round"
-            aria-hidden="true"
-          >
-            <path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />
-          </svg>
-        ) : (
-          <Icon name={props.icon} />
-        )
-      }
-    />
-  );
-}
-
 function HeaderActions(
   props: ControllerProps & {
     dock: BrowserPanelDock;
@@ -72,26 +37,26 @@ function HeaderActions(
         <openclaw-tooltip
           prop:content={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
         >
-          <BrowserIconButton
+          <PanelIconButton
             class="rail-header__action bp-icon"
             label={t(props.dock === "bottom" ? "browser.dockRight" : "browser.dockBottom")}
-            icon={props.dock === "bottom" ? "panelRightOpen" : "panelBottomOpen"}
+            icon={<Icon name={props.dock === "bottom" ? "panelRightOpen" : "panelBottomOpen"} />}
             onClick={() => props.onDockChange(props.dock === "bottom" ? "right" : "bottom")}
           />
         </openclaw-tooltip>
       </span>
-      <BrowserIconButton
+      <PanelIconButton
         class="rail-header__action bp-icon"
         label={t("browser.openExternal")}
-        icon="externalLink"
+        icon={<Icon name="externalLink" />}
         newTab
         disabled={!activeUrl()}
         onClick={() => props.controller.openExternal()}
       />
-      <BrowserIconButton
+      <PanelIconButton
         class="rail-header__action bp-icon"
         label={t("browser.close")}
-        icon="x"
+        icon={<Icon name="x" />}
         onClick={() => props.onClose()}
       />
     </div>
@@ -121,24 +86,27 @@ function Toolbar(props: ControllerProps & { embedded: boolean }) {
         </span>
       ) : null}
       {props.embedded && !props.controller.host.fixedTab ? (
-        <BrowserIconButton
+        <PanelIconButton
+          class="bp-icon"
           label={t("browser.newTab")}
-          icon="plus"
+          icon={<Icon name="plus" />}
           newTab
           onClick={() => props.controller.beginNewTab()}
         />
       ) : null}
-      <BrowserIconButton
+      <PanelIconButton
+        class="bp-icon"
         label={t("browser.back")}
-        icon="chevronLeft"
+        icon={<Icon name="chevronLeft" />}
         disabled={
           nativeTab() ? !nativeTab()!.canGoBack : !hasView() || props.controller.evaluateUnavailable
         }
         onClick={() => props.controller.goHistory(-1)}
       />
-      <BrowserIconButton
+      <PanelIconButton
+        class="bp-icon"
         label={t("browser.forward")}
-        icon="chevronRight"
+        icon={<Icon name="chevronRight" />}
         disabled={
           nativeTab()
             ? !nativeTab()!.canGoForward
@@ -146,9 +114,10 @@ function Toolbar(props: ControllerProps & { embedded: boolean }) {
         }
         onClick={() => props.controller.goHistory(1)}
       />
-      <BrowserIconButton
+      <PanelIconButton
+        class="bp-icon"
         label={t(nativeTab()?.loading ? "browser.stop" : "browser.reload")}
-        icon={nativeTab()?.loading ? "x" : "refresh"}
+        icon={<Icon name={nativeTab()?.loading ? "x" : "refresh"} />}
         busy={!nativeTab() && props.controller.loading}
         disabled={!props.controller.activeTargetId}
         onClick={() => props.controller.reloadPage()}
@@ -182,33 +151,35 @@ function Toolbar(props: ControllerProps & { embedded: boolean }) {
         }}
       />
       {props.embedded ? (
-        <BrowserIconButton
+        <PanelIconButton
+          class="bp-icon"
           label={t("browser.openExternal")}
-          icon="externalLink"
+          icon={<Icon name="externalLink" />}
           newTab
           disabled={!hasView()}
           onClick={() => props.controller.openExternal()}
         />
       ) : null}
       {!props.controller.host.dashboardTarget?.sessionScoped ? (
-        <BrowserIconButton
+        <PanelIconButton
+          class="bp-icon"
           label={t(
             props.controller.download.pending ? "browser.downloading" : "browser.downloadFile",
           )}
-          icon={props.controller.download.pending ? "loader" : "download"}
+          icon={<Icon name={props.controller.download.pending ? "loader" : "download"} />}
           busy={props.controller.download.pending}
           disabled={!props.controller.download.available}
           onClick={() => void props.controller.download.save()}
         />
       ) : null}
-      <BrowserIconButton
+      <PanelIconButton
         class={["bp-icon", { "is-active": props.controller.mode === "annotate" }]}
         label={t("browser.annotate")}
-        icon="penLine"
+        icon={<Icon name="penLine" />}
         disabled={!hasView()}
         onClick={() => props.controller.setMode("annotate")}
       />
-      <BrowserIconButton
+      <PanelIconButton
         class={["bp-icon", { "is-active": props.controller.mode === "inspect" }]}
         label={t("browser.inspect")}
         title={t(
@@ -216,7 +187,19 @@ function Toolbar(props: ControllerProps & { embedded: boolean }) {
             ? "browser.inspectUnavailable"
             : "browser.inspect",
         )}
-        icon="mousePointer"
+        icon={
+          <svg
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path d="m4 4 7.07 17 2.51-7.39L21 11.07z" />
+          </svg>
+        }
         disabled={!hasView() || (!nativeTab() && props.controller.evaluateUnavailable)}
         onClick={() => props.controller.setMode("inspect")}
       />

@@ -159,9 +159,7 @@ it.each([
   });
   try {
     expect(maintenance).toBeDefined();
-    expect(maintenance?.warnings).toEqual([
-      expect.stringContaining("Restart the Gateway you launched manually after the update."),
-    ]);
+    expect(maintenance?.warnings).toEqual([expect.stringContaining("openclaw gateway stop")]);
     expect(maintenance?.warnings?.[0]).toContain(scenario.message);
     await maintenance?.finish({});
   } finally {

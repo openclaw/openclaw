@@ -265,9 +265,9 @@ describe("config form schema constraints", () => {
       const: ["a"],
     } satisfies JsonSchema;
 
-    expect(canApplyArrayCandidate(schema, ["a", "x", "y"], ["a", "x"], false, false)).toBe(true);
-    expect(canApplyArrayCandidate(schema, ["a", "x"], ["a"], false, false)).toBe(true);
-    expect(canApplyArrayCandidate(schema, ["a", "x", "y"], ["x", "y"], false, false)).toBe(false);
+    expect(canApplyArrayCandidate(schema, ["a", "x", "y"], ["a", "x"], false)).toBe(true);
+    expect(canApplyArrayCandidate(schema, ["a", "x"], ["a"], false)).toBe(true);
+    expect(canApplyArrayCandidate(schema, ["a", "x", "y"], ["x", "y"], false)).toBe(false);
   });
 
   it("validates and compares deeply nested config values without depth cutoffs", () => {
