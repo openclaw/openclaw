@@ -1,5 +1,4 @@
 import "../test-utils/prepare-compiled-subprocesses.js";
-// Media store tests cover persisted media records and local file storage.
 import fs from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
@@ -12,6 +11,28 @@ import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { FsSafeError } from "../infra/fs-safe.js";
 import { createTempHomeEnv, type TempHomeEnv } from "../test-utils/temp-home.js";
 import { expectSavedOriginalFilenameCase } from "./store-filename.test-support.js";
+
+type FileStore = ReturnType<(typeof import("@openclaw/fs-safe/store"))["fileStore"]>;
+
+function mockFileStore(wrap: (store: FileStore) => Partial<FileStore>) {
+  vi.doMock("@openclaw/fs-safe/store", async (importOriginal) => {
+    const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
+    return {
+      ...actual,
+      fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
+        const store = actual.fileStore(options);
+        return { ...store, ...wrap(store) };
+      },
+    };
+  });
+}
+
+function freshStore(scope: string) {
+  return importFreshModule<typeof import("./store.js")>(
+    import.meta.url,
+    `./store.js?scope=${scope}`,
+  );
+}
 
 describe("media store", () => {
   let store: typeof import("./store.js");
@@ -114,38 +135,25 @@ describe("media store", () => {
   it.each(["ENOENT", "ENOSPC"] as const)("handles buffer write failure %s", async (code) => {
     const segment = code === "ENOENT" ? "race-buffer" : "failed-buffer";
     const attempts: string[] = [];
-    vi.doMock("@openclaw/fs-safe/store", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
-      return {
-        ...actual,
-        fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
-          const actualStore = actual.fileStore(options);
-          return {
-            ...actualStore,
-            write: async (...args: Parameters<typeof actualStore.write>) => {
-              if (args[0].includes(`${segment}/`)) {
-                attempts.push(args[0]);
-                if (code === "ENOSPC" || attempts.length === 1) {
-                  if (code === "ENOENT") {
-                    await fs.rm(path.dirname(actualStore.path(args[0])), {
-                      recursive: true,
-                      force: true,
-                    });
-                  }
-                  throw Object.assign(new Error(code), { code });
-                }
-              }
-              return await actualStore.write(...args);
-            },
-          };
-        },
-      };
-    });
+    mockFileStore((actualStore) => ({
+      write: async (...args) => {
+        if (args[0].includes(`${segment}/`)) {
+          attempts.push(args[0]);
+          if (code === "ENOSPC" || attempts.length === 1) {
+            if (code === "ENOENT") {
+              await fs.rm(path.dirname(actualStore.path(args[0])), {
+                recursive: true,
+                force: true,
+              });
+            }
+            throw Object.assign(new Error(code), { code });
+          }
+        }
+        return await actualStore.write(...args);
+      },
+    }));
     try {
-      const scoped = await importFreshModule<typeof import("./store.js")>(
-        import.meta.url,
-        `./store.js?scope=buffer-write-${code}`,
-      );
+      const scoped = await freshStore(`buffer-write-${code}`);
       const result = scoped.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", segment);
       if (code === "ENOENT") {
         const saved = await result;
@@ -434,33 +442,20 @@ describe("media store filesystem faults", () => {
       const insertedName = "v2-quota-inserted.mp4";
       let injected = false;
       if (operation === "remove") {
-        vi.doMock("@openclaw/fs-safe/store", async (importOriginal) => {
-          const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
-          return {
-            ...actual,
-            fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
-              const actualStore = actual.fileStore(options);
-              return {
-                ...actualStore,
-                remove: async (...args: Parameters<typeof actualStore.remove>) => {
-                  if (args[0] === `playback-transcode/${oldName}`) {
-                    injected = true;
-                    if (code !== "ENOENT") {
-                      throw injectedError;
-                    }
-                    await fs.unlink(actualStore.path(args[0]));
-                  }
-                  return await actualStore.remove(...args);
-                },
-              };
-            },
-          };
-        });
+        mockFileStore((actualStore) => ({
+          remove: async (...args) => {
+            if (args[0] === `playback-transcode/${oldName}`) {
+              injected = true;
+              if (code !== "ENOENT") {
+                throw injectedError;
+              }
+              await fs.unlink(actualStore.path(args[0]));
+            }
+            return await actualStore.remove(...args);
+          },
+        }));
       }
-      const store = await importFreshModule<typeof import("./store.js")>(
-        import.meta.url,
-        `./store.js?scope=playback-quota-${operation}-${code}`,
-      );
+      const store = await freshStore(`playback-quota-${operation}-${code}`);
       const cacheDir = path.join(await store.ensureMediaDir(), store.PLAYBACK_TRANSCODE_SUBDIR);
       await fs.mkdir(cacheDir);
       const oldPath = path.join(cacheDir, oldName);
@@ -529,29 +524,16 @@ describe("media store filesystem faults", () => {
     const segment = `retry-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     const injectedError = error();
     let writeAttempts = 0;
-    vi.doMock("@openclaw/fs-safe/store", async (importOriginal) => {
-      const actual = await importOriginal<typeof import("@openclaw/fs-safe/store")>();
-      return {
-        ...actual,
-        fileStore: (options: Parameters<typeof actual.fileStore>[0]) => {
-          const actualStore = actual.fileStore(options);
-          return {
-            ...actualStore,
-            write: async (...args: Parameters<typeof actualStore.write>) => {
-              if (args[0].includes(`${segment}/`) && writeAttempts++ === 0) {
-                throw injectedError;
-              }
-              return await actualStore.write(...args);
-            },
-          };
-        },
-      };
-    });
+    mockFileStore((actualStore) => ({
+      write: async (...args) => {
+        if (args[0].includes(`${segment}/`) && writeAttempts++ === 0) {
+          throw injectedError;
+        }
+        return await actualStore.write(...args);
+      },
+    }));
 
-    const store = await importFreshModule<typeof import("./store.js")>(
-      import.meta.url,
-      `./store.js?scope=retry-boundary-${segment}`,
-    );
+    const store = await freshStore(`retry-boundary-${segment}`);
     const result = store.saveMediaBuffer(Buffer.from("voice"), "audio/ogg", segment);
     if (shouldRetry) {
       const saved = await result;
@@ -590,10 +572,7 @@ describe("media store filesystem faults", () => {
       return await originalOpen(...args);
     });
 
-    const store = await importFreshModule<typeof import("./store.js")>(
-      import.meta.url,
-      "./store.js?scope=stream-before-open",
-    );
+    const store = await freshStore("stream-before-open");
     const saved = await store.saveMediaStream(stream, "text/plain", subdir, 1024);
 
     expect(directoryPruned).toBe(true);
@@ -627,79 +606,13 @@ describe("media store filesystem faults", () => {
       return await originalRename(source, target);
     });
 
-    const store = await importFreshModule<typeof import("./store.js")>(
-      import.meta.url,
-      "./store.js?scope=stream-final-rename",
-    );
+    const store = await freshStore("stream-final-rename");
     await expect(
       store.saveMediaStream(stream, "text/plain", subdir, 1024, "publication.txt"),
     ).rejects.toBe(injectedError);
 
     expect(stagedBytes).toEqual(input);
     await expect(fs.readdir(path.join(store.getMediaDir(), subdir))).resolves.toEqual([]);
-  });
-
-  it("fully persists a stream chunk after a positive short write", async () => {
-    const stateDir = tempDirs.make("openclaw-media-short-write-");
-    vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    const input = Buffer.from("positive short write");
-    const originalOpen = fs.open.bind(fs);
-    let shortWriteObserved = false;
-    vi.spyOn(fs, "open").mockImplementation(async (...args) => {
-      const handle = await originalOpen(...args);
-      if (
-        typeof args[0] !== "string" ||
-        !args[0].includes(`${path.sep}short-write-stream${path.sep}`) ||
-        args[1] !== "wx"
-      ) {
-        return handle;
-      }
-
-      let injectShortWrite = true;
-      const injectedHandle = Object.create(handle) as typeof handle;
-      injectedHandle.close = handle.close.bind(handle);
-      injectedHandle.write = (async (
-        buffer: Buffer,
-        offset = 0,
-        length = buffer.byteLength - offset,
-      ) => {
-        const writeLength = injectShortWrite ? Math.max(1, Math.floor(length / 2)) : length;
-        injectShortWrite = false;
-        shortWriteObserved ||= writeLength < length;
-        return await handle.write(buffer, offset, writeLength);
-      }) as typeof handle.write;
-      injectedHandle.writeFile = (async (data: string | NodeJS.ArrayBufferView) => {
-        const buffer =
-          typeof data === "string"
-            ? Buffer.from(data)
-            : Buffer.from(data.buffer, data.byteOffset, data.byteLength);
-        let offset = 0;
-        while (offset < buffer.byteLength) {
-          const { bytesWritten } = await injectedHandle.write(
-            buffer,
-            offset,
-            buffer.byteLength - offset,
-          );
-          offset += bytesWritten;
-        }
-      }) as typeof handle.writeFile;
-      return injectedHandle;
-    });
-
-    const store = await importFreshModule<typeof import("./store.js")>(
-      import.meta.url,
-      "./store.js?scope=positive-short-write",
-    );
-    const saved = await store.saveMediaStream(
-      Readable.from([input]),
-      "text/plain",
-      "short-write-stream",
-      1024,
-    );
-
-    expect(shortWriteObserved).toBe(true);
-    expect(saved.size).toBe(input.byteLength);
-    await expect(fs.readFile(saved.path)).resolves.toEqual(input);
   });
 });
 

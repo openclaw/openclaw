@@ -9,7 +9,10 @@ import { createDeferred } from "../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "../infra/runtime-worker-url.js";
 import { withChannelReadAuthority } from "../shared/channel-read-authority.js";
-import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
+import {
+  withOpenClawTestState,
+  type OpenClawTestState,
+} from "../test-utils/openclaw-test-state.js";
 import { saveRemoteMedia } from "./fetch.js";
 import { mediaNativeProcessEntrypoints } from "./native-process-runtime.test-support.js";
 import { saveMediaBuffer, saveMediaSource, saveMediaStream } from "./store.js";
@@ -26,6 +29,38 @@ afterEach(() => {
 
 async function* mediaBytes() {
   yield bytes;
+}
+
+function withRead<T>(run: () => Promise<T>) {
+  return withChannelReadAuthority(() => {}, run);
+}
+
+function revocableRead() {
+  let active = true;
+  const revoked = new Error("Session media authority changed");
+  return {
+    revoked,
+    revoke: () => {
+      active = false;
+    },
+    run: <T>(operation: () => Promise<T>) =>
+      withChannelReadAuthority(() => {
+        if (!active) {
+          throw revoked;
+        }
+      }, operation),
+  };
+}
+
+function withMediaState(
+  subdir: string,
+  run: (state: OpenClawTestState, mediaDir: string, realMediaDir: string) => Promise<void>,
+) {
+  return withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    const mediaDir = state.statePath("media", subdir);
+    await fs.mkdir(mediaDir, { recursive: true });
+    await run(state, mediaDir, await fs.realpath(mediaDir));
+  });
 }
 
 function observeOpen(
@@ -45,10 +80,7 @@ describe("read-owned media publication", () => {
   it.each(["buffer", "stream"] as const)(
     "composes a client commit guard with read authority after %s bytes are written",
     async (kind) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const mediaDir = state.statePath("media", "inbound");
-        await fs.mkdir(mediaDir, { recursive: true });
-        const realMediaDir = await fs.realpath(mediaDir);
+      await withMediaState("inbound", async (_state, mediaDir, realMediaDir) => {
         let allowed = true;
         let wrote = false;
         const closed = new Error("client upload policy changed");
@@ -67,29 +99,19 @@ describe("read-owned media publication", () => {
             });
           }
         });
+        const options = [
+          "application/pdf",
+          "inbound",
+          undefined,
+          undefined,
+          undefined,
+          { assertCommitAllowed },
+        ] as const;
         await expect(
-          withChannelReadAuthority(
-            () => {},
-            () =>
-              kind === "buffer"
-                ? saveMediaBuffer(
-                    bytes,
-                    "application/pdf",
-                    "inbound",
-                    undefined,
-                    undefined,
-                    undefined,
-                    { assertCommitAllowed },
-                  )
-                : saveMediaStream(
-                    mediaBytes(),
-                    "application/pdf",
-                    "inbound",
-                    undefined,
-                    undefined,
-                    undefined,
-                    { assertCommitAllowed },
-                  ),
+          withRead(() =>
+            kind === "buffer"
+              ? saveMediaBuffer(bytes, ...options)
+              : saveMediaStream(mediaBytes(), ...options),
           ),
         ).rejects.toBe(closed);
         expect(wrote).toBe(true);
@@ -99,24 +121,18 @@ describe("read-owned media publication", () => {
   );
 
   it("rejects scoped source publication when durable file sync fails", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    await withMediaState("outbound", async (state, mediaDir, realMediaDir) => {
       const source = state.statePath("source.pdf");
-      const mediaDir = state.statePath("media", "outbound");
       await fs.writeFile(source, bytes);
-      await fs.mkdir(mediaDir, { recursive: true });
-      const realMediaDir = await fs.realpath(mediaDir);
       const syncError = Object.assign(new Error("synthetic media sync failure"), { code: "EIO" });
       observeOpen((handle, filePath, flags) => {
         if (path.dirname(filePath) === realMediaDir && flags === "wx") {
           vi.spyOn(handle, "sync").mockRejectedValue(syncError);
         }
       });
-      await expect(
-        withChannelReadAuthority(
-          () => {},
-          () => saveMediaSource(source, undefined, "outbound"),
-        ),
-      ).rejects.toBe(syncError);
+      await expect(withRead(() => saveMediaSource(source, undefined, "outbound"))).rejects.toBe(
+        syncError,
+      );
       expect(await fs.readdir(mediaDir)).toEqual([]);
       expect(await fs.readFile(source)).toEqual(bytes);
     });
@@ -128,12 +144,9 @@ describe("read-owned media publication", () => {
   ] as const)(
     "syncs scoped %s content before publication and its parent afterward (directory fails=%s)",
     async (kind, failDirectorySync) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+      await withMediaState("outbound", async (state, mediaDir, realMediaDir) => {
         const source = state.statePath("source.pdf");
-        const mediaDir = state.statePath("media", "outbound");
         await fs.writeFile(source, bytes);
-        await fs.mkdir(mediaDir, { recursive: true });
-        const realMediaDir = await fs.realpath(mediaDir);
         const syncEvents: string[] = [];
         observeOpen((handle, filePath, flags) => {
           const sync = handle.sync.bind(handle);
@@ -160,12 +173,10 @@ describe("read-owned media publication", () => {
             });
           }
         });
-        const saved = await withChannelReadAuthority(
-          () => {},
-          () =>
-            kind === "buffer"
-              ? saveMediaBuffer(bytes, "application/pdf", "outbound")
-              : saveMediaSource(source, undefined, "outbound"),
+        const saved = await withRead(() =>
+          kind === "buffer"
+            ? saveMediaBuffer(bytes, "application/pdf", "outbound")
+            : saveMediaSource(source, undefined, "outbound"),
         );
         expect(syncEvents).toEqual(["file", "directory"]);
         expect(await fs.readFile(saved.path)).toEqual(bytes);
@@ -177,14 +188,10 @@ describe("read-owned media publication", () => {
   it.skipIf(process.platform === "win32").each(["file", "directory"] as const)(
     "discards scoped media when authority changes during %s sync",
     async (phase) => {
-      await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-        const mediaDir = state.statePath("media", "outbound");
-        await fs.mkdir(mediaDir, { recursive: true });
-        const realMediaDir = await fs.realpath(mediaDir);
+      await withMediaState("outbound", async (_state, mediaDir, realMediaDir) => {
         const syncing = createDeferred();
         const release = createDeferred();
-        let active = true;
-        const revoked = new Error("Session media authority changed during sync");
+        const authority = revocableRead();
         observeOpen((handle, filePath, flags) => {
           const match =
             phase === "file"
@@ -199,18 +206,13 @@ describe("read-owned media publication", () => {
             });
           }
         });
-        const operation = withChannelReadAuthority(
-          () => {
-            if (!active) {
-              throw revoked;
-            }
-          },
-          () => saveMediaBuffer(bytes, "application/pdf", "outbound"),
+        const operation = authority.run(() =>
+          saveMediaBuffer(bytes, "application/pdf", "outbound"),
         );
-        const rejected = expect(operation).rejects.toBe(revoked);
+        const rejected = expect(operation).rejects.toBe(authority.revoked);
         try {
           await syncing.promise;
-          active = false;
+          authority.revoke();
         } finally {
           release.resolve();
         }
@@ -226,8 +228,7 @@ describe("read-owned media publication", () => {
       await fs.writeFile(source, bytes);
       const opened = createDeferred();
       const resume = createDeferred();
-      const revoked = new Error("Session media authority changed");
-      let active = true;
+      const authority = revocableRead();
       let sourceReads = 0;
       observeOpen(async (handle, filePath) => {
         if (filePath === source) {
@@ -240,17 +241,10 @@ describe("read-owned media publication", () => {
           await resume.promise;
         }
       });
-      const operation = withChannelReadAuthority(
-        () => {
-          if (!active) {
-            throw revoked;
-          }
-        },
-        () => saveMediaSource(source, undefined, "outbound"),
-      );
-      const rejection = expect(operation).rejects.toBe(revoked);
+      const operation = authority.run(() => saveMediaSource(source, undefined, "outbound"));
+      const rejection = expect(operation).rejects.toBe(authority.revoked);
       await opened.promise;
-      active = false;
+      authority.revoke();
       resume.resolve();
       await rejection;
       expect(sourceReads).toBe(0);
@@ -258,29 +252,19 @@ describe("read-owned media publication", () => {
   });
 
   it("removes source output when the host rejects the completed read", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
+    await withMediaState("outbound", async (state, mediaDir) => {
       const source = state.statePath("source.pdf");
-      const mediaDir = state.statePath("media", "outbound");
       await fs.writeFile(source, bytes);
-      await fs.mkdir(mediaDir, { recursive: true });
       const preserved = path.join(mediaDir, "existing.pdf");
       await fs.writeFile(preserved, bytes);
-      let active = true;
-      const revoked = new Error("Session media authority changed");
+      const authority = revocableRead();
       await expect(
-        withChannelReadAuthority(
-          () => {
-            if (!active) {
-              throw revoked;
-            }
-          },
-          async () => {
-            const saved = await saveMediaSource(source, undefined, "outbound");
-            expect(await fs.readFile(saved.path)).toEqual(bytes);
-            active = false;
-          },
-        ),
-      ).rejects.toBe(revoked);
+        authority.run(async () => {
+          const saved = await saveMediaSource(source, undefined, "outbound");
+          expect(await fs.readFile(saved.path)).toEqual(bytes);
+          authority.revoke();
+        }),
+      ).rejects.toBe(authority.revoked);
       expect(await fs.readdir(mediaDir)).toEqual(["existing.pdf"]);
       expect(await fs.readFile(preserved)).toEqual(bytes);
     });
@@ -300,10 +284,7 @@ describe("read-owned media publication", () => {
             vi.spyOn(handle, "chmod").mockRejectedValue(chmodError);
           }
         });
-        const operation = withChannelReadAuthority(
-          () => {},
-          () => saveMediaStream(mediaBytes(), "application/pdf"),
-        );
+        const operation = withRead(() => saveMediaStream(mediaBytes(), "application/pdf"));
         if (mode === 0o600) {
           await expect(operation).rejects.toBe(chmodError);
           await expect(fs.readdir(mediaDir)).resolves.toEqual([]);
@@ -387,12 +368,9 @@ describe("read-owned media publication", () => {
           }
         })();
 
-        await expect(
-          withChannelReadAuthority(
-            () => {},
-            () => saveMediaStream(stream, "application/pdf"),
-          ),
-        ).rejects.toThrow(/created file|hardlink|path/i);
+        await expect(withRead(() => saveMediaStream(stream, "application/pdf"))).rejects.toThrow(
+          /created file|hardlink|path/i,
+        );
         expect(stagedPath).toBeDefined();
         await expect(fs.readFile(stagedPath!)).resolves.toEqual(
           kind === "replacement" ? Buffer.from("replacement") : bytes,
@@ -404,21 +382,18 @@ describe("read-owned media publication", () => {
 
   it("preserves replacements across repeated disposal in the same read", async () => {
     await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      await withChannelReadAuthority(
-        () => {},
-        async () => {
-          const saved = await saveMediaStream(mediaBytes(), "application/pdf");
-          const displaced = state.statePath("displaced.pdf");
-          await fs.rename(saved.path, displaced);
-          await fs.writeFile(saved.path, "replacement");
+      await withRead(async () => {
+        const saved = await saveMediaStream(mediaBytes(), "application/pdf");
+        const displaced = state.statePath("displaced.pdf");
+        await fs.rename(saved.path, displaced);
+        await fs.writeFile(saved.path, "replacement");
 
-          await unlinkIfExists(saved.path);
-          await unlinkIfExists(saved.path);
+        await unlinkIfExists(saved.path);
+        await unlinkIfExists(saved.path);
 
-          await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("replacement");
-          await expect(fs.readFile(displaced)).resolves.toEqual(bytes);
-        },
-      );
+        await expect(fs.readFile(saved.path, "utf8")).resolves.toBe("replacement");
+        await expect(fs.readFile(displaced)).resolves.toEqual(bytes);
+      });
     });
   });
 
@@ -441,12 +416,7 @@ describe("read-owned media publication", () => {
       await fs.symlink(replacement, alias, process.platform === "win32" ? "junction" : "dir");
     })();
 
-    await expect(
-      withChannelReadAuthority(
-        () => {},
-        () => saveMediaStream(stream, "application/pdf"),
-      ),
-    ).rejects.toSatisfy(
+    await expect(withRead(() => saveMediaStream(stream, "application/pdf"))).rejects.toSatisfy(
       (error: unknown) => error instanceof FsSafeError && error.code === "path-mismatch",
     );
     await expect(fs.readdir(originalMedia)).resolves.toEqual([]);
@@ -455,9 +425,7 @@ describe("read-owned media publication", () => {
   });
 
   it("honors a request timeout after its response finishes while the host read remains active", async () => {
-    await withOpenClawTestState({ layout: "state-only" }, async (state) => {
-      const mediaDir = state.statePath("media", "inbound");
-      await fs.mkdir(mediaDir, { recursive: true });
+    await withMediaState("inbound", async (_state, mediaDir) => {
       const request = new AbortController();
       const timedOut = new Error("synthetic request timeout");
       let hostChecks = 0;
