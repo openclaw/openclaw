@@ -34,7 +34,8 @@ const acquireQaCredentialLease = vi.fn(async (_options: unknown) => ({
   heartbeat: vi.fn(async () => {}),
   release,
 }));
-vi.mock("./relay-client.js", () => ({
+vi.mock("./relay-client.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./relay-client.js")>()),
   createBuzzQaRelayDriver: async (params: { onMessage: RelayHandler }) => {
     relayDriverState.onMessage = params.onMessage;
     return {
