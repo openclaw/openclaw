@@ -27,6 +27,7 @@ import {
 } from "./chat-engine.test-support.js";
 import { ChatTurnRouter } from "./chat-turn-router.js";
 import { ChatWizardHost } from "./chat-wizard-host.js";
+import * as hostedSetup from "./hosted-setup.runtime.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 import type { SystemAgentOperation } from "./operation-types.js";
 import { SystemAgentOperationExitError } from "./operations-execution-helpers.js";
@@ -44,9 +45,7 @@ function createRouterHarness(
     executeOperation?: NonNullable<
       ConstructorParameters<typeof ChatTurnRouter>[1]["executeOperation"]
     >;
-    wizardDependencies?: NonNullable<
-      ConstructorParameters<typeof ChatWizardHost>[0]["dependencies"]
-    >;
+
     loadOverview?: ReturnType<typeof fakeOverviewLoader>;
   } = {},
 ) {
@@ -66,7 +65,6 @@ function createRouterHarness(
     new ChatWizardHost({
       surface: options.surface,
       beforePersistentApply: async () => {},
-      dependencies: internals.wizardDependencies,
     }),
     {
       requireVerifiedInference: async () => verifiedInference.execution,
@@ -186,28 +184,22 @@ describe("SystemAgentChatEngine operations", () => {
   }>)(
     "keeps delegated $source $command with the operator",
     async ({ source, command, directive }) => {
-      const startWizard = vi.fn(async () => {});
+      const startWizard = vi.fn(async () => "applied" as const);
       const importMemory = vi.fn(async () => ({
         status: "workspace-missing" as const,
         providers: [] as [],
         workspace: "/tmp/openclaw-no-workspace",
       }));
-      const router = createRouterHarness(
-        {
-          operatorApprovalOnly: true,
-          runAgentTurn: async () =>
-            source === "tool" ? { text: "Opening setup.", directive } : null,
-        },
-        {
-          wizardDependencies: {
-            runChannelSetupWizard: startWizard,
-            runSkillsSetupWizard: startWizard,
-            runSearchSetupWizard: startWizard,
-            runGatewaySetupWizard: startWizard,
-            runMemoryImportWizard: importMemory,
-          },
-        },
-      );
+      vi.spyOn(hostedSetup, "runHostedChannelSetup").mockImplementationOnce(startWizard);
+      vi.spyOn(hostedSetup, "runHostedSkillsSetup").mockImplementationOnce(startWizard);
+      vi.spyOn(hostedSetup, "runHostedSearchSetup").mockImplementationOnce(startWizard);
+      vi.spyOn(hostedSetup, "runHostedGatewaySetup").mockImplementationOnce(startWizard);
+      vi.spyOn(hostedSetup, "runHostedMemoryImport").mockImplementationOnce(importMemory);
+      const router = createRouterHarness({
+        operatorApprovalOnly: true,
+        runAgentTurn: async () =>
+          source === "tool" ? { text: "Opening setup.", directive } : null,
+      });
 
       const reply = await router.resolveTurn(source === "typed" ? command : "help me set up");
 
@@ -255,21 +247,15 @@ describe("SystemAgentChatEngine operations", () => {
   });
 
   it("surfaces a failed hosted wizard directive", async () => {
-    const router = createRouterHarness(
-      {
-        runAgentTurn: async () => ({
-          text: "Opening setup.",
-          directive: { kind: "channel-setup" as const, channel: "telegram" },
-        }),
-      },
-      {
-        wizardDependencies: {
-          runChannelSetupWizard: async () => {
-            throw new Error("wizard exploded");
-          },
-        },
-      },
+    vi.spyOn(hostedSetup, "runHostedChannelSetup").mockRejectedValueOnce(
+      new Error("wizard exploded"),
     );
+    const router = createRouterHarness({
+      runAgentTurn: async () => ({
+        text: "Opening setup.",
+        directive: { kind: "channel-setup" as const, channel: "telegram" },
+      }),
+    });
 
     const reply = await router.resolveTurn("connect telegram for me");
 
@@ -307,7 +293,9 @@ describe("SystemAgentChatEngine operations", () => {
       }
       return configFixture.read();
     });
-    const runChannelSetupWizard = vi.fn(async () => {});
+    const runChannelSetupWizard = vi
+      .spyOn(hostedSetup, "runHostedChannelSetup")
+      .mockResolvedValueOnce("applied");
     const engine = new SystemAgentChatEngine({
       verifiedInference,
       runAgentTurn: async () => ({
@@ -317,7 +305,6 @@ describe("SystemAgentChatEngine operations", () => {
       deps: {
         loadOverview: fakeOverviewLoader(),
       },
-      runChannelSetupWizard,
     });
 
     await expect(engine.handle("please connect a messaging channel")).rejects.toBeInstanceOf(

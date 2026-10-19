@@ -16,7 +16,6 @@ import {
   SystemAgentChatEngine as RuntimeSystemAgentChatEngine,
   type SystemAgentChatEngineOptions,
 } from "./chat-engine.js";
-import type { ChatWizardHostDependencies } from "./chat-wizard-host.js";
 import {
   resolveSystemAgentConfiguredRouteFromConfig as resolveRouteImpl,
   type SystemAgentConfiguredRoute,
@@ -280,11 +279,10 @@ export async function createCliVerifiedBinding(config: OpenClawConfig) {
   return { binding };
 }
 
-type TestSystemAgentChatEngineOptions = Omit<SystemAgentChatEngineOptions, "verifiedInference"> &
-  ChatWizardHostDependencies & {
-    executeOperation?: typeof import("./operations.js").executeSystemAgentOperation;
-    verifiedInference?: SystemAgentVerifiedInferenceBinding;
-  };
+type TestSystemAgentChatEngineOptions = Omit<SystemAgentChatEngineOptions, "verifiedInference"> & {
+  executeOperation?: typeof import("./operations.js").executeSystemAgentOperation;
+  verifiedInference?: SystemAgentVerifiedInferenceBinding;
+};
 
 export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
   override answerWizard = scoped(super.answerWizard.bind(this));
@@ -308,10 +306,7 @@ export class SystemAgentChatEngine extends RuntimeSystemAgentChatEngine {
           ...engineOptions.deps,
         },
       },
-      {
-        wizardDependencies: opts,
-        ...(executeOperation ? { executeOperation } : {}),
-      },
+      executeOperation ? { executeOperation } : {},
     );
   }
 }

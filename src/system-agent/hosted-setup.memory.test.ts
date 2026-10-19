@@ -2,6 +2,7 @@ import path from "node:path";
 import "./chat-engine.mocks.test-support.js";
 import { expect, it, vi } from "vitest";
 import type { SetupMemoryImportOutcome } from "../wizard/setup.memory-import.js";
+import * as audit from "./audit.js";
 import {
   fakeOverviewLoader,
   sharedVerifiedInferenceConfig,
@@ -12,6 +13,7 @@ import {
   type MemoryImportStepParams,
   type OpenClawConfig,
 } from "./chat-engine.test-support.js";
+import * as hostedSetup from "./hosted-setup.runtime.js";
 import { createInferenceConfigFixture } from "./inference-config.test-support.js";
 
 function createEngine(options: ConstructorParameters<typeof SystemAgentChatEngine>[0] = {}) {
@@ -121,10 +123,9 @@ it.each([
     }
     return "state/openclaw.sqlite";
   });
-  const reply = await createEngine({
-    appendAuditEntry,
-    runMemoryImportWizard: async () => result,
-  }).handle(command);
+  vi.spyOn(audit, "appendSystemAgentAuditEntry").mockImplementation(appendAuditEntry);
+  vi.spyOn(hostedSetup, "runHostedMemoryImport").mockResolvedValueOnce(result);
+  const reply = await createEngine().handle(command);
   expect(reply.text).toContain(expected);
   if (kind === "empty" || kind === "failed") {
     expect(reply.text).not.toContain("Done");

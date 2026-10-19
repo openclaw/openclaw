@@ -15,11 +15,7 @@ import {
   redactSensitiveCommandText,
   type SystemAgentChatTurnOptions,
 } from "./chat-turn-router.js";
-import {
-  ChatWizardHost,
-  type ChatWizardHostDependencies,
-  type SystemAgentChatReply,
-} from "./chat-wizard-host.js";
+import { ChatWizardHost, type SystemAgentChatReply } from "./chat-wizard-host.js";
 import type { SystemAgentGreetingPlanner } from "./greeting.js";
 import {
   SystemAgentInferenceUnavailableError,
@@ -46,7 +42,6 @@ export type SystemAgentChatEngineOptions = ConstructorParameters<typeof ChatTurn
 };
 
 type SystemAgentChatEngineInternals = {
-  wizardDependencies?: ChatWizardHostDependencies;
   executeOperation?: typeof import("./operations.js").executeSystemAgentOperation;
 };
 
@@ -78,7 +73,6 @@ export class SystemAgentChatEngine {
       beforePersistentApply: async (runtime) => {
         await this.requirePersistentApplyInference(runtime);
       },
-      dependencies: internals.wizardDependencies,
     });
     this.router = new ChatTurnRouter(
       options,
