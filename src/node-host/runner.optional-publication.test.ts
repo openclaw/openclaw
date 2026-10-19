@@ -1,8 +1,9 @@
+import { setImmediate } from "node:timers/promises";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import { GatewayClientRequestError, type GatewayClientOptions } from "../gateway/client.js";
 import { NODE_RUNNER_INVENTORY_UPDATE_METHOD } from "../infra/node-runner-inventory.js";
-import { mocks, resetRunnerTestState, runNodeHost } from "./runner.test-support.js";
+import { mocks, resetRunnerTestState, withReadyNodeHost } from "./runner.test-support.js";
 
 const NODE_PLUGIN_TOOLS_UPDATE_METHOD = "node.pluginTools.update";
 const NODE_SKILLS_UPDATE_METHOD = "node.skills.update";
@@ -24,10 +25,24 @@ function receiveHello(options: GatewayClientOptions | undefined, protocol = 4) {
   } as unknown as Parameters<NonNullable<GatewayClientOptions["onHelloOk"]>>[0]);
 }
 
-async function settlePublications() {
-  await new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+const settlePublications = () => setImmediate();
+
+const expectPublications = (client: CapturedClient, count: number) =>
+  vi.waitFor(() => expect(getPublications(client)).toHaveLength(count));
+
+function changeTools(tools: typeof mocks.nodePluginTools) {
+  mocks.nodePluginTools = tools;
+  mocks.availabilityChanged?.();
+}
+
+async function beginPublication(
+  client: CapturedClient,
+  options: GatewayClientOptions,
+  ...responses: Promise<unknown>[]
+) {
+  queuePluginResponses(client, ...responses);
+  receiveHello(options);
+  await expectPublications(client, 1);
 }
 
 function queuePluginResponses(client: CapturedClient, ...responses: Promise<unknown>[]) {
@@ -58,47 +73,6 @@ function enableSkills() {
       content: "---\nname: release-helper\ndescription: Prepare a release\n---\n",
     },
   ];
-}
-
-async function withReadyNodeHost(
-  runTest: (params: {
-    client: CapturedClient;
-    options: GatewayClientOptions | undefined;
-  }) => Promise<void>,
-): Promise<void> {
-  mocks.startGatewayClientWhenEventLoopReady.mockResolvedValueOnce({
-    ready: true,
-    aborted: false,
-    elapsedMs: 0,
-    maxDriftMs: 0,
-    checks: 1,
-  });
-  const processOnSpy = vi.spyOn(process, "on");
-  const previousExitCode = process.exitCode;
-  let running: Promise<void> | undefined;
-  try {
-    running = runNodeHost({ gatewayHost: "127.0.0.1", gatewayPort: 18789 });
-    await vi.waitFor(() => expect(mocks.availabilityChanged).toBeDefined());
-    const client = mocks.capturedGatewayClients[0];
-    if (!client) {
-      throw new Error("expected captured Gateway client");
-    }
-    await runTest({ client, options: mocks.capturedGatewayClientOptions.at(-1) });
-  } finally {
-    const onSigterm = processOnSpy.mock.calls.find(([event]) => event === "SIGTERM")?.[1];
-    try {
-      onSigterm?.("SIGTERM");
-      await running;
-    } finally {
-      for (const [event, listener] of processOnSpy.mock.calls) {
-        if ((event === "SIGINT" || event === "SIGTERM") && typeof listener === "function") {
-          process.off(event, listener);
-        }
-      }
-      process.exitCode = previousExitCode;
-      processOnSpy.mockRestore();
-    }
-  }
 }
 
 describe("runNodeHost connection and optional publications", () => {
@@ -206,9 +180,8 @@ describe("runNodeHost connection and optional publications", () => {
       }
       await settlePublications();
       expect(getPublications(client)).toHaveLength(1);
-      mocks.nodePluginTools = [];
-      mocks.availabilityChanged?.();
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(2));
+      changeTools([]);
+      await expectPublications(client, 2);
       mocks.availabilityChanged?.();
       await settlePublications();
       expect(getPublications(client)).toHaveLength(2);
@@ -221,8 +194,7 @@ describe("runNodeHost connection and optional publications", () => {
       queuePluginResponses(client, initial.promise);
       receiveHello(options, 3);
       await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
-      mocks.nodePluginTools = [];
-      mocks.availabilityChanged?.();
+      changeTools([]);
       initial.reject(new Error("temporary publish failure"));
       await vi.waitFor(() =>
         expect(client.request).toHaveBeenCalledWith(NODE_PLUGIN_TOOLS_UPDATE_METHOD, { tools: [] }),
@@ -234,13 +206,9 @@ describe("runNodeHost connection and optional publications", () => {
     await withReadyNodeHost(async ({ client, options }) => {
       const initialPluginTools = [...mocks.nodePluginTools];
       const initial = createDeferred<unknown>();
-      queuePluginResponses(client, initial.promise);
-      receiveHello(options);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
-      mocks.nodePluginTools = [];
-      mocks.availabilityChanged?.();
-      mocks.nodePluginTools = initialPluginTools;
-      mocks.availabilityChanged?.();
+      await beginPublication(client, options, initial.promise);
+      changeTools([]);
+      changeTools(initialPluginTools);
       initial.resolve({});
       await settlePublications();
       await settlePublications();
@@ -255,14 +223,8 @@ describe("runNodeHost connection and optional publications", () => {
 
   it("preserves retry backoff across duplicate inventory events", async () => {
     await withReadyNodeHost(async ({ client, options }) => {
-      const failures = [
-        createDeferred<unknown>(),
-        createDeferred<unknown>(),
-        createDeferred<unknown>(),
-      ];
-      queuePluginResponses(client, ...failures.map(({ promise }) => promise));
-      receiveHello(options);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
+      const failures = Array.from({ length: 3 }, () => createDeferred<unknown>());
+      await beginPublication(client, options, ...failures.map(({ promise }) => promise));
       vi.useFakeTimers();
       const setTimeoutSpy = vi.spyOn(globalThis, "setTimeout");
       try {
@@ -292,17 +254,13 @@ describe("runNodeHost connection and optional publications", () => {
     await withReadyNodeHost(async ({ client, options }) => {
       const initialPluginTools = [...mocks.nodePluginTools];
       const changed = createDeferred<unknown>();
-      queuePluginResponses(client, Promise.resolve({}), changed.promise);
-      receiveHello(options);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
+      await beginPublication(client, options, Promise.resolve({}), changed.promise);
       await settlePublications();
-      mocks.nodePluginTools = [];
-      mocks.availabilityChanged?.();
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(2));
+      changeTools([]);
+      await expectPublications(client, 2);
       changed.reject(new Error("publication outcome unknown"));
       await settlePublications();
-      mocks.nodePluginTools = initialPluginTools;
-      mocks.availabilityChanged?.();
+      changeTools(initialPluginTools);
       await vi.waitFor(() => {
         const publications = getPublications(client);
         expect(publications.length).toBeGreaterThanOrEqual(3);
@@ -316,20 +274,16 @@ describe("runNodeHost connection and optional publications", () => {
       const initialPluginTools = [...mocks.nodePluginTools];
       const initial = createDeferred<unknown>();
       const second = createDeferred<unknown>();
-      queuePluginResponses(client, initial.promise, second.promise);
-      receiveHello(options);
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(1));
-      mocks.nodePluginTools = [];
-      mocks.availabilityChanged?.();
+      await beginPublication(client, options, initial.promise, second.promise);
+      changeTools([]);
       initial.reject(
         new GatewayClientRequestError({
           code: "INVALID_REQUEST",
           message: "temporary validation failure",
         }),
       );
-      await vi.waitFor(() => expect(getPublications(client)).toHaveLength(2));
-      mocks.nodePluginTools = initialPluginTools;
-      mocks.availabilityChanged?.();
+      await expectPublications(client, 2);
+      changeTools(initialPluginTools);
       second.resolve({});
       await vi.waitFor(() => {
         const publications = getPublications(client);

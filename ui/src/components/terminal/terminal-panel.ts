@@ -56,7 +56,10 @@ export type OpenClawTerminalPanel = HTMLElement &
   >;
 
 /** Owns synchronous PTY/dock authority; Solid reads its publication projection. */
-export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
+export function createTerminalPanel(
+  element: HTMLElement & TerminalInputs,
+  scheduleAfterRender: (callback: () => void) => void,
+) {
   let context: ApplicationContext | undefined;
   let connected = false;
   let completion: Promise<boolean> = Promise.resolve(true);
@@ -71,13 +74,23 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
     if (!connected) {
       return;
     }
-    if (!complete) {
+    const needsCommit = !complete;
+    if (needsCommit) {
       completion = new Promise((resolve) => {
         complete = resolve;
       });
     }
+    const pending = complete;
     for (const listener of listeners) {
       listener();
+    }
+    if (needsCommit) {
+      scheduleAfterRender(() => {
+        // Detach retires this receipt before a retained host starts another render.
+        if (complete === pending) {
+          rendered();
+        }
+      });
     }
   }
   let hostedActionsContent: HTMLElement | undefined;
@@ -123,8 +136,9 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
       // without restoring them, so re-run the normal open path.
       void terminalSessions.restoreSessions();
     }
-    if (changed.has("client") || changed.has("available")) {
-      terminalSessions.scheduleLifecycleSync();
+    terminalSessions.scheduleLifecycleSync();
+    if (changed.has("gatewayConnected") && element.gatewayConnected && sessionPicker?.open()) {
+      sessionPicker.onRefresh();
     }
     for (const tab of terminalSessions.state.tabs) {
       updateTerminalFont(tab.controller, owner.terminalFontFamily);
@@ -146,12 +160,13 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
     notifyPanelHostedTabsChanged(element, [
       element.embedded && element.tabsInHeader,
       terminalSessions.state.activeId,
-      owner.hostedTabs.map(({ id, label, statusLabel, badge, className }) => [
+      owner.hostedTabs.map(({ id, label, statusLabel, badge, className, closeDisabled }) => [
         id,
         label,
         statusLabel,
         badge,
         className,
+        closeDisabled,
       ]),
       terminalSessions.state.booting,
       terminalSessions.canHandoffSessions,
@@ -205,7 +220,7 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
             tab.status === "live" &&
             tab.gatewaySessionId,
         ),
-      client: () => element.client,
+      client: () => (element.gatewayConnected && element.available ? element.client : null),
       config: () => context?.config,
       isCurrent: (tab) =>
         terminalSessions.state.tabs.some((entry) => entry === tab) && tab.status === "live",
@@ -213,9 +228,10 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
       setError: (message) => terminalSessions.setError(message),
     });
     sessionPicker = createTerminalSessionPicker({
-      client: () => element.client,
+      client: () => (element.gatewayConnected && element.available ? element.client : null),
       available: () => element.available,
       hosted: () => element.embedded && element.tabsInHeader,
+      connected: () => element.gatewayConnected,
       currentSessionIds: () =>
         new Set(terminalSessions.state.tabs.map((tab) => tab.gatewaySessionId).filter(Boolean)),
       list: () => terminalSessions.listSessions(),
@@ -235,6 +251,22 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
         .find((tab) => tab.id === terminalSessions.state.activeId)
         ?.controller.fit(),
   });
+
+  function rendered(): void {
+    if (!connected) {
+      return;
+    }
+    const resolve = complete;
+    complete = undefined;
+    const changed = changes;
+    changes = new Set();
+    // Ghostty measures its canvas; only the active session may occupy the viewport.
+    for (const tab of terminalSessions.state.tabs) {
+      tab.host.style.display = tab.id === terminalSessions.state.activeId ? "block" : "none";
+    }
+    updated(changed);
+    resolve?.(true);
+  }
 
   const owner = {
     inputs: element,
@@ -302,21 +334,6 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
         complete = undefined;
       };
     },
-    rendered() {
-      if (!connected) {
-        return;
-      }
-      const resolve = complete;
-      complete = undefined;
-      const changed = changes;
-      changes = new Set();
-      // Ghostty measures its canvas; only the active session may occupy the viewport.
-      for (const tab of terminalSessions.state.tabs) {
-        tab.host.style.display = tab.id === terminalSessions.state.activeId ? "block" : "none";
-      }
-      updated(changed);
-      resolve?.(true);
-    },
     get terminalPanelUploadController() {
       return terminalPanelUploadController;
     },
@@ -324,8 +341,8 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
       return terminalFontFamily(context?.theme.settings.terminalFontFamily);
     },
     get hostedTabs() {
-      return terminalPanelHostedTabs(terminalSessions.state.tabs).map((tab) =>
-        Object.assign(tab, { icon: hostedTabIcon.cloneNode(true) }),
+      return terminalPanelHostedTabs(terminalSessions.state.tabs, element.gatewayConnected).map(
+        (tab) => Object.assign(tab, { icon: hostedTabIcon.cloneNode(true) }),
       );
     },
     get activeHostedTabId() {
@@ -410,6 +427,7 @@ export function createTerminalPanel(element: HTMLElement & TerminalInputs) {
         tabs: terminalSessions.state.tabs,
         activeId: terminalSessions.state.activeId,
         booting: terminalSessions.state.booting,
+        connected: element.gatewayConnected,
         connecting:
           terminalSessions.waitingForRefresh ||
           (terminalSessions.state.booting && terminalSessions.state.tabs.length === 0) ||

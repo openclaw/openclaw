@@ -27,9 +27,9 @@ it("distinguishes users from groups", () => {
   expect(zalouserMessagingAdapter.inferTargetChatType({ to: "group:456" })).toBe("group");
 });
 
-import { listZalouserDirectoryGroupMembers } from "./directory.js";
 import { createZalouserSendReceipt } from "./send-receipt.js";
 import { sendMessageZalouser } from "./send.js";
+import { listZaloGroupMembers } from "./zalo-js.js";
 
 vi.mock("./qr-temp-file.js", () => ({
   writeQrDataUrlToTempFile: vi.fn(async () => null),
@@ -374,10 +374,12 @@ it.each([
   ["group:1471383327500481391", "1471383327500481391"],
   ["1471383327500481391", "1471383327500481391"],
 ])("resolves directory group %s to %s", async (groupId, expectedId) => {
-  const listZaloGroupMembers = vi.fn(async () => []);
-  await listZalouserDirectoryGroupMembers(
-    { cfg: {}, accountId: "default", groupId },
-    { listZaloGroupMembers },
-  );
+  vi.mocked(listZaloGroupMembers).mockResolvedValueOnce([]);
+  await required(zalouserPlugin.directory?.listGroupMembers)({
+    cfg: {},
+    accountId: "default",
+    groupId,
+    runtime: createNonExitingRuntimeEnv(),
+  });
   expect(listZaloGroupMembers).toHaveBeenLastCalledWith("default", expectedId);
 });

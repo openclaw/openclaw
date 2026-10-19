@@ -38,7 +38,7 @@ import { AuthProfileStoreUnreadableError } from "./store-unreadable-error.js";
 import { publishAuthProfileStoreUpdate } from "./store-update-publication.js";
 import { runAuthProfileStoreUpdate } from "./store-update.js";
 import type { AuthStoreUpdateInput } from "./store.worker-contract.js";
-import type { AuthProfileCredential, AuthProfileStore, OAuthCredential } from "./types.js";
+import type { AuthProfileStore, OAuthCredential } from "./types.js";
 import { runAuthProfileUsage } from "./usage-lifecycle.js";
 
 export type CandidateAuthProfileStore = {
@@ -173,7 +173,12 @@ export async function loadCandidateAuthProfileStoreAsync(
 export async function prepareCandidateAuthProfileCredentialRead(
   candidate: CandidateAuthProfileStore,
   profileId: string,
-): Promise<() => AuthProfileCredential | undefined> {
+): Promise<
+  Pick<
+    ReturnType<typeof captureAuthProfileCredentialAuthority>,
+    "readCurrentCredential" | "waitUntilCurrent"
+  >
+> {
   // Key the authority by the adopted file identity that later writes publish under.
   assertCandidateDatabaseIdentity(candidate);
   const authority = captureAuthProfileCredentialAuthority(
@@ -186,7 +191,8 @@ export async function prepareCandidateAuthProfileCredentialRead(
   );
   const store = await loadCandidateAuthProfileStoreAsync(candidate);
   authority.observe(store?.profiles[profileId]);
-  return authority.readCurrentCredential;
+  await authority.waitUntilCurrent();
+  return authority;
 }
 
 type CandidateAuthProfileUpdate = {

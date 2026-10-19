@@ -22,6 +22,8 @@ import {
 } from "../../gateway/message-action-turn-capability.js";
 import * as workerAdmission from "../../infra/sqlite-worker-operation-admission.js";
 import { sqliteWorkerOwnerProbe } from "../../infra/sqlite-worker-owner-probe.test-support.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
 import {
   bindUserTurnPromptReactionSource,
   readUserTurnPromptReactionSource,
@@ -356,6 +358,38 @@ it("reserves source completion for an explicit terminal addition, never acknowle
     ).toBe(complete);
   }
   expect(external).not.toHaveBeenCalled();
+});
+
+it("records a terminal reaction on its exact source despite a colliding physical session", async () => {
+  const messageId = await persist();
+  const createOperation = (storeScope: string) =>
+    createReplyOperation({
+      sessionKey: scope.sessionKey,
+      sessionId: scope.sessionId,
+      resetTriggered: false,
+      target: captureSessionTarget({
+        storeScope,
+        sessionKey: scope.sessionKey,
+        incarnation: scope.sessionId,
+      }),
+    });
+  const operation = createOperation(required(recorder.getAdmissionReceipt()).storePath);
+  const competingOperation = createOperation(state.path("other", "sessions.json"));
+  operation.attachBackend({ kind: "embedded", runId, cancel() {} });
+  try {
+    const [outcome] = await Promise.allSettled([execute({ final: true })]);
+    expect(broadcast).toHaveBeenCalledOnce();
+    expect(reactions()[messageId]).toEqual([
+      { emoji: "👍", count: 1, identities: [{ id: "agent:main", label: "Test Agent" }] },
+    ]);
+    expect(outcome.status).toBe("fulfilled");
+    expect(operation.sourceReplyDelivered).toBe(true);
+    expect(competingOperation.sourceReplyDelivered).toBe(false);
+    expect(external).not.toHaveBeenCalled();
+  } finally {
+    operation.complete();
+    competingOperation.complete();
+  }
 });
 
 it("requires a committed host-owned prompt and rejects model-selected targets or identities", async () => {

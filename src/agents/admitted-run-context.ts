@@ -50,7 +50,7 @@ export type AdmittedRunContext = Readonly<{
 
 export type AdmittedRunOperatorAuthority = Readonly<{
   profileId: string;
-  /** Host-captured original authenticated input, consumed only by restart-claim admission. */
+  /** Host-captured original input; claim/occurrence owners revalidate it for continuations. */
   recoverySnapshot?: import("../gateway/operator-run-recovery-source.js").OperatorRunRecoverySnapshot;
   scopes: readonly string[];
   /** Original access dependency; null is proven independent, undefined is unclassified. */
@@ -121,7 +121,7 @@ export function createAdmittedRunOperatorAuthority(
     gatewayAccessGrant: source.gatewayAccessGrant
       ? Object.freeze({ ...source.gatewayAccessGrant })
       : source.gatewayAccessGrant,
-    source: source.source ?? Object.freeze({}),
+    source: source.source ?? {},
     signal,
     retain: source.retain,
     onModelPolicyChanged: source.onModelPolicyChanged,
@@ -455,7 +455,7 @@ export function retainAdmittedRunBeforeToolCallRecovery(
       throw new Error("admitted run native hook recovery is no longer active");
     }
   };
-  return Object.freeze({
+  return {
     assertActive,
     release: () => {
       if (activeNativeHookRecoveryLeases.get(runId) === recovery) {
@@ -463,7 +463,7 @@ export function retainAdmittedRunBeforeToolCallRecovery(
         recovery.releaseOperatorAuthority?.();
       }
     },
-  });
+  };
 }
 
 type ExecutionIdentityRecoveryAdmission = Readonly<{
@@ -486,14 +486,14 @@ export function createExecutionIdentityRecoveryAdmission(params: {
     retryOnly: params.retryOnly,
     consume: (runId: string) => {
       if (consumed) {
-        return Object.freeze({ accepted: false });
+        return { accepted: false };
       }
       consumed = true;
       if (
         params.expectedOperationalRunId !== undefined &&
         params.expectedOperationalRunId !== runId
       ) {
-        return Object.freeze({ accepted: false });
+        return { accepted: false };
       }
       // The trusted recovery resolver binds the current operational owner separately.
       // Without that explicit binding, only the token's original run may redeem it.
@@ -501,7 +501,7 @@ export function createExecutionIdentityRecoveryAdmission(params: {
         params.expectedOperationalRunId !== undefined || params.token?.runId === runId
           ? params.token
           : undefined;
-      return Object.freeze({ accepted: true, ...(token ? { token } : {}) });
+      return { accepted: true, ...(token ? { token } : {}) };
     },
   });
 }
@@ -682,27 +682,6 @@ export async function resolvePreparedRunAdmission(params: {
   return admitted;
 }
 
-function consumeRecoveryAdmission(params: {
-  admission: ExecutionIdentityRecoveryAdmission | undefined;
-  runId: string;
-}): Readonly<{ accepted: boolean; token?: ExecutionIdentityAdmissionToken }> {
-  const consumed: Readonly<{
-    accepted: boolean;
-    token?: ExecutionIdentityAdmissionToken;
-  }> =
-    typeof params.admission?.consume === "function"
-      ? params.admission.consume(params.runId)
-      : Object.freeze({ accepted: false });
-  const token = consumed.token;
-  if (!token) {
-    return consumed;
-  }
-  return Object.freeze({
-    accepted: consumed.accepted,
-    token: Object.isFrozen(token) ? token : Object.freeze(token),
-  });
-}
-
 /**
  * Owns the single post-prepare allocation/adoption/capture decision for an execution.
  * Queue loss remains audit loss only; the admitted execution keeps its exact token object.
@@ -725,16 +704,16 @@ function admitPreparedAgentRun(params: {
   };
   // Consume the one-shot recovery lease even while collection is disabled so a
   // later operational instance cannot adopt evidence that belonged to this run.
-  const recovery = consumeRecoveryAdmission({
-    admission: params.recovery,
-    runId: params.facts.runId,
-  });
+  const recovery =
+    typeof params.recovery?.consume === "function"
+      ? params.recovery.consume(params.facts.runId)
+      : undefined;
   if (!isExecutionIdentityCollectionEnabled(params.cfg)) {
     return Object.freeze(prepareGatewayContextBindingOwner(admitted));
   }
   const executionIdentityToken =
-    recovery.token ??
-    (!params.recovery || (recovery.accepted && !params.recovery.retryOnly)
+    recovery?.token ??
+    (!params.recovery || (recovery?.accepted && !params.recovery.retryOnly)
       ? createExecutionIdentityAdmissionToken(params.facts.runId)
       : undefined);
   if (!executionIdentityToken) {

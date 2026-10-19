@@ -4,15 +4,17 @@ import type {
   SessionsPatchManyParams,
 } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
 import { awaitGateBeforeSettlement, withinTest } from "../../../test/helpers/promise.js";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import type { SessionEntry } from "../../config/sessions.js";
+import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
 import {
   loadSessionEntry,
   loadTranscriptEvents,
   replaceSessionEntry,
   upsertSessionEntryCore,
 } from "../../config/sessions/session-accessor.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import { createReplyOperation } from "../../sessions/session-controller.operation.js";
 import { createDeferredCore } from "../../shared/deferred.js";
 import { closeOpenClawAgentDatabasesForTest } from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteAdmission } from "../../state/openclaw-agent-write-admission.js";
@@ -31,7 +33,17 @@ const readSession = (key: string) => loadSessionEntry(scopeFor(key));
 const seedSession = (key: string, entry: Partial<SessionEntry> = {}) =>
   upsertSessionEntryCore(scopeFor(key), { sessionId: key, updatedAt: 1, ...entry });
 const replyOperation = (key: string, sessionId = key) =>
-  createReplyOperation({ ...scopeFor(key), sessionId, resetTriggered: false });
+  createReplyOperation({
+    ...scopeFor(key),
+    sessionId,
+    target: captureSessionTarget({
+      storeScope: resolveSessionStorePathCore(undefined, { agentId: "main" }),
+      sessionKey: key,
+      agentId: "main",
+      incarnation: sessionId,
+    }),
+    resetTriggered: false,
+  });
 const organizationExpectation = {
   expectedSidebarRoot: false,
   expectedCategory: null,
@@ -78,8 +90,6 @@ async function invokePatchSession(
       loadGatewayModelCatalogSnapshot: vi.fn(async () => ({ entries: [], routeVariants: [] })),
       broadcastToConnIds: vi.fn(),
       getSessionEventSubscriberConnIds: () => new Set(),
-      chatAbortControllers: new Map(),
-      chatQueuedTurns: new Map(),
       dedupe: new Map(),
     } as unknown as GatewayRequestContext,
     respond: (...response: Parameters<RespondFn>) => responses.push(response),

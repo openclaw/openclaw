@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createSignal, For, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, For, onSettled, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { toSanitizedMarkdownHtml } from "../../components/markdown.ts";
 import { Icon } from "../../components/solid/icon.tsx";
@@ -95,6 +95,32 @@ function StatusChips(props: { status: LogbookStatusPayload }) {
   );
 }
 
+function LogbookKeyframe(props: { model: LogbookModel; id: number }) {
+  // An expanded image keeps its decoded source when the bounded shared cache evicts it.
+  const preview = createMemo<string | undefined>(
+    (previous) => props.model.state.framePreviews.get(props.id) ?? previous,
+  );
+  onSettled(() => {
+    if (!preview()) {
+      void props.model.loadFrame(props.id);
+    }
+  });
+  return (
+    <Show
+      when={preview()}
+      fallback={
+        <div class="logbook-card__keyframe logbook-card__keyframe--loading">
+          {t("common.loading")}
+        </div>
+      }
+    >
+      {(src) => (
+        <img class="logbook-card__keyframe" src={src()} alt={t("logbook.card.keyframeAlt")} />
+      )}
+    </Show>
+  );
+}
+
 function LogbookCard(props: {
   model: LogbookModel;
   card: LogbookCardPayload;
@@ -108,22 +134,6 @@ function LogbookCard(props: {
     !props.model.state.framePreviewFailed.has(props.card.keyframeId)
       ? props.card.keyframeId
       : undefined;
-  const preview = () =>
-    keyframeId() !== undefined ? props.model.state.framePreviews.get(keyframeId()!) : undefined;
-  // Load the expanded card's missing keyframe through the Gateway-backed preview cache.
-  createEffect(
-    () => ({
-      expanded: expanded(),
-      id: keyframeId(),
-      preview: preview(),
-      model: props.model,
-    }),
-    (current) => {
-      if (current.expanded && current.id !== undefined && !current.preview) {
-        void current.model.loadFrame(current.id);
-      }
-    },
-  );
   return (
     <article
       class={["logbook-card", { "logbook-card--expanded": expanded() }]}
@@ -152,20 +162,9 @@ function LogbookCard(props: {
       </button>
       <Show when={expanded()}>
         <div class="logbook-card__body">
-          <Show
-            when={preview()}
-            fallback={
-              <Show when={keyframeId() !== undefined}>
-                <div class="logbook-card__keyframe logbook-card__keyframe--loading">
-                  {t("common.loading")}
-                </div>
-              </Show>
-            }
-          >
-            {(src) => (
-              <img class="logbook-card__keyframe" src={src()} alt={t("logbook.card.keyframeAlt")} />
-            )}
-          </Show>
+          <For each={keyframeId() === undefined ? [] : [keyframeId()!]}>
+            {(id) => <LogbookKeyframe model={props.model} id={id} />}
+          </For>
           <Show when={props.card.detail}>
             <p class="logbook-card__detail">{props.card.detail.trim()}</p>
           </Show>

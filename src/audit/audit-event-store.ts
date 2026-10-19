@@ -22,7 +22,6 @@ import {
   AUDIT_INBOUND_MESSAGE_COMPLETED_REASONS,
   AUDIT_INBOUND_MESSAGE_SKIPPED_REASONS,
   AUDIT_OUTBOUND_MESSAGE_SUPPRESSED_REASONS,
-  isOutboundMessageProgressInput,
   type AgentRunAuditEventRecord,
   type AuditEventInput,
   type AuditEventListQuery,
@@ -577,7 +576,7 @@ function deleteExpiredAuditEvents(db: EngineConnection, now: number) {
 function pruneAfterInsert(db: EngineConnection, now: number, at: number, sequence: number): void {
   const kysely = getNodeSqliteKysely<AuditDatabase>(db);
   const cached = auditEventRetention.get(db);
-  const retention = cached
+  let retention = cached
     ? {
         rowCount: cached.rowCount + 1,
         nextExpiryAt: Math.min(cached.nextExpiryAt, at + AUDIT_EVENT_RETENTION_MS),
@@ -590,24 +589,23 @@ function pruneAfterInsert(db: EngineConnection, now: number, at: number, sequenc
     pruned = true;
   }
   if (retention.rowCount > AUDIT_EVENT_MAX_ROWS) {
-    const retainedRows = Math.max(0, AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS);
-    const overflowRow = executeSqliteQueryTakeFirstSync(
+    const overflowCutoff = kysely
+      .selectFrom("audit_events")
+      .select("sequence")
+      .orderBy("sequence", "desc")
+      .offset(AUDIT_EVENT_MAX_ROWS - AUDIT_EVENT_PRUNE_BATCH_ROWS)
+      .limit(1);
+    const overflow = executeSqliteQuerySync(
       db,
-      kysely
-        .selectFrom("audit_events")
-        .select("sequence")
-        .orderBy("sequence", "desc")
-        .offset(retainedRows)
-        .limit(1),
+      kysely.deleteFrom("audit_events").where("sequence", "<=", overflowCutoff),
     );
-    const sequenceCutoff = overflowRow ? normalizeSqliteNumber(overflowRow.sequence) : undefined;
-    if (sequenceCutoff !== undefined) {
-      const overflow = executeSqliteQuerySync(
-        db,
-        kysely.deleteFrom("audit_events").where("sequence", "<=", sequenceCutoff),
-      );
-      retention.rowCount = Math.max(0, retention.rowCount - Number(overflow.numAffectedRows ?? 0n));
+    const deleted = Number(overflow.numAffectedRows ?? 0n);
+    if (deleted > 0) {
+      retention.rowCount = Math.max(0, retention.rowCount - deleted);
       pruned = true;
+    } else {
+      retention = readAuditEventRetention(db);
+      pruned = false;
     }
   }
   if (pruned) {
@@ -629,9 +627,6 @@ export function recordAuditEventInDatabase(
   input: AuditEventInput,
   options: OpenClawStateDatabaseOptions & { database: OpenClawStateDatabase },
 ): AuditEventRecord | undefined {
-  if (isOutboundMessageProgressInput(input)) {
-    throw new Error("outbound message progress belongs to its companion store");
-  }
   const executionToken =
     input.kind === "message" && input.direction === "outbound"
       ? planMessageExecutionBinding(input.executionIdentityToken, input.runId)

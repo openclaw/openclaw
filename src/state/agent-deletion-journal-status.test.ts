@@ -5,9 +5,9 @@ import { isAgentDeletionBlocked, withAgentDeletion } from "../agents/agent-lifec
 import { listConfiguredOwnerInputs } from "../agents/prepared-model-runtime.configured.js";
 import { prepareSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import {
-  beginSessionWorkAdmission,
+  beginSessionEffect,
   closeAgentWorkAdmissions,
-} from "../sessions/session-lifecycle-admission.js";
+} from "../sessions/session-controller.lifecycle.js";
 import {
   withOpenClawTestState,
   type OpenClawTestState,
@@ -84,14 +84,14 @@ it("revokes queued work and refuses the next turn after a worker deletion withou
       serializeOwner: true,
       assertAllowed: () => {},
     };
-    const first = await beginSessionWorkAdmission(target);
+    const first = await beginSessionEffect(target);
     first.release();
     const directReads = vi.spyOn(stateReads, "withExistingOpenClawStateDatabaseCurrentReadOnly");
     expect(isAgentDeletionBlocked("doomed", fixture.options)).toBe(false);
     expect(directReads).not.toHaveBeenCalled();
     reads.mockClear();
-    const active = await beginSessionWorkAdmission(target);
-    const queued = beginSessionWorkAdmission(target);
+    const active = await beginSessionEffect(target);
+    const queued = beginSessionEffect(target);
     const refused = expect(queued).rejects.toThrow("deletion");
     const reopen = closeAgentWorkAdmissions({
       ...target,
@@ -101,7 +101,7 @@ it("revokes queued work and refuses the next turn after a worker deletion withou
       await fixture.deleting(async () => {
         await refused;
         expect(active.isActive()).toBe(true);
-        await expect(beginSessionWorkAdmission(target)).rejects.toThrow("deletion");
+        await expect(beginSessionEffect(target)).rejects.toThrow("deletion");
         expect(await fixture.read()).toBe("pending");
         directReads.mockClear();
         expect(isAgentDeletionBlocked("doomed", fixture.options)).toBe(true);
@@ -109,7 +109,7 @@ it("revokes queued work and refuses the next turn after a worker deletion withou
         active.release();
       });
       reopen();
-      const resumed = await beginSessionWorkAdmission(target);
+      const resumed = await beginSessionEffect(target);
       resumed.release();
       expect(
         reads.mock.calls.filter(([, command]) => command.type === "agentDeletionJournal.status"),

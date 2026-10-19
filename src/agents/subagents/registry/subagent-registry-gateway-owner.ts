@@ -1,7 +1,8 @@
-import { setImmediate as yieldToEventLoop } from "node:timers/promises";
+import { performance } from "node:perf_hooks";
 import { WorkerTaskError } from "@openclaw/worker-runtime";
 import { readSessionEntryReadOnlyInWorker } from "../../../config/sessions/session-entry-read-runtime.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
+import type { GatewayStartupTrace } from "../../../gateway/server-startup-trace.js";
 import {
   getAgentEventLifecycleGeneration,
   isAgentEventLifecycleGenerationCurrent,
@@ -14,16 +15,26 @@ import {
   withPluginRuntimeGatewayRequestScope,
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
-import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
+import {
+  getCurrentSubagentRunOwner,
+  getSubagentActivationRuns,
+  subagentRuns,
+} from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   assertSubagentRegistryWriteSourceCurrent,
   SubagentRegistryMutationRejectedError,
 } from "./subagent-registry-persistence.js";
-import { publishSubagentRunChanges } from "./subagent-registry-publication.js";
 import { isRetiredSubagentExecution } from "./subagent-registry-restart-recovery-helpers.js";
 import type { SubagentRunRecord } from "./subagent-registry.types.js";
 import { getSubagentRunRuntimeKey } from "./subagent-run-generation.js";
+
+type ActivationMetrics = {
+  authorityRestoreMs: number;
+  publishMs: number;
+  recoveredRuns: number;
+  publishedRuns: number;
+};
 
 const log = createSubsystemLogger("agents/subagents");
 // Worker admission and unavailable policy startup retry; revoked custody never re-arms itself.
@@ -41,6 +52,7 @@ async function restoreSubagentCompletionSource(
   entry: SubagentRunRecord,
   resolver: GatewayContextResolver,
   isGatewayCurrent: () => boolean,
+  metrics?: ActivationMetrics,
 ): Promise<void> {
   const runtimeKey = getSubagentRunRuntimeKey(entry);
   deferredCompletionSources.delete(runtimeKey);
@@ -64,6 +76,7 @@ async function restoreSubagentCompletionSource(
   ) {
     return;
   }
+  const beforeRestore = performance.now();
   let releaseRestored: (() => void) | undefined;
   let continuation:
     | Awaited<
@@ -227,6 +240,9 @@ async function restoreSubagentCompletionSource(
   } finally {
     continuation?.release();
     releaseRestored?.();
+    if (metrics) {
+      metrics.authorityRestoreMs += performance.now() - beforeRestore;
+    }
   }
 }
 
@@ -251,6 +267,7 @@ async function recoverSubagentRunGatewayOwner(
   resolver: GatewayContextResolver,
   onRecovered: (entry: SubagentRunRecord) => void,
   isGatewayCurrent: () => boolean,
+  metrics: ActivationMetrics,
 ): Promise<boolean> {
   const previousResolver = getEntryGatewayContextResolver(expected);
   const gateway = resolver();
@@ -258,34 +275,42 @@ async function recoverSubagentRunGatewayOwner(
     return false;
   }
   let recovered: SubagentRunRecord | undefined;
-  const committed = await mutateSubagentRuns(
-    [expected.runId],
-    (rows) => {
-      const current = rows.get(expected.runId);
-      if (!current) {
-        throw new SubagentRegistryMutationRejectedError(
-          "Subagent Gateway recovery row disappeared",
-        );
-      }
-      return { value: true, postimages: new Map([[current.runId, { ...current }]]) };
-    },
-    {
-      gatewayRecovery: { expected, previousResolver, resolver, gateway },
-      onPublished: (postimages) => {
-        const row = postimages.get(expected.runId);
-        if (row) {
-          bindGatewayContextResolver(row, resolver);
-          if (!row.collect) {
-            subagentRuns.requireCompletionAuthority(row);
-          }
-          recovered = row;
-          subagentRuns.commitOwnership(row);
+  const beforePublish = performance.now();
+  let committed: boolean;
+  try {
+    committed = await mutateSubagentRuns(
+      [expected.runId],
+      (rows) => {
+        const current = rows.get(expected.runId);
+        if (!current) {
+          throw new SubagentRegistryMutationRejectedError(
+            "Subagent Gateway recovery row disappeared",
+          );
         }
+        return { value: true, postimages: new Map([[current.runId, { ...current }]]) };
       },
-    },
-  );
+      {
+        gatewayRecovery: { expected, previousResolver, resolver, gateway },
+        onPublished: (postimages) => {
+          const row = postimages.get(expected.runId);
+          if (row) {
+            bindGatewayContextResolver(row, resolver);
+            if (!row.collect) {
+              subagentRuns.requireCompletionAuthority(row);
+            }
+            recovered = row;
+            subagentRuns.commitOwnership(row);
+            metrics.publishedRuns += 1;
+          }
+        },
+      },
+    );
+  } finally {
+    metrics.publishMs += performance.now() - beforePublish;
+  }
   if (recovered) {
-    await restoreSubagentCompletionSource(recovered, resolver, isGatewayCurrent);
+    metrics.recoveredRuns += 1;
+    await restoreSubagentCompletionSource(recovered, resolver, isGatewayCurrent, metrics);
     if (isGatewayCurrent()) {
       onRecovered(recovered);
     }
@@ -293,12 +318,13 @@ async function recoverSubagentRunGatewayOwner(
   return committed;
 }
 
-/** Bind only the captured inventory, retaining the same Gateway across batch yields. */
+/** Activate unfinished obligations; the registry owns later retention of cold rows. */
 export async function bindSubagentRunGatewayOwners(params: {
   runs: Map<string, SubagentRunRecord>;
   resumedRuns: Set<object>;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   onRecovered: (entry: SubagentRunRecord) => void;
+  startupTrace?: GatewayStartupTrace;
 }): Promise<boolean> {
   const resolver = params.getGatewayContextResolver();
   const gateway = resolver?.();
@@ -306,45 +332,65 @@ export async function bindSubagentRunGatewayOwners(params: {
     return false;
   }
   const isCurrent = () => params.getGatewayContextResolver() === resolver && resolver() === gateway;
-  // New registrations during a yield belong to the next pass, not this captured owner set.
-  const capturedRuns = [...params.runs.values()];
-  let visited = 0;
-  for (const snapshot of capturedRuns) {
-    if (++visited % 128 === 0) {
-      await yieldToEventLoop();
-      if (!isCurrent()) {
-        return false;
+  bindGatewayContextResolver(params.runs, resolver);
+  const capturedRuns = [...getSubagentActivationRuns(params.runs)];
+  const metrics: ActivationMetrics = {
+    authorityRestoreMs: 0,
+    publishMs: 0,
+    recoveredRuns: 0,
+    publishedRuns: 0,
+  };
+  let activeRuns = 0;
+  try {
+    for (const snapshot of capturedRuns) {
+      if (snapshot.execution.status !== "terminal") {
+        activeRuns += 1;
       }
-    }
-    const entry = getCurrentSubagentRunOwner(params.runs, snapshot);
-    if (!entry) {
-      continue;
-    }
-    const previous = getEntryGatewayContextResolver(entry);
-    if (previous) {
-      if (
-        previous() ||
-        (!(entry.execution.status === "terminal" && entry.requesterSettleWake) &&
-          !isRetiredSubagentExecution(entry))
-      ) {
+      const entry = getCurrentSubagentRunOwner(params.runs, snapshot);
+      if (!entry) {
         continue;
       }
-      const previousResumeKey = getSubagentRunRuntimeKey(entry);
-      if (await recoverSubagentRunGatewayOwner(entry, resolver, params.onRecovered, isCurrent)) {
-        params.resumedRuns.delete(previousResumeKey);
+      const previous = getEntryGatewayContextResolver(entry);
+      if (previous) {
+        if (
+          previous() ||
+          (!(entry.execution.status === "terminal" && entry.requesterSettleWake) &&
+            !isRetiredSubagentExecution(entry))
+        ) {
+          continue;
+        }
+        const previousResumeKey = getSubagentRunRuntimeKey(entry);
+        if (
+          await recoverSubagentRunGatewayOwner(
+            entry,
+            resolver,
+            params.onRecovered,
+            isCurrent,
+            metrics,
+          )
+        ) {
+          params.resumedRuns.delete(previousResumeKey);
+        }
+        if (!isCurrent()) {
+          return false;
+        }
+        continue;
       }
+      bindGatewayContextResolver(entry, resolver);
+      await restoreSubagentCompletionSource(entry, resolver, isCurrent, metrics);
       if (!isCurrent()) {
         return false;
       }
-      continue;
     }
-    bindGatewayContextResolver(entry, resolver);
-    await restoreSubagentCompletionSource(entry, resolver, isCurrent);
-    if (!isCurrent()) {
-      return false;
-    }
-    // Binding an existing owner must not supersede a registration already in preparation.
-    publishSubagentRunChanges([entry.childSessionKey], [entry.runId]);
+    return isCurrent();
+  } finally {
+    params.startupTrace?.detail("sidecars.subagent-activation", [
+      ["registryActivationAuthorityRestoreMs", metrics.authorityRestoreMs],
+      ["registryActivationPublishMs", metrics.publishMs],
+      ["registryActivationRuns", capturedRuns.length],
+      ["registryActivationActiveRuns", activeRuns],
+      ["registryActivationRecoveredRuns", metrics.recoveredRuns],
+      ["registryActivationPublishedRuns", metrics.publishedRuns],
+    ]);
   }
-  return isCurrent();
 }

@@ -1,5 +1,8 @@
 import { afterEach, expect, it, vi } from "vitest";
-import type { ControlUiSettingsView } from "../../../src/plugin-sdk/control-ui.js";
+import type {
+  ControlUiSettingsView,
+  ControlUiChannelSettingsView,
+} from "../../../src/plugin-sdk/control-ui.js";
 import type { ControlUiPluginDistribution } from "./control-ui-distribution.ts";
 import { loadControlUiPluginAssets } from "./control-ui-loader.ts";
 import { ControlUiPluginRuntime } from "./control-ui-runtime.ts";
@@ -118,3 +121,41 @@ it.each(["owner", "placement", "duplicate"])(
     f.runtime.dispose();
   },
 );
+
+it("binds channel settings loading to the declared channel without runtime activation", async () => {
+  const f = fixture();
+  const view: ControlUiChannelSettingsView = {
+    placement: { section: "channels", panel: "detail", channelId: "custom" },
+    mount: vi.fn(),
+  };
+  packaged[0]!.settingsViews = [view.placement];
+  vi.mocked(loadControlUiPluginAssets).mockResolvedValue({
+    pluginId: "fixture",
+    settingsViews: [view],
+    default: { id: "fixture", activate: f.activate },
+  });
+  const loaded = await f.runtime.loadSettingsView(view.placement, new AbortController().signal);
+  expect(loaded.view).toBe(view);
+  expect(f.activate).not.toHaveBeenCalled();
+  await expect(
+    f.runtime.loadSettingsView(
+      { ...view.placement, channelId: "foreign" },
+      new AbortController().signal,
+    ),
+  ).rejects.toThrow("one packaged owner");
+  f.runtime.dispose();
+  expect(loaded.signal.aborted).toBe(true);
+});
+it("rejects module channel identity drift even when section and panel match", async () => {
+  const f = fixture();
+  const channelPlacement = { section: "channels", panel: "detail", channelId: "custom" } as const;
+  packaged[0]!.settingsViews = [channelPlacement];
+  vi.mocked(loadControlUiPluginAssets).mockResolvedValue({
+    pluginId: "fixture",
+    settingsViews: [{ placement: { ...channelPlacement, channelId: "foreign" }, mount: vi.fn() }],
+  });
+  await expect(
+    f.runtime.loadSettingsView(channelPlacement, new AbortController().signal),
+  ).rejects.toThrow("Invalid or duplicate");
+  f.runtime.dispose();
+});

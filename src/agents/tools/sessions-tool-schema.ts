@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { SessionMoveProfileTargetSchema } from "../../../packages/gateway-protocol/src/schema/session-placement.js";
 import { SESSIONS_PATCH_MANY_MAX_TARGETS } from "../../../packages/gateway-protocol/src/schema/sessions-patch.js";
+import { UsersListParamsSchema } from "../../../packages/gateway-protocol/src/schema/users.js";
 import {
   SESSION_AGENT_ATTENTION_ICON_IDS,
   SESSION_COLOR_IDS,
@@ -15,6 +16,7 @@ const ACTIONS = [
   "reset",
   "delete",
   "assign_owner",
+  "owner_profiles",
   "group_list",
   "group_set",
   "group_rename",
@@ -33,7 +35,8 @@ const SessionsToolSchema = Type.Object(
     offset: Type.Optional(
       Type.Integer({
         minimum: 0,
-        description: "cloud_profiles: nextOffset from the previous profile-list page.",
+        description:
+          "cloud_profiles or owner_profiles: nextOffset from the previous profile-list page.",
       }),
     ),
     sessionKey: Type.Optional(Type.String({ description: "Target session. Default: current" })),
@@ -127,7 +130,17 @@ const SessionsToolSchema = Type.Object(
         description: "New owner kind for assign_owner",
       }),
     ),
-    ownerId: Type.Optional(Type.String({ description: "New owner id for assign_owner" })),
+    ownerId: Type.Optional(
+      Type.String({
+        description:
+          "assign_owner: canonical Gateway profile ID for a human (prefer trusted requester_profile.id), never a channel sender ID; configured agent ID for an agent.",
+      }),
+    ),
+    githubAccountIds: Type.Optional({
+      ...UsersListParamsSchema.properties.githubAccountIds,
+      description:
+        "owner_profiles: optional verified GitHub account IDs to resolve to canonical Gateway profile IDs. Names and channel sender IDs do not establish a match.",
+    }),
     names: Type.Optional(
       Type.Array(Type.String(), {
         description:

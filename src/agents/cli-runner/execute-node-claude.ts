@@ -260,6 +260,7 @@ export async function executeNodeClaudeRun(params: {
         () =>
           params.deps.resolveRegisteredExecApprovalDecision({
             approvalId: registration.id,
+            expiresAtMs: registration.expiresAtMs,
             preResolvedDecision: registration.finalDecision,
           }),
         skillRuntime?.signal ?? nodeAbortController.signal,

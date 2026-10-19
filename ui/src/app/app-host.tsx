@@ -30,7 +30,6 @@ import {
   resolveUiKnownSelectedGlobalAgentId,
 } from "../lib/sessions/session-key.ts";
 import { showToast } from "../lib/toast.ts";
-import type { ChatPage } from "../pages/chat/chat-page.ts";
 import { retireSessionPaneHandoffs } from "../pages/chat/chat-pane-handoff-lifecycle.ts";
 import { equalShellRouteState, selectShellRouteState } from "./app-host-route-state.ts";
 import { ShellChromeOwner, type ShellChromeHost } from "./app-shell-chrome.ts";
@@ -105,7 +104,7 @@ export class ShellOwner
       (element) => element?.isConnected && element.localName === tagName,
     ) ??
     // Route modules own their nested panels; replay may target one of those islands.
-    this.routeOutlet?.querySelector(tagName) ??
+    this.routeOutlet?.renderedElement?.(tagName) ??
     null;
   readonly elements: ShellOwnedElements = {};
   commandPaletteTarget: CommandPaletteTargetDetail | undefined;
@@ -514,14 +513,7 @@ export class ShellOwner
 
   readonly openNewSession = this.shellNavigation.openNewSession.bind(this.shellNavigation);
 
-  // Shipped Mac app builds without web chrome still drive these handlers.
-  readonly handleNativeToggleSidebar = this.toggleNavigationSurface;
-  readonly handleNativeOpenSearch = this.shellChrome.openPalette;
-  readonly handleNativeToggleSearch = this.shellChrome.handleNativeToggleSearch;
   readonly handleNativeNewSession = this.shellChrome.handleNativeNewSession;
-  readonly handleNativeNavigate = this.shellChrome.handleNativeNavigate;
-  readonly handleWindowResize = this.shellChrome.handleWindowResize;
-  readonly handleDocumentKeydown = this.shellChrome.handleDocumentKeydown;
   get pendingDebugOverlayMode() {
     return this.shellChrome.pendingDebugOverlayMode;
   }
@@ -546,7 +538,6 @@ export class ShellOwner
       ),
     });
   };
-  readonly handleShellNavDrawerToggle = this.shellChrome.handleShellNavDrawerToggle;
   readonly handleCommandPaletteSlashCommand = this.shellChrome.handleCommandPaletteSlashCommand;
   readonly restorePendingLazyAction = this.shellChrome.restorePendingLazyAction;
   readonly nativeNavCollapsed = this.shellChrome.nativeNavCollapsed;
@@ -588,7 +579,7 @@ export class ShellOwner
     // renders their element, independent of further context updates.
     this.restorePendingLazyAction();
     // Chat owns its route island and the drawer input exposed by its custom element.
-    const chatPage = this.routeOutlet?.querySelector<ChatPage>("openclaw-chat-page");
+    const chatPage = this.routeOutlet?.renderedElement?.("openclaw-chat-page");
     if (chatPage) {
       chatPage.navDrawerOpen = this.navDrawerOpen && !this.onboardingMode;
       chatPage.gatewayStatus = this.mobileGatewayStatus;
@@ -656,8 +647,8 @@ declare module "@solidjs/web" {
 export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
   const componentOwner = getOwner();
   const element = document.createElement("openclaw-app-shell");
-  // The mount owns this instance; the effect below handles later runtime changes.
-  const owner = untrack(
+  // Initial construction precedes the live runtime subscription below.
+  const initialOwner = untrack(
     () => new ShellOwner(element, props.runtime, props.getReadiness?.(), props.onboarding),
   );
   // Synchronize Gateway subscriptions and browser listeners for this runtime epoch.
@@ -666,10 +657,10 @@ export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
     (runtime) =>
       runWithOwner(componentOwner, () =>
         createRoot((dispose) => {
-          owner.replaceRuntime(runtime);
-          owner.connect();
+          initialOwner.replaceRuntime(runtime);
+          initialOwner.connect();
           return () => {
-            owner.disconnect();
+            initialOwner.disconnect();
             dispose();
           };
         }),
@@ -677,32 +668,32 @@ export function OpenClawShell(props: OpenClawShellProps): SolidJSX.Element {
   );
   // Publish committed shell DOM to document chrome and the native host.
   createEffect(
-    () => owner.shellRevision(),
+    () => initialOwner.shellRevision(),
     () => {
-      owner.afterCommit();
+      initialOwner.afterCommit();
     },
   );
-  const view = <ApplicationShell host={owner} />;
-  const onShell = untrack(() => props.onShell); // Callback identity belongs to this mount.
+  const view = <ApplicationShell host={initialOwner} />;
+  const initialOnShell = untrack(() => props.onShell);
   onSettled(() => {
-    onShell?.(owner);
-    return () => onShell?.(undefined);
+    initialOnShell?.(initialOwner);
+    return () => initialOnShell?.(undefined);
   });
   return (
     <openclaw-app-shell
       ref={(host) => {
-        owner.element = host;
+        initialOwner.element = host;
         // The optional observer reads committed owner facts without rendering the shell again.
         Object.defineProperties(host, {
           readiness: {
-            get: () => owner.readiness,
+            get: () => initialOwner.readiness,
             set: (value: ControlUiReadiness | undefined) => {
-              owner.readiness = value;
+              initialOwner.readiness = value;
             },
           },
-          updateComplete: { get: () => owner.updateComplete },
-          navigationSidebar: { get: () => owner.navigationSidebar },
-          activeSessionKey: { get: () => owner.activeSessionKey },
+          updateComplete: { get: () => initialOwner.updateComplete },
+          navigationSidebar: { get: () => initialOwner.navigationSidebar },
+          activeSessionKey: { get: () => initialOwner.activeSessionKey },
         });
       }}
     >

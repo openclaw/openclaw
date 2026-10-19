@@ -7,9 +7,9 @@ import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execu
 import { racePromiseWithAbortSignal } from "../../infra/abort-signal.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
 import {
-  beginSessionWorkAdmission,
-  runExclusiveSessionLifecycleMutation,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  runSessionMutation,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   onSessionIdentityMutation,
   type SessionIdentityMutation,
@@ -304,7 +304,7 @@ describe("automatic worker planning protections", () => {
       }
     };
     if (protection.startsWith("lifecycle")) {
-      await runExclusiveSessionLifecycleMutation("archive", {
+      await runSessionMutation({
         scope: storePath,
         identities: [protection.endsWith("-key") ? protectedKey : protectedId],
         run,
@@ -331,7 +331,7 @@ describe("automatic worker planning protections", () => {
       });
       release = () => clearAgentRunContext("maintenance-live-run");
     } else if (protection.startsWith("work")) {
-      const lease = await beginSessionWorkAdmission({
+      const lease = await beginSessionEffect({
         scope: storePath,
         identities: [protection.endsWith("-key") ? protectedKey : protectedId],
         assertAllowed: () => {},

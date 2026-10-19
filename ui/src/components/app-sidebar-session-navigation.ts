@@ -101,8 +101,23 @@ import {
   SidebarProjectionMemo,
 } from "./sidebar-projection-memo.ts";
 import { restoreSnapshotSections, restoreSnapshotSession } from "./sidebar-snapshot-model.ts";
+import { mountedViewerSessionKeys } from "./solid/viewer-facepile.tsx";
 
 export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase {
+  readonly personCardTriggers = new WeakMap<HTMLElement, HTMLElement>();
+  readonly presencePeople = new Map<string, HTMLElement>();
+
+  mountedPresence() {
+    return {
+      sessionKeys: mountedViewerSessionKeys(this.hostElement),
+      activityProfileIds: new Set(
+        [...this.presencePeople.values()]
+          .filter((element) => this.hostElement.contains(element))
+          .map((element) => element.dataset.personCardKey?.slice("profile:".length) ?? ""),
+      ),
+    };
+  }
+
   shouldPublishSessionData(): boolean {
     return this.sessionProjection.shouldPublishSessionData(this, {
       snapshot: Boolean(this.sidebarSnapshot),
@@ -700,7 +715,7 @@ export abstract class AppSidebarSessionNavigationElement extends AppSidebarBase 
   }
 
   get resolveSessionAttention() {
-    return this.attention.resolve();
+    return this.attention.readResolver();
   }
 
   projectHomeSession(row: GatewaySessionRow, agentId: string): SidebarHomeSession {

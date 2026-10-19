@@ -20,7 +20,7 @@ import { resolveGatewaySessionStoreTargetWithStoreAsync } from "../gateway/sessi
 import { emitAgentEvent } from "../infra/agent-events.js";
 import { parseAgentSessionKey } from "../routing/session-key.js";
 import { createDeferredCore } from "../shared/deferred.js";
-import * as requesterTransfer from "./subagents/registry/subagent-registry-requester-wake-commit.js";
+import * as requesterTransfer from "./subagents/registry/subagent-registry-requester-yield.js";
 
 const { config, callGatewayMock, readAcpSessionMetaMock, readAcpSessionMetaForEntryMock } =
   vi.hoisted(() => ({
@@ -105,8 +105,11 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createSessionConversationTestRegistry } from "../test-utils/session-conversation-registry.js";
-import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from "./embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
+import {
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import {
   registerSessionsSendRequesterRetirementTests,
@@ -654,21 +657,25 @@ describe("sessions_send child coordination", () => {
     announceTesting.setDepsForTest({ callGateway: callGatewayMock });
     const enteredPreparation = createDeferredCore();
     const releasePreparation = createDeferredCore();
-    const commit = requesterTransfer.commitRequesterInitialTransfer;
+    const commit = requesterTransfer.commitRequesterTransfer;
     const barrier = vi
-      .spyOn(requesterTransfer, "commitRequesterInitialTransfer")
-      .mockImplementation((context, params) =>
-        commit(context, {
-          ...params,
-          prepare: async () => {
-            await params.prepare?.();
-            if (params.kind === "intent") {
-              enteredPreparation.resolve();
-              await releasePreparation.promise;
-            }
-          },
-        }),
-      );
+      .spyOn(requesterTransfer, "commitRequesterTransfer")
+      .mockImplementation((params, options) => {
+        const prepareYield = params.prepare;
+        return commit(
+          prepareYield
+            ? {
+                ...params,
+                prepare: async () => {
+                  await prepareYield();
+                  enteredPreparation.resolve();
+                  await releasePreparation.promise;
+                },
+              }
+            : params,
+          options,
+        );
+      });
     let stopObserving = () => {};
     try {
       const tool = createSessionsSendTool({

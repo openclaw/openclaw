@@ -115,7 +115,7 @@ function createReadAvailabilityAssertion(
     assertCurrent?.();
     context ??= captureOpenClawStateWorkerContext({ env: options.env });
     (context.assertPublicationCurrent ?? context.admission.assertCurrent)();
-    assertPluginStatePublicationSettled(context.admission.identity.key);
+    assertPluginStatePublicationSettled(context.admission.identity.key, options);
   };
 }
 

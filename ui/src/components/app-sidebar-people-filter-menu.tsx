@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { createMemo } from "solid-js";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import type { PickerFocusHandle } from "./select-picker-types.ts";
 import type { SidebarMenusOwner } from "./sidebar-menus-types.ts";
 import type { SidebarMenus } from "./sidebar-menus.tsx";
 import { SidebarSessionFilterPopover } from "./sidebar-session-filter-popover.tsx";
@@ -19,6 +20,8 @@ export function renderSidebarPeopleFilterMenuForMenus(
   host: SidebarMenusOwner,
   position: NonNullable<SidebarMenus["peopleFilterMenuPosition"]>,
 ): JSX.Element {
+  const pickers = new Map<string, PickerFocusHandle>();
+  let reset: HTMLButtonElement | undefined;
   const people = () => host.people;
   const commit = (update: () => void) => {
     if (menus.peopleFilterMenuPosition !== position) {
@@ -36,12 +39,17 @@ export function renderSidebarPeopleFilterMenuForMenus(
       class="sidebar-session-sort-menu sidebar-people-filter-menu"
       anchor={menus.triggers.get("peopleFilter") ?? null}
       label={t("presence.filters.label")}
-      initialFocusSelector="#sidebar-people-status"
+      initialFocus={() => pickers.get("status")?.trigger}
+      focusTargets={() => [
+        ...[...pickers.values()].flatMap((picker) => picker.elements()),
+        ...(reset ? [reset] : []),
+      ]}
       onClose={menus.positionedMenuHandlers("peopleFilter").onClose}
       content={
         <>
           <div class="sidebar-session-menu-section">
             <Picker
+              focusRef={(handle) => pickers.set("status", handle)}
               id="sidebar-people-status"
               label={t("sessionsView.status")}
               value={people().statusFilter}
@@ -59,6 +67,7 @@ export function renderSidebarPeopleFilterMenuForMenus(
               }}
             />
             <Picker
+              focusRef={(handle) => pickers.set("sort", handle)}
               id="sidebar-people-sort"
               label={t("chat.sidebar.sortBy")}
               value={people().sortMode}
@@ -80,6 +89,7 @@ export function renderSidebarPeopleFilterMenuForMenus(
           {changed() ? (
             <footer class="sidebar-session-menu-footer">
               <button
+                ref={(element) => (reset = element)}
                 type="button"
                 id="sidebar-people-reset"
                 class="sidebar-session-filter-footer"

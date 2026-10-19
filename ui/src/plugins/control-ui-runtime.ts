@@ -7,6 +7,7 @@ import type {
 import { CONTROL_UI_PLUGIN_AUTH_GRANT_TTL_MS } from "../../../src/gateway/control-ui-plugin-frame-contract.js";
 import type {
   ControlUiSettingsPlacement,
+  ControlUiChannelSettingsView,
   ControlUiSettingsView,
 } from "../../../src/plugin-sdk/control-ui-settings.js";
 import type {
@@ -67,6 +68,14 @@ const UI_CAPABILITY_BY_CONTRIBUTION = {
 const CONTRIBUTION_ID = /^[a-zA-Z0-9][a-zA-Z0-9._-]{0,127}$/;
 const ACTIVATION_TIMEOUT_MS = 15_000;
 
+function sameSettingsPlacement(a: ControlUiSettingsPlacement, b: ControlUiSettingsPlacement) {
+  return (
+    a.section === b.section &&
+    a.panel === b.panel &&
+    (a.section !== "channels" || (b.section === "channels" && a.channelId === b.channelId))
+  );
+}
+
 export class ControlUiPluginRuntime implements ControlUiPluginCapability {
   private readonly owners = new Map<string, ControlUiPluginOwner>();
   private readonly preloads = new ControlUiPluginAssetPreloads();
@@ -107,15 +116,21 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
     return [...this.diagnostics, ...warnings];
   }
 
+  loadSettingsView(
+    placement: ControlUiSettingsView["placement"],
+    signal: AbortSignal,
+  ): Promise<{ view: ControlUiSettingsView; signal: AbortSignal; dispose: () => void }>;
+  loadSettingsView(
+    placement: ControlUiChannelSettingsView["placement"],
+    signal: AbortSignal,
+  ): Promise<{ view: ControlUiChannelSettingsView; signal: AbortSignal; dispose: () => void }>;
   async loadSettingsView(placement: ControlUiSettingsPlacement, signal: AbortSignal) {
     if (this.disposed) {
       throw new Error("The plugin UI runtime has ended.");
     }
     signal.throwIfAborted();
     const matches = controlUiPluginDistributions.filter((entry) =>
-      entry.settingsViews?.some(
-        (item) => item.section === placement.section && item.panel === placement.panel,
-      ),
+      entry.settingsViews?.some((item) => sameSettingsPlacement(item, placement)),
     );
     if (matches.length !== 1) {
       throw new Error("Settings presentation requires one packaged owner.");
@@ -166,14 +181,10 @@ export class ControlUiPluginRuntime implements ControlUiPluginCapability {
       const declared = module.settingsViews.every(
         (view) =>
           typeof view.mount === "function" &&
-          distribution.settingsViews?.some(
-            (item) =>
-              item.section === view.placement.section && item.panel === view.placement.panel,
-          ),
+          distribution.settingsViews?.some((item) => sameSettingsPlacement(item, view.placement)),
       );
-      const views: readonly ControlUiSettingsView[] = module.settingsViews.filter(
-        (view) =>
-          view.placement.section === placement.section && view.placement.panel === placement.panel,
+      const views = module.settingsViews.filter((view) =>
+        sameSettingsPlacement(view.placement, placement),
       );
       const view = views[0];
       if (!declared || views.length !== 1 || !view) {

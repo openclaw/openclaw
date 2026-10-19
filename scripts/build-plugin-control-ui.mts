@@ -58,14 +58,14 @@ async function buildBundledPluginControlUi(
 async function prepareBundledSettingsControlUi(repoRoot: string): Promise<void> {
   const selected: string[] = [];
   for (const entry of collectSourceCheckoutPluginBuildEntries({ cwd: repoRoot })) {
-    if (entry.isolated || !isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
+    if (!isRecord(entry.packageJson) || !controlUiSource(entry.packageJson)) {
       continue;
     }
     const rootDir = path.join(repoRoot, "extensions", entry.id);
     const manifest = JSON.parse(
       await fs.readFile(path.join(rootDir, "openclaw.plugin.json"), "utf8"),
     );
-    const declaration = normalizeManifestControlUi(manifest.controlUi);
+    const declaration = normalizeManifestControlUi(manifest.controlUi, manifest.channels);
     if (!declaration.ok) {
       throw new Error(`Invalid Control UI declaration for ${entry.id}: ${declaration.error}`);
     }

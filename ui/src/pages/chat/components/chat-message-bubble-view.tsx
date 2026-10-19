@@ -284,29 +284,41 @@ function AssistantViews(props: ContentProps) {
   return (
     <Show when={props.state().sourceRole === "assistant"}>
       <For each={props.state().assistantViewBlocks} keyed={false}>
-        {(block) => (
-          <div class="chat-tool-card__widget-host">
-            <ToolPreview
-              preview={block().preview}
-              surface="chat_message"
-              options={{
-                rawText: block().rawText ?? null,
-                canvasPluginSurfaceUrl: props.options.canvasPluginSurfaceUrl,
-                boardProvider: props.options.boardProvider,
-                widgetLayout: props.options.widgetLayout,
-                embedSandboxMode: props.options.embedSandboxMode ?? "scripts",
-                allowExternalEmbedUrls: props.options.allowExternalEmbedUrls,
-                sessionKey: props.options.sessionKey,
-                messageTimestamp: messageTimestamp(),
-              }}
-            />
-            <Show when={block().rawText}>
-              <div class="chat-tool-card__widget-raw">
-                <ChatToolRawOutput text={block().rawText!} style={{ display: "contents" }} />
-              </div>
-            </Show>
-          </div>
-        )}
+        {(block) => {
+          let rawToggle: HTMLButtonElement | undefined;
+          return (
+            <div class="chat-tool-card__widget-host">
+              <ToolPreview
+                preview={block().preview}
+                surface="chat_message"
+                options={{
+                  rawText: block().rawText ?? null,
+                  toggleRawDetails: () => {
+                    const open = rawToggle?.getAttribute("aria-expanded") !== "true";
+                    rawToggle?.click();
+                    return Boolean(rawToggle && open);
+                  },
+                  canvasPluginSurfaceUrl: props.options.canvasPluginSurfaceUrl,
+                  boardProvider: props.options.boardProvider,
+                  widgetLayout: props.options.widgetLayout,
+                  embedSandboxMode: props.options.embedSandboxMode ?? "scripts",
+                  allowExternalEmbedUrls: props.options.allowExternalEmbedUrls,
+                  sessionKey: props.options.sessionKey,
+                  messageTimestamp: messageTimestamp(),
+                }}
+              />
+              <Show when={block().rawText}>
+                <div class="chat-tool-card__widget-raw">
+                  <ChatToolRawOutput
+                    text={block().rawText!}
+                    toggleRef={(element) => (rawToggle = element)}
+                    style={{ display: "contents" }}
+                  />
+                </div>
+              </Show>
+            </div>
+          );
+        }}
       </For>
     </Show>
   );

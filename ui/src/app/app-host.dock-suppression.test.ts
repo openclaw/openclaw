@@ -3,9 +3,9 @@
 import type { RouterState } from "@openclaw/uirouter";
 import { afterEach, expect, it, onTestFinished, vi } from "vitest";
 import { resolveThemeBranding } from "../../../packages/gateway-protocol/src/theme.ts";
-import type { GatewayBrowserClient } from "../api/gateway.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
 import { createApplicationRouter, type RouteId } from "../app-routes.ts";
+import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectShellRouteState } from "./app-host-route-state.ts";
 import {
@@ -32,7 +32,7 @@ it("applies route ownership to shell panels without session-gating desktop", asy
     "matchMedia",
     vi.fn(() => ({ matches: false })),
   );
-  const client = {} as GatewayBrowserClient;
+  const client = createTestGatewayClient(vi.fn());
   const row: GatewaySessionRow = { key: "agent:main:main", kind: "direct", updatedAt: 0 };
   const context = {
     basePath: "",

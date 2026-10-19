@@ -16,8 +16,8 @@ import {
   reduceChatSessionProjection,
 } from "./history-merge.ts";
 import { persistedSteerTargetRunId } from "./stream-causal-boundary.ts";
-import { maybeResetToolStreamRun } from "./stream-reconciliation.ts";
 import { prunePersistedAssistantStreamSegments } from "./stream-segment-pruning.ts";
+import { resetToolStreamRun } from "./tool-stream-state.ts";
 
 type SessionMessageApplySource =
   | { kind: "history-delta" }
@@ -159,7 +159,7 @@ export function applySessionMessagePayload(
       state.chatStream = null;
       state.chatStreamStartedAt = null;
       if (runActive === false) {
-        maybeResetToolStreamRun(state, assistantOwnerRunId);
+        resetToolStreamRun(state, assistantOwnerRunId);
       }
     }
   }

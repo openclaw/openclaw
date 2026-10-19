@@ -1,42 +1,59 @@
 import path from "node:path";
-import { constants, DatabaseSync } from "node:sqlite";
+import { constants, DatabaseSync, StatementSync } from "node:sqlite";
 import { afterEach, expect, it } from "vitest";
+import { observeSqliteReadSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { enableNodeSqliteKyselyStatementCache } from "./kysely-sync-cache-state.js";
+import { runSqliteSchemaReadSnapshotSync } from "./sqlite-pinned-read-snapshot.js";
 import { createSqliteTableContractReader } from "./sqlite-schema-contract.js";
-import { collectSqliteSchemaIssues } from "./sqlite-schema-contract.test-support.js";
+import {
+  collectSqliteSchemaIssues,
+  sqliteSchemaFixture,
+} from "./sqlite-schema-contract.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-it("compares one committed schema and observes later changes on the next inspection", () => {
-  const directory = tempDirs.make("openclaw-schema-snapshot-");
-  const filename = path.join(directory, "state.sqlite");
-  const writer = new DatabaseSync(filename);
-  const schema = "CREATE TABLE a (id INTEGER); CREATE TABLE z (id INTEGER);";
-  writer.exec(`PRAGMA journal_mode=WAL; ${schema}`);
-  const reader = new DatabaseSync(filename, { readOnly: true });
-  try {
-    const readTable = createSqliteTableContractReader(reader);
-    let changed = false;
-    const issues = collectSqliteSchemaIssues(reader, schema, {}, (name) => {
-      const contract = readTable(name);
-      if (!changed) {
-        changed = true;
-        const remainingTable = name === "a" ? "z" : "a";
-        writer.exec(`ALTER TABLE ${remainingTable} ADD COLUMN later TEXT`);
-      }
-      return contract;
-    });
-    expect(changed).toBe(true);
-    expect(issues).toEqual([]);
-    expect(reader.isTransaction).toBe(false);
-    expect(collectSqliteSchemaIssues(reader, schema)).not.toEqual([]);
-    expect(reader.isTransaction).toBe(false);
-  } finally {
-    reader.close();
-    writer.close();
-  }
-});
+it.each(["top-level", "nested"] as const)(
+  "compares one committed schema during %s inspection and observes the next commit",
+  (scope) => {
+    const directory = tempDirs.make("openclaw-schema-snapshot-");
+    const filename = path.join(directory, "state.sqlite");
+    const writer = new DatabaseSync(filename);
+    const schemaSql = "CREATE TABLE a (id INTEGER); CREATE TABLE z (id INTEGER);";
+    const schema = sqliteSchemaFixture(schemaSql);
+    writer.exec(`PRAGMA journal_mode=WAL; ${schemaSql}`);
+    const reader = new DatabaseSync(filename, { readOnly: true });
+    const observation = observeSqliteReadSql(StatementSync.prototype);
+    try {
+      const readTable = createSqliteTableContractReader(reader);
+      let changed = false;
+      const inspect = () =>
+        collectSqliteSchemaIssues(reader, schema, {}, (name) => {
+          if (!changed) {
+            changed = true;
+            const remainingTable = name === "a" ? "z" : "a";
+            writer.exec(`ALTER TABLE ${remainingTable} ADD COLUMN later TEXT`);
+          }
+          return readTable(name);
+        });
+      const issues =
+        scope === "nested" ? runSqliteSchemaReadSnapshotSync(reader, inspect) : inspect();
+      const schemaReads = () =>
+        observation.queries.filter((sql) => /^PRAGMA schema_version\b/iu.test(sql));
+      expect(changed).toBe(true);
+      expect(issues).toEqual([]);
+      expect(schemaReads()).toHaveLength(1);
+      expect(reader.isTransaction).toBe(false);
+      expect(collectSqliteSchemaIssues(reader, schema)).not.toEqual([]);
+      expect(schemaReads()).toHaveLength(2);
+      expect(reader.isTransaction).toBe(false);
+    } finally {
+      observation.restore();
+      reader.close();
+      writer.close();
+    }
+  },
+);
 
 it.skipIf(typeof DatabaseSync.prototype.setAuthorizer !== "function")(
   "does not require transaction-control authorization for top-level or nested inspections",

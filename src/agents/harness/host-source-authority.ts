@@ -1,5 +1,4 @@
 import type { ProviderModelRef as ModelRef } from "@openclaw/model-catalog-core/model-catalog-refs";
-import type { ReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.contracts.js";
 import {
   captureExternalSessionCommitGuard,
   composeSessionSourceAssertion,
@@ -10,6 +9,7 @@ import {
   getAgentRunLifecycleGeneration,
   type AgentRunDelegatedAuthority,
 } from "../../infra/agent-run-registry.js";
+import type { ReplyTurnParticipants } from "../../sessions/session-controller.contracts.js";
 import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import {
   assertAdmittedRunOperatorAuthority,
@@ -218,9 +218,7 @@ export function retainHarnessSource(
     },
     get sourceIdentity() {
       assertCurrent();
-      const identity = source.source;
-      assertCurrent();
-      return identity;
+      return source.source;
     },
     bindModelExecution: (model: ModelRef | undefined) => {
       assertCurrent();

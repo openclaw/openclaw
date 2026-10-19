@@ -26,7 +26,7 @@ test.each(["separate", "shared"] as const)(
     );
     const status = await import("../status/summary.js");
     const actualStatus = await vi.importActual<typeof status>("../status/summary.js");
-    vi.mocked(status.getStatusSummary).mockImplementation(actualStatus.getStatusSummary);
+    vi.mocked(status.prepareStatusSummary).mockImplementation(actualStatus.prepareStatusSummary);
     const root = expectDefined(process.env.OPENCLAW_STATE_DIR, "isolated state");
     const agentCount = 12;
     const agentIds = Array.from({ length: agentCount }, (_, index) => `fleet${index}`);

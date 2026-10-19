@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, Show, untrack } from "solid-js";
+import { createEffect, createSignal, onCleanup, Show } from "solid-js";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -13,19 +13,18 @@ export function ModelAccounts(props: ModelAccountsProps) {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const state = new ModelAccountsState(context, props, () => setRevision((value) => value + 1));
   // Snapshot identity/profile at request admission; target changes retire account reads and auth polls.
-  const sync = () => {
-    untrack(() => state.applySnapshot(context.gateway.snapshot));
+  const sync = (target: ModelAccountsProps) => {
+    state.applySnapshot(context.gateway.snapshot, target);
     state.publish();
   };
   // Retire account reads and auth polls synchronously with connection authority.
-  const stopGateway = context.gateway.subscribe(sync);
+  const stopGateway = context.gateway.subscribe(() => sync(props));
   const stopEvents = context.gateway.subscribeEvents((event) => {
     if (modelAuthEventInvalidates(event)) {
       void state.loadAccounts();
     }
   });
-  createEffect(() => [props.identityId, props.profileId], sync);
-  sync();
+  createEffect(() => ({ identityId: props.identityId, profileId: props.profileId }), sync);
   const readState = () => {
     revision();
     return state;

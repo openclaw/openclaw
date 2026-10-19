@@ -49,6 +49,96 @@ function hasWorkerEntry(config: TsdownConfig, name: string, source: string): boo
   return (entry as Record<string, unknown>)[name] === source;
 }
 
+it("keeps the standalone launcher bootstrap within its measured metadata-only boundary", async () => {
+  const selected = configs.find((config) =>
+    hasWorkerEntry(config, "node-host-launcher-bootstrap", "src/node-host/launcher-bootstrap.ts"),
+  );
+  if (!selected) {
+    throw new Error("Missing standalone launcher build config");
+  }
+  const root = createTempDir("openclaw-launcher-boundary-");
+  const modules: string[] = [];
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    outDir: root,
+    dts: false,
+    logLevel: "silent",
+    plugins: [
+      selected.plugins,
+      {
+        name: "launcher-boundary-proof",
+        generateBundle(_options, bundle) {
+          for (const chunk of Object.values(bundle)) {
+            if (chunk.type === "chunk") {
+              modules.push(
+                ...Object.keys(chunk.modules).map((id) =>
+                  path.relative(process.cwd(), id).split(path.sep).join("/"),
+                ),
+              );
+              expect(chunk.dynamicImports).toEqual([]);
+            }
+          }
+        },
+      },
+    ],
+  });
+  try {
+    expect(
+      modules.filter(
+        (id) =>
+          /^src\/(?:agents|gateway|tui|cron)\//u.test(id) ||
+          id === "src/cli/program/subcli-descriptors.ts",
+      ),
+    ).toEqual([]);
+    expect(modules).toContain("src/cli/program/subcli-command-metadata.ts");
+    // Corrected canonical output measured 60,979 bytes; allow a small metadata margin.
+    expect(
+      fs.statSync(path.join(root, "node-host-launcher-bootstrap.js")).size,
+    ).toBeLessThanOrEqual(64 * 1024);
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
+
+it("keeps catalog projections independent of discovery I/O", async () => {
+  const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+  if (!selected) {
+    throw new Error("Missing unified build config");
+  }
+  const { bundles } = await build({
+    ...selected,
+    config: false,
+    entry: { "catalog-projections": "src/plugins/catalog-discovery.ts" },
+    outDir: createTempDir("openclaw-catalog-projections-"),
+    dts: false,
+    logLevel: "silent",
+  });
+  try {
+    const chunks = bundles.flatMap((bundle) =>
+      bundle.chunks.filter((chunk) => chunk.type === "chunk"),
+    );
+    const modules = chunks.flatMap((chunk) =>
+      Object.entries(chunk.modules)
+        .filter(([, module]) => module.renderedLength > 0)
+        .map(([id]) => id.replaceAll("\\", "/")),
+    );
+    expect(
+      modules.filter((id) =>
+        /\/src\/(?:plugins\/(?:management-service|catalog-discovery-runtime)|skills\/discovery\/status)\.ts$/u.test(
+          id,
+        ),
+      ),
+    ).toEqual([]);
+  } finally {
+    for (const bundle of bundles) {
+      await bundle[Symbol.asyncDispose]();
+    }
+  }
+});
+
 const workerBuildTargets = [
   ["worker", "worker/worker", "src/worker/worker-deploy-entry.ts"],
   ["code-mode-node", "worker/code-mode-node.worker", "src/agents/code-mode-node.worker.ts"],
@@ -415,22 +505,40 @@ describe("tsdown config", () => {
     }
   });
 
-  it("keeps writable database and session lifecycle outside the archive worker bootstrap", async () => {
-    const workerEntry = "config/sessions/session-accessor.sqlite-archive.worker";
-    const selected = configs.find((config) => config.name === TSDOWN_UNIFIED_CONFIG_GROUP);
+  it.each([
+    {
+      label: "writable database and session lifecycle outside the archive worker",
+      workerEntry: "config/sessions/session-accessor.sqlite-archive.worker",
+      siblingEntries: ["plugin-sdk/session-store-runtime"],
+      forbidden:
+        /\/src\/(?:state\/openclaw-agent-db|.*session-accessor\.sqlite-(?:reclamation|lifecycle-state|entry-store|archive))\.ts$/u,
+    },
+    {
+      label: "gateway state and config outside the plugin preparation worker",
+      workerEntry: "plugins/plugin-generation-preparation.worker",
+      siblingEntries: [],
+      forbidden:
+        /\/src\/(?:state\/openclaw-state-(?:context|cache)|config\/(?:config|io)|plugins\/plugin-source-admission-store)\.ts$/u,
+    },
+  ])("keeps $label bootstrap", async ({ workerEntry, siblingEntries, forbidden }) => {
+    const selected = configs.find((config) =>
+      siblingEntries.length > 0
+        ? config.name === TSDOWN_UNIFIED_CONFIG_GROUP
+        : hasWorkerEntry(config, workerEntry, path.resolve("src", workerEntry + ".ts")),
+    );
     if (!selected) {
-      throw new Error("Missing session archive worker build config");
+      throw new Error(`Missing worker build config: ${workerEntry}`);
     }
     const entries = selected.entry as Record<string, string>;
-    // Include the parent store: shared chunks must not pull its lifecycle writes
-    // into the one-shot materialize/publish worker's static closure.
+    // Include sibling entrypoints where sharing is intentional; otherwise use
+    // the standalone graph. Both must keep host lifecycle outside bootstrap.
     const { bundles } = await build({
       ...selected,
       config: false,
       entry: Object.fromEntries(
-        [workerEntry, "plugin-sdk/session-store-runtime"].map((name) => [name, entries[name]!]),
+        [workerEntry, ...siblingEntries].map((name) => [name, entries[name]!]),
       ),
-      outDir: fs.realpathSync(createTempDir("openclaw-archive-worker-imports-")),
+      outDir: fs.realpathSync(createTempDir("openclaw-worker-imports-")),
       dts: false,
       logLevel: "silent",
     });
@@ -452,7 +560,7 @@ describe("tsdown config", () => {
         visited.add(name);
         const chunk = chunks.get(name);
         if (!chunk) {
-          throw new Error(`Missing archive worker chunk: ${name}`);
+          throw new Error(`Missing worker chunk: ${name}`);
         }
         for (const [id, module] of Object.entries(chunk.modules)) {
           if (module.renderedLength > 0) {
@@ -468,15 +576,21 @@ describe("tsdown config", () => {
           }
         }
       }
-      expect(
-        [...modules].filter(
-          (id) =>
-            id.endsWith("/src/state/openclaw-agent-db.ts") ||
-            /\/session-accessor\.sqlite-(?:reclamation|lifecycle-state|entry-store|archive)\.ts$/u.test(
-              id,
-            ),
-        ),
-      ).toEqual([]);
+      expect([...modules].filter((id) => forbidden.test(id))).toEqual([]);
+      if (workerEntry === "plugins/plugin-generation-preparation.worker") {
+        const diagnostics = [...chunks.values()].filter((chunk) =>
+          Object.entries(chunk.modules).some(
+            ([id, module]) =>
+              module.renderedLength > 0 &&
+              id.replaceAll("\\", "/").endsWith("/src/logging/diagnostic-worker-gc-profile.ts"),
+          ),
+        );
+        expect(diagnostics).toHaveLength(1);
+        for (const chunk of diagnostics) {
+          expect(chunk.fileName).toMatch(/^plugins\/plugin-preparation-.*\.mjs$/u);
+          expect(visited.has(chunk.fileName)).toBe(false);
+        }
+      }
     } finally {
       for (const bundle of bundles) {
         await bundle[Symbol.asyncDispose]();
@@ -1321,7 +1435,11 @@ console.log("relocated session card renders with bundled fonts");
         expect(config?.entry).toEqual({
           [entry]: source,
           ...(target === "worker"
-            ? { "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js" }
+            ? {
+                "worker/worker-chunk-highlight": "node_modules/highlight.js/lib/index.js",
+                "worker/worker-chunk-fs-safe-watch-io":
+                  "node_modules/@openclaw/fs-safe/dist/watch-io-worker.js",
+              }
             : {}),
         });
         return [target, config] as const;

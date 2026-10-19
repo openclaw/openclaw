@@ -16,6 +16,12 @@ session operation does not initialize unrelated cron, secrets, transcript, or
 update handlers. The worker backend still owns database handles, write admission,
 and cleanup; lazy loading changes code residency, not database ownership.
 
+On Windows, path casing and extended-length prefixes do not create separate
+maintenance owners. An "undergoing offline maintenance" error identifies another
+process holding state. An "Internal state ownership error" instead means the
+current command lost its maintenance scope; retry the command and report the
+error if it persists.
+
 ## Integrity checks
 
 Admission validates SQLite format, schema, required indexes, and required
@@ -663,6 +669,12 @@ remain separate, with no cached readiness result shared between them.
 
 ### Startup on multi-agent hosts
 
+Startup and Gateway agent listing share the configured-plus-reserved agent roster.
+Existing native databases for reserved system agents (`openclaw` and `crestodian`)
+receive inspection and deferred session preparation without an `agents.entries`
+entry. Registered databases that no configured or reserved agent owns remain
+skipped; use Doctor to inspect their retained data.
+
 Foreground startup agent-database checks and session startup maintenance are
 limited to two databases at a time. Each inspection's
 size-derived foreground allowance starts when its scheduled inspection begins, so waiting for a
@@ -674,10 +686,10 @@ and different concurrency.
 Session startup certification reuses up to two worker threads for databases that
 need fresh session-validation proof. Valid receipts retain their existing fast path. Each
 certification task has fresh admission, its own commit gate, and full session
-validation. The task closes its database handles and leases and waits
-for the parent's close request to finish before releasing the thread for another
-database. If native cleanup is uncertain, writer admission and cleanup custody
-remain held until execution ends.
+validation. The parent's close request closes the task's database handles and
+leases. Task completion carries that cleanup and releases the thread for another
+database; the parent holds writer admission until completion. If native cleanup
+is uncertain, writer admission and cleanup custody remain held until execution ends.
 
 During startup, reaching the inspection's foreground deadline records pending
 preparation and marks that agent **degraded** while the Gateway continues with healthy agents.
@@ -799,12 +811,12 @@ uninstalled copies from its identity-marked staging directories, retains any
 exchanged originals, and skips files that already have NOCOW. Unmarked backups
 from older or unknown operations are never deleted automatically.
 
-The official Debian bookworm Docker image cannot perform this optional repair:
-its coreutils 9.1 `mv` lacks `--exchange`/`--no-copy`, and it does not include
-`fuser` (the `psmisc` package) or `getfacl`/`setfacl` (the `acl` package).
-A derived image needs those tools and an exchange-capable GNU `mv`, as well as
-kernel/filesystem support on the mounted state volume. Updates still proceed
-with the existing stores.
+The official Debian trixie Docker image includes an exchange-capable GNU `mv`,
+`fuser` (`psmisc`), `getfacl`/`setfacl` (`acl`), and `lsattr`/`chattr`
+(`e2fsprogs`). The mounted state volume still needs kernel/filesystem support.
+Older bookworm-based images lack the required tools; recreate the container
+with a current image before retrying. Unsupported hosts still proceed with
+updates using the existing stores.
 
 After publication, Doctor re-records the identity of each destination database
 it rewrites so `update cleanup` eligibility survives the rewrite. Recorded
@@ -1117,6 +1129,23 @@ are preserved. Page or b-tree damage, unreadable table data, and other integrity
 failures remain a refusal: preserve the database and its WAL, then restore a
 verified backup or use SQLite recovery. Runtime and startup never perform this
 repair automatically.
+
+FTS5-only `malformed inverted index` findings on canonical agent search tables
+are also repairable. A Node upgrade or downgrade can change SQLite's `unicode61`
+tokenization (for example, U+FFFE in SQLite 3.54), leaving intact content with an
+incompatible derived index. Stop the Gateway and run `openclaw doctor --fix` with
+the Node version that will run the Gateway, then restart it. Doctor preserves a
+backup and rebuilds only the affected, schema-validated FTS tables in one
+transaction. It verifies integrity and foreign keys before clearing quarantine;
+session recovery uses this same repair instead of moving the database aside.
+Unknown or changed FTS definitions and findings mixed with structural damage
+are not eligible for this repair.
+
+Startup does not rebuild FTS indexes automatically: the offline maintenance
+owner supplies the exclusive custody needed for backup and quarantine recovery.
+The admission error gives the `openclaw doctor --fix` command. Switching SQLite
+versions again may require another rebuild, without changing stored content or
+the database schema.
 
 <a id="downgrades-are-unsupported" />
 

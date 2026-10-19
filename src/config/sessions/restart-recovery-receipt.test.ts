@@ -191,6 +191,8 @@ describe("restart recovery steering block reasons", () => {
     [tombstone("source-old")],
     [tombstone("source-old"), "unknown-source-with-terminal-history", ""],
     [{ ...claim, status: "done", restartRecoveryDeliverySourceRunId: "source-2" }, "stale-claim"],
+    [claim, undefined, "recovery-1"],
+    [claim, "stale-claim", "other-run"],
     [{ ...tombstone("source-1"), sessionId: "session-2" }, "stale-claim"],
     [{ status: undefined }, undefined, ""],
     ...([undefined, "done", "interrupted"] as const).map(

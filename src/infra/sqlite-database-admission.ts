@@ -125,11 +125,7 @@ const reader = createSqliteDatabaseAdmissionReader({
   pathAdmission,
   exchange,
   publishFact,
-  retain: (record) => {
-    if (state.registry.changeReferences(record, 1)) {
-      exchange(record);
-    }
-  },
+  retain: retainReference,
   release: releaseReference,
 });
 export const {
@@ -144,6 +140,8 @@ export const {
 const scopedWrites = createSqliteDatabaseWriteReceipts({
   admission,
   pathAdmission,
+  retain: retainReference,
+  release: releaseReference,
   writeListeners: state.writeListeners,
   readRevision: readSqliteDatabaseWriteRevision,
   writer: (database) => state.dataWriters.get(database),
@@ -156,6 +154,7 @@ const scopedWrites = createSqliteDatabaseWriteReceipts({
 export const {
   onSqliteDatabaseWriteSettled,
   retireSqliteDatabaseWriteScopes,
+  retainSqliteDatabaseWriteScopesForPath,
   withSqliteDatabaseWriteScope,
   withoutSqliteDatabaseWriteScope,
   readSqliteDatabaseScopedWriteToken,
@@ -430,6 +429,12 @@ export function releaseSqliteDatabaseAdmission(database: DatabaseSync): void {
   if (state.openedIdentities.delete(database) && record) {
     state.local.delete(database);
     releaseReference(record);
+  }
+}
+
+function retainReference(record: Admission): void {
+  if (state.registry.changeReferences(record, 1)) {
+    exchange(record);
   }
 }
 

@@ -1,6 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import { createReplyTurnParticipants } from "../../auto-reply/reply/reply-run-registry.tool-authority.js";
+import { createReplyTurnParticipants } from "../../sessions/session-controller.tool-authority.js";
 import { createAdmittedRunOperatorAuthority } from "../admitted-run-context.js";
 import { SANDBOX_DEFAULT_TOOL_ALLOW, type SandboxToolPolicy } from "../sandbox/types.js";
 import type { AnyAgentTool } from "./common.js";

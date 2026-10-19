@@ -674,6 +674,7 @@ export async function prepareCodexAttemptPrompt(context: CodexAttemptContext) {
       parentLocalEgress,
       skillsPrompt: skillsInstructions ? (params.skillsSnapshot?.prompt ?? "") : "",
       tools: toolBridge.availableSpecs,
+      sourceTools: toolBridge.availableTools,
     });
   const systemPromptReport = buildSystemPromptReport();
   let workspaceReferencesIncluded = true;

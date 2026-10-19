@@ -24,6 +24,8 @@ describe("AcpSessionManager turn results", () => {
 
   function setupRuntime(meta = readySessionMeta(), sessionKey = "agent:codex:acp:session-1") {
     const f = managerFixture(sessionKey, meta);
+    const sessionMeta = { currentMeta: meta };
+    mockMutableSession(sessionKey, sessionMeta);
     const run = (overrides: Partial<Parameters<typeof f.manager.runTurn>[0]> = {}) =>
       f.run({
         text: "Do work",
@@ -37,13 +39,17 @@ describe("AcpSessionManager turn results", () => {
       f.runtimeState.runtime.startTurn = startTurn;
       return startTurn;
     };
-    return { ...f.runtimeState, sessionKey, run, start };
+    return { ...f.runtimeState, sessionKey, sessionMeta, run, start };
   }
 
-  function parentSession(sessionKey: string) {
+  function parentSession(
+    sessionKey: string,
+    state: ReturnType<typeof setupRuntime>["sessionMeta"],
+  ) {
     mockParentedAcpSessionEntries({
       childSessionKey: sessionKey,
       parentSessionKey: "agent:main:main",
+      state,
     });
   }
 
@@ -177,7 +183,7 @@ describe("AcpSessionManager turn results", () => {
   it("does not replay a submitted parented prompt after an early runtime exit", async () => {
     await withStateDirEnv("openclaw-acp-manager-", async () => {
       const state = setupRuntime();
-      parentSession(state.sessionKey);
+      parentSession(state.sessionKey, state.sessionMeta);
       const startTurn = state.start(() => ({
         promptStarted: Promise.resolve(),
         result: Promise.resolve({ status: "failed", error: runtimeExit }),
@@ -196,7 +202,7 @@ describe("AcpSessionManager turn results", () => {
     async (status) => {
       await withStateDirEnv("openclaw-acp-manager-", async () => {
         const state = setupRuntime();
-        parentSession(state.sessionKey);
+        parentSession(state.sessionKey, state.sessionMeta);
         const closed = createDeferred();
         let streamClosed = false;
         const closeStream = vi.fn(async () => {

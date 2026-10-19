@@ -36,7 +36,6 @@ import {
   withPluginRuntimePluginScope,
   withPluginRuntimeRegistryScope,
 } from "./runtime/gateway-request-scope.js";
-import type { PreparedDecisionBillingFacts } from "./runtime/runtime-model-usage.js";
 import type { PluginRuntime } from "./runtime/types.js";
 
 // A completed reaction must retain only the emptied holder, not the caller's registry closure.
@@ -293,11 +292,12 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
             evaluate: async (batch, options) => {
               assertRuntimeCurrent();
               const capturedRegistry = currentDecisionRegistry();
-              const { evaluateDecisionInRegistry } = await import("../decisions/runtime.js");
+              const { evaluateDecisionOperation, completeDecisionEvaluation } =
+                await import("../decisions/runtime.js");
               assertRuntimeCurrent();
               const selectedRegistry = currentDecisionRegistry(capturedRegistry);
               const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
-                evaluateDecisionInRegistry(
+                evaluateDecisionOperation(
                   batch,
                   options,
                   selectedRegistry,
@@ -311,36 +311,18 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
               );
               assertRuntimeCurrent();
               options.signal.throwIfAborted();
-              return result;
+              return completeDecisionEvaluation(result);
             },
             evaluateV2: async (batch, options) => {
               assertRuntimeCurrent();
               const capturedRegistry = currentDecisionRegistry();
-              const [
-                { evaluateDecisionV2InRegistry },
-                { finalizePluginModelUsage },
-                { resolveDecisionModelSetting },
-                { splitTrailingAuthProfile },
-              ] = await Promise.all([
-                import("../decisions/runtime.js"),
-                import("./runtime/runtime-model-usage.js"),
-                import("../agents/decision-model-setting.js"),
-                import("../agents/model-ref-profile.js"),
-              ]);
+              const { evaluateDecisionV2Operation, completeDecisionEvaluation } =
+                await import("../decisions/runtime.js");
               assertRuntimeCurrent();
               const selectedRegistry = currentDecisionRegistry(capturedRegistry);
               const config = getRuntimeConfig();
-              const selected = resolveDecisionModelSetting(config, options.agentId);
-              const target = selected
-                ? {
-                    provider: selected.provider,
-                    model: splitTrailingAuthProfile(selected.model).model,
-                    agentId: options.agentId,
-                  }
-                : undefined;
-              let preparedBilling: PreparedDecisionBillingFacts | undefined;
               const result = await withPluginRuntimeRegistryScope(selectedRegistry, () =>
-                evaluateDecisionV2InRegistry(
+                evaluateDecisionV2Operation(
                   batch,
                   options,
                   selectedRegistry,
@@ -350,27 +332,11 @@ export function createPluginRuntimeResolver(state: PluginRegistryState) {
                     assertRuntimeCurrent();
                     return true;
                   },
-                  undefined,
-                  (facts) => {
-                    preparedBilling = facts;
-                  },
                 ),
               );
               assertRuntimeCurrent();
               options.signal.throwIfAborted();
-              if (result.status === "ok" && target) {
-                // Preparation captures prices, not success. Record only the validated
-                // snapshot after provider and caller lifetimes have both accepted it.
-                finalizePluginModelUsage({
-                  cfg: config,
-                  hostPluginId: record.id,
-                  rawUsage: result.result.usage,
-                  estimate: "none",
-                  target,
-                  preparedBilling,
-                });
-              }
-              return result;
+              return completeDecisionEvaluation(result);
             },
           } satisfies PluginRuntime["decisions"];
         }

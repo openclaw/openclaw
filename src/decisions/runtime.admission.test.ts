@@ -1,10 +1,12 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { evaluateAttemptDecisionToolPrefilter } from "../agents/embedded-agent-runner/run/attempt-decision-prefilter.js";
+import { createDecisionTool } from "../agents/tools/decision-tool.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
 } from "../config/runtime-snapshot.js";
 import { resetPluginRuntimeStateForTest } from "../plugins/runtime.js";
+import { clearSecretsRuntimeSnapshot } from "../secrets/runtime.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { evaluateDecisionInRegistry } from "./runtime.js";
 import { answer, batch, config, options, registered } from "./runtime.test-support.js";
@@ -16,6 +18,54 @@ afterEach(() => {
 });
 
 describe("registered decision consumer admission", () => {
+  it.each(["unchanged", "secrets-cleared", "selection-changed"] as const)(
+    "checks host authority before an explicit V1 tool dispatch (%s)",
+    async (change) => {
+      setRuntimeConfigSnapshot(config);
+      const release = createDeferredCore();
+      const dispatch = vi.fn(async () => answer);
+      const host = registered(async (_batch, context) => {
+        await release.promise;
+        if (context.isAdmissible?.() === false) {
+          return { status: "unavailable", reason: "transport" };
+        }
+        return dispatch();
+      });
+      const tool = createDecisionTool("main", { config });
+      expect(tool).not.toBeNull();
+      const pending = tool!.execute("admission", {
+        contractVersion: 2,
+        state: { type: "text", text: "synthetic" },
+        questions: batch.questions,
+      });
+      try {
+        await Promise.race([host.started, pending]);
+        expect(dispatch).not.toHaveBeenCalled();
+        if (change === "secrets-cleared") {
+          clearSecretsRuntimeSnapshot();
+          // Keep selection identical so only the secret generation closes admission.
+          setRuntimeConfigSnapshot(config);
+        } else if (change === "selection-changed") {
+          setRuntimeConfigSnapshot({
+            agents: { defaults: { decisionModel: "fixture/replacement-v1" } },
+          });
+        }
+        release.resolve();
+        await expect(pending).resolves.toMatchObject({
+          details:
+            change === "unchanged"
+              ? { status: "ok" }
+              : { status: "unavailable", reason: "retiring" },
+        });
+        expect(dispatch).toHaveBeenCalledTimes(change === "unchanged" ? 1 : 0);
+        expect(host.registry.decisionProviders[0]!.host.inspect(config).activeRequests).toBe(0);
+      } finally {
+        release.resolve();
+        await Promise.allSettled([pending]);
+      }
+    },
+  );
+
   it("reserves the fourth physical slot for requested work until optional callbacks settle", async () => {
     const selected = {
       agents: {

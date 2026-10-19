@@ -101,6 +101,8 @@ SQLite snapshot, including committed WAL changes. They do not copy the entire
 agent database unless its journal state requires private recovery. Startup and
 migration readiness checks retain their full validation.
 
+Local reports apply committed agent deletions after their final diagnostics, database-engine, backup, log, and usage reads. Deleted namespaces are omitted while undeleted namespaces in shared stores remain visible. Online JSON keeps the snapshot published by the Gateway.
+
 The CLI runs in a separate process and contacts the Gateway over WebSocket, even
 for a local loopback target. `--timeout` bounds checks, not the entire status
 command. Cold device-token worker initialization happens during request preparation,
@@ -208,6 +210,8 @@ Use `openclaw skills check --agent <id>` to inspect the missing requirements.
   until cleared.
 - Output includes per-agent session stores when multiple agents are
   configured.
+- Session summaries omit namespaces with a committed agent deletion while cleanup drains. Undeleted namespaces in a shared store still contribute to counts and recent sessions, even when its configured reader is deleted.
+- Display defaults follow the surviving roster when the configured default is being deleted. Runtime and System Agent ownership remain unchanged, and explicit fleets without a default still require agent selection.
 - Fleet status works without a System Agent owner. Pending events include each
   agent's main queue; a shared global queue is counted once. `--agent` selects
   credentials only for `--usage`.
@@ -261,6 +265,19 @@ If local session state requires Doctor, status prints any installation drift to 
 - `status --all` includes a **Telemetry exporters** diagnosis with the latest
   trusted per-signal exporter state and transport. Endpoint values, headers,
   certificates, payloads, and raw errors are not shown.
+
+## Plugin reload
+
+While the Gateway replaces plugins, status shows a **Plugin reload** overview
+row naming the plugins, phase, and waiting or failure reason. JSON includes the
+owner's `pluginReload` record: `phase` (`reloading`, `recovering`, or `failed`),
+`pluginIds`, and optional `deadlineAtMs` and `reason`. New agent runs wait during
+replacement. Ordinary drains have a shared 60-second budget;
+[`plugins reload --wait`](/cli/plugins/uninstall-and-update) extends it to ten
+minutes and can be cancelled with Ctrl+C. A successful rollback, including after
+a drain timeout, clears the pending reload record. Unresolved activation or
+recovery failures stay visible until a later reload of the affected plugin
+succeeds or the Gateway restarts.
 
 ## Secrets
 

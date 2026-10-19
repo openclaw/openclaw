@@ -27,7 +27,7 @@ import { buildTestCtx } from "./test-ctx.js";
 
 let dispatchReplyFromConfig: typeof import("./dispatch-from-config.js").dispatchReplyFromConfig;
 let resetInboundDedupe: typeof import("./inbound-dedupe.js").resetInboundDedupe;
-let resetReplyRunRegistry: () => void;
+let resetSessionControllerForTest: () => void;
 
 const REJECTED_MODEL = "openai/REJECTED_PRIVATE_TOKEN";
 const SESSION_KEY = "agent:main:session";
@@ -75,13 +75,13 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
   beforeAll(async () => {
     ({ dispatchReplyFromConfig } = await import("./dispatch-from-config.js"));
     ({ resetInboundDedupe } = await import("./inbound-dedupe.js"));
-    const { testing } = await import("./reply-run-registry.test-support.js");
-    resetReplyRunRegistry = () => testing.resetReplyRunRegistry();
+    const { testing } = await import("../../sessions/session-controller.test-support.js");
+    resetSessionControllerForTest = () => testing.resetSessionControllerForTest();
   });
 
   beforeEach(() => {
     clearAgentHarnesses();
-    resetReplyRunRegistry();
+    resetSessionControllerForTest();
     setDiscordTestRegistry();
     resetInboundDedupe();
     resetPluginTtsAndThreadMocks();

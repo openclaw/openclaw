@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { GatewayControlUiPluginTab } from "../api/gateway.ts";
 import { serializeSidebarEntry, type SidebarZoneEntry } from "../app-navigation.ts";
 import { isRouteId, pluginTabLocation } from "../app-route-paths.ts";
@@ -159,6 +159,13 @@ export function readSidebarBrandPresentation(host: AppSidebarRenderHost) {
 }
 
 function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
+  let button: HTMLButtonElement | undefined;
+  const focusHeader = () => button?.focus();
+  onCleanup(() => {
+    if (host.sidebarMenus.focusAgentRoster === focusHeader) {
+      host.sidebarMenus.focusAgentRoster = undefined;
+    }
+  });
   const currentBranding = () => host.sessionDataContext?.theme.branding ?? currentThemeBranding();
   const cached = () => (host.sidebarSnapshot?.brand.agentId ? null : host.sidebarSnapshot?.brand);
   const brand = () => cached() ?? readSidebarBrandPresentation(host);
@@ -184,6 +191,10 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
         <button
           type="button"
           class="sidebar-workspace-header__main"
+          ref={(element) => {
+            button = element;
+            host.sidebarMenus.focusAgentRoster = focusHeader;
+          }}
           aria-haspopup="menu"
           aria-expanded={menuOpen() ? "true" : "false"}
           aria-label={`${name()} · ${t("agentChip.workspaceMenuLabel")}`}
@@ -514,6 +525,7 @@ export function renderAppSidebarPageEntry(
 export function renderAppSidebarPluginTab(
   host: AppSidebarRenderHost,
   tab: () => GatewayControlUiPluginTab,
+  triggerRef?: (element: HTMLAnchorElement) => void,
 ): JSX.Element {
   const ref = () => ({ pluginId: tab().pluginId, id: tab().id });
   const key = () => pluginTabKey(ref());
@@ -534,6 +546,7 @@ export function renderAppSidebarPluginTab(
   });
   const link = (
     <SidebarNavLink
+      ref={triggerRef}
       href={`${location().pathname}${location().search}`}
       icon={<Icon name={iconName()} />}
       label={tab().label}

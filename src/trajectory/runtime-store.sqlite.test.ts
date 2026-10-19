@@ -16,6 +16,7 @@ import {
   createSqliteWorkerOperationAdmission,
   withSqliteWorkerOperationAdmission,
 } from "../infra/sqlite-worker-operation-admission.js";
+import type { SqliteWorkerOperationContext } from "../infra/sqlite-worker-operation-settlement.js";
 import type { DB as OpenClawAgentKyselyDatabase } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -25,6 +26,8 @@ import { loadAgentTrajectoryOperations } from "../state/openclaw-agent-execution
 import type { AgentWorkerOperationContext } from "../state/openclaw-agent-operation-context.js";
 import { requireNativeSqliteDatabase } from "../test-utils/native-sqlite.js";
 import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js";
+import { beginTrajectoryRuntimeRetention } from "./runtime-retention.sqlite.js";
+import type { SqliteTrajectoryRuntimeAppend } from "./runtime-store.contract.js";
 import {
   appendSqliteTrajectoryRuntimeEventsWithWriter,
   loadSqliteTrajectoryRuntimeEventRowsSync,
@@ -57,6 +60,174 @@ describe("SQLite trajectory runtime store", () => {
   afterEach(() => {
     vi.useRealTimers();
   });
+
+  async function workerAppend(busyTimeoutMs?: number) {
+    const options = { agentId: "main", path: sqlitePath() };
+    const database = openOpenClawAgentDatabase(options);
+    const operations = await loadAgentTrajectoryOperations();
+    const context: AgentWorkerOperationContext = {
+      options,
+      open: () => database,
+      admit() {},
+      writeTransaction: (operationLabel, _owner, write, _diagnostic, singleStatement) =>
+        runOpenClawAgentWriteTransaction(write, options, {
+          operationLabel,
+          singleStatement,
+          busyTimeoutMs,
+        }),
+    };
+    const event = createTrajectoryEvent({ type: "terminal-insert" });
+    const input: SqliteTrajectoryRuntimeAppend = {
+      sessionId: "session-1",
+      windowFacts: { nextSeq: 0, retainedBytes: 0 },
+      events: [{ runId: event.runId, ts: event.ts, line: JSON.stringify(event) }],
+    };
+    const append = () => {
+      const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+      const owner: SqliteWorkerOperationContext = { port: admission.port };
+      try {
+        const window = withSqliteWorkerOperationAdmission(owner, () =>
+          operations["trajectory.events.append"](input, context),
+        );
+        return { owner, window };
+      } finally {
+        admission.finish();
+      }
+    };
+    return { database, context, input, append, operations, event };
+  }
+
+  it("publishes the prepared append receipt after one autocommit INSERT and uses its next window", async () => {
+    const { database, input, append, event } = await workerAppend();
+    const controls = vi.spyOn(database.db, "exec");
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["insert"],
+      (sql) => (/^insert into "trajectory_runtime_events"/i.test(sql) ? "insert" : null),
+    );
+    try {
+      const first = append();
+      expect(first.owner.committed).toEqual({
+        facts: {
+          kind: "trajectory-runtime-append",
+          sessionId: "session-1",
+          appendedRange: { firstSeq: 0, lastSeq: 0 },
+          removedThroughSeq: undefined,
+          windowFacts: first.window,
+        },
+      });
+      input.windowFacts = first.window;
+      expect(append().owner.committed).toMatchObject({
+        facts: { appendedRange: { firstSeq: 1, lastSeq: 1 } },
+      });
+      expect(counter.counts.insert).toBe(2);
+      expect(controls).not.toHaveBeenCalled();
+    } finally {
+      controls.mockRestore();
+      counter.restore();
+    }
+    expect(loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId: "session-1", storePath })).toEqual(
+      [
+        { seq: 0, event },
+        { seq: 1, event },
+      ],
+    );
+  });
+
+  it("refuses receipt capture and final admission before attempting the terminal INSERT", async () => {
+    const { database, context, input, append, operations } = await workerAppend();
+    const counter = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["insert"],
+      (sql) => (/^insert into "trajectory_runtime_events"/i.test(sql) ? "insert" : null),
+    );
+    try {
+      expect(() => operations["trajectory.events.append"](input, context)).toThrow(/receipt/i);
+      context.admit = () => {
+        throw new Error("append revoked");
+      };
+      expect(append).toThrow("append revoked");
+      expect(counter.counts.insert).toBe(0);
+    } finally {
+      counter.restore();
+    }
+    expect(loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId: "session-1", storePath })).toEqual(
+      [],
+    );
+  });
+
+  it.each(["statement", "lock"])(
+    "keeps a failed %s unpublished and permits a later append",
+    async (failure) => {
+      const { database, context, input, operations, append, event } = await workerAppend(0);
+      const blocker = openNodeSqliteDatabase(sqlitePath());
+      const admission = createSqliteWorkerOperationAdmission((_request, grant) => grant());
+      const owner: SqliteWorkerOperationContext = { port: admission.port };
+      if (failure === "lock") {
+        blocker.exec("BEGIN IMMEDIATE");
+      } else {
+        database.db
+          .exec(`CREATE TEMP TRIGGER reject_terminal_append BEFORE INSERT ON trajectory_runtime_events
+        BEGIN SELECT RAISE(ABORT, 'terminal insert rejected'); END`);
+      }
+      try {
+        expect(() =>
+          withSqliteWorkerOperationAdmission(owner, () =>
+            operations["trajectory.events.append"](input, context),
+          ),
+        ).toThrow(failure === "lock" ? /locked|busy/i : "terminal insert rejected");
+        expect(owner.committed).toBeUndefined();
+      } finally {
+        if (failure === "lock") {
+          blocker.exec("ROLLBACK");
+        } else {
+          database.db.exec("DROP TRIGGER reject_terminal_append");
+        }
+        blocker.close();
+        admission.finish();
+      }
+      expect(append().window.nextSeq).toBe(1);
+      expect(
+        loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId: "session-1", storePath }),
+      ).toEqual([{ seq: 0, event }]);
+    },
+  );
+
+  it.each(["unknown window", "large batch", "pruning", "retention"])(
+    "rolls back refused %s work as a transaction",
+    async (kind) => {
+      const { database, context, input, append } = await workerAppend();
+      const lease = new Int32Array(new SharedArrayBuffer(4));
+      if (kind === "unknown window") {
+        input.windowFacts = undefined;
+      }
+      if (kind === "large batch") {
+        input.events = Array.from({ length: 33 }, () => input.events[0]!);
+      }
+      if (kind === "pruning") {
+        input.maxRuntimeBytes = 1;
+      }
+      if (kind === "retention") {
+        Atomics.store(lease, 0, 1);
+        beginTrajectoryRuntimeRetention(database.db, lease);
+      }
+      context.admit = () => {
+        throw new Error("append revoked");
+      };
+      const controls = vi.spyOn(database.db, "exec");
+      try {
+        expect(append).toThrow("append revoked");
+        expect(controls).toHaveBeenCalledWith("BEGIN IMMEDIATE");
+        expect(controls).toHaveBeenCalledWith("ROLLBACK");
+      } finally {
+        controls.mockRestore();
+        Atomics.store(lease, 0, 0);
+      }
+      expect(
+        loadSqliteTrajectoryRuntimeEventRowsSync({ sessionId: "session-1", storePath }),
+      ).toEqual([]);
+    },
+  );
 
   it("reads mixed payloads through the worker operation and preserves byte limits, cursors and rollback", async () => {
     const options = { agentId: "main", path: sqlitePath() };

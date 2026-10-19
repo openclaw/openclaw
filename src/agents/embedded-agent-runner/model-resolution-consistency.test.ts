@@ -166,7 +166,8 @@ vi.mock("../provider-request-config.js", () => ({
   applyPreparedRuntimeAuthToModel: (model: unknown) => model,
 }));
 
-vi.mock("../sandbox.js", () => ({
+vi.mock("../sandbox/context.js", async () => ({
+  ...(await vi.importActual<typeof import("../sandbox/context.js")>("../sandbox/context.js")),
   resolveSandboxContext: vi.fn(async () => undefined),
 }));
 

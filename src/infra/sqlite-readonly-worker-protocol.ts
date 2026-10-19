@@ -3,6 +3,7 @@ import { toUSVString } from "node:util";
 import { isStringArray } from "@openclaw/normalization-core/record-coerce";
 import { sliceUtf16Safe } from "@openclaw/normalization-core/utf16-slice";
 import { markPrivateDirectoryCreationRefused } from "./private-directory-creation.js";
+import type { SqlitePrivateSnapshotFamily } from "./sqlite-readonly-location.types.js";
 import type {
   SqliteReadOnlyOperationCommand,
   SqliteReadOnlyOperationResult,
@@ -14,6 +15,7 @@ export const SQLITE_READONLY_WORKER_MAX_BUFFER = 1024 * 1024;
 
 export type SqliteReadOnlyWorkerMode =
   | "sync"
+  | "private-fork"
   | "content-version"
   | "file-generation"
   | "async"
@@ -68,7 +70,13 @@ export type SqliteReadOnlyWorkerOptions =
   | SqliteAuthProfileReadOptions
   | SqliteReadOnlyOperationOptions
   | {
-      mode: Exclude<SqliteReadOnlyWorkerMode, "auth-profile-rows" | "operation">;
+      mode: "private-fork";
+      family: SqlitePrivateSnapshotFamily;
+      stagingRoot: string;
+      signal?: AbortSignal;
+    }
+  | {
+      mode: Exclude<SqliteReadOnlyWorkerMode, "auth-profile-rows" | "operation" | "private-fork">;
       stagingRoot?: string;
       signal?: AbortSignal;
       expectedSourceIdentity?: DatabaseFileIdentity;
@@ -79,6 +87,9 @@ export function sqliteReadOnlyWorkerRequestArgs(
 ): string[] {
   const args = [options.mode, path.resolve(pathname)];
   const stagingRoot = options.stagingRoot && path.resolve(options.stagingRoot);
+  if (options.mode === "private-fork") {
+    return [...args, stagingRoot ?? "", JSON.stringify(options.family)];
+  }
   const expected =
     options.mode === "auth-profile-rows" || options.mode === "operation"
       ? undefined
@@ -164,7 +175,14 @@ function parseSqliteReadOnlyWorkerResult(
 
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
-  mode: "sync" | "async" | "metadata" | "consolidated" | "content-version" | "file-generation",
+  mode:
+    | "sync"
+    | "private-fork"
+    | "async"
+    | "metadata"
+    | "consolidated"
+    | "content-version"
+    | "file-generation",
 ): string;
 export function readSqliteReadOnlyWorkerValue(
   params: SqliteReadOnlyWorkerOutput,
@@ -215,6 +233,7 @@ export function readSqliteReadOnlyWorkerValue(
   }
   if (
     (mode === "sync" ||
+      mode === "private-fork" ||
       mode === "async" ||
       mode === "metadata" ||
       mode === "consolidated" ||

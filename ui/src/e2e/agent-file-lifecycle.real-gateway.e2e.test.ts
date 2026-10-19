@@ -234,10 +234,11 @@ catalogSuite.define(() => {
           expect(await identityName.inputValue()).toBe("Keep this identity draft");
           await openPicker(picker);
           await option("fixture/selected").click();
+          const selected = () => pickerValue(picker);
+          await expect.poll(selected).toBe("fixture/selected");
           const fallbackInput = editor.locator("openclaw-multi-select.agent-fallbacks input");
           await fallbackInput.fill("fixture/anchor");
           await fallbackInput.press("Enter");
-          const selected = () => pickerValue(picker);
           await expect.poll(selected).toBe("fixture/selected");
           await expect.poll(() => mutations.length).toBeGreaterThan(0);
           const selectedModel = { primary: "fixture/selected", fallbacks: ["fixture/anchor"] };

@@ -13,9 +13,14 @@ import "../../../styles/chat/selection-annotations.css";
 registerChatMessageMetadataEnglish();
 
 type ChatCommentPinsProps = {
+  threadState?: { commentPins?: ChatCommentPinsHandle };
   attachments: readonly ChatAttachment[];
   sessionKey: string;
   disabled: boolean;
+};
+
+export type ChatCommentPinsHandle = {
+  visiblePin: (id: string) => HTMLButtonElement | undefined;
 };
 
 /** Draft attachments own the data; this transcript-local view owns source pins. */
@@ -41,6 +46,28 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
     const comments = createMemo(() =>
       currentChatComments(inputs().attachments, inputs().sessionKey),
     );
+    const handle: ChatCommentPinsHandle = {
+      visiblePin: (id) => {
+        const thread = root?.getBoundingClientRect();
+        if (!thread) {
+          return undefined;
+        }
+        return pins.find((pin) => {
+          if (!pin.isConnected || pin.dataset.attachmentId !== id || pin.hidden) {
+            return false;
+          }
+          const bounds = pin.getBoundingClientRect();
+          return (
+            bounds.width > 0 &&
+            bounds.height > 0 &&
+            bounds.top >= Math.max(thread.top, 0) &&
+            bounds.bottom <= Math.min(thread.bottom, window.innerHeight) &&
+            bounds.left >= Math.max(thread.left, 0) &&
+            bounds.right <= Math.min(thread.right, window.innerWidth)
+          );
+        });
+      },
+    };
 
     /** The transcript is top-aligned, so content after every placed source cannot move a pin. */
     function canMovePins(target: Node) {
@@ -119,6 +146,11 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
     }
 
     onSettled(() => {
+      // The parent keys this view by its pane's thread state.
+      const initialThreadState = props.threadState;
+      if (initialThreadState) {
+        initialThreadState.commentPins = handle;
+      }
       let disconnect: (() => void) | undefined;
       // Native bridge content settles before its host is inserted by the parent.
       queueMicrotask(() => {
@@ -145,6 +177,9 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
         }
       });
       return () => {
+        if (initialThreadState?.commentPins === handle) {
+          initialThreadState.commentPins = undefined;
+        }
         disposed = true;
         resizeObserver?.disconnect();
         mutationObserver?.disconnect();
@@ -183,6 +218,7 @@ export const ChatCommentPins = defineSolidBridge<ChatCommentPinsProps>(
   },
   {
     properties: {
+      threadState: { default: undefined, attribute: false },
       attachments: { default: [], attribute: false },
       sessionKey: { default: "" },
       disabled: { default: false, attribute: false },

@@ -412,13 +412,27 @@ export async function loadAgentTrajectoryOperations() {
       input: Parameters<typeof kernel.appendSqliteTrajectoryRuntimeEventsWithWriter>[0],
       { open, writeTransaction, admit },
     ) => {
-      return kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(input, open(), (label, write) =>
-        writeTransaction(label, "Trajectory append", (current) => {
-          const result = write(current);
-          deferSqliteWorkerCommitReceipt(current.db, result.receipt);
-          admit("commit");
-          return result;
-        }),
+      return kernel.appendSqliteTrajectoryRuntimeEventsWithWriter(
+        input,
+        open(),
+        (label, write, receipt) =>
+          writeTransaction(
+            label,
+            "Trajectory append",
+            (current) => {
+              if (receipt) {
+                deferSqliteWorkerCommitReceipt(current.db, receipt);
+                admit("commit");
+                return write(current);
+              }
+              const result = write(current);
+              deferSqliteWorkerCommitReceipt(current.db, result.receipt);
+              admit("commit");
+              return result;
+            },
+            undefined,
+            receipt !== undefined,
+          ),
       ).receipt.windowFacts;
     },
     "trajectory.retention.begin": (_input: undefined, { open }) => {

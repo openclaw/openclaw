@@ -6,6 +6,7 @@ import {
   readFileSync,
   readdirSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
@@ -72,6 +73,11 @@ describe("Apple build cache contracts", () => {
     ]) {
       copyFileSync(`scripts/${file}`, path.join(root, "scripts", file));
     }
+    mkdirSync(path.join(root, "src/infra"), { recursive: true });
+    copyFileSync(
+      "src/infra/update-runtime-staging.ts",
+      path.join(root, "src/infra/update-runtime-staging.ts"),
+    );
     put(
       "pnpm.cjs",
       `const fs = require("node:fs");
@@ -81,12 +87,37 @@ fs.mkdirSync(target, { recursive: true });
 fs.writeFileSync(target + "/native.js", "verified bundle");
 fs.appendFileSync("builds", "built\\n");`,
     );
-    const key = spawnSync(process.execPath, ["scripts/prepare-apple-mermaid.mjs", "--cache-key"], {
-      cwd: root,
-      encoding: "utf8",
-    });
-    expect(key.status, key.stderr).toBe(0);
-    expect(key.stdout.trim()).toMatch(/^[a-z0-9-]+-v[\d.]+-[a-f0-9]{64}$/);
+    const cacheKey = () => {
+      const result = spawnSync(
+        process.execPath,
+        ["scripts/prepare-apple-mermaid.mjs", "--cache-key"],
+        {
+          cwd: root,
+          encoding: "utf8",
+        },
+      );
+      expect(result.status, result.stderr).toBe(0);
+      return result.stdout.trim();
+    };
+    const key = cacheKey();
+    expect(key).toMatch(/^[a-z0-9-]+-v[\d.]+-[a-f0-9]{64}$/);
+    const retained =
+      "packages/mermaid-renderer/node_modules.openclaw-update-0459d479-fce3-4876-8faf-03a268fe0562.tmp";
+    put(`${retained}/previous/retained.txt`, "rollback bytes");
+    // Git promotion retains links relative to their final location. Reading this
+    // rollback tree as source would fail, even though its custody is intentional.
+    symlinkSync(
+      "../missing-normalization-core",
+      path.join(root, retained, "previous/normalization-core"),
+      process.platform === "win32" ? "junction" : "dir",
+    );
+    expect(cacheKey()).toBe(key);
+    put(`${retained}/previous/retained.txt`, "other rollback bytes");
+    expect(cacheKey()).toBe(key);
+    const ordinary =
+      "packages/mermaid-renderer/node_modules.openclaw-update-operator.tmp/source.ts";
+    put(ordinary, "legitimate source");
+    expect(cacheKey()).not.toBe(key);
     expect(() => readFileSync(path.join(root, "builds"))).toThrow();
     const run = () => {
       const result = spawnSync(process.execPath, ["scripts/prepare-apple-mermaid.mjs"], {

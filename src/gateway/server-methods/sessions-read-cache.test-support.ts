@@ -135,7 +135,6 @@ export function identifiedClient(profileId: string): GatewayClient {
 
 export function requestContext(config: OpenClawConfig): GatewayRequestContext {
   return {
-    chatAbortControllers: new Map(),
     getRuntimeConfig: () => config,
     getSessionEventSubscriberConnIds: () => new Set(),
     forgetConnectionAncestors: vi.fn(),

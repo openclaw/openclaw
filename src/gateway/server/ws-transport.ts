@@ -8,6 +8,7 @@ export function createGatewayWebSocketTransport(
   socket: WebSocket,
   stream: Socket,
   acceptsDeflatedSegments: boolean,
+  observeFrameBytes?: (frame: Buffer, record: (bytes: number) => void) => void,
 ): GatewayConnectionTransport {
   const write = stream.write.bind(stream);
   let batch: { chunks: Uint8Array[]; callbacks: ((error?: Error | null) => void)[] } | undefined;
@@ -46,7 +47,13 @@ export function createGatewayWebSocketTransport(
       return socket.bufferedAmount + pendingBytes;
     },
     acceptsDeflatedSegments,
-    recordEventSent: recordGatewayWsEvent,
+    recordEventSent(event, frame, sessionEvent, presenceMode) {
+      if (recordGatewayWsEvent(event, frame.byteLength, sessionEvent, presenceMode)) {
+        observeFrameBytes?.(frame, (bytes) =>
+          recordGatewayWsEvent(event, 0, undefined, undefined, bytes),
+        );
+      }
+    },
     batchWrites() {
       if (batch) {
         return;

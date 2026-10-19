@@ -38,7 +38,10 @@ import {
   HEARTBEAT_SKIP_NO_PENDING_EVENT,
   type HeartbeatRunResult,
 } from "./heartbeat-wake.js";
-import { markSessionEventWakeWorkStarted } from "./session-event-wake.js";
+import {
+  markSessionEventWakeWorkStarted,
+  retireRefusedSessionEventWakePoll,
+} from "./session-event-wake.js";
 import { resolveSystemEventQueueKey } from "./system-event-ownership.js";
 import {
   consumeSelectedSystemEventEntries,
@@ -130,7 +133,23 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
   if (cancelledBeforeDispatch) {
     return cancelledBeforeDispatch;
   }
-  const settledResult = () => cancelledExecResult() ?? policy.result;
+  const retireRefusedPoll = (result: HeartbeatRunResult) => {
+    if (
+      result.status === "skipped" &&
+      result.reason === "requests-in-flight" &&
+      (state.admission === undefined || state.admission.status === "skipped") &&
+      prepared.run.kind !== "isolated" &&
+      wake.preflight.pendingEventEntries.length === 0 &&
+      wake.scheduledTasks.length === 0
+    ) {
+      retireRefusedSessionEventWakePoll();
+    }
+    return result;
+  };
+  const settledResult = () => {
+    const result = cancelledExecResult() ?? policy.result;
+    return result && retireRefusedPoll(result);
+  };
   const signal = execRequestAbortSignal(execRequestOwners, getHeartbeatWakeAbortSignal());
   const eventQueueKey = resolveSystemEventQueueKey(prepared.sessionKey, agentId);
   const deferredGenericIds = new Set(prepared.deferredGenericEvents.map((event) => event.id));
@@ -349,7 +368,7 @@ export async function runHeartbeatOnce(opts: HeartbeatRunOptions): Promise<Heart
           ? "agent-runner-cancelled"
           : "requests-in-flight";
     emitHeartbeatEvent({ status: "skipped", reason, durationMs: Date.now() - startedAt });
-    return { status: "skipped", reason };
+    return retireRefusedPoll({ status: "skipped", reason });
   } catch (error) {
     const settled = settledResult();
     if (settled) {

@@ -99,6 +99,10 @@ synthesized by the Gateway using the configured TTS provider, voice, and endpoin
 within `tts.maxTextLength`. Starting another Read aloud or Talk action stops the
 previous playback. The control does not use browser speech synthesis. The former `messages.tts` configuration is migrated to `tts` by Doctor.
 
+Already-downloaded speech keeps playing through a Gateway connection blip, and
+**Stop reading** remains available. New synthesis requires a live connection;
+changing Gateway or losing speech access stops the old playback.
+
 Hold the microphone button for dictation. Explicit audio models in
 `tools.media.models` use the same transcription owner as uploaded voice notes,
 including local OpenAI-compatible `/v1/audio/transcriptions` endpoints and local

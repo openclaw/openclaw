@@ -2,6 +2,7 @@ import type { JSX } from "@solidjs/web";
 import { Show } from "solid-js";
 import { t } from "../lib/reactive/i18n.ts";
 import { RelativeTime } from "./relative-time.tsx";
+import { sidebarAttentionFocusRef } from "./sidebar-attention-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 
 export function SidebarDismissButton(props: {
@@ -13,6 +14,7 @@ export function SidebarDismissButton(props: {
   return (
     <Show when={props.onDismiss}>
       <button
+        ref={sidebarAttentionFocusRef()}
         type="button"
         class="sidebar-issues-panel__dismiss"
         aria-label={label()}
@@ -52,7 +54,11 @@ export function SidebarNotificationCard(props: {
       ]}
       onToggle={(event) => props.onToggle?.(event.currentTarget.open)}
     >
-      <summary class="sidebar-issues-panel__summary" data-issue-row-focus>
+      <summary
+        ref={sidebarAttentionFocusRef("row")}
+        class="sidebar-issues-panel__summary"
+        data-issue-row-focus
+      >
         <span
           class={[
             "sidebar-issues-panel__icon",

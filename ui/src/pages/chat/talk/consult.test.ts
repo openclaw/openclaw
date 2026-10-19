@@ -158,9 +158,13 @@ describe("RealtimeTalkSession consult handoff", () => {
     expect(submit).toHaveBeenCalledOnce();
   });
 
-  it.each(["agent:voice:home", "global"])(
-    "keeps the acknowledgement alive and cancels its exact %s target",
-    async (agentSessionKey) => {
+  it.each([
+    { agentSessionKey: "agent:voice:home", abortFails: false },
+    { agentSessionKey: "global", abortFails: false },
+    { agentSessionKey: "agent:voice:home", abortFails: true },
+  ])(
+    "settles cancellation for $agentSessionKey even if the abort RPC fails: $abortFails",
+    async ({ agentSessionKey, abortFails }) => {
       type Acknowledgement = { runId: string; agentId: string; agentSessionKey: string };
       const pendingAcknowledgement = createDeferred<Acknowledgement>();
       const request = vi.fn(
@@ -170,6 +174,9 @@ describe("RealtimeTalkSession consult handoff", () => {
             return await pendingAcknowledgement.promise;
           }
           if (method === "chat.abort") {
+            if (abortFails) {
+              throw new Error("Gateway disconnected during abort");
+            }
             return { ok: true, aborted: true };
           }
           throw new Error(`unexpected request: ${method}`);

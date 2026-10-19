@@ -1,4 +1,6 @@
 import fs from "node:fs/promises";
+import { syncBuiltinESMExports } from "node:module";
+import os from "node:os";
 import path from "node:path";
 import { gunzipSync } from "node:zlib";
 import { afterAll, beforeAll, describe, expect, it, onTestFinished, vi } from "vitest";
@@ -258,8 +260,16 @@ async function installStatelessFixture(
 }
 
 describe("configured plugin migration deferral", () => {
-  it("keeps a present config-path Doctor contract available during an update rehearsal", () =>
-    withFixture(async ({ home, pluginId }) => {
+  it("keeps a present config-path Doctor contract available during an update rehearsal", () => {
+    // The real rehearsal runs in a child; this process's shared broker outlives its fixture.
+    const processTempDir = os.tmpdir();
+    const tempDir = vi.spyOn(os, "tmpdir").mockReturnValue(processTempDir);
+    syncBuiltinESMExports();
+    onTestFinished(() => {
+      tempDir.mockRestore();
+      syncBuiltinESMExports();
+    });
+    return withFixture(async ({ home, pluginId }) => {
       const rehearsalRoot = path.join(home, ".openclaw");
       const pluginRoot = path.join(rehearsalRoot, "copied-custom-plugin");
       await installStatelessFixture(pluginRoot, pluginId, "config-only");
@@ -281,7 +291,8 @@ describe("configured plugin migration deferral", () => {
           expect(readDeferredPluginMigrations()).toEqual([]);
         },
       );
-    }));
+    });
+  });
 
   it.each(["linked", "unrecorded"] as const)(
     "keeps a %s config-path plugin available only when package convergence skips it",

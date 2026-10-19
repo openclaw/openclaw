@@ -5,7 +5,7 @@ import {
 } from "../agents/github-host.js";
 import { resolveConfiguredGitHubToolIdentity } from "../agents/github-tool-identity.js";
 import { runGitReadOperation } from "../infra/git-read-cache.js";
-import { prepareControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
+import { createControlUiSessionPrRead } from "./control-ui-session-pr-read.js";
 import { withControlUiSessionPrSource } from "./control-ui-session-pr-source.js";
 import { gitHubPublicApi, type ControlUiGitHubSessionIdentity } from "./github-public-api.js";
 import { prepareGatewayProjectGitHubIdentity } from "./project-github-identity.js";
@@ -55,7 +55,7 @@ export async function withControlUiSessionGitHubRead<T>(
     }
   };
   assertClient();
-  const read = await prepareControlUiSessionPrRead({
+  const read = createControlUiSessionPrRead({
     client,
     sessionKey: params.sessionKey,
     agentId,

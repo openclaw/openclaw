@@ -45,7 +45,10 @@ import { throwSqliteLifecycleErrors } from "./sqlite-lifecycle-errors.js";
 import { retainSnapshotTempDirectory } from "./sqlite-readonly-location-cleanup.js";
 import type { PreparedSqliteReadOnlyLocation } from "./sqlite-readonly-location.types.js";
 import { prepareSqliteReadOnlyLocationSync } from "./sqlite-snapshot-source.js";
-import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
+import {
+  runSqliteImmediateTransactionSync,
+  runSqliteSingleStatementSync,
+} from "./sqlite-transaction.js";
 import { STARTUP_MIGRATION_LEASE_TTL_MS } from "./startup-migration-checkpoint.js";
 import { readStateLeaseProcessOwnerStatus } from "./state-lease-process-owner.js";
 
@@ -251,15 +254,22 @@ export function acquireGatewayOwnerLease(params: {
   ) =>
     withOpenClawStateStartupMigrationCheckpointDatabase(
       (db) =>
-        // The admitted state owner already supplies the transaction. Native
-        // checkpoint bootstrap is the only path that still needs one here.
+        // Compound operations join the admitted owner's transaction; native
+        // checkpoint bootstrap still needs its own envelope here.
         db.isTransaction
           ? mutate(db)
-          : runSqliteImmediateTransactionSync(db, () => mutate(db), {
-              databaseLabel: databasePath,
-              operationLabel: `gateway.owner-lease.${operation}`,
-            }),
-      { env, path: databasePath, sealOnClose: operation === "release" },
+          : operation === "release"
+            ? runSqliteSingleStatementSync(db, () => mutate(db))
+            : runSqliteImmediateTransactionSync(db, () => mutate(db), {
+                databaseLabel: databasePath,
+                operationLabel: `gateway.owner-lease.${operation}`,
+              }),
+      {
+        env,
+        path: databasePath,
+        sealOnClose: operation === "release",
+        singleStatement: operation === "release" ? true : undefined,
+      },
     );
   const expiresAt = mutateLease("acquire", (db) => {
     const previous = resolveStoppedGatewayOwnerLease(readGatewayOwnerLeaseFromDatabase(db));

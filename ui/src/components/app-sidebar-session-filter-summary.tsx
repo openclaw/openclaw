@@ -1,4 +1,4 @@
-import { createMemo, Show, untrack } from "solid-js";
+import { createMemo, Show } from "solid-js";
 import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
 import { isMobileNavLayout } from "../app/mobile-nav-layout.ts";
 import { beginNativeWindowDrag } from "../app/native-window-drag.ts";
@@ -33,26 +33,6 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
         : ownerId()
           ? (owners().find((entry) => entry.id === ownerId())?.label ?? ownerId()!)
           : t("sessionsView.allOwners");
-  const optionKeys = createMemo(
-    () => [
-      ownerId(),
-      selfId(),
-      props.host.sessionInvolvingMeFilterActive,
-      Boolean(props.host.sidebarSnapshot),
-      isMobileNavLayout(),
-      getLocale(),
-      ...owners().flatMap((entry) => [
-        entry.id,
-        entry.label,
-        entry.avatarUrl,
-        entry.identity ? sessionParticipantIdentityKey(entry.identity) : null,
-      ]),
-    ],
-    {
-      equals: (previous, next) =>
-        previous.length === next.length && previous.every((value, index) => value === next[index]),
-    },
-  );
   const options = () => [
     { value: "all", label: t("sessionsView.allOwners") },
     { value: "involving-me", label: t("sessionsView.involvingMe") },
@@ -64,33 +44,53 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
       ? [{ value: `owner:${ownerId()}`, label: label() }]
       : []),
   ];
-  const params = createMemo(() => {
-    optionKeys();
-    return untrack(() => ({
-      id: "sidebar-session-owner-title",
-      class: "sidebar-session-owner-filter",
-      label: t("sessionsView.owners"),
-      value: props.host.sessionInvolvingMeFilterActive
-        ? "involving-me"
-        : ownerId()
-          ? `owner:${ownerId()}`
-          : "all",
-      disabled: Boolean(props.host.sidebarSnapshot),
-      searchable: "always" as const,
-      sheet: isMobileNavLayout(),
-      showOptionTooltips: false,
-      renderLeading: (option: { value: string }) => {
-        const owner = owners().find((entry) => `owner:${entry.id}` === option.value);
-        return owner ? renderSessionOwnerAvatar(owner) : undefined;
+  const picker = createMemo(
+    () => ({
+      keys: [
+        ownerId(),
+        selfId(),
+        props.host.sessionInvolvingMeFilterActive,
+        Boolean(props.host.sidebarSnapshot),
+        isMobileNavLayout(),
+        getLocale(),
+        ...owners().flatMap((entry) => [
+          entry.id,
+          entry.label,
+          entry.avatarUrl,
+          entry.identity ? sessionParticipantIdentityKey(entry.identity) : null,
+        ]),
+      ],
+      params: {
+        id: "sidebar-session-owner-title",
+        class: "sidebar-session-owner-filter",
+        label: t("sessionsView.owners"),
+        value: props.host.sessionInvolvingMeFilterActive
+          ? "involving-me"
+          : ownerId()
+            ? `owner:${ownerId()}`
+            : "all",
+        disabled: Boolean(props.host.sidebarSnapshot),
+        searchable: "always" as const,
+        sheet: isMobileNavLayout(),
+        showOptionTooltips: false,
+        renderLeading: (option: { value: string }) => {
+          const owner = owners().find((entry) => `owner:${entry.id}` === option.value);
+          return owner ? renderSessionOwnerAvatar(owner) : undefined;
+        },
+        options: options(),
+        onChange: (value: string) =>
+          props.host.setSessionOwnerFilter(
+            value.startsWith("owner:") ? value.slice("owner:".length) : null,
+            value === "involving-me",
+          ),
       },
-      options: options(),
-      onChange: (value: string) =>
-        props.host.setSessionOwnerFilter(
-          value.startsWith("owner:") ? value.slice("owner:".length) : null,
-          value === "involving-me",
-        ),
-    }));
-  });
+    }),
+    {
+      equals: (previous, next) =>
+        previous.keys.length === next.keys.length &&
+        previous.keys.every((value, index) => value === next.keys[index]),
+    },
+  );
   return (
     <Show
       when={owners().length > 0 || ownerId() !== null || props.host.sessionInvolvingMeFilterActive}
@@ -98,7 +98,7 @@ function SidebarOwnerPicker(props: { host: SessionListHost }) {
         <span class="sidebar-recent-sessions__label-text">{t("chat.sidebar.threads")}</span>
       }
     >
-      <Picker {...params()} />
+      <Picker {...picker().params} />
     </Show>
   );
 }

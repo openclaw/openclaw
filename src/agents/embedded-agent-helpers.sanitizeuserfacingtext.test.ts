@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { markInboundContextLabel } from "../auto-reply/reply/inbound-context-marker.js";
-import { dropStaleOpenAIReasoning, isMessagingToolDuplicate } from "./embedded-agent-helpers.js";
 import { stripThoughtSignatures } from "./embedded-agent-helpers/bootstrap.js";
+import { isMessagingToolDuplicate } from "./embedded-agent-helpers/messaging-dedupe.js";
+import { dropStaleOpenAIReasoning } from "./embedded-agent-helpers/openai.js";
 import { sanitizeUserFacingText } from "./embedded-agent-helpers/sanitize-user-facing-text.js";
 import { renderUserFacingText } from "./embedded-agent-helpers/user-facing-text.js";
 import { formatAgentInternalEventsForPrompt, type AgentInternalEvent } from "./internal-events.js";

@@ -1,8 +1,13 @@
 // Keeps gateway health, usage, security audit, and service summaries behind explicit option gates.
 
+import { describeDatabaseEngineSelection } from "../infra/database-engine/report.js";
 import { readBackupRunFreshness } from "../state/backup-run-records.js";
+import {
+  buildGatewayStatusJsonPayload,
+  resolveStatusUpdateChannelInfo,
+} from "./status-all/format.js";
 import { resolveStatusDatabaseEngines } from "./status-database-engines.js";
-import { buildStatusJsonPayload } from "./status-json-payload.ts";
+import type { StatusOverviewSurface } from "./status-overview-surface.ts";
 import {
   resolveStatusRuntimeSnapshot,
   resolveStatusUsageSummary,
@@ -21,7 +26,8 @@ export async function resolveStatusJsonOutput(params: {
   includePluginCompatibility?: boolean;
   suppressHealthErrors?: boolean;
 }) {
-  const { scan, opts } = params;
+  const { opts } = params;
+  let { scan } = params;
   const inspectionReason = "Local plugin inspection is not collected in online status.";
   const { securityAudit, usage, health, lastHeartbeat, gatewayService, nodeService } =
     await resolveStatusRuntimeSnapshot({
@@ -55,30 +61,65 @@ export async function resolveStatusJsonOutput(params: {
         : {}),
     });
 
-  const payload = buildStatusJsonPayload({
-    summary: scan.summary,
-    surface: {
-      ...scan,
-      gatewayService,
-      nodeService,
-      databaseEngines: await resolveStatusDatabaseEngines(scan.cfg, scan.summary.databaseStores),
-    },
-    osSummary: scan.osSummary,
+  const databaseEngines = await resolveStatusDatabaseEngines(scan.cfg, scan.summary.databaseStores);
+  const backups = await readBackupRunFreshness(scan.env ?? {});
+  scan = { ...scan, ...scan.publish?.() };
+  const surface: StatusOverviewSurface = {
+    ...scan,
+    gatewayService,
+    nodeService,
+    databaseEngines,
+  };
+  const projectedSecurityAudit =
+    params.includeSecurityAudit && scan.collection
+      ? { collected: false, reason: inspectionReason }
+      : securityAudit;
+  const pluginCompatibility = params.includePluginCompatibility
+    ? scan.pluginCompatibility
+    : undefined;
+  const channelInfo = resolveStatusUpdateChannelInfo({
+    updateConfigChannel: surface.cfg.update?.channel,
+    update: surface.update,
+  });
+  const databaseFamilies = describeDatabaseEngineSelection(surface.cfg, databaseEngines.stores);
+  const payload = {
+    ...scan.summary,
+    os: scan.osSummary,
+    update: surface.update,
+    updateChannel: channelInfo.channel,
+    updateChannelSource: channelInfo.source,
     memory: scan.memory,
     memoryPlugin: scan.memoryPlugin,
+    databaseEngines: {
+      experimental: databaseFamilies.some((family) => family.effective === "postgres"),
+      families: databaseFamilies,
+      ...databaseEngines,
+    },
+    gateway: buildGatewayStatusJsonPayload(surface),
+    gatewayService: surface.gatewayService,
+    nodeService: surface.nodeService,
     agents: scan.agentStatus,
-    configDiagnostics: scan.configDiagnostics,
+    ...(scan.configDiagnostics ? { configDiagnostics: scan.configDiagnostics } : {}),
     secretDiagnostics: scan.secretDiagnostics,
-    securityAudit:
-      params.includeSecurityAudit && scan.collection
-        ? { collected: false, reason: inspectionReason }
-        : securityAudit,
-    health,
-    usage,
-    lastHeartbeat,
-    pluginCompatibility: params.includePluginCompatibility ? scan.pluginCompatibility : undefined,
-  });
-  const backups = await readBackupRunFreshness(scan.env ?? {});
+    ...(projectedSecurityAudit ? { securityAudit: projectedSecurityAudit } : {}),
+    ...(pluginCompatibility
+      ? {
+          // Keep warnings grouped with a count so consumers can test compatibility status cheaply.
+          pluginCompatibility: {
+            count: pluginCompatibility.length,
+            warnings: pluginCompatibility,
+          },
+        }
+      : {}),
+    ...(health || usage || lastHeartbeat
+      ? {
+          // Deep/usage fields stay absent in fast mode instead of appearing as null placeholders.
+          health,
+          usage,
+          lastHeartbeat,
+        }
+      : {}),
+  };
   if (backups.latest || backups.latestOk) {
     Object.assign(payload, { backups });
   }

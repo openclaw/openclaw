@@ -203,6 +203,7 @@ it.each([
         identity_login: "proof",
         title: "Cloud",
         body: null,
+        draft: null,
         push_repository: "example/handoff-fixture",
         repository: prRepository,
         base_branch: baseBranch,

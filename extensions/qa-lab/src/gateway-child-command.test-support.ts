@@ -1,4 +1,4 @@
-import { readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expect, it } from "vitest";
 import type { createQaGatewayChild } from "./gateway-child.js";
@@ -41,6 +41,23 @@ export function buildGatewayEnvironmentCaptureScript(observedEnvPath: string): s
     "};",
     `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, JSON.stringify(env));`,
   ].join("\n");
+}
+
+export async function writeRepoCliSourceRootCaptureFixture(
+  repoRoot: string,
+  observedEnvPath: string,
+): Promise<void> {
+  const runnerPath = path.join(repoRoot, "scripts", "run-node.mjs");
+  await mkdir(path.dirname(runnerPath), { recursive: true });
+  await writeFile(
+    runnerPath,
+    [
+      'import fs from "node:fs";',
+      'if (process.env.OPENCLAW_CLI === "1") process.stdin.resume();',
+      `fs.writeFileSync(${JSON.stringify(observedEnvPath)}, process.env.OPENCLAW_DEV_SOURCE_ROOT ?? "");`,
+    ].join("\n"),
+    "utf8",
+  );
 }
 
 export async function writePackagedGatewayFixture(root: string): Promise<string> {

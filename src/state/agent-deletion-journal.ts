@@ -627,9 +627,6 @@ export async function listPendingAgentDeletionJournalsAsync(
     { type: "agentRecovery.pendingDeletions", input: undefined },
     { current: true },
   );
-  if (reply && (!reply.ok || reply.type !== "agentRecovery.pendingDeletions")) {
-    throw new Error("Unexpected pending agent deletion read result");
-  }
   return {
     entries: reply?.entries ?? [],
     manualClawAgentIds: reply?.manualClawAgentIds ?? [],

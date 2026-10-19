@@ -1,13 +1,12 @@
 import { vi } from "vitest";
-import {
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueMessageOptions,
-} from "./embedded-agent-runner/runs.js";
+import type { EmbeddedAgentQueueMessageOptions } from "./embedded-agent-runner/runs.js";
+import { registerTestEmbeddedRun as setActiveEmbeddedRun } from "./embedded-agent-runner/runs.test-support.js";
 
 export function activeRun(
   sessionKey: string,
   options: {
     sessionId?: string;
+    storeScope?: string;
     streaming?: boolean;
     sourceReplyDeliveryMode?: "automatic" | "message_tool_only";
     rejects?: boolean;
@@ -32,12 +31,18 @@ export function activeRun(
         },
       },
       isStreaming: () => options.streaming ?? true,
+      isStopped: () => options.streaming === false,
       isCompacting: () => false,
       supportsTranscriptCommitWait: true,
       sourceReplyDeliveryMode: options.sourceReplyDeliveryMode ?? "message_tool_only",
       abort: () => {},
     },
     sessionKey,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    { storeScope: options.storeScope },
   );
   return queueMessage;
 }

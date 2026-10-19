@@ -63,6 +63,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   private readonly completeInputTranscripts: boolean;
   private readonly extendedThinkingModel: boolean;
   private ws: WebSocket | null = null;
+  private readonly socketListeners = new AbortController();
   private setupTimeout: ReturnType<typeof globalThis.setTimeout> | null = null;
   private readonly input = this.ctx.input;
   private inputContext: AudioContext | null = null;
@@ -155,21 +156,38 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
         `Realtime connection timed out after ${GOOGLE_LIVE_SETUP_TIMEOUT_MS}ms`,
       );
     }, GOOGLE_LIVE_SETUP_TIMEOUT_MS);
-    ws.addEventListener("open", () => {
-      if (this.closed || this.ws !== ws) {
-        return;
-      }
-      this.send(this.session.initialMessage ?? { setup: {} });
-    });
-    ws.addEventListener("message", (event) => {
-      this.handleMessage(ws, event.data);
-    });
-    ws.addEventListener("close", () => {
-      this.failConnection(ws, "Realtime connection closed");
-    });
-    ws.addEventListener("error", () => {
-      this.failConnection(ws, "Realtime connection failed");
-    });
+    const listenerOptions = { signal: this.socketListeners.signal };
+    ws.addEventListener(
+      "open",
+      () => {
+        if (this.closed || this.ws !== ws) {
+          return;
+        }
+        this.send(this.session.initialMessage ?? { setup: {} });
+      },
+      listenerOptions,
+    );
+    ws.addEventListener(
+      "message",
+      (event) => {
+        this.handleMessage(ws, event.data);
+      },
+      listenerOptions,
+    );
+    ws.addEventListener(
+      "close",
+      () => {
+        this.failConnection(ws, "Realtime connection closed");
+      },
+      listenerOptions,
+    );
+    ws.addEventListener(
+      "error",
+      () => {
+        this.failConnection(ws, "Realtime connection failed");
+      },
+      listenerOptions,
+    );
     const result = await this.startup.promise;
     return this.closed ? "cancelled" : result;
   }
@@ -226,6 +244,7 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
   }
 
   private releaseResources(): void {
+    this.socketListeners.abort();
     this.clearSetupTimeout();
     this.interruptedTurn = false;
     this.pendingTranscripts.user = { text: "", byteCount: 0 };
@@ -558,10 +577,13 @@ export class GoogleLiveRealtimeTalkTransport implements RealtimeTalkTransport {
       if (!this.videoFramesActive || this.closed || this.camera.video !== video) {
         return;
       }
-      if (!this.send(googleLiveVideoMessage(frame))) {
-        throw new Error("Google Live socket is not open");
+      // Keep polling through a mute that occurs while preview data becomes ready.
+      if (this.camera.hasUsableTrack()) {
+        if (!this.send(googleLiveVideoMessage(frame))) {
+          throw new Error("Google Live socket is not open");
+        }
+        this.hasSentVideoFrame = true;
       }
-      this.hasSentVideoFrame = true;
     } catch (error) {
       if (!this.closed && this.camera.video === video) {
         this.videoFramesActive = false;

@@ -17,9 +17,12 @@ function buildRestrictedFinalizationAttempt(
 ): EmbeddedRunAttemptParams {
   const internalAttempt =
     attempt as AgentHarnessSettledTurnFinalizationAttemptParams<AgentHarnessAttemptParamsV2> &
-      Pick<EmbeddedRunAttemptParams, "admittedRunContext">;
+      Pick<EmbeddedRunAttemptParams, "admittedRunContext" | "replyOperation">;
   return {
     admittedRunContext: internalAttempt.admittedRunContext,
+    // Finalization is another backend attempt of the same admitted turn, so its
+    // native registration borrows that turn instead of needing a second admission.
+    replyOperation: internalAttempt.replyOperation,
     sessionId: attempt.sessionId,
     sessionKey: attempt.sessionKey,
     sessionTarget: attempt.sessionTarget,

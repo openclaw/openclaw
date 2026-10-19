@@ -1,11 +1,11 @@
 import { expect, it, vi, type Mock } from "vitest";
 import { createDeferred, withinTest } from "../../../test/helpers/promise.js";
 import type { RunEmbeddedAgentInternalParams as AgentRunParams } from "../../agents/embedded-agent-runner/run/internal-params.js";
+import { getSessionControllerOperation } from "../../sessions/session-controller.js";
 import type { ReplyPayload } from "../types.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
 import * as pendingToolTaskDrain from "./pending-tool-task-drain.js";
 import type { FollowupRun } from "./queue.js";
-import { replyRunRegistry } from "./reply-run-registry.js";
 
 type FollowupDrainFixture = {
   createMinimalRun: (params: {
@@ -29,9 +29,9 @@ export function registerFollowupDrainCases({
 }: FollowupDrainFixture): void {
   it.for([
     {
-      name: "releases a queued followup after the pending tool delivery idle bound",
+      name: "keeps a queued followup owned after the pending tool delivery idle bound",
       elapsedMs: 30_000,
-      owned: false,
+      owned: true,
     },
     {
       name: "keeps a queued followup owned until pending tool delivery settles",
@@ -78,14 +78,11 @@ export function registerFollowupDrainCases({
       await withinTest(Promise.all([toolResultStarted.promise, drainStarted.promise]), signal);
 
       await vi.advanceTimersByTimeAsync(elapsedMs);
-      if (!owned) {
-        await withinTest(followup, signal);
-      }
-      expect(replyRunRegistry.get("main") !== undefined).toBe(owned);
+      expect(getSessionControllerOperation("main") !== undefined).toBe(owned);
 
       toolResultReleased.resolve();
       await followup;
-      expect(replyRunRegistry.get("main")).toBeUndefined();
+      expect(getSessionControllerOperation("main")).toBeUndefined();
     } finally {
       toolResultReleased.resolve();
       try {

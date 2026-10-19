@@ -297,6 +297,10 @@ function checkPulseBoundaries(data: unknown) {
     : undefined;
 }
 export const validateSessionsListParams = compile(S.SessionsListParamsSchema, checkPulseBoundaries);
+export const validateSessionsSubscribeParams = compile(
+  S.SessionsSubscribeParamsSchema,
+  checkPulseBoundaries,
+);
 export const validateSessionCatalogShareRoute = compile(S.SessionCatalogShareRouteSchema);
 export const validateSessionsCatalogListParams = compile(S.SessionsCatalogListParamsSchema);
 export const validateSessionsCatalogReadParams = compile(S.SessionsCatalogReadParamsSchema);

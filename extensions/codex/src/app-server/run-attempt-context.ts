@@ -198,6 +198,7 @@ export async function prepareCodexAttemptContext(
   const baseDeveloperInstructions = joinPresentSections(
     buildDeveloperInstructions(runtimeParams, {
       dynamicTools: toolBridge.availableSpecs,
+      nativeCodeModeEnabled: runtime.nativeToolSurfaceEnabled,
       nativeCodeModeOnlyEnabled:
         runtime.nativeToolSurfaceEnabled && connection.appServer.codeModeOnly,
     }),

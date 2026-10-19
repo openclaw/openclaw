@@ -8,10 +8,8 @@ import { createMessageTool } from "../src/agents/tools/message-tool-execution.js
 import { dispatchChannelMessageAction } from "../src/channels/plugins/message-action-dispatch.js";
 import type { ChannelThreadingToolContext } from "../src/channels/plugins/types.public.js";
 import { createDefaultDeps } from "../src/cli/deps.js";
-import { createMessageCliHelpers } from "../src/cli/program/message/helpers.js";
-import { registerMessageDiscordAdminCommands } from "../src/cli/program/message/register.discord-admin.js";
-import { registerMessageSearchCommand } from "../src/cli/program/message/register.permissions-search.js";
-import { registerMessageReadEditDeleteCommands } from "../src/cli/program/message/register.read-edit-delete.js";
+import * as messageCliHelpers from "../src/cli/program/message/helpers.js";
+import { registerMessageCommands } from "../src/cli/program/register.message.js";
 import { messageCommand } from "../src/commands/message.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../src/config/config.js";
 import type { OpenClawConfig } from "../src/config/types.js";
@@ -416,24 +414,32 @@ function expectGraphRequests(requests: GraphRequest[], action: Action, destinati
 }
 
 describe("Teams message CLI", () => {
-  async function runCli(
-    register: typeof registerMessageDiscordAdminCommands,
-    args: string[],
-    action: Action | "read",
-    json = true,
-  ) {
+  async function runCli(args: string[], action: Action | "read", json = true) {
     const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() };
-    const command = new Command().name("message").exitOverride();
-    register(command, {
-      ...createMessageCliHelpers("msteams"),
+    const command = new Command().name("openclaw").exitOverride();
+    const helpers = messageCliHelpers.createMessageCliHelpers("msteams");
+    const createHelpers = vi.spyOn(messageCliHelpers, "createMessageCliHelpers").mockReturnValue({
+      ...helpers,
       runMessageAction: async (name, opts) => {
         await messageCommand({ ...opts, action: name }, createDefaultDeps(), runtime);
       },
     });
+    try {
+      registerMessageCommands(command, {
+        programVersion: "test",
+        messageChannelOptions: "msteams",
+        agentChannelOptions: "last|msteams",
+      });
+    } finally {
+      createHelpers.mockRestore();
+    }
 
-    await command.parseAsync([...args, "--channel", "msteams", ...(json ? ["--json"] : [])], {
-      from: "user",
-    });
+    await command.parseAsync(
+      ["message", ...args, "--channel", "msteams", ...(json ? ["--json"] : [])],
+      {
+        from: "user",
+      },
+    );
 
     expect(runtime.error).not.toHaveBeenCalled();
     if (!json) {
@@ -456,8 +462,8 @@ describe("Teams message CLI", () => {
     const readArgs = ["read", "--target", otherTarget, "--message-id", other.messageId];
     const searchArgs = ["search", "--channel-id", otherTarget, "--query", "planning"];
     const outputs = [
-      await runCli(registerMessageReadEditDeleteCommands, readArgs, "read", false),
-      await runCli(registerMessageSearchCommand, searchArgs, "search", false),
+      await runCli(readArgs, "read", false),
+      await runCli(searchArgs, "search", false),
     ];
     for (const output of outputs) {
       expect.soft(output).toContain(other.text);
@@ -471,13 +477,13 @@ describe("Teams message CLI", () => {
       from: messageSender,
       createdAt: messageCreatedAt,
     };
-    await expect(runCli(registerMessageReadEditDeleteCommands, readArgs, "read")).resolves.toEqual({
+    await expect(runCli(readArgs, "read")).resolves.toEqual({
       ok: true,
       channel: "msteams",
       action: "read",
       message,
     });
-    await expect(runCli(registerMessageSearchCommand, searchArgs, "search")).resolves.toEqual({
+    await expect(runCli(searchArgs, "search")).resolves.toEqual({
       ok: true,
       channel: "msteams",
       action: "search",
@@ -485,7 +491,6 @@ describe("Teams message CLI", () => {
       truncated: false,
     });
     const emptyOutput = await runCli(
-      registerMessageSearchCommand,
       ["search", "--channel-id", otherTarget, "--query", "unmatched"],
       "search",
       false,
@@ -497,7 +502,6 @@ describe("Teams message CLI", () => {
   it("reads a selected channel member without current conversation context", async () => {
     const fixture = await createFixture("none");
     const payload = await runCli(
-      registerMessageDiscordAdminCommands,
       ["member", "info", "--user-id", memberId, "--channel-id", otherTarget],
       "member-info",
     );
@@ -513,7 +517,6 @@ describe("Teams message CLI", () => {
     async ({ limit, count, truncated }) => {
       const fixture = await createFixture("none", "bundled", limit);
       const payload = await runCli(
-        registerMessageSearchCommand,
         ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", String(limit)],
         "search",
       );
@@ -528,7 +531,6 @@ describe("Teams message CLI", () => {
     const fixture = await createFixture("none");
     await expect(
       runCli(
-        registerMessageSearchCommand,
         ["search", "--channel-id", otherTarget, "--query", "planning", "--limit", "abc"],
         "search",
       ),

@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createComponent, createEffect, onSettled, untrack } from "solid-js";
+import { createComponent, createEffect, onSettled } from "solid-js";
 import { acquireNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
 import { composedParent } from "../lib/navigation-click.ts";
 import { listen } from "../lib/reactive/listener.ts";
@@ -33,6 +33,7 @@ type ModalDialogAttributes = SolidJSX.HTMLAttributes<OpenClawModalDialog> & {
   label: string;
   manual?: boolean;
   description?: string;
+  "prop:onOpenChange"?: ModalDialogProperties["onOpenChange"];
   "onModal-cancel"?: (event: Event) => void;
 };
 
@@ -351,7 +352,7 @@ function createModalPolicy(host: OpenClawModalDialog, props: ModalDialogProperti
     }
     reportedOpen = open;
     publication += 1;
-    untrack(() => props.onOpenChange?.(open));
+    props.onOpenChange?.(open);
   };
 
   const request = (next: boolean, controlled = true) => {

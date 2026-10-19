@@ -10,7 +10,7 @@ import { captureRuntimeConfigAsyncReader, getRuntimeConfig } from "../../../conf
 import { abortControlledSubagents } from "../../../gateway/server-methods/chat-abort-descendants.js";
 import { withExecRequestTurn } from "../../../infra/exec-request-context.js";
 import { getProcessSupervisor } from "../../../process/supervisor/index.js";
-import { beginSessionWorkAdmission } from "../../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../../sessions/session-controller.lifecycle.js";
 import { isPidDefinitelyDead } from "../../../shared/pid-alive.js";
 import { withEnvAsync } from "../../../test-utils/env.js";
 import { captureExecRequestCancellation } from "../../bash-process-control.js";
@@ -436,9 +436,10 @@ it.each([
     let callerAuthorized = true;
     const ready = createDeferred();
     const interrupted = createDeferred();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       scope: storePath,
       identities: [childSessionKey, sessionId],
+      run: { runId, sessionKey: childSessionKey, sessionId, agentId: "main" },
       assertAllowed: () => {},
       onInterrupt: (reason) => {
         // The native kill owner supplies the reason; the admitted command relays it.

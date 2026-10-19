@@ -129,3 +129,65 @@ it("parks on owner events and reveals with the parent's next props", () => {
   expect(mounted.container.querySelector("input")).toBe(content);
   expect(content.value).toBe("Retained text");
 });
+
+it("releases region refs when the lazy host or its containing view unmounts", () => {
+  let regionElement: HTMLElement | null = null;
+  let regionView: HTMLElementTagNameMap["openclaw-chat-sidebar-region"] | null = null;
+  let loading: (value: boolean) => void = () => {};
+  const mounted = mountSolid(() => {
+    const [pending, setPending] = createSignal(false);
+    loading = setPending;
+    return (
+      <SidebarRegionView
+        presentationId="owned-region-refs"
+        panelIdPrefix="chat-owned-region-refs"
+        availableWidth={1400}
+        narrow={false}
+        layout={{ columns: [] }}
+        panelDefinitions={sidebarPanelDefinitions()}
+        callbacks={{
+          activatePanel() {},
+          togglePanelExpanded() {},
+          closeSlot() {},
+          openSlot() {},
+          reorderPanel() {},
+          resizePanel() {},
+          setOpen() {},
+        }}
+        regionError={pending() ? null : undefined}
+        onRegionElementRef={(element) => {
+          regionElement = element;
+          return () => {
+            if (regionElement === element) {
+              regionElement = null;
+            }
+          };
+        }}
+        onRegionViewRef={(element) => {
+          regionView = element;
+          return () => {
+            if (regionView === element) {
+              regionView = null;
+            }
+          };
+        }}
+      />
+    );
+  });
+  flush();
+  const shell = regionElement;
+  const firstView = regionView;
+  expect(shell).toBe(mounted.container.querySelector(".sidebar-region"));
+  expect(firstView).toBe(mounted.container.querySelector("openclaw-chat-sidebar-region"));
+  loading(true);
+  flush();
+  expect(regionView).toBeNull();
+  expect(regionElement).toBe(shell);
+  loading(false);
+  flush();
+  expect(regionView).not.toBeNull();
+  expect(regionView).not.toBe(firstView);
+  mounted.unmount();
+  expect(regionView).toBeNull();
+  expect(regionElement).toBeNull();
+});

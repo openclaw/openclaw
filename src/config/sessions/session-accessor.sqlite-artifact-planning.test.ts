@@ -2,8 +2,12 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { awaitGateBeforeSettlement, createDeferred } from "../../../test/helpers/promise.js";
+import {
+  isSessionNodePayloadSelect,
+  trackSqliteStatementExecutions,
+} from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import { beginSessionEffect } from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   closeOpenClawAgentDatabasesAsync,
@@ -51,6 +55,65 @@ afterEach(async () => {
   vi.restoreAllMocks();
   await closeOpenClawAgentDatabasesAsync();
   await state.cleanup();
+});
+
+it("skips unused candidate reads and observes a later matching entry", () => {
+  const database = openOpenClawAgentDatabase(options);
+  const input = {
+    agentId: "main",
+    archiveRemovedEntryTranscripts: false,
+    archiveDirectory: state.sessionsDir(),
+    pluginOwnerId: "memory-core",
+    sessionKeySegmentPrefix: "idle-cleanup-",
+    transcriptContentMarker: "artifact-plan-marker",
+    orphanTranscriptMinAgeMs: 300_000,
+    nowMs: Date.now() + 600_000,
+  };
+  const planWithReadCounts = () => {
+    const reads = trackSqliteStatementExecutions(
+      requireNativeSqliteDatabase(database.db),
+      ["entryPayload", "foreignOwners"],
+      (sql) => {
+        if (isSessionNodePayloadSelect(sql)) {
+          return "entryPayload";
+        }
+        return sql.startsWith(
+          'select "session_id" from "session_windows" where "plugin_owner_id" is not null',
+        ) && sql.includes('"plugin_owner_id" !=')
+          ? "foreignOwners"
+          : null;
+      },
+    );
+    try {
+      return {
+        plan: artifactPlanning.planSessionLifecycleArtifactCleanup(database, input),
+        reads: { ...reads.counts },
+      };
+    } finally {
+      reads.restore();
+    }
+  };
+
+  expect(planWithReadCounts()).toEqual({
+    plan: { entries: [], deletePlans: [] },
+    reads: { entryPayload: 0, foreignOwners: 0 },
+  });
+
+  const candidateKey = "agent:main:idle-cleanup-candidate";
+  const candidate = {
+    sessionId: "idle-cleanup-candidate",
+    updatedAt: 1,
+    pluginOwnerId: "memory-core",
+  };
+  runOpenClawAgentWriteTransaction(
+    (transaction) => writeSessionEntry(transaction, candidateKey, candidate),
+    options,
+  );
+  const next = planWithReadCounts();
+  expect(next.plan.entries).toHaveLength(1);
+  expect(next.plan.entries).toMatchObject([{ sessionKey: candidateKey, expectedEntry: candidate }]);
+  expect(next.plan.deletePlans.map((plan) => plan.sessionId)).toEqual([candidate.sessionId]);
+  expect(next.reads).toEqual({ entryPayload: 1, foreignOwners: 1 });
 });
 
 it("hydrates only old scoped candidates while protecting out-of-scope history references", () => {
@@ -165,7 +228,7 @@ it.each(["admitted", "revoked", "referenced"] as const)(
       (value) => ({ value }),
       (error: unknown) => ({ error }),
     );
-    let admission: Awaited<ReturnType<typeof beginSessionWorkAdmission>> | undefined;
+    let admission: Awaited<ReturnType<typeof beginSessionEffect>> | undefined;
     let closing: ReturnType<typeof closeOpenClawAgentDatabaseByPathAsync> | undefined;
     let following: Promise<void> | undefined;
     try {
@@ -175,7 +238,7 @@ it.each(["admitted", "revoked", "referenced"] as const)(
         "Artifact worker read was bypassed",
       );
       if (outcome === "admitted") {
-        admission = await beginSessionWorkAdmission({
+        admission = await beginSessionEffect({
           scope: storePath,
           identities: [sessionKey, sessionId],
           assertAllowed: () => {},

@@ -14,7 +14,7 @@ import { loadPluginManifest } from "./manifest.js";
 afterEach(resetPluginLoaderTestStateForTest);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
-function fixture(controlUi: unknown, uiCapabilities?: unknown) {
+function fixture(controlUi: unknown, uiCapabilities?: unknown, channels?: string[]) {
   const plugin = writePlugin({
     id: "native-ui",
     body: 'module.exports = { id: "native-ui", register() {} };',
@@ -26,12 +26,31 @@ function fixture(controlUi: unknown, uiCapabilities?: unknown) {
       configSchema: { type: "object", additionalProperties: false },
       controlUi,
       uiCapabilities,
+      channels,
     }),
   );
   return plugin;
 }
 
 describe("native Control UI manifest", () => {
+  it("admits channel detail presentations only for the manifest's declared channels", () => {
+    const controlUi = {
+      entry: "dist/control-ui/index.js",
+      activation: "settings-only",
+      settingsViews: [{ section: "channels", panel: "detail", channelId: "custom" }],
+    };
+    const owned = fixture(controlUi, undefined, ["custom"]);
+    expect(loadPluginManifest(owned.dir)).toMatchObject({ ok: true, manifest: { controlUi } });
+    const foreign = fixture(controlUi, undefined, ["other"]);
+    expect(loadPluginManifest(foreign.dir)).toMatchObject({ ok: false });
+    const duplicate = fixture(
+      { ...controlUi, settingsViews: [controlUi.settingsViews[0], controlUi.settingsViews[0]] },
+      undefined,
+      ["custom"],
+    );
+    expect(loadPluginManifest(duplicate.dir)).toMatchObject({ ok: false });
+  });
+
   it("carries normalized built entrypoints through discovery into runtime ownership", () => {
     useNoBundledPlugins();
     const plugin = fixture(

@@ -17,13 +17,13 @@ import {
   createSharedRunIntegrationSession,
   loadSharedRunIntegrationHarness,
 } from "./run.shared-integration-harness.test-support.js";
+import { resolveEmbeddedRunAbandonment, markActiveEmbeddedRunAbandoned } from "./runs.js";
 import {
-  clearActiveEmbeddedRun,
-  resolveEmbeddedRunAbandonment,
-  markActiveEmbeddedRunAbandoned,
-  setActiveEmbeddedRun,
-} from "./runs.js";
-import { createEmbeddedRunHandle, testing as runsTesting } from "./runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  testing as runsTesting,
+} from "./runs.test-support.js";
 
 let runEmbeddedAgent: Awaited<ReturnType<typeof loadSharedRunIntegrationHarness>>;
 

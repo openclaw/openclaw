@@ -47,6 +47,14 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
       false,
     ).activity;
   const sessions = createTestSessionCapability(connection.gateway);
+  const subscribe = vi
+    .spyOn(sessions, "subscribeMessages")
+    .mockImplementation(async (key, options) => ({
+      key,
+      agentId: options?.agentId,
+      mode: options?.mode,
+    }));
+  const unsubscribe = vi.spyOn(sessions, "unsubscribeMessages").mockResolvedValue();
   const provider = createSolidApplicationContextProvider(
     createContext(connection.gateway, sessions),
   );
@@ -82,6 +90,39 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
     });
     flush();
   };
+  expect(subscribe).toHaveBeenCalledWith(child.key, expect.objectContaining({ mode: "narration" }));
+  connection.publishEvent({
+    type: "event",
+    event: "session.narration",
+    payload: {
+      sessionKey: child.key,
+      runId: "child-run",
+      text: "Reading sources. **Checking the API response.**",
+    },
+  });
+  flush();
+  expect(element.textContent).toContain("Checking the API response.");
+  await Promise.resolve();
+  element.presented = false;
+  flush();
+  expect(unsubscribe).toHaveBeenCalledWith(expect.objectContaining({ key: child.key }));
+  expect(element.textContent).not.toContain("Checking the API response.");
+  element.presented = true;
+  flush();
+  expect(subscribe).toHaveBeenCalledTimes(2);
+  connection.publishEvent({
+    type: "event",
+    event: "session.narration",
+    payload: { sessionKey: child.key, runId: "old-run", text: "Stale narration" },
+  });
+  flush();
+  expect(element.textContent).not.toContain("Stale narration");
+  connection.publishEvent({
+    type: "event",
+    event: "session.narration",
+    payload: { sessionKey: child.key, runId: "child-run", text: "" },
+  });
+  flush();
   await emit();
   expect(element.textContent).toContain(digest.headline);
   for (const patch of [
@@ -121,6 +162,11 @@ it("keeps live child headlines scoped to their run, incarnation, and connection"
   expect(element.textContent).not.toContain(digest.headline);
   await emit({ revision: 10 });
   expect(element.textContent).not.toContain(digest.headline);
+  element.rows = rows(child);
+  flush();
+  expect(element.textContent).not.toContain(digest.headline);
+  await emit({ revision: 11 });
+  expect(element.textContent).toContain(digest.headline);
   view.unmount();
   flush();
   expect(subscriptions).toHaveBeenCalledTimes(1);

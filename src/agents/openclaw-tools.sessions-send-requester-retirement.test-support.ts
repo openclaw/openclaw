@@ -1,4 +1,5 @@
-import { expect, it, vi, type MockInstance } from "vitest";
+import { expect, it, vi } from "vitest";
+import type { MockInstance } from "vitest";
 import { withinTest } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/config.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -17,12 +18,12 @@ import {
   getAdmittedRunDelegatedAuthority,
   prepareSystemAgentRunAdmission,
 } from "./admitted-run-context.js";
+import type { EmbeddedAgentQueueHandle } from "./embedded-agent-runner/runs.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-} from "./embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "./embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "./embedded-agent-runner/runs.test-support.js";
 import { createRequesterYieldCallback } from "./openclaw-tools.requester-yield.js";
 import { announceTesting } from "./subagents/announce/subagent-announce-overrides.test-support.js";
 import { subscribeSubagentRunChanges } from "./subagents/registry/subagent-registry-publication.js";

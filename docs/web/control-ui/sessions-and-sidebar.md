@@ -133,6 +133,10 @@ A temporary selected row appears in the sidebar immediately, at the top of the
 session list or under its agent in the agent roster, clearing the previous chat’s
 highlight without changing the saved session until creation is accepted.
 The temporary row has no session actions; a failed creation restores the draft.
+Sessions created by another client or an agent appear through the sidebar's batched
+refresh, normally within five seconds. A busy Gateway can extend the refresh interval
+to fifteen seconds after the previous refresh finishes. Creating a conversation here
+still updates its list immediately when accepted.
 As soon as creation is accepted, the submitted prompt and attachments are cleared
 from the New session composer, without waiting for its chat preview to load. The
 submitted browser draft is retired before the confirmed conversation URL is

@@ -3,6 +3,7 @@ import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTempDirTracker, useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as databaseProcessRole from "../infra/database-engine/admission-scope.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import { revokeSqliteDatabaseAdmissionsForPath } from "../infra/sqlite-database-admission.js";
 import { SQLITE_IDLE_HANDLE_TTL_MS } from "../infra/sqlite-handle-lifecycle.js";
@@ -386,6 +387,35 @@ describe("openclaw agent database handle cache", () => {
     closeOpenClawAgentDatabaseByPath(target.path);
     await expect(result).rejects.toThrow(/closed|revoked/);
     expect(operation).not.toHaveBeenCalled();
+  });
+
+  it("releases a CLI one-shot's idle lease for Doctor but keeps a borrowed one", () => {
+    vi.spyOn(databaseProcessRole, "getDatabaseProcessRole").mockReturnValue("cli-oneshot");
+    const leasedAgents = () =>
+      readActiveOpenClawAgentDatabaseLeasesReadOnly({ env }).map((lease) => lease.agent_id);
+    const idle = openOpenClawAgentDatabase({ agentId: "one-shot-idle", env });
+    const borrowed = borrowOpenClawAgentDatabase({ agentId: "one-shot-busy", env });
+    try {
+      vi.advanceTimersByTime(30_000 - 1);
+      expect(leasedAgents().toSorted()).toEqual(["one-shot-busy", "one-shot-idle"]);
+      vi.advanceTimersByTime(1);
+      expect(idle.db.isOpen).toBe(false);
+      expect(leasedAgents()).toEqual(["one-shot-busy"]);
+    } finally {
+      borrowed.release();
+    }
+    vi.advanceTimersByTime(30_000);
+    expect(leasedAgents()).toEqual([]);
+  });
+
+  it("keeps a Gateway's idle lease for the shared retention window", () => {
+    vi.spyOn(databaseProcessRole, "getDatabaseProcessRole").mockReturnValue("gateway");
+    const database = openOpenClawAgentDatabase({ agentId: "gateway-idle", env });
+    vi.advanceTimersByTime(SQLITE_IDLE_HANDLE_TTL_MS - 1);
+    expect(database.db.isOpen).toBe(true);
+    expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+    expect(readActiveOpenClawAgentDatabaseLeasesReadOnly({ env })).toEqual([]);
   });
 
   it("keeps an open transaction through expiry and evicts after it finishes", () => {

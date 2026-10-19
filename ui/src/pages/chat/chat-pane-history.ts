@@ -73,7 +73,7 @@ import {
   readChatSessionSnapshot,
   resolveChatSnapshotKey,
 } from "./session-message-cache.ts";
-import { maybeResetToolStream } from "./stream-reconciliation.ts";
+import { resetToolStream } from "./tool-stream-state.ts";
 
 export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
   private activeCatalogContinuation: symbol | null = null;
@@ -156,7 +156,7 @@ export abstract class ChatPaneHistory extends ChatPaneReplyNavigation {
       void this.loadCatalogSession(catalogKey, false);
       return;
     }
-    maybeResetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
+    resetToolStream(state, { preserveStreamSegments: state.chatRunId !== null });
     this.reconcileWaitingApprovalSnapshot();
     if (chatHistoryRequests(state).subscriptionError) {
       void syncSelectedSessionMessageSubscription(state);

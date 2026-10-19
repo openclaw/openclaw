@@ -329,39 +329,27 @@ async function activateStandalonePreparedModelRuntimeNow(
     "catalogMode" | "force" | "providerDiscoveryTimeoutMs"
   >,
 ): Promise<PreparedModelRuntimeSnapshot | undefined> {
-  for (;;) {
-    assertLifetime();
-    const overlapsConfiguredOwner = [...owners.values()].some(
-      (owner) =>
-        owner.provenance === "configured" &&
-        owner.input.agentDir === input.agentDir &&
-        (input.agentId === undefined || owner.input.agentId === input.agentId) &&
-        (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
-    );
-    if (gatewayLifecycleActive && (!input.readOnly || overlapsConfiguredOwner)) {
-      // Gateway startup/reload owns configured identities. Isolated read-only drafts may publish
-      // separately, but stale drafts must never replace an overlapping configured generation.
-      return undefined;
-    }
-    try {
-      return await publishPreparedModelRuntimeSnapshot(
-        {
-          ...input,
-          preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
-        },
-        { ...options, provenance: "standalone" },
-      );
-    } catch (error) {
-      if (!(error instanceof PreparedModelRuntimePublicationSupersededError)) {
-        throw error;
-      }
-      const replacement = pendingModelRuntimeReplacement;
-      if (replacement) {
-        assertPreparedModelRuntimeAdmissionCanWait();
-        await replacement.promise;
-      }
-    }
+  assertLifetime();
+  const overlapsConfiguredOwner = [...owners.values()].some(
+    (owner) =>
+      owner.provenance === "configured" &&
+      owner.input.agentDir === input.agentDir &&
+      (input.agentId === undefined || owner.input.agentId === input.agentId) &&
+      (input.workspaceDir === undefined || owner.input.workspaceDir === input.workspaceDir),
+  );
+  if (gatewayLifecycleActive && (!input.readOnly || overlapsConfiguredOwner)) {
+    // Gateway startup/reload owns configured identities. Isolated read-only drafts may publish
+    // separately, but stale drafts must never replace an overlapping configured generation.
+    return undefined;
   }
+  // A crossing reload fails this standalone request; the next request selects its new owner.
+  return await publishPreparedModelRuntimeSnapshot(
+    {
+      ...input,
+      preserveWorkspaceDirOnRefresh: input.workspaceDir !== undefined,
+    },
+    { ...options, provenance: "standalone" },
+  );
 }
 
 const preparedModelRuntimeLeaseContext = {

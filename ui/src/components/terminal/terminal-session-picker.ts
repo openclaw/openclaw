@@ -6,6 +6,7 @@ type PickerDependencies = {
   client: () => TerminalGatewayClient | null;
   available: () => boolean;
   hosted: () => boolean;
+  connected: () => boolean;
   currentSessionIds: () => ReadonlySet<string>;
   list: () => Promise<TerminalSessionInfo[] | null>;
   showError: (error: unknown) => void;
@@ -17,7 +18,9 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
   const [loading, setLoading] = createSignal(false);
   const [sessions, setSessions] = createSignal<TerminalSessionInfo[]>([]);
   let generation = 0;
-  let trigger: HTMLButtonElement | undefined;
+  let inlineTrigger: HTMLButtonElement | undefined;
+  let hostedTrigger: HTMLButtonElement | undefined;
+  const trigger = () => (deps.hosted() ? hostedTrigger : inlineTrigger);
   let menu: HTMLDivElement | undefined;
   let refresh: HTMLButtonElement | undefined;
 
@@ -38,7 +41,7 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
     } catch (error) {
       if (isCurrent()) {
         setOpen(false);
-        trigger?.focus();
+        trigger()?.focus();
         deps.showError(error);
       }
     } finally {
@@ -51,12 +54,12 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
   function dismiss(restoreFocus: boolean) {
     setOpen(false);
     if (restoreFocus) {
-      onSettled(() => trigger?.focus());
+      onSettled(() => trigger()?.focus());
     }
   }
 
   function inside(target: EventTarget | null) {
-    return target instanceof Node && (target === trigger || menu?.contains(target));
+    return target instanceof Node && (target === trigger() || menu?.contains(target));
   }
 
   onSettled(() => {
@@ -64,7 +67,7 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
       document,
       "pointerdown",
       (event) => {
-        if (open() && !event.composedPath().some((node) => node === trigger || node === menu)) {
+        if (open() && !event.composedPath().some((node) => node === trigger() || node === menu)) {
           dismiss(false);
         }
       },
@@ -77,6 +80,9 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
   });
 
   return {
+    get connected() {
+      return deps.connected();
+    },
     get hosted() {
       return deps.hosted();
     },
@@ -87,7 +93,10 @@ export function createTerminalSessionPicker(deps: PickerDependencies) {
     loading,
     sessions,
     triggerRef: (element: HTMLButtonElement) => {
-      trigger = element;
+      inlineTrigger = element;
+    },
+    hostedTriggerRef: (element: HTMLButtonElement) => {
+      hostedTrigger = element;
     },
     menuRef: (element: HTMLDivElement) => {
       menu = element;

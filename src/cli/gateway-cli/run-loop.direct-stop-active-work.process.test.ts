@@ -10,6 +10,7 @@ import {
 } from "../../../test/helpers/promise.js";
 import { resolveRuntimeWorkerUrl } from "../../infra/runtime-worker-url.js";
 import { gatewayDirectStopEntrypoints } from "../cli-entrypoint.test-support.js";
+import { formatCliProcessFailure } from "../cli-process-child.test-helpers.js";
 import { createProcessFixtures } from "./run-loop-process.test-support.js";
 
 const fixtures = createProcessFixtures("direct-stop fixture cleanup failed; retaining state");
@@ -21,8 +22,12 @@ const childScript = `
   import fs from "node:fs";
   import { createChannelIngressDrain } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.ingressDrain))};
   import { createChannelIngressQueue } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.ingressQueue))};
-  import { clearActiveEmbeddedRun, setActiveEmbeddedRun } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runs))};
-  import { getActiveEmbeddedRunCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.activeRunProjections))};
+  import {
+    attachActiveEmbeddedRun,
+    detachActiveEmbeddedRun,
+  } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runs))};
+  import { withSessionTurn } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.sessionControllerAdmission))};
+  import { getActiveSessionRunCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.sessionControllerQueries))};
   import { runGatewayLoop } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.runLoop))};
   import { getActiveGatewayRootWorkCount } from ${JSON.stringify(moduleUrl(gatewayDirectStopEntrypoints.workAdmission))};
 
@@ -45,15 +50,26 @@ const childScript = `
   };
   const drain = createChannelIngressDrain({
     queue,
-    dispatchClaimedEvent: async (_event, lifecycle) => {
-      setActiveEmbeddedRun(sessionId, handle, sessionKey);
-      await lifecycle.onAdopted();
-      trace("adopted:roots=" + getActiveGatewayRootWorkCount() + ":embedded=" + getActiveEmbeddedRunCount());
-      adopted.resolve();
-      await embedded.promise;
-      clearActiveEmbeddedRun(sessionId, handle, sessionKey);
-      trace("embedded-completed");
-    },
+    // A keyed native run registers only under its controller turn admission.
+    dispatchClaimedEvent: (_event, lifecycle) =>
+      withSessionTurn({ sessionKey, sessionId }, async (operation) => {
+        const registration = attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, undefined, operation);
+        await lifecycle.onAdopted();
+        trace(
+          "adopted:roots=" +
+            getActiveGatewayRootWorkCount() +
+            ":embedded=" +
+            getActiveSessionRunCount(),
+        );
+        adopted.resolve();
+        await embedded.promise;
+        detachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, undefined, registration);
+        trace("embedded-completed");
+      }).catch((error) => {
+        // Fail fast: a dispatch failure would otherwise leave startup waiting for adoption.
+        trace("dispatch-failed:" + error.message);
+        process.exit(1);
+      }),
   });
 
   await queue.enqueue("event-direct-stop", { text: "hello" }, { laneKey: sessionKey });
@@ -160,7 +176,11 @@ posixIt(
         "gateway-ready trace was not produced",
       ),
       signal,
-    );
+    ).catch((cause: unknown) => {
+      throw new Error(formatCliProcessFailure({ reason: String(cause), ...tracked.output }), {
+        cause,
+      });
+    });
     // The exit event can precede the final stdout data; close joins both streams.
     expect(child.kill("SIGTERM")).toBe(true);
 

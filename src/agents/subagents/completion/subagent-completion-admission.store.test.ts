@@ -34,11 +34,7 @@ import {
 } from "../registry/subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "../registry/subagent-registry-state.fixture.test-support.js";
 import { readSubagentRun } from "../registry/subagent-registry.store.sqlite.js";
-import { getSubagentRunRuntimeKey } from "../registry/subagent-run-generation.js";
-import {
-  admitSubagentCompletionDelivery,
-  mutateRequesterCompletionBatch,
-} from "./subagent-completion-admission.store.js";
+import { admitSubagentCompletionDelivery } from "./subagent-completion-admission.store.js";
 import {
   seedSubagentCompletionDelivery,
   seedSubagentCompletionOwner,
@@ -46,8 +42,7 @@ import {
   records as requesterRecords,
   currentCompletionRun,
   armRequesterWake,
-  requesterWakeDriver,
-  advanceRequesterWakeTime,
+  settleRequesterCompletionBatch,
 } from "./subagent-completion-admission.test-helpers.js";
 import {
   admitCorrelatedSubagentSessionDelivery,
@@ -501,9 +496,9 @@ it("settles a requester cohort after concurrently admitted children complete", a
         return { value: undefined, postimages: new Map([[next.runId, next]]) };
       }),
     );
-    const settled = mutateRequesterCompletionBatch({
+    const settled = settleRequesterCompletionBatch({
       entries: inputs.map(({ subagent }) => subagent),
-      operation: { kind: "settle", outcome: { delivered: true, path: "direct" } },
+      outcome: { delivered: true, path: "direct" },
       assertCurrent: () => {},
     });
     try {
@@ -547,11 +542,9 @@ it("retains a committed wake with unreadable facts until canonical restore", asy
   await withSubagentCompletionWorkerState(async (database) => {
     const input = armRequesterWake(requesterRecords());
     seedSubagentCompletionOwner({ subagent: input.subagent, databaseOptions: { database } });
-    const driver = requesterWakeDriver([input]);
     const runWorker = stateWorker.runOpenClawStateWorkerOperation;
     let executions = 0;
     let corrupt = true;
-    let firstEpisode: ReturnType<typeof driver.controller.pendingRequesterSettleWakeCommits.get>;
     let observedError: unknown;
     const worker = vi
       .spyOn(stateWorker, "runOpenClawStateWorkerOperation")
@@ -565,9 +558,6 @@ it("retains a committed wake with unreadable facts until canonical restore", asy
               execute: async (command, executeOptions) => {
                 if (command.type === "sessionDelivery.mutateSubagentCompletion") {
                   executions += 1;
-                  firstEpisode ??= driver.controller.pendingRequesterSettleWakeCommits.get(
-                    getSubagentRunRuntimeKey(input.subagent),
-                  );
                 }
                 const result = await scope.execute(command, executeOptions);
                 if (command.type === "sessionDelivery.mutateSubagentCompletion" && corrupt) {
@@ -594,48 +584,32 @@ it("retains a committed wake with unreadable facts until canonical restore", asy
           },
         );
       });
-    driver.wake.mockImplementation(async (params) => {
-      try {
-        await params.transitionBatch(
-          [input.subagent],
-          { status: "dispatching", attemptCount: 1, rearmGeneration: 1 },
-          () => {},
-        );
-      } catch (error) {
-        observedError = error;
-        throw error;
-      }
-      return false;
-    });
-    vi.useFakeTimers({ toNotFake: ["hrtime", "performance"] });
     const context = captureOpenClawStateWorkerContext();
     try {
-      await driver.run();
+      const settle = () =>
+        settleRequesterCompletionBatch({
+          entries: [input.subagent],
+          outcome: { delivered: true, path: "direct" },
+          context,
+        });
+      try {
+        await settle();
+      } catch (error) {
+        observedError = error;
+      }
       expect(executions).toBe(1);
       expect(corrupt).toBe(false);
-      expect(
-        loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.requesterSettleWake?.status,
-      ).toBe("dispatching");
+      expect(loadSubagentRegistryFromSqlite().get(input.subagent.runId)?.delivery?.status).toBe(
+        "delivered",
+      );
       expect(observedError).toMatchObject({ outcome: "committed" });
       expect(hasSqliteWorkerOutcomeUnknown(observedError)).toBe(true);
       if (!(observedError instanceof Error)) {
-        throw new Error("Expected the requester wake's retained write error");
+        throw new Error("Expected the requester's retained write error");
       }
-      expect(firstEpisode).toBeDefined();
-      expect(
-        driver.controller.pendingRequesterSettleWakeCommits.get(
-          getSubagentRunRuntimeKey(input.subagent),
-        ),
-      ).toBe(firstEpisode);
-      expect(currentCompletionRun(input).requesterSettleWake?.status).toBe("pending");
-      await advanceRequesterWakeTime(30_000);
+      expect(currentCompletionRun(input).requesterSettleWake).toBeDefined();
+      await expect(settle()).rejects.toThrow(observedError);
       expect(executions).toBe(1);
-      expect(
-        driver.controller.pendingRequesterSettleWakeCommits.get(
-          getSubagentRunRuntimeKey(input.subagent),
-        ),
-      ).toBe(firstEpisode);
-      driver.controller.clearScheduledResumeTimers();
       await closeOpenClawStateDatabaseAsync();
       expect(() =>
         assertSubagentRegistryWriteOutcomeKnown([input.subagent.runId], context.admission),
@@ -650,9 +624,7 @@ it("retains a committed wake with unreadable facts until canonical restore", asy
       expect(subagentRuns.get(input.subagent.runId)).not.toBe(input.subagent);
       expect(executions).toBe(1);
     } finally {
-      driver.controller.clearScheduledResumeTimers();
       worker.mockRestore();
-      vi.useRealTimers();
     }
   });
 });

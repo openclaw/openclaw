@@ -25,6 +25,7 @@ type SessionDescriptor = {
   status?: string;
 };
 type EventPayload = {
+  kind?: string;
   sessionKey?: string;
   sessionId?: string;
   inFlightRun?: { runId: string };
@@ -409,7 +410,7 @@ suite.define(() => {
               hasActiveRun: true,
               status: "running",
             });
-            // Embedded ownership intentionally omits the complete activeRunIds set; scoped history retains the current run identity.
+            // Cursor deltas carry session identity in sessionInfo instead of the full snapshot envelope.
             const activeHistoryResponse = () =>
               received.find((frame) => {
                 const request = sent.find((entry) => entry.id === frame.id);
@@ -417,9 +418,10 @@ suite.define(() => {
                   frame.ok === true &&
                   ["chat.startup", "chat.history"].includes(request?.method ?? "") &&
                   request?.params?.sessionKey === sessionKey &&
-                  frame.payload?.sessionKey === sessionKey &&
-                  frame.payload.sessionId === sessionId &&
-                  frame.payload.sessionInfo?.key === sessionKey &&
+                  (frame.payload?.kind === "delta" ||
+                    (frame.payload?.sessionKey === sessionKey &&
+                      frame.payload.sessionId === sessionId)) &&
+                  frame.payload?.sessionInfo?.key === sessionKey &&
                   frame.payload.sessionInfo.sessionId === sessionId &&
                   frame.payload.sessionInfo.hasActiveRun === true &&
                   frame.payload.sessionInfo.status === "running" &&

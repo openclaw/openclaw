@@ -43,6 +43,8 @@ type FilePreviewModalProps = {
 type OpenClawFilePreviewModal = SolidBridgeElement<FilePreviewModalProps>;
 
 function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePreviewModal) {
+  let modal: HTMLElement | undefined;
+  let modalOpen = false;
   type Target = "search" | "item" | "button" | "close" | "body";
   const targets = new Map<HTMLElement, Target>();
   const capture = (target: Target) => {
@@ -107,10 +109,7 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     host.dispatchEvent(new CustomEvent(name, { bubbles: true, composed: true, detail }));
   const close = () => emit("file-preview-close");
   const focusModal = () => {
-    if (
-      !host.isConnected ||
-      !host.querySelector<HTMLDialogElement>("openclaw-modal-dialog > dialog")?.open
-    ) {
+    if (!host.isConnected || !modal?.isConnected || !modalOpen) {
       return;
     }
     const target =
@@ -267,6 +266,8 @@ function FilePreviewContent(props: FilePreviewModalProps, host: OpenClawFilePrev
     <>
       <style>{styles}</style>
       <openclaw-modal-dialog
+        ref={(element) => (modal = element)}
+        prop:onOpenChange={(open: boolean) => (modalOpen = open)}
         label={label()}
         style={{
           "--openclaw-modal-width": "min(1100px, 92vw)",

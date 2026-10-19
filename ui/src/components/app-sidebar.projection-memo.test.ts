@@ -18,9 +18,11 @@ import {
   catalogPage,
   createContext,
   createGatewayHarness,
+  createSidebarElement,
   createSessionsHarness,
   mountSidebarContext,
 } from "../test-helpers/app-sidebar.ts";
+import { createApplicationContextProvider } from "../test-helpers/application-context.ts";
 import { createTestGatewayClient } from "../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../test-helpers/gateway-methods.ts";
 import { settleLitElement } from "../test-helpers/lit-settle.ts";
@@ -125,6 +127,52 @@ async function expectRowRefresh(sidebar: Sidebar, change: () => void) {
 }
 
 describe("sidebar projection memo", () => {
+  it("prepares initially hidden session rows from shell inputs while keeping later owner updates parked", async () => {
+    const target = session("question-proof");
+    const sessions = createSessionsHarness("main", []);
+    const client = createTestGatewayClient(vi.fn(async () => ({ questions: [] })));
+    const gateway = createGatewayHarness(client);
+    gateway.publish({ phase: "connecting", client: null, hello: null });
+    const context = createContext(gateway.gateway, sessions.sessions);
+    const provider = createApplicationContextProvider(context);
+    const sidebar = await createSidebarElement();
+    sidebar.navigationVisible = false;
+    sidebar.connected = false;
+    sidebar.activeRouteId = "chat";
+    provider.append(sidebar.hostElement);
+    document.body.append(provider);
+    onTestFinished(() => provider.remove());
+    await settleLitElement(sidebar);
+    const row = () => sidebar.querySelector(`[data-session-key="${target.key}"]`);
+    expect(row()).toBeNull();
+
+    sessions.publishList({
+      result: { ...sessions.sessions.state.result!, sessions: [target], count: 1 },
+    });
+    gateway.publish({ phase: "connected", client, hello: gatewayHelloForMethods([]) });
+    sidebar.connected = true;
+    sidebar.sessionKey = target.key;
+    await waitForSolid(() => expect(row()?.textContent).toContain("question-proof"));
+    expect(sidebar.navigationVisible).toBe(false);
+    const heldRow = row();
+    const reads = sessions.list.mock.calls.length;
+
+    sessions.publishList({
+      result: {
+        ...sessions.sessions.state.result!,
+        sessions: [{ ...target, label: "Updated while hidden" }],
+        count: 1,
+      },
+    });
+    await settleLitElement(sidebar);
+    expect(row()).toBe(heldRow);
+    expect(row()?.textContent).toContain("question-proof");
+    expect(row()?.textContent).not.toContain("Updated while hidden");
+    expect(sessions.list).toHaveBeenCalledTimes(reads);
+    sidebar.navigationVisible = true;
+    await waitForSolid(() => expect(row()?.textContent).toContain("Updated while hidden"));
+  });
+
   it("keeps a pending boot read across connected view recreation and retires it on detach", async () => {
     const pending = createDeferred<SidebarSnapshotModel | null>();
     const read = vi

@@ -1,7 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { afterAll, expect, it, vi } from "vitest";
-import { createReplyOperation } from "../../auto-reply/reply/reply-run-registry.js";
 import {
   admitReplyTurn,
   runWithReplyOperationLifecycleAdmission,
@@ -31,12 +30,13 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayContextResolver,
 } from "../../plugins/runtime/gateway-request-scope.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
 import {
-  beginSessionWorkAdmission,
-  captureGatewaySessionWorkAdmissions,
-  getSessionWorkAdmissionRelease,
-  type SessionWorkAdmissionLease,
-} from "../../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  captureGatewaySessionControllerWork,
+  captureSessionControllerSettlement,
+  type SessionEffectRef,
+} from "../../sessions/session-controller.lifecycle.js";
 import {
   closeOpenClawAgentDatabasesForTest,
   getOpenClawAgentDatabaseIfOpen,
@@ -59,7 +59,7 @@ import {
 
 const sessionDirs = useSessionStoreTempDirs(afterAll, "openclaw-restart-owner-");
 
-it("keeps retained subagent interruptions out of main-session startup recovery", async () => {
+it("loads only orphan candidates for main-session startup recovery", async () => {
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const sessionKey = "agent:main:main";
@@ -67,14 +67,17 @@ it("keeps retained subagent interruptions out of main-session startup recovery",
     { storePath, sessionKey },
     { sessionId: "main-session", updatedAt: 1, abortedLastRun: true },
   );
-  const summaries = await sessionEntryReader.readSessionEntrySummariesInWorker({ storePath });
-  const retained = Array.from({ length: 4_500 }, (_, index) => ({
-    sessionKey: `agent:main:subagent:retained-${index}`,
-    entry: { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
-  }));
-  const read = vi
-    .spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker")
-    .mockResolvedValue([...retained, ...summaries]);
+  for (let index = 0; index < 16; index++) {
+    sessionAccessor.replaceSessionEntrySync(
+      { storePath, sessionKey: `agent:main:subagent:retained-${index}` },
+      { sessionId: `retained-${index}`, updatedAt: 1, abortedLastRun: true },
+    );
+    sessionAccessor.replaceSessionEntrySync(
+      { storePath, sessionKey: `agent:main:settled-${index}` },
+      { sessionId: `settled-${index}`, updatedAt: 1, status: "done" },
+    );
+  }
+  const read = vi.spyOn(sessionEntryReader, "readSessionEntrySummariesInWorker");
   const warn = vi.spyOn(mainSessionRecoveryLog, "warn").mockImplementation(() => {});
   try {
     expect(
@@ -87,6 +90,8 @@ it("keeps retained subagent interruptions out of main-session startup recovery",
       abortedLastRun: true,
       mainRestartRecovery: { chargedAttempts: 0 },
     });
+    const batches = await Promise.all(read.mock.results.map(({ value }) => value));
+    expect(batches.flat().map((item) => item.sessionKey)).toEqual([sessionKey]);
   } finally {
     read.mockRestore();
     warn.mockRestore();
@@ -123,12 +128,16 @@ it.each([false, true])(
           resolveGatewayContext: () => undefined,
           activeRuns: [
             {
+              storePath,
+              agentId: "main",
               sessionKey,
               sessionId: "main-session",
               runId: "main-run",
               lifecycleGeneration: getAgentEventLifecycleGeneration(),
             },
             {
+              storePath,
+              agentId: "main",
               sessionKey: "agent:main:missing",
               sessionId: "missing-session",
               runId: "missing-run",
@@ -137,6 +146,8 @@ it.each([false, true])(
             ...(markOther
               ? [
                   {
+                    storePath,
+                    agentId: "main",
                     sessionKey: otherKey,
                     sessionId: "other-session",
                     runId: "other-run",
@@ -157,6 +168,51 @@ it.each([false, true])(
       expect(loadSessionEntry({ storePath, sessionKey })?.mainRestartRecovery).toBeUndefined();
     } finally {
       warn.mockRestore();
+    }
+  },
+);
+
+it.each(["store", "agent"] as const)(
+  "keeps a matching session outside the captured recovery %s untouched",
+  async (different) => {
+    const stateDir = sessionDirs.make();
+    const storePath = path.join(stateDir, "configured", "sessions.json");
+    const sourceStore =
+      different === "store" ? path.join(stateDir, "retained", "sessions.json") : storePath;
+    const sessionKey = "agent:main:main";
+    const sessionId = "same-session";
+    const runId = "same-run";
+    for (const currentStore of new Set([storePath, sourceStore])) {
+      await replaceSessionEntry(
+        { agentId: "main", storePath: currentStore, sessionKey },
+        { sessionId, lifecycleRunId: runId, updatedAt: 1 },
+      );
+    }
+
+    await expect(
+      markRestartAbortedMainSessions({
+        cfg: { session: { store: storePath } },
+        stateDir,
+        resolveGatewayContext: () => undefined,
+        activeRuns: [
+          {
+            storePath: sourceStore,
+            agentId: different === "agent" ? "other" : "main",
+            sessionKey,
+            sessionId,
+            runId,
+            lifecycleGeneration: getAgentEventLifecycleGeneration(),
+          },
+        ],
+      }),
+    ).resolves.toEqual({ marked: different === "store" ? 1 : 0, skipped: 0 });
+    expect(loadSessionEntry({ agentId: "main", storePath, sessionKey })?.abortedLastRun).not.toBe(
+      true,
+    );
+    if (different === "store") {
+      expect(
+        loadSessionEntry({ agentId: "main", storePath: sourceStore, sessionKey })?.abortedLastRun,
+      ).toBe(true);
     }
   },
 );
@@ -405,7 +461,7 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
   const storePath = path.join(stateDir, "sessions.json");
   const resolveGatewayContext = () => undefined;
   const otherGatewayContext = () => undefined;
-  const admissions: SessionWorkAdmissionLease[] = [];
+  const admissions: SessionEffectRef[] = [];
   const env = { OPENCLAW_STATE_DIR: stateDir };
   const incognitoTarget = {
     agentId: "main",
@@ -425,7 +481,7 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
         { sessionId: name, updatedAt: Date.now() },
       );
       admissions.push(
-        await beginSessionWorkAdmission({
+        await beginSessionEffect({
           scope: storePath,
           identities: [sessionKey, name],
           resolveGatewayContext: resolver,
@@ -439,7 +495,7 @@ it("marks only the closing Gateway's exact durable admissions and leaves host in
       incognito: true,
     });
     admissions.push(
-      await beginSessionWorkAdmission({
+      await beginSessionEffect({
         scope: incognitoTarget.storePath,
         identities: [incognitoTarget.sessionKey, "volatile"],
         resolveGatewayContext,
@@ -478,14 +534,14 @@ it.each(["release", "completed", "cancelled", "rotation"] as const)(
     const sessionKey = "agent:main:closing";
     const sessionId = "closing";
     const resolveGatewayContext = () => undefined;
-    let admission: SessionWorkAdmissionLease | undefined;
+    let admission: SessionEffectRef | undefined;
     let cancelled = false;
     const cancellation = createAgentRunDirectAbortError();
     const apply = sessionAccessor.applySessionEntryReplacements;
     let restoreSpy = () => {};
     try {
       await replaceSessionEntry({ storePath, sessionKey }, { sessionId, updatedAt: Date.now() });
-      admission = await beginSessionWorkAdmission({
+      admission = await beginSessionEffect({
         scope: storePath,
         identities: [sessionKey, sessionId],
         resolveGatewayContext,
@@ -581,7 +637,7 @@ it("does not adopt an ambient Gateway when moving an unbound reply owner", async
         async () => getPluginRuntimeGatewayRequestScope()?.resolveGatewayContext,
       );
       expect({
-        selected: captureGatewaySessionWorkAdmissions(otherGatewayContext).isActive({
+        selected: captureGatewaySessionControllerWork(otherGatewayContext).isActive({
           scope: storePath,
           sessionKey,
           sessionId,
@@ -590,7 +646,10 @@ it("does not adopt an ambient Gateway when moving an unbound reply owner", async
       }).toEqual({ selected: false, observedScope: undefined });
     });
   } finally {
-    const released = getSessionWorkAdmissionRelease({ scope: storePath, identities: [sessionKey] });
+    const released = captureSessionControllerSettlement({
+      scope: storePath,
+      identities: [sessionKey],
+    });
     operation.complete();
     await released;
   }
@@ -600,7 +659,7 @@ it("keeps another active session recoverable when one owner releases after batch
   const stateDir = sessionDirs.make();
   const storePath = path.join(stateDir, "sessions.json");
   const resolveGatewayContext = () => undefined;
-  const admissions: SessionWorkAdmissionLease[] = [];
+  const admissions: SessionEffectRef[] = [];
   const apply = sessionAccessor.applySessionEntryReplacements;
   let restoreSpy = () => {};
   try {
@@ -611,7 +670,7 @@ it("keeps another active session recoverable when one owner releases after batch
         { sessionId: name, status: "done", updatedAt: Date.now() },
       );
       admissions.push(
-        await beginSessionWorkAdmission({
+        await beginSessionEffect({
           scope: storePath,
           identities: [sessionKey, name],
           resolveGatewayContext,

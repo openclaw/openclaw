@@ -15,15 +15,13 @@ import {
   contextHandoffMatches,
   type ChannelIngressResolutionScope,
 } from "./admission-evidence-scope-key.js";
+import type { ChannelAdmissionEvidence } from "./admission-evidence.types.js";
 import type { ChannelIngressHostOwner, ChannelParticipantInput } from "./ingress-host-owner.js";
 import type {
   ChannelIngressContextBinding,
   ResolvedChannelMessageIngress,
 } from "./runtime-types.js";
-
-export type ChannelAdmissionEvidence = Readonly<{
-  kind: "channel-admission-evidence";
-}>;
+export type { ChannelAdmissionEvidence } from "./admission-evidence.types.js";
 
 type ChannelAdmissionContribution = Readonly<{
   participant:

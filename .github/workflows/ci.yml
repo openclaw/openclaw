@@ -112,6 +112,9 @@ env:
   IOS_SCREENSHOT_NODE_VERSION: "24.16.0"
   IOS_SCREENSHOT_XCODE_VERSION: "Xcode 27.0 Build version 27A266a"
   NODE_VERSION: "24.21.0"
+  # Type check with tsrs, except full release validation, which re-checks every
+  # type graph with tsgo (scripts/lib/local-check-runtime.mts).
+  OPENCLAW_TYPECHECKER: ${{ github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && 'tsgo' || '' }}
 
 jobs:
   preflight:
@@ -3500,7 +3503,7 @@ jobs:
         if: matrix.requires_sandbox_image == true && runner.os == 'Linux'
         shell: bash
         run: |
-          if ! docker image inspect openclaw-sandbox:bookworm-slim >/dev/null 2>&1; then
+          if ! docker image inspect openclaw-sandbox:trixie-slim >/dev/null 2>&1; then
             scripts/sandbox-setup.sh
           fi
 
@@ -4553,6 +4556,14 @@ jobs:
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_format_check == 'true' }}
         run: pnpm format:check
 
+      - name: Check AGENTS.md bootstrap size
+        if: ${{ !cancelled() && steps.node_setup.outcome == 'success' }}
+        run: |
+          # Historical release targets predate this guard.
+          if node -e 'process.exit(require("./package.json").scripts?.["check:agents-md-size"] ? 0 : 1)'; then
+            pnpm check:agents-md-size
+          fi
+
       - name: Check config docs baseline
         if: ${{ !cancelled() && steps.node_setup.outcome == 'success' && needs.preflight.outputs.run_docs_content == 'true' }}
         run: pnpm config:docs:check
@@ -4761,7 +4772,12 @@ jobs:
     name: ${{ matrix.check_name || 'macos-node' }}
     needs: [preflight]
     if: ${{ !cancelled() && always() && needs.preflight.outputs.run_macos_node == 'true' }}
-    runs-on: ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' && fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '')), toJSON(((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'macos-15' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || github.run_attempt > 1) && 'macos-15' || (github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-15' || 'macos-15')))) || (((needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND) == 'github' || contains(fromJSON('["hybrid","runson"]'), (needs.preflight.outputs.ci_qualification == 'true' && (github.run_attempt == 1 && needs.preflight.outputs.qualification_runner_backend || 'github') || vars.OPENCLAW_CI_RUNNER_BACKEND))) && 'macos-15' || ((github.event_name == 'workflow_dispatch' && ((needs.preflight.outputs.node_runner_backend != 'runson' && needs.preflight.outputs.ci_qualification != 'true') || github.run_attempt != 1)) || github.run_attempt > 1) && 'macos-15' || (github.repository == 'openclaw/openclaw' && 'blacksmith-6vcpu-macos-15' || 'macos-15')) }}
+    runs-on: &hosted_xcode_runner >-
+      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
+      'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
+      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
+      startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
+      '')), toJSON('xcode-27'))) || ('xcode-27') }}
     timeout-minutes: 20
     strategy:
       fail-fast: false
@@ -4806,12 +4822,7 @@ jobs:
       max-parallel: 2
       matrix:
         phase: ${{ fromJSON(github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && '["release","tests","packages"]' || '["tests","packages"]') }}
-    runs-on: &hosted_xcode_runner >-
-      ${{ (github.event_name == 'workflow_dispatch' && startsWith(inputs.dispatch_id,
-      'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP || '') != '' &&
-      fromJSON(format('{{"group":{0},"labels":{1}}}', toJSON((github.event_name == 'workflow_dispatch' &&
-      startsWith(inputs.dispatch_id, 'full-release-validation-') && vars.OPENCLAW_RELEASE_RUNNER_GROUP ||
-      '')), toJSON('xcode-27'))) || ('xcode-27') }}
+    runs-on: *hosted_xcode_runner
     timeout-minutes: ${{ github.event_name == 'workflow_dispatch' && needs.preflight.outputs.validation_tier != 'main' && !inputs.release_gate && needs.preflight.outputs.release_scope == 'full' && needs.preflight.outputs.compatibility_target != 'true' && matrix.phase == 'tests' && 75 || 30 }}
     env:
       HISTORICAL_TARGET: *historical_target

@@ -39,31 +39,20 @@ registerEnglishCatalog(registerSettingsEnglish);
 export type { ConfigProps } from "./view-types.ts";
 void warmJson5().catch(() => undefined);
 
-function resetContentScroll(target: EventTarget | null) {
-  queueMicrotask(() => {
-    const origin = target instanceof Element ? target : null;
-    const targets = [
-      origin
-        ?.closest(".config-lead")
-        ?.parentElement?.querySelector<HTMLElement>(".config-content") ??
-        document.querySelector<HTMLElement>(".config-content"),
-      document.querySelector<HTMLElement>(".shell--settings .content"),
-    ];
-    for (const content of targets) {
-      if (!content) {
-        continue;
-      }
-      if (typeof content.scrollTo === "function") {
-        content.scrollTo({ top: 0, left: 0, behavior: "auto" });
-      } else {
-        content.scrollTop = 0;
-        content.scrollLeft = 0;
-      }
-    }
-  });
-}
-
 export function Config(props: ConfigProps) {
+  let content: HTMLDivElement | undefined;
+  function resetContentScroll() {
+    queueMicrotask(() => {
+      for (const target of [content, content?.closest<HTMLElement>(".shell--settings .content")]) {
+        if (typeof target?.scrollTo === "function") {
+          target.scrollTo({ top: 0, left: 0, behavior: "auto" });
+        } else if (target) {
+          target.scrollTop = 0;
+          target.scrollLeft = 0;
+        }
+      }
+    });
+  }
   // The page owns these plain presentation facts; the revision only invalidates readers.
   const [revision, setRevision] = createSignal(0);
   const refresh = () => {
@@ -102,7 +91,7 @@ export function Config(props: ConfigProps) {
         ? props.formMode
         : "form";
     if (viewState.lastFormModeForScroll !== null && viewState.lastFormModeForScroll !== formMode) {
-      resetContentScroll(null);
+      resetContentScroll();
     }
     viewState.lastFormModeForScroll = formMode;
     const contextKey = configContextKey(props);
@@ -287,8 +276,8 @@ export function Config(props: ConfigProps) {
       />
     );
     // The section renderer is a stable factory; recreating it discards live field nodes.
-    const renderSection = untrack(() => props.renderSection);
-    return <>{renderSection ? renderSection(editor) : editor}</>;
+    const initialRenderSection = untrack(() => props.renderSection);
+    return <>{initialRenderSection ? initialRenderSection(editor) : editor}</>;
   }
   return (
     <>
@@ -361,7 +350,7 @@ export function Config(props: ConfigProps) {
                     value={channelGroup().key ?? ""}
                     onChange={(event) => {
                       props.onSubsectionChange(event.currentTarget.value || null);
-                      resetContentScroll(event.currentTarget);
+                      resetContentScroll();
                     }}
                   >
                     <For each={state().channelGroups} keyed={(group) => group.key}>
@@ -397,6 +386,7 @@ export function Config(props: ConfigProps) {
         </div>
       ) : null}
       <div
+        ref={(element) => (content = element)}
         id="config-section-panel"
         class="config-content"
         role={state().showSectionTabs ? "tabpanel" : "region"}

@@ -12,6 +12,7 @@ import {
   observeSqliteWorkerCommittedFacts,
   type SqliteWorkerAdmissionFactory,
 } from "../infra/sqlite-worker-operation-admission.js";
+import { observeSqliteWorkerAdmissionFinish } from "../infra/sqlite-worker-operation-settlement.js";
 import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import type { DB } from "../state/openclaw-state-db.generated.js";
 import type { OpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.types.js";
@@ -24,6 +25,14 @@ type PluginStateRow = Selectable<DB["plugin_state_entries"]>;
 type EntryKey = Pick<PluginStateRow, "plugin_id" | "namespace" | "entry_key">;
 type Receipt = SqliteCommitReceipt<PluginStateRow>;
 type PluginStateChange = StateDomainChange<PluginStateRow>;
+
+export type PluginStatePublicationScope = {
+  pluginId: string;
+  namespace: string;
+  /** Omitted when the write can affect any live entry in the namespace. */
+  key?: string;
+};
+type PendingPublication = { scope?: PluginStatePublicationScope };
 
 /** Descriptive read dependencies; these snapshots never grant mutation authority. */
 export type PluginStateReadDependency = {
@@ -43,7 +52,7 @@ type PluginStateReadCapture = {
 
 const state = resolveGlobalSingleton(Symbol.for("openclaw.pluginStatePublication"), () => ({
   reads: new AsyncLocalStorage<PluginStateReadCapture>(),
-  pending: new Map<string | symbol, Set<string>>(),
+  pending: new Map<string | symbol, Set<PendingPublication>>(),
   unavailable: new Set<string | symbol>(),
 }));
 
@@ -67,17 +76,7 @@ export function pluginStatePublicationKey(row: EntryKey): string {
 }
 
 publication.subscribeFacts((change) => {
-  if (change.kind === "pending") {
-    const pending = state.pending.get(change.identity) ?? new Set<string>();
-    pending.add(change.operationId);
-    state.pending.set(change.identity, pending);
-  } else if (change.kind === "settled") {
-    const pending = state.pending.get(change.identity);
-    pending?.delete(change.operationId);
-    if (!pending?.size) {
-      state.pending.delete(change.identity);
-    }
-  } else if (change.kind === "unknown") {
+  if (change.kind === "unknown") {
     state.unavailable.add(change.identity);
   }
 });
@@ -247,10 +246,27 @@ function isRow(value: unknown): value is PluginStateRow {
   );
 }
 
-/** External effects cannot use facts while a writer is pending or its outcome is unknown. */
-export function assertPluginStatePublicationSettled(identity: string): void {
-  if (state.pending.has(identity) || state.unavailable.has(identity)) {
+/** Deny affected pending writes; an indeterminate outcome retires the whole source. */
+export function assertPluginStatePublicationSettled(
+  identity: string,
+  scope?: PluginStatePublicationScope,
+): void {
+  if (state.unavailable.has(identity)) {
     throw new Error("Plugin state authority is unavailable");
+  }
+  for (const pending of state.pending.get(identity) ?? []) {
+    const write = pending.scope;
+    if (
+      !scope ||
+      !write ||
+      (scope.pluginId === write.pluginId &&
+        scope.namespace === write.namespace &&
+        (scope.key === undefined ||
+          write.key === undefined ||
+          toUSVString(scope.key) === toUSVString(write.key)))
+    ) {
+      throw new Error("Plugin state authority is unavailable");
+    }
   }
 }
 
@@ -258,20 +274,37 @@ export function assertPluginStatePublicationSettled(identity: string): void {
 export function beginPluginStatePublication(
   identity: () => string | symbol,
   assertCurrent?: () => void,
+  scope?: PluginStatePublicationScope,
 ) {
   const pendingIdentity = identity();
-  const pending = publication.begin({
-    identity: pendingIdentity,
-    assertCurrent() {
-      assertCurrent?.();
-      if (identity() !== pendingIdentity) {
-        throw new Error("Plugin state receipt changed owner");
-      }
-    },
-  });
+  const hold = { scope };
+  const holds = state.pending.get(pendingIdentity) ?? new Set<PendingPublication>();
+  holds.add(hold);
+  state.pending.set(pendingIdentity, holds);
+  const release = () => {
+    if (holds.delete(hold) && holds.size === 0) {
+      state.pending.delete(pendingIdentity);
+    }
+  };
+  let pending: ReturnType<typeof publication.begin>;
+  try {
+    pending = publication.begin({
+      identity: pendingIdentity,
+      assertCurrent() {
+        assertCurrent?.();
+        if (identity() !== pendingIdentity) {
+          throw new Error("Plugin state receipt changed owner");
+        }
+      },
+    });
+  } catch (error) {
+    release();
+    throw error;
+  }
   return {
     install: pending.committed,
     finish(outcome: "completed" | "unknown") {
+      release();
       pending.finish(outcome === "completed", true);
     },
   };
@@ -282,6 +315,7 @@ export function withPluginStatePublication(
   createAdmission: SqliteWorkerAdmissionFactory,
   context: OpenClawStateWorkerContext,
   onCommitted?: (facts: unknown) => void,
+  scope?: PluginStatePublicationScope,
 ): SqliteWorkerAdmissionFactory {
   return (operation) => {
     const owner = createAdmission(operation);
@@ -290,26 +324,22 @@ export function withPluginStatePublication(
       pending = beginPluginStatePublication(
         () => context.admission.identity.key,
         context.assertPublicationCurrent ?? context.admission.assertCurrent,
+        scope,
       );
     } catch (error) {
       owner.admission.finish();
       throw error;
     }
     let installed = false;
-    const finish = owner.admission.finish.bind(owner.admission);
-    owner.admission.finish = () => {
-      try {
-        finish();
-      } finally {
-        const settlement = owner.admission.settlement;
-        // A completed rollback has no receipt; a committed write must publish before denial ends.
-        pending.finish(
-          settlement?.kind === "completed" && (!settlement.committed || installed)
-            ? "completed"
-            : "unknown",
-        );
-      }
-    };
+    observeSqliteWorkerAdmissionFinish(owner.admission, () => {
+      const settlement = owner.admission.settlement;
+      // A completed rollback has no receipt; a committed write must publish before denial ends.
+      pending.finish(
+        settlement?.kind === "completed" && (!settlement.committed || installed)
+          ? "completed"
+          : "unknown",
+      );
+    });
     observeSqliteWorkerCommittedFacts(owner.admission, ({ facts }) => {
       pending.install(facts);
       installed = true;

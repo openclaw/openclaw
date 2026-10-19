@@ -511,7 +511,7 @@ describe("worker launch capabilities", () => {
         ? { entered: createDeferred(), release: createDeferred() }
         : undefined;
       const skillCleanupError = new Error("synthetic security cleanup failure");
-      const snapshot = { skills: [], resolvedSkills: [], prompt: "" };
+      const snapshot = { skills: [], resolvedSkills: [], discoverySkills: [], prompt: "" };
       const transfer = resourceCleanup
         ? vi.spyOn(skillTransfer, "transferSkillResources").mockResolvedValue({
             source: snapshot,

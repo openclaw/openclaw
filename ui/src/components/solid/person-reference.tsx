@@ -1,4 +1,4 @@
-import { createEffect, onCleanup, onSettled, Show, untrack } from "solid-js";
+import { createEffect, onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
@@ -11,6 +11,7 @@ import { profileAvatarUrl, profileDirectory } from "../../lib/profile-directory.
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { listen } from "../../lib/reactive/listener.ts";
 import {
   prepareSessionNavigationHandoff,
   runSessionNavigationIntent,
@@ -48,6 +49,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
   const portal = createPortaledHovercardOwner(() => close());
   let trigger: HTMLButtonElement | undefined;
   let stopRoute: (() => void) | undefined;
+  let stopEvents: (() => void)[] = [];
   let person: PresenceViewer | null | undefined;
   let activity: ReturnType<typeof observePersonActivityData> | undefined;
   const activityExpiry = createPresenceActivityLifecycle(
@@ -67,9 +69,8 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     activityExpiry.sync();
     stopRoute?.();
     stopRoute = undefined;
-    document.removeEventListener("pointerdown", outside, true);
-    document.removeEventListener("focusin", outside, true);
-    document.removeEventListener("keydown", escape, true);
+    stopEvents.forEach((stop) => stop());
+    stopEvents = [];
     portal.reset();
     person = undefined;
     trigger?.setAttribute("aria-expanded", "false");
@@ -103,9 +104,6 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       renderCard();
     }
   };
-  const stopGateway = gateway?.subscribe(() => untrack(syncConnection));
-  untrack(syncConnection);
-
   createEffect(
     () => ({ profileId: profileId(), label: label(), loading: t("common.loading") }),
     (value, previous) => {
@@ -117,13 +115,15 @@ function PersonReferenceContent(props: PersonReferenceProps) {
   );
 
   onSettled(() => {
+    const stopGateway = gateway?.subscribe(syncConnection);
+    syncConnection();
     activityExpiry.connect();
-    return () => activityExpiry.disconnect();
-  });
-  onCleanup(() => {
-    stopGateway?.();
-    close();
-    connection.dispose();
+    return () => {
+      activityExpiry.disconnect();
+      stopGateway?.();
+      close();
+      connection.dispose();
+    };
   });
 
   function open() {
@@ -137,12 +137,14 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       "session-progress-hovercard person-activity-hovercard",
     );
     portal.markTrigger(trigger);
-    card.addEventListener("pointerleave", portal.handleCardPointerLeave);
     portal.mount(trigger, card, "vertical", true, () => updatePersonActivityCard(card));
-    document.addEventListener("pointerdown", outside, true);
-    document.addEventListener("focusin", outside, true);
-    document.addEventListener("keydown", escape, true);
-    stopRoute = context?.router.subscribe(() => untrack(close));
+    stopEvents = [
+      listen(card, "pointerleave", portal.handleCardPointerLeave),
+      listen(document, "pointerdown", outside, true),
+      listen(document, "focusin", outside, true),
+      listen(document, "keydown", escape, true),
+    ];
+    stopRoute = context?.router.subscribe(close);
     if (context) {
       activity = observePersonActivityData(context, () => renderCard());
     }
@@ -153,7 +155,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
 
   async function loadPerson(card: HTMLDivElement) {
     const scope = connection.capture();
-    const requestedId = untrack(profileId);
+    const requestedId = profileId();
     if (!scope || !context) {
       return;
     }
@@ -169,7 +171,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
           name:
             profile.displayName?.trim() ||
             profile.githubIdentity?.login ||
-            untrack(() => t("presence.card.person")),
+            t("presence.card.person"),
           avatarUrl: profileAvatarUrl(profile),
           watchedSessions: [],
         };
@@ -177,11 +179,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     } catch {
       // An unavailable or unauthorized profile remains an explicit, unresolved reference.
     }
-    if (
-      portal.card !== card ||
-      untrack(profileId) !== requestedId ||
-      !connection.isCurrent(scope)
-    ) {
+    if (portal.card !== card || profileId() !== requestedId || !connection.isCurrent(scope)) {
       return;
     }
     person = resolved;
@@ -189,82 +187,77 @@ function PersonReferenceContent(props: PersonReferenceProps) {
   }
 
   function renderCard() {
-    // Native hovercard events snapshot current facts without owning reactive subscriptions.
-    untrack(() => {
-      activityExpiry.sync();
-      const card = portal.card;
-      if (!card) {
-        return;
-      }
-      card.setAttribute(
-        "aria-label",
-        t("presence.card.ariaLabel", { name: person?.name ?? label() }),
-      );
-      const data = activity?.data;
-      const presence = projectPresencePayload(data?.presencePayload).users.find((user) =>
-        presenceMatchesProfile(user, person?.identity),
-      );
-      const user = person && {
-        ...person,
-        name: presence?.name ?? person.name,
-        avatarUrl: presence?.avatarUrl ?? person.avatarUrl,
-        watchedSessions: presence?.watchedSessions ?? [],
-        entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
-      };
-      const defaults = {
-        agentsList: context?.agents.state.agentsList,
-        hello: context?.gateway.snapshot.hello,
-      };
-      const scope = connection.capture();
-      const route = context?.router.getState().location;
-      portal.renderContents(card, () =>
-        untrack(() =>
-          updatePersonActivityCard(
-            card,
-            user && context
-              ? {
-                  user,
-                  sessionData: data,
-                  watchAgentId: resolveUiDefaultAgentId(defaults),
-                  mainKey: resolveUiConfiguredMainKey(defaults),
-                  globalScope: isUiGlobalScopeConfigured(defaults),
-                  routing: personActivityRouting(context, close),
-                  openSession: (row, agentId, options) => {
-                    const face = resolveSessionPreferredFace(row);
-                    close();
-                    runSessionNavigationIntent(props.host, {
-                      agentId,
-                      face,
+    activityExpiry.sync();
+    const card = portal.card;
+    if (!card) {
+      return;
+    }
+    card.setAttribute(
+      "aria-label",
+      t("presence.card.ariaLabel", { name: person?.name ?? label() }),
+    );
+    const data = activity?.data;
+    const presence = projectPresencePayload(data?.presencePayload).users.find((user) =>
+      presenceMatchesProfile(user, person?.identity),
+    );
+    const user = person && {
+      ...person,
+      name: presence?.name ?? person.name,
+      avatarUrl: presence?.avatarUrl ?? person.avatarUrl,
+      watchedSessions: presence?.watchedSessions ?? [],
+      entries: presence?.entries ?? (data?.presencePayload ? [] : undefined),
+    };
+    const defaults = {
+      agentsList: context?.agents.state.agentsList,
+      hello: context?.gateway.snapshot.hello,
+    };
+    const scope = connection.capture();
+    const route = context?.router.getState().location;
+    portal.renderContents(card, () =>
+      updatePersonActivityCard(
+        card,
+        user && context
+          ? {
+              user,
+              sessionData: data,
+              watchAgentId: resolveUiDefaultAgentId(defaults),
+              mainKey: resolveUiConfiguredMainKey(defaults),
+              globalScope: isUiGlobalScopeConfigured(defaults),
+              routing: personActivityRouting(context, close),
+              openSession: (row, agentId, options) => {
+                const face = resolveSessionPreferredFace(row);
+                close();
+                runSessionNavigationIntent(props.host, {
+                  agentId,
+                  face,
+                  sessionKey: row.key,
+                  commit: () => {
+                    if (
+                      !scope ||
+                      context.router.getState().location !== route ||
+                      !connection.isCurrent(scope)
+                    ) {
+                      return false;
+                    }
+                    prepareSessionNavigationHandoff(context.gateway, options.pathname, row.key);
+                    context.navigate(face, options);
+                    selectApplicationSession({
+                      selection: context.agentSelection,
+                      gateway: context.gateway,
                       sessionKey: row.key,
-                      commit: () => {
-                        if (
-                          !scope ||
-                          context.router.getState().location !== route ||
-                          !connection.isCurrent(scope)
-                        ) {
-                          return false;
-                        }
-                        prepareSessionNavigationHandoff(context.gateway, options.pathname, row.key);
-                        context.navigate(face, options);
-                        selectApplicationSession({
-                          selection: context.agentSelection,
-                          gateway: context.gateway,
-                          sessionKey: row.key,
-                          agentId,
-                        });
-                        return true;
-                      },
+                      agentId,
                     });
+                    return true;
                   },
-                }
-              : person === undefined
-                ? t("common.loading")
-                : t("chat.mentions.unavailable"),
-          ),
-        ),
-      );
-      portal.position();
-    });
+                });
+              },
+            }
+          : person === undefined
+            ? t("common.loading")
+            : t("chat.mentions.unavailable"),
+      ),
+    );
+    portal.position();
   }
 
   const avatar = useIdentityAvatarView(() => ({
@@ -292,7 +285,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
           250,
           () => {
             if (portal.held) {
-              untrack(open);
+              open();
             }
           },
           trigger,

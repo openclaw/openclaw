@@ -22,6 +22,7 @@ import {
   recordAggregateTruncation,
 } from "../prompt-cache-observability.js";
 import type { MeasuredRequestContext } from "../prompt-cache-request-observer.js";
+import type { ActiveEmbeddedRunAttachment } from "../run-state.js";
 import { updateActiveEmbeddedRunSnapshot } from "../runs.js";
 import type { ToolResultPromptProjectionState } from "../session-prompt-state.js";
 import { truncateOversizedToolResultsInMessages } from "../tool-result-truncation.js";
@@ -78,6 +79,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     | "skipPreparedUserTurnMessage"
     | "userTurnTranscriptRecorder"
   >;
+  registration?: ActiveEmbeddedRunAttachment;
   activeSession: PromptSubmissionSession;
   appendOnlyRuntimeContext?: boolean;
   appendContext?: string;
@@ -276,7 +278,7 @@ export async function submitEmbeddedAttemptPrompt(input: {
     messages: activeSession.messages,
     imagesCount: input.images.length,
   });
-  updateActiveEmbeddedRunSnapshot(attempt.sessionId, {
+  updateActiveEmbeddedRunSnapshot(input.registration, {
     transcriptLeafId: input.transcriptLeafId,
     messages: snapshotRecentMessages(activeSession.messages),
     inFlightPrompt: input.transcriptPrompt,

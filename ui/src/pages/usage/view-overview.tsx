@@ -153,10 +153,10 @@ function renderCostWindowComparison(
               <div class={["cost-window-card", { "cost-window-card--range": isRange }]}>
                 <div class="cost-window-card__label">{label()}</div>
                 <div class="cost-window-card__value">
-                  {formatAnalysisCost(summary.totals.totalCost)}
+                  {formatAnalysisCost(summary.totals.totalCost, summary.totals.usageReport)}
                 </div>
                 <div class="cost-window-card__meta">
-                  {`${formatUsageTokens(summary.totals.totalTokens)} ${t("usage.metrics.tokens")} · ${formatAnalysisCost(averageDailyCost)} ${t("usage.costWindows.perDay")}`}
+                  {`${formatUsageTokens(summary.totals.totalTokens, summary.totals.usageReport)} ${t("usage.metrics.tokens")} · ${formatAnalysisCost(averageDailyCost, summary.totals.usageReport)} ${t("usage.costWindows.perDay")}`}
                 </div>
               </div>
             );
@@ -233,21 +233,24 @@ export function UsageInsights(props: {
       return undefined;
     }
 
+    // A ratio of partial counters is neither exact nor a lower bound: show it only when complete.
+    const report = totals.usageReport;
+    const partial = report?.state === "unavailable";
+    const empty = t("usage.common.emptyValue");
     const avgTokens = aggregates.messages.total
       ? Math.round(totals.totalTokens / aggregates.messages.total)
       : 0;
     const avgCost = aggregates.messages.total ? totals.totalCost / aggregates.messages.total : 0;
     const cacheBase = totals.input + totals.cacheRead + totals.cacheWrite;
     const cacheHitRate = cacheBase > 0 ? totals.cacheRead / cacheBase : 0;
-    const cacheHitLabel =
-      cacheBase > 0 ? `${(cacheHitRate * 100).toFixed(1)}%` : t("usage.common.emptyValue");
+    const cacheHitLabel = cacheBase > 0 && !partial ? `${(cacheHitRate * 100).toFixed(1)}%` : empty;
     const errorRatePct = stats.errorRate * 100;
     const throughputLabel =
-      stats.throughputTokensPerMin !== undefined
+      stats.throughputTokensPerMin !== undefined && !partial
         ? `${formatUsageTokens(Math.round(stats.throughputTokensPerMin))} ${t("usage.overview.tokensPerMinute")}`
         : t("usage.common.emptyValue");
     const throughputCostLabel =
-      stats.throughputCostPerMin !== undefined
+      stats.throughputCostPerMin !== undefined && !partial
         ? `${formatAnalysisCost(stats.throughputCostPerMin)} ${t("usage.overview.perMinute")}`
         : t("usage.common.emptyValue");
     const avgDurationLabel =
@@ -271,9 +274,18 @@ export function UsageInsights(props: {
     ) => ({
       label,
       ...(agent ? { agentId: label } : {}),
-      value: formatAnalysisCost(entryTotals.totalCost, entryTotals.usageReport),
+      // Usage with no known price is unpriced, never free.
+      value:
+        entryTotals.totalCost === 0 && entryTotals.missingCostEntries > 0
+          ? t("usage.overview.unpriced")
+          : formatAnalysisCost(entryTotals.totalCost, entryTotals.usageReport),
       sub: [
-        showCostShares && entryTotals.usageReport?.state !== "unavailable" && totals.totalCost > 0
+        // A share needs a complete entry and a complete denominator.
+        showCostShares &&
+        !partial &&
+        entryTotals.usageReport?.state !== "unavailable" &&
+        entryTotals.totalCost > 0 &&
+        totals.totalCost > 0
           ? t("usage.overview.costShare", {
               percent: ((entryTotals.totalCost / totals.totalCost) * 100).toFixed(1),
             })
@@ -314,14 +326,16 @@ export function UsageInsights(props: {
       aggregates,
       throughputLabel,
       throughputCostLabel,
-      avgTokens,
+      avgTokensLabel: partial ? empty : formatUsageTokens(avgTokens),
+      avgCostLabel: partial ? empty : formatAnalysisCost(avgCost),
+      partial,
+      report,
       cacheHitLabel,
       totals,
       cacheBase,
       cacheHitRate,
       errorRatePct,
       avgDurationLabel,
-      avgCost,
       insightLists,
       errorDays,
     };
@@ -358,7 +372,7 @@ export function UsageInsights(props: {
                 <SummaryStat
                   hintId="average-tokens"
                   metric="avgTokens"
-                  value={formatUsageTokens(insights().avgTokens)}
+                  value={insights().avgTokensLabel}
                   sub={t("usage.overview.acrossMessages", {
                     count: String(insights().aggregates.messages.total || 0),
                   })}
@@ -369,13 +383,15 @@ export function UsageInsights(props: {
                   metric="cacheHitRate"
                   hint={t("usage.overview.cacheHint")}
                   value={insights().cacheHitLabel}
-                  sub={`${formatUsageTokens(insights().totals.cacheRead)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase)} ${t("usage.overview.prompt")}`}
+                  sub={`${formatUsageTokens(insights().totals.cacheRead, insights().report)} ${t("usage.overview.cached")} · ${formatUsageTokens(insights().cacheBase, insights().report)} ${t("usage.overview.prompt")}`}
                   tone={
-                    insights().cacheHitRate > 0.6
-                      ? "good"
-                      : insights().cacheHitRate > 0.3
-                        ? "warn"
-                        : "bad"
+                    insights().partial
+                      ? undefined
+                      : insights().cacheHitRate > 0.6
+                        ? "good"
+                        : insights().cacheHitRate > 0.3
+                          ? "warn"
+                          : "bad"
                   }
                   class="usage-summary-card--medium"
                 />
@@ -402,8 +418,8 @@ export function UsageInsights(props: {
                       ? "usage.overview.avgCostHintMissing"
                       : "usage.overview.avgCostHint",
                   )}
-                  value={formatAnalysisCost(insights().avgCost)}
-                  sub={`${formatAnalysisCost(insights().totals.totalCost)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`}
+                  value={insights().avgCostLabel}
+                  sub={`${formatAnalysisCost(insights().totals.totalCost, insights().report)} ${normalizeLowercaseStringOrEmpty(t("usage.breakdown.total"))}`}
                   class="usage-summary-card--compact"
                 />
                 <SummaryStat

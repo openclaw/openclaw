@@ -252,6 +252,9 @@ async function runEmbeddedAttemptOwned(
           yieldMessage = message;
           yieldAcknowledgment = acknowledgment;
           yieldMessageWaitRegistered = messageWaitRegistered;
+          // The controller records the yield and closes injection before this
+          // backend ends its own turn; a racing steer stays queued as a followup.
+          params.replyOperation?.yield();
           queueYieldInterruptForSession?.();
           runAbortController.abort(SESSIONS_YIELD_ABORT_REASON);
           abortSessionForYield?.();

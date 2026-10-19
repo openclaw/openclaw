@@ -454,6 +454,7 @@ what was recorded, not as proof of what happened:
 - Writes go through a bounded asynchronous process-owned queue; queue
   saturation, storage failure, or a bounded shutdown timeout can drop records
   and log one operational warning.
+  A rejected metadata record does not stop the queue from accepting later records.
 - Shutdown drops waiting metadata at its existing deadline but joins submitted
   worker operations before releasing the writer. Unknown worker outcomes are
   not replayed; ordinary native lock contention keeps the existing FIFO retry.
@@ -578,7 +579,8 @@ boundaries alongside the operator behavior above:
   absent. It must not change approval decisions when provenance is missing,
   deleted, or corrupt. Do not add eager creation, late binding, dual writes,
   fallback readers, sidecars, or schema-version workarounds. Changes require
-  older-reader open/use and candidate-reopen proof.
+  enabled, disabled, integrity, downgrade, older-reader open/use, and
+  candidate-reopen proof.
 - Invoker evidence is tri-state: tagged principal-bearing input is `present`,
   tagged principal-less input is `unknown`, and omission alone is `absent`.
   Validate the closed raw variant before projection or field dropping; reject

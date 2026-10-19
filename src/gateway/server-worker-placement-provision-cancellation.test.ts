@@ -19,11 +19,11 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
-  beginSessionWorkAdmission,
-  closeSessionWorkAdmissions,
-  runExclusiveSessionLifecycleMutation,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  closeSessionControllerAdmission,
+  runSessionMutation,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { runOpenClawStateWriteTransaction } from "../state/openclaw-state-db.js";
 import type { WorkerPlacementSessionWorkCancellation } from "./server-worker-placement-cancel.js";
@@ -51,6 +51,7 @@ const REQUEST = {
 };
 
 const sessionIdentity = (scope = `${support.testState.root}/sessions.sqlite`) => ({
+  agentId: REQUEST.agentId,
   scope,
   identities: [REQUEST.sessionKey, REQUEST.sessionId],
 });
@@ -106,7 +107,8 @@ describe("dispatch Stop before provider allocation", () => {
     const start = vi.spyOn(placements, "startDispatch");
     const runtime = await createRuntime(placements, environments);
     const interrupted = vi.fn();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
+      agentId: REQUEST.agentId,
       scope: `${support.testState.root}/sessions.sqlite`,
       identities: [identity],
       assertAllowed: () => {},
@@ -312,7 +314,7 @@ describe("dispatch Stop before provider allocation", () => {
       } finally {
         release.resolve();
         await Promise.allSettled([moving, stopping]);
-        await runExclusiveSessionLifecycleMutation("placement-move", {
+        await runSessionMutation({
           ...sessionIdentity(sessionTarget.storePath),
           run: async () => {},
         });
@@ -458,7 +460,7 @@ describe("dispatch Stop before provider allocation", () => {
     const environments = support.createService(support.createProvider());
     const placements = createWorkerSessionPlacementStore({ database: support.testState.stateDb });
     const interrupted = vi.fn();
-    const admission = await beginSessionWorkAdmission({
+    const admission = await beginSessionEffect({
       ...sessionIdentity(),
       assertAllowed: () => {},
       onInterrupt: interrupted,
@@ -588,12 +590,12 @@ describe("dispatch Stop before provider allocation", () => {
       const identity = sessionIdentity(target.storePath);
       // A task kill acquires this mutation outside the admitted operation's ALS,
       // then drains admissions while its own lifecycle mutation remains active.
-      const mutation = runExclusiveSessionLifecycleMutation("subagent-kill", {
+      const mutation = runSessionMutation({
         ...identity,
         prepare: async () => {
           mutationEntered.resolve();
           await interrupt.promise;
-          const { released } = startSessionWorkAdmissionInterruption(identity);
+          const { released } = startSessionControllerInterruption(identity);
           void released.then(() => events.push("admission-released"));
           await Promise.race([released, releaseMutation.promise]);
           await releaseMutation.promise;
@@ -614,7 +616,7 @@ describe("dispatch Stop before provider allocation", () => {
         releaseMutation.resolve();
         await Promise.allSettled([operation, mutation]);
         // Flush the canceled contender: it must never execute after its predecessor releases.
-        await runExclusiveSessionLifecycleMutation("patch", { ...identity, run: async () => {} });
+        await runSessionMutation({ ...identity, run: async () => {} });
       }
       expect(events).toEqual(["admission-released", "mutation-finished"]);
     },
@@ -699,7 +701,7 @@ describe("dispatch Stop before provider allocation", () => {
       }
       const releaseIngress =
         reason === "closed-ingress"
-          ? closeSessionWorkAdmissions({
+          ? closeSessionControllerAdmission({
               ...sessionIdentity(),
               reason: new Error("session cancellation owns ingress"),
             })
@@ -743,7 +745,7 @@ describe("dispatch Stop before provider allocation", () => {
           expect(
             destroy.mock.calls.filter(([lease]) => lease.leaseId === environment.leaseId),
           ).toEqual([[{ leaseId: environment.leaseId, profile: { region: "test" } }]]);
-          const interruption = startSessionWorkAdmissionInterruption(sessionIdentity());
+          const interruption = startSessionControllerInterruption(sessionIdentity());
           const admissionReleased = vi.fn();
           void interruption.released.then(admissionReleased);
           if (reason === "started-failure") {
