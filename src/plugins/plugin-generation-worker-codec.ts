@@ -166,7 +166,7 @@ export class GenerationCodec {
         ...(key === "dispose" || key === "disposeAsync" ? { disposal: true as const } : {}),
       };
     }
-    if (isOwnedPluginNativeRecovery(value)) {
+    if (native) {
       const snapshot = snapshotPluginNativeRecovery(value);
       snapshot.roots.forEach(this.retainNativeRoot);
       return { kind: "native", id, snapshot: this.encode(snapshot, seen, undefined, owner) };
