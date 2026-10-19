@@ -4,7 +4,6 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { getMediaDir } from "../media/store.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { agentHandlers } from "./server-methods/agent.js";
@@ -28,18 +27,68 @@ const handlers: Record<string, GatewayRequestHandler> = {
 
 describe("client upload policy at the input commit owner", () => {
   const fixture = installAgentAuthorityProofFixture();
+  const uploadsDisabled = { code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } };
+  const cached = expect.objectContaining({ cached: true });
+  async function prepare() {
+    const f = await fixture({ imageCapable: true });
+    const original = f.context.getCommittedRuntimeConfig;
+    const config = f.context.getRuntimeConfig();
+    let enabled = true;
+    f.context.getCommittedRuntimeConfig = () => ({
+      ...config,
+      gateway: { ...config.gateway, uploads: { enabled } },
+    });
+    return {
+      ...f,
+      disable: () => {
+        enabled = false;
+      },
+      cleanup: async () => {
+        f.context.getCommittedRuntimeConfig = original;
+        await f.cleanup();
+      },
+    };
+  }
+  function request(
+    f: Awaited<ReturnType<typeof prepare>>,
+    method: string,
+    params: Record<string, unknown>,
+    receipt = false,
+  ) {
+    return {
+      req: { type: "req", id: receipt ? "receipt-wire-id" : f.runId, method, params },
+      params,
+      client: {
+        connId: receipt ? "upload-receipt-proof" : "upload-policy-proof",
+        connect: {
+          minProtocol: 1,
+          maxProtocol: 1,
+          role: "operator",
+          scopes: ["operator.admin"],
+          client: { id: "cli", mode: "cli", platform: "test", version: "test" },
+          ...(receipt
+            ? {
+                device: {
+                  id: "upload-receipt-device",
+                  publicKey: "synthetic",
+                  signature: "synthetic",
+                  signedAt: 1,
+                  nonce: "synthetic",
+                },
+              }
+            : {}),
+        },
+      },
+      context: f.context,
+      respond: vi.fn<RespondFn>(),
+      isWebchatConnect: () => false,
+    } satisfies Parameters<GatewayRequestHandler>[0];
+  }
 
   it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as const)(
     "replays accepted %s uploads after disable without admitting fresh bytes",
     async (method) => {
-      const f = await fixture({ imageCapable: true });
-      const originalConfig = f.context.getCommittedRuntimeConfig;
-      const initialConfig = f.context.getRuntimeConfig();
-      let enabled = true;
-      f.context.getCommittedRuntimeConfig = () => ({
-        ...initialConfig,
-        gateway: { ...initialConfig.gateway, uploads: { enabled } },
-      });
+      const f = await prepare();
       const params = {
         agentId: "main",
         ...(method === "chat.send"
@@ -50,33 +99,9 @@ describe("client upload policy at the input commit owner", () => {
         attachments: [{ mimeType: "image/png", fileName: "proof.png", content: PNG }],
       };
       const invoke = async (requestParams = params) => {
-        const respond = vi.fn<RespondFn>();
-        const options = {
-          req: { type: "req" as const, id: "receipt-wire-id", method, params: requestParams },
-          params: requestParams,
-          client: {
-            connId: "upload-receipt-proof",
-            connect: {
-              minProtocol: 1,
-              maxProtocol: 1,
-              role: "operator" as const,
-              scopes: ["operator.admin"],
-              client: { id: "cli", mode: "cli", platform: "test", version: "test" },
-              device: {
-                id: "upload-receipt-device",
-                publicKey: "synthetic",
-                signature: "synthetic",
-                signedAt: 1,
-                nonce: "synthetic",
-              },
-            },
-          },
-          context: f.context,
-          respond,
-          isWebchatConnect: () => false,
-        } satisfies Parameters<GatewayRequestHandler>[0];
+        const options = request(f, method, requestParams, true);
         await handleGatewayRequest(options);
-        return respond;
+        return options.respond;
       };
       try {
         const accepted = await invoke();
@@ -89,25 +114,16 @@ describe("client upload policy at the input commit owner", () => {
         const mediaDir = path.join(getMediaDir(), "inbound");
         const files = await fs.readdir(mediaDir);
         const dispatches = dispatchInboundMessageMock.mock.calls.length;
-        enabled = false;
+        f.disable();
         const replay = await invoke();
-        expect(replay).toHaveBeenCalledExactlyOnceWith(
-          receipt[0],
-          receipt[1],
-          receipt[2],
-          expect.objectContaining({ cached: true }),
-        );
+        expect(replay).toHaveBeenCalledExactlyOnceWith(receipt[0], receipt[1], receipt[2], cached);
         const freshRunId = randomUUID();
         const denied = await invoke({ ...params, idempotencyKey: freshRunId });
-        expect(denied.mock.calls.at(-1)?.[2]).toMatchObject({
-          code: "FORBIDDEN",
-          details: { code: "UPLOADS_DISABLED" },
-        });
+        expect(denied.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
         expect(f.context.dedupe.has("chat:" + freshRunId)).toBe(false);
         expect(await fs.readdir(mediaDir)).toEqual(files);
         expect(dispatchInboundMessageMock).toHaveBeenCalledTimes(dispatches);
       } finally {
-        f.context.getCommittedRuntimeConfig = originalConfig;
         await f.cleanup();
       }
     },
@@ -126,14 +142,7 @@ describe("client upload policy at the input commit owner", () => {
   ] as const)(
     "settles %s %s when %s interrupts the real media writer",
     async (method, kind, interruption) => {
-      const f = await fixture({ imageCapable: true });
-      const originalCommittedConfig = f.context.getCommittedRuntimeConfig;
-      const initialConfig = f.context.getRuntimeConfig();
-      let committedConfig: OpenClawConfig = {
-        ...initialConfig,
-        gateway: { ...initialConfig.gateway, uploads: { enabled: true } },
-      };
-      f.context.getCommittedRuntimeConfig = () => committedConfig;
+      const f = await prepare();
       const mediaDir = path.join(getMediaDir(), "inbound");
       const before = await fs.readdir(mediaDir).catch(() => [] as string[]);
       const entered = createDeferred();
@@ -149,7 +158,6 @@ describe("client upload policy at the input commit owner", () => {
         }
         return result;
       });
-      const respond = vi.fn<RespondFn>();
       const content =
         kind === "document"
           ? Buffer.from("late upload policy proof")
@@ -174,23 +182,8 @@ describe("client upload policy at the input commit owner", () => {
           },
         ],
       };
-      const handlerOptions = {
-        req: { type: "req", id: f.runId, method, params: requestParams },
-        params: requestParams,
-        client: {
-          connId: "upload-policy-proof",
-          connect: {
-            minProtocol: 1,
-            maxProtocol: 1,
-            role: "operator",
-            scopes: ["operator.admin"],
-            client: { id: "cli", mode: "cli", platform: "test", version: "test" },
-          },
-        },
-        context: f.context,
-        respond,
-        isWebchatConnect: () => false,
-      } satisfies Parameters<GatewayRequestHandler>[0];
+      const handlerOptions = request(f, method, requestParams);
+      const { respond } = handlerOptions;
       const pending = Promise.resolve(handlers[method]!(handlerOptions));
       try {
         await Promise.race([
@@ -219,22 +212,14 @@ describe("client upload policy at the input commit owner", () => {
           });
         }
         if (interruption !== "stop") {
-          committedConfig = {
-            ...committedConfig,
-            gateway: { ...committedConfig.gateway, uploads: { enabled: false } },
-          };
+          f.disable();
         }
         resume.resolve();
         await pending;
         await f.drain();
         expect(intercepted).toBe(true);
         if (interruption !== "policy") {
-          expect(respond).toHaveBeenCalledExactlyOnceWith(
-            true,
-            stoppedPayload,
-            undefined,
-            expect.objectContaining({ cached: true }),
-          );
+          expect(respond).toHaveBeenCalledExactlyOnceWith(true, stoppedPayload, undefined, cached);
           expect(f.context.dedupe.get(`agent:${f.runId}`)?.payload).toEqual(stoppedPayload);
           if (interruption === "stop-and-policy") {
             const replayRespond = vi.fn<RespondFn>();
@@ -247,7 +232,7 @@ describe("client upload policy at the input commit owner", () => {
               true,
               stoppedPayload,
               undefined,
-              expect.objectContaining({ cached: true }),
+              cached,
             );
             const freshRespond = vi.fn<RespondFn>();
             const freshParams = { ...requestParams, idempotencyKey: f.runId + "-fresh" };
@@ -257,24 +242,18 @@ describe("client upload policy at the input commit owner", () => {
               respond: freshRespond,
             });
             expect(freshRespond.mock.calls.some(([ok]) => ok)).toBe(false);
-            expect(freshRespond.mock.calls.at(-1)?.[2]).toMatchObject({
-              code: "FORBIDDEN",
-              details: { code: "UPLOADS_DISABLED" },
-            });
+            expect(freshRespond.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
             expect(f.context.dedupe.has(`agent:${f.runId}-fresh`)).toBe(false);
           }
         } else if (method === "sessions.create") {
           // Creation remains committed; only its initial input is rejected.
           expect(respond.mock.calls.at(-1)?.[1]).toMatchObject({
             runStarted: false,
-            runError: { code: "FORBIDDEN", details: { code: "UPLOADS_DISABLED" } },
+            runError: uploadsDisabled,
           });
         } else {
           expect(respond.mock.calls.some(([ok]) => ok)).toBe(false);
-          expect(respond.mock.calls.at(-1)?.[2]).toMatchObject({
-            code: "FORBIDDEN",
-            details: { code: "UPLOADS_DISABLED" },
-          });
+          expect(respond.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
         }
         expect(await fs.readdir(mediaDir)).toEqual(before);
         expect(agentCommandMock).not.toHaveBeenCalled();
@@ -283,7 +262,6 @@ describe("client upload policy at the input commit owner", () => {
         resume.resolve();
         await Promise.allSettled([pending]);
         pause.mockRestore();
-        f.context.getCommittedRuntimeConfig = originalCommittedConfig;
         await f.cleanup();
       }
     },

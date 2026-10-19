@@ -41,13 +41,11 @@ afterEach(() => {
 });
 
 function observeSessionDeletion() {
-  const settled = createDeferredCore();
-  const deletes = vi.spyOn(deletion, "deleteGatewaySession").mockImplementation(async (params) => {
-    try {
-      return await originalDelete(params);
-    } finally {
-      settled.resolve();
-    }
+  const settled = createDeferredCore<Awaited<ReturnType<typeof originalDelete>>>();
+  const deletes = vi.spyOn(deletion, "deleteGatewaySession").mockImplementation((params) => {
+    const operation = originalDelete(params);
+    void operation.then(settled.resolve, settled.reject);
+    return operation;
   });
   return { deletes, deleted: settled.promise };
 }
@@ -113,12 +111,7 @@ async function withLifetime(
 
 it("expires Incognito at creation plus 24 hours, cancels work, and deletes without an archive", async () => {
   await withLifetime(async ({ context, logWarning, scope, time }) => {
-    const deleted = createDeferredCore<Awaited<ReturnType<typeof originalDelete>>>();
-    const deletes = vi.spyOn(deletion, "deleteGatewaySession").mockImplementation((params) => {
-      const operation = originalDelete(params);
-      void operation.then(deleted.resolve, deleted.reject);
-      return operation;
-    });
+    const { deletes, deleted } = observeSessionDeletion();
     await appendTranscriptMessage(scope, {
       eventId: "private-input",
       message: { role: "user", content: "Ephemeral conversation", timestamp: Date.now() },
@@ -141,7 +134,7 @@ it("expires Incognito at creation plus 24 hours, cancels work, and deletes witho
     active.abortSignal.addEventListener("abort", release, { once: true });
     try {
       await time.advanceBy(1);
-      const result = await deleted.promise;
+      const result = await deleted;
       expect(result, JSON.stringify(result)).toMatchObject({
         ok: true,
         result: { deleted: true, archived: [] },
@@ -242,17 +235,10 @@ it("refuses work while session cleanup retries", async () => {
   await withLifetime(async ({ scope, context, logWarning, time }) => {
     const retrying = createDeferredCore();
     logWarning.mockImplementation(() => retrying.resolve());
-    const deleted = createDeferredCore<Awaited<ReturnType<typeof originalDelete>>>();
-    const deletes = vi
-      .spyOn(deletion, "deleteGatewaySession")
-      .mockImplementationOnce(async () => {
-        return { ok: false, error: { code: "UNAVAILABLE", message: "Cleanup still draining" } };
-      })
-      .mockImplementation((params) => {
-        const operation = originalDelete(params);
-        void operation.then(deleted.resolve, deleted.reject);
-        return operation;
-      });
+    const { deletes, deleted } = observeSessionDeletion();
+    deletes.mockImplementationOnce(async () => {
+      return { ok: false, error: { code: "UNAVAILABLE", message: "Cleanup still draining" } };
+    });
     await time.advanceBy(DAY_MS);
     await retrying.promise;
     expect(logWarning).toHaveBeenCalledOnce();
@@ -284,7 +270,7 @@ it("refuses work while session cleanup retries", async () => {
     expect(await loadTranscriptEvents(scope)).toEqual([]);
     expect(rpcSourceTesting.size).toBe(0);
     await time.advanceBy(60_000);
-    await expect(deleted.promise).resolves.toMatchObject({ ok: true, result: { deleted: true } });
+    await expect(deleted).resolves.toMatchObject({ ok: true, result: { deleted: true } });
     expect(deletes).toHaveBeenCalledTimes(2);
     expect(loadSessionEntryReadOnly(scope)).toBeUndefined();
   });

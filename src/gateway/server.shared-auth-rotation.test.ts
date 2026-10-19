@@ -29,6 +29,11 @@ import { resolveSharedGatewaySessionGeneration } from "./server/ws-shared-genera
 const OLD_TOKEN = "shared-token-old";
 const NEW_TOKEN = "shared-token-new";
 const SECRET_REF_TOKEN_ID = "OPENCLAW_SHARED_AUTH_ROTATION_SECRET_REF";
+const scopes = ["operator.admin"];
+const hotReloadAck = {
+  hash: expect.any(String),
+  sentinel: { payload: { stats: { requiresRestart: false } } },
+};
 type ConfigSnapshot = { hash: string; config: OpenClawConfig };
 type ConfigAck = { hash: string; sentinel: { payload: { stats: { requiresRestart: boolean } } } };
 
@@ -105,7 +110,7 @@ describe("gateway shared auth rotation", () => {
       platform: "test",
       mode: "backend",
       deviceIdentity: null,
-      scopes: ["operator.admin"],
+      scopes,
       ...options,
       // Each connection presents only its declared credential, never a cached fallback.
       hostDeps: {
@@ -136,29 +141,22 @@ describe("gateway shared auth rotation", () => {
     const identity = loadOrCreateDeviceIdentity({ path: state.path("device-identity.sqlite") });
     const clientName = params.browserClient ? "openclaw-control-ui" : "test";
     const mode = params.browserClient ? "webchat" : "test";
+    const device = { deviceId: identity.deviceId, role: "operator", scopes };
     const pending = await requestDevicePairing({
-      deviceId: identity.deviceId,
+      ...device,
       publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
       clientId: clientName,
       clientMode: mode,
-      role: "operator",
-      scopes: ["operator.admin"],
     });
-    await approveDevicePairing(pending.request.requestId, { callerScopes: ["operator.admin"] });
+    await approveDevicePairing(pending.request.requestId, { callerScopes: scopes });
     let issued;
     if (params.issuerGeneration) {
       issued = await ensureDeviceToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        scopes: ["operator.admin"],
+        ...device,
         issuer: { kind: "shared-gateway-auth", generation: params.issuerGeneration },
       });
     } else {
-      const rotated = await rotateDeviceToken({
-        deviceId: identity.deviceId,
-        role: "operator",
-        scopes: ["operator.admin"],
-      });
+      const rotated = await rotateDeviceToken(device);
       expect(rotated.ok).toBe(true);
       issued = rotated.ok ? rotated.entry : undefined;
     }
@@ -196,10 +194,7 @@ describe("gateway shared auth rotation", () => {
       raw: JSON.stringify({ gateway: { auth: { token: NEW_TOKEN } } }),
       restartDelayMs: 1_000,
     });
-    expect(ack).toMatchObject({
-      hash: expect.any(String),
-      sentinel: { payload: { stats: { requiresRestart: false } } },
-    });
+    expect(ack).toMatchObject(hotReloadAck);
     return ack;
   }
 
@@ -237,27 +232,22 @@ describe("gateway shared auth rotation", () => {
       const issuerGeneration = requiredSharedGeneration();
       const connection = await openDeviceTokenClient({ issuerGeneration, browserClient });
       const { deviceId, hello } = connection;
+      const issuer = { kind: "shared-gateway-auth", generation: issuerGeneration };
       const token = hello.auth?.deviceToken;
       expect(token).toBeTypeOf("string");
       if (typeof token !== "string") {
         throw new Error("expected hello device token");
       }
-      expect((await getPairedDevice(deviceId))?.tokens?.operator?.issuer).toEqual({
-        kind: "shared-gateway-auth",
-        generation: issuerGeneration,
-      });
+      expect((await getPairedDevice(deviceId))?.tokens?.operator?.issuer).toEqual(issuer);
       await expect(
         verifyDeviceToken({
           deviceId,
           token,
           role: "operator",
-          scopes: ["operator.admin"],
+          scopes,
           requiredSharedGatewaySessionGeneration: issuerGeneration,
         }),
-      ).resolves.toEqual({
-        ok: true,
-        issuer: { kind: "shared-gateway-auth", generation: issuerGeneration },
-      });
+      ).resolves.toEqual({ ok: true, issuer });
       await rotateSharedToken(connection.client);
       await expectAuthChangedClose(connection);
     },
@@ -273,10 +263,7 @@ describe("gateway shared auth rotation", () => {
       baseHash: before.hash,
       raw: JSON.stringify(before.config),
     });
-    expect(ack).toMatchObject({
-      hash: expect.any(String),
-      sentinel: { payload: { stats: { requiresRestart: false } } },
-    });
+    expect(ack).toMatchObject(hotReloadAck);
     await expectAuthChangedClose(connection);
   });
 });

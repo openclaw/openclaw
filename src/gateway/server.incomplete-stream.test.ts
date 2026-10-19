@@ -23,7 +23,6 @@ const cases = [
 type Scenario = (typeof cases)[number];
 type ChatMessage = {
   role: string;
-  stopReason?: string;
   content: unknown;
   openclawRunError?: { runId: string; summary: string };
 };
@@ -204,59 +203,37 @@ it(
           );
           const assistant = history.messages.findLast((message) => message.role === "assistant");
           const toolResults = history.messages.filter((message) => message.role === "toolResult");
-          console.log(
-            JSON.stringify({
-              scenario,
-              status: waited.status,
-              stopReason: assistant?.stopReason,
-              requests: requests.length,
-              toolResults: toolResults.length,
-              content: assistant?.content,
-            }),
-          );
+          const check = <T>(value: T) => expect.soft(value, scenario);
+          const chatEvent = (state: string) =>
+            expect.objectContaining({
+              event: "chat",
+              payload: expect.objectContaining({ runId: started.runId, state }),
+            });
           if (scenario.startsWith("started") || scenario.startsWith("sealed")) {
-            expect.soft(waited.status, scenario).toBe("error");
-            expect
-              .soft(
-                history.messages.filter(
-                  (message) => message.openclawRunError?.runId === started.runId,
-                ),
-                scenario,
-              )
-              .toEqual([
-                expect.objectContaining({
-                  role: "custom",
-                  openclawRunError: {
-                    runId: started.runId,
-                    summary: expect.stringMatching(/\S/),
-                  },
-                }),
-              ]);
+            check(waited.status).toBe("error");
+            check(
+              history.messages.filter(
+                (message) => message.openclawRunError?.runId === started.runId,
+              ),
+            ).toEqual([
+              expect.objectContaining({
+                role: "custom",
+                openclawRunError: { runId: started.runId, summary: expect.stringMatching(/\S/) },
+              }),
+            ]);
             if (scenario.endsWith("text")) {
-              expect.soft(JSON.stringify(assistant?.content), scenario).toContain("Partial answer");
+              check(JSON.stringify(assistant?.content)).toContain("Partial answer");
             }
-            expect.soft(toolResults, scenario).toHaveLength(0);
-            expect.soft(events, scenario).toContainEqual(
-              expect.objectContaining({
-                event: "chat",
-                payload: expect.objectContaining({ runId: started.runId, state: "error" }),
-              }),
-            );
-            expect.soft(events, scenario).not.toContainEqual(
-              expect.objectContaining({
-                event: "chat",
-                payload: expect.objectContaining({ runId: started.runId, state: "final" }),
-              }),
-            );
+            check(toolResults).toHaveLength(0);
+            check(events).toContainEqual(chatEvent("error"));
+            check(events).not.toContainEqual(chatEvent("final"));
           } else {
-            expect.soft(waited.status, scenario).toBe("ok");
-            expect
-              .soft(JSON.stringify(assistant?.content), scenario)
-              .toContain("COMPLETE_REPLY_MARKER");
-            expect.soft(requests, scenario).toHaveLength(scenario === "compatible-tool" ? 2 : 1);
-            expect.soft(toolResults, scenario).toHaveLength(scenario === "compatible-tool" ? 1 : 0);
+            check(waited.status).toBe("ok");
+            check(JSON.stringify(assistant?.content)).toContain("COMPLETE_REPLY_MARKER");
+            check(requests).toHaveLength(scenario === "compatible-tool" ? 2 : 1);
+            check(toolResults).toHaveLength(scenario === "compatible-tool" ? 1 : 0);
             if (scenario === "compatible-tool") {
-              expect.soft(JSON.stringify(requests[1])).toContain("COMPLETE_TOOL_READ_MARKER");
+              check(JSON.stringify(requests[1])).toContain("COMPLETE_TOOL_READ_MARKER");
             }
           }
         }
