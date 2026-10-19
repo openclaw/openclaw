@@ -9,6 +9,7 @@ export function SidebarDismissButton(props: {
   itemLabel: string;
   onDismiss?: () => void;
   dismissing?: boolean;
+  disabled?: boolean;
 }) {
   const label = () => t("attention.dismissItem", { item: props.itemLabel });
   return (
@@ -20,7 +21,7 @@ export function SidebarDismissButton(props: {
         aria-label={label()}
         aria-busy={props.dismissing ? "true" : undefined}
         title={props.dismissing ? t("attention.mentions.dismissing") : label()}
-        disabled={props.dismissing}
+        disabled={props.disabled || props.dismissing}
         onClick={(event: Event) => {
           event.preventDefault();
           event.stopPropagation();
@@ -41,6 +42,7 @@ export function SidebarNotificationCard(props: {
   severity?: "error" | "warning";
   critical?: boolean;
   dismissing?: boolean;
+  dismissDisabled?: boolean;
   onDismiss?: () => void;
   onToggle?: (open: boolean) => void;
   body: JSX.Element;
@@ -89,6 +91,7 @@ export function SidebarNotificationCard(props: {
           itemLabel={props.title}
           onDismiss={props.onDismiss}
           dismissing={props.dismissing}
+          disabled={props.dismissDisabled}
         />
         <span class="sidebar-issues-panel__chevron" aria-hidden="true">
           <Icon name="chevronRight" />

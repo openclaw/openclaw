@@ -252,6 +252,17 @@ describe("agent RPC real delegated-authority effects", () => {
             expect(validateAgentRunDelegatedAuthority(f.owner.authority)).toBe(false);
           }
           expect(agentCommandMock).not.toHaveBeenCalled();
+          await execution.resume();
+          expect(agentCommandMock).toHaveBeenCalledOnce();
+          const completed = await f.dispatch(
+            params,
+            mode === "ordinary raw input" ? null : await f.freshCaller(),
+          );
+          expect(completed).toMatchObject({
+            ok: true,
+            meta: { cached: true },
+            payload: { runId: f.runId, status: "ok" },
+          });
         }
       } finally {
         await finish([writer, request], [observer], replacement);

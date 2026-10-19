@@ -29,7 +29,24 @@ import type { EmbeddedRunAttemptParams } from "./types.js";
 
 type WithOwnedTranscriptWrite = <T>(operation: () => Promise<T> | T) => Promise<T>;
 
-export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
+export async function prepareEmbeddedAttemptTranscriptLifecycle({
+  runAbortController,
+  attempt: {
+    abortSignal,
+    admittedRunContext,
+    config,
+    runId,
+    replyOperation,
+    sessionFile,
+    sessionId,
+    sessionKey,
+    sessionManager,
+    sessionPersistence,
+    sessionTarget: originalSessionTarget,
+    preparedSessionTarget: preparedTarget,
+  },
+  externalAbortController,
+}: {
   runAbortController?: AbortController;
   attempt: Pick<
     EmbeddedRunAttemptInternalParams,
@@ -56,24 +73,22 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
   transcriptLifecycle: ReturnType<typeof createEmbeddedAttemptTranscriptLifecycle>;
   withOwnedTranscriptWrite: WithOwnedTranscriptWrite;
 }> {
-  const { attempt, externalAbortController } = input;
-  const preparedTarget = attempt.preparedSessionTarget;
   preparedTarget?.assertCurrent();
   const initialWriter = getOwnedSessionTranscriptInitialWriter({
-    sessionFile: attempt.sessionFile,
-    sessionKey: attempt.sessionKey,
-    sessionTarget: attempt.sessionManager?.getSessionTarget() ?? attempt.sessionTarget,
+    sessionFile,
+    sessionKey,
+    sessionTarget: sessionManager?.getSessionTarget() ?? originalSessionTarget,
   });
   const sessionTarget =
     preparedTarget?.target ??
     (await resolveAgentRunSessionTarget({
-      agentId: attempt.sessionTarget?.agentId,
-      config: attempt.config,
+      agentId: originalSessionTarget?.agentId,
+      config,
       missingSessionKey: "resolve-existing",
-      sessionFile: attempt.sessionFile,
-      sessionId: attempt.sessionId,
-      sessionKey: attempt.sessionKey,
-      sessionTarget: attempt.sessionTarget,
+      sessionFile,
+      sessionId,
+      sessionKey,
+      sessionTarget: originalSessionTarget,
     }));
   await externalAbortController.throwIfFiredAfterPrepCleanup();
   preparedTarget?.assertCurrent();
@@ -81,22 +96,22 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
 
   const fencedSessionTarget = {
     ...sessionTarget,
-    expectedLifecycleRevision: attempt.sessionTarget?.expectedLifecycleRevision,
-    expectedWriterRunId: attempt.sessionTarget?.expectedWriterRunId,
+    expectedLifecycleRevision: originalSessionTarget?.expectedLifecycleRevision,
+    expectedWriterRunId: originalSessionTarget?.expectedWriterRunId,
   };
   // The stable cron root can rotate while its exact run remains stored. Retain
   // its admitted generation only for this attempt, before compaction adoption.
   const generation = await prepareCronRootSessionGeneration(
     {
       ...sessionTarget,
-      sessionKey: attempt.sessionKey ?? sessionTarget.sessionKey,
+      sessionKey: sessionKey ?? sessionTarget.sessionKey,
       lifecycleRevision: fencedSessionTarget.expectedLifecycleRevision,
     },
-    input.runAbortController ? (reason) => input.runAbortController?.abort(reason) : undefined,
+    runAbortController ? (reason) => runAbortController.abort(reason) : undefined,
   );
   const transcriptLifecycle = createEmbeddedAttemptTranscriptLifecycle({
-    runId: attempt.runId,
-    sessionId: attempt.sessionId,
+    runId,
+    sessionId,
     onDrained: async () => {
       try {
         await ownedTranscriptWriteContext.sessionActor?.actor.release();
@@ -105,10 +120,10 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       }
     },
   });
-  const assertAdmittedActive = attempt.admittedRunContext
-    ? resolveAdmittedRunActiveAssertion(attempt.admittedRunContext, attempt.abortSignal)
+  const assertAdmittedActive = admittedRunContext
+    ? resolveAdmittedRunActiveAssertion(admittedRunContext, abortSignal)
     : undefined;
-  const { writeContext: terminalWriter } = captureAgentRunTerminalPersistence(attempt.runId);
+  const { writeContext: terminalWriter } = captureAgentRunTerminalPersistence(runId);
   const assertTerminalCurrent = composeSessionSourceAssertion([
     terminalWriter?.assertCurrent,
     generation?.assertCurrent,
@@ -118,15 +133,15 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       ? initialWriter.withTranscriptWrite(() => transcriptLifecycle.withTranscriptWrite(operation))
       : transcriptLifecycle.withTranscriptWrite(operation);
   const ownedTranscriptWriteContext: OwnedSessionTranscriptWriteContext = {
-    sessionFile: attempt.sessionFile,
-    sessionKey: attempt.sessionKey,
+    sessionFile,
+    sessionKey,
     sessionTarget: fencedSessionTarget,
-    sessionReader: getReplyOperationSessionReader(attempt.replyOperation),
+    sessionReader: getReplyOperationSessionReader(replyOperation),
     ...(initialWriter ? { initialWriter } : {}),
     assertCommitAllowed: composeSessionSourceAssertion(
       [assertAdmittedActive, generation?.assertCurrent],
       (assertSources) => {
-        attempt.abortSignal?.throwIfAborted();
+        abortSignal?.throwIfAborted();
         preparedTarget?.assertCurrent();
         assertSources();
       },
@@ -135,8 +150,8 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     withRestartAbortWrite: terminalWriter
       ? async (write) => {
           if (
-            !isAgentRunRestartAbortReason(attempt.abortSignal?.reason) &&
-            !isAgentRunRestartAbortReason(input.runAbortController?.signal.reason)
+            !isAgentRunRestartAbortReason(abortSignal?.reason) &&
+            !isAgentRunRestartAbortReason(runAbortController?.signal.reason)
           ) {
             throw new Error("Interrupted transcript write requires a restart abort");
           }
@@ -173,7 +188,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
     };
     assertCurrent();
     // Detached helpers keep their caller-owned transcript and never open durable storage.
-    if (attempt.sessionPersistence !== "detached") {
+    if (sessionPersistence !== "detached") {
       const reader = ownedTranscriptWriteContext.sessionReader;
       if (reader) {
         assertSessionEntryCohortScope(reader, fencedSessionTarget);
@@ -182,10 +197,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
       // Ordinary writes still pass assertCommitAllowed; terminal writes retain source and writer fences.
       const assertActorCurrent = terminalWriter ? assertTerminalCurrent : assertCurrent;
       const lifetime = { assertCurrent: assertActorCurrent, assertReadable: assertActorCurrent };
-      const incognito = captureSessionManagerIncognitoBinding(
-        fencedSessionTarget,
-        attempt.sessionManager,
-      );
+      const incognito = captureSessionManagerIncognitoBinding(fencedSessionTarget, sessionManager);
       if (incognito) {
         const actor = await incognito.acquire(false, lifetime);
         if (!actor) {
@@ -242,7 +254,7 @@ export async function prepareEmbeddedAttemptTranscriptLifecycle(input: {
   }
 
   return {
-    compactionTimeoutMs: resolveCompactionTimeoutMs(attempt.config),
+    compactionTimeoutMs: resolveCompactionTimeoutMs(config),
     assertCronRootCurrent: generation ? ownedTranscriptWriteContext.assertCommitAllowed : undefined,
     ownedTranscriptWriteContext,
     transcriptLifecycle,

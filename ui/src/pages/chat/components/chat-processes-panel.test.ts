@@ -55,7 +55,11 @@ it.each([false, true])(
     await panel.updateComplete;
     expect(panel.textContent).toContain("Compiling");
     result = { sessionId: "parent-session", processes: [], truncated };
-    await vi.advanceTimersByTimeAsync(5_000);
+    connection.publishEvent("sessions.processes.changed", {
+      sessionKey: "agent:main:parent",
+      agentId: "main",
+    });
+    await vi.advanceTimersByTimeAsync(0);
     await panel.updateComplete;
     if (truncated) {
       expect(panel.textContent).toContain("limited list");

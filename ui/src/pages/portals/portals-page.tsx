@@ -45,7 +45,7 @@ function EmptyState(props: { model: PortalsModel }) {
         fallback={
           <>
             <Show
-              when={state().loading && !state().loaded}
+              when={!state().loaded && (state().loading || !state().connected)}
               fallback={
                 <>
                   <div class="portals-empty__title">

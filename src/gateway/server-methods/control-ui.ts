@@ -603,10 +603,15 @@ export function createControlUiHandlers(
           parsed.sessionKeys,
           parsed.refreshSessionKeys.length > 0 ? new Set(parsed.refreshSessionKeys) : undefined,
           resolve,
+          parsed.passiveSessionKeys ? new Set(parsed.passiveSessionKeys) : undefined,
         );
         void replacement.catch(() => {});
       });
-      respond(true, { subscribed: parsed.sessionKeys.length > 0 }, undefined);
+      respond(
+        true,
+        { subscribed: parsed.sessionKeys.length > 0 || Boolean(parsed.passiveSessionKeys?.length) },
+        undefined,
+      );
     },
   };
 }

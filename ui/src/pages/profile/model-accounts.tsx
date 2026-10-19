@@ -1,4 +1,4 @@
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createSignal, onSettled, Show } from "solid-js";
 import { registerModelAccountsEnglish } from "../../i18n/locales/en-model-accounts.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
@@ -13,27 +13,30 @@ export function ModelAccounts(props: ModelAccountsProps) {
   const [revision, setRevision] = createSignal(0, { ownedWrite: true });
   const state = new ModelAccountsState(context, props, () => setRevision((value) => value + 1));
   // Snapshot identity/profile at request admission; target changes retire account reads and auth polls.
-  const sync = (target: ModelAccountsProps) => {
-    state.applySnapshot(context.gateway.snapshot, target);
-    state.publish();
-  };
-  // Retire account reads and auth polls synchronously with connection authority.
-  const stopGateway = context.gateway.subscribe(() => sync(props));
-  const stopEvents = context.gateway.subscribeEvents((event) => {
-    if (modelAuthEventInvalidates(event)) {
-      void state.loadAccounts();
-    }
+  onSettled(() => {
+    const target = props.target;
+    const sync = () => {
+      state.applySnapshot(target.read());
+      state.publish();
+    };
+    // The profile owner admits both connection authority and its canonical profile.
+    const stopTarget = target.subscribe(sync);
+    const stopEvents = context.gateway.subscribeEvents((event) => {
+      if (modelAuthEventInvalidates(event)) {
+        void state.loadAccounts();
+      }
+    });
+    sync();
+    return () => {
+      stopEvents();
+      stopTarget();
+      state.dispose();
+    };
   });
-  createEffect(() => ({ identityId: props.identityId, profileId: props.profileId }), sync);
   const readState = () => {
     revision();
     return state;
   };
-  onCleanup(() => {
-    stopEvents();
-    stopGateway();
-    state.dispose();
-  });
   return (
     <openclaw-model-accounts>
       <Show when={readState().target || readState().context.gateway.snapshot.phase === "connected"}>

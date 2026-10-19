@@ -4,6 +4,7 @@ import { createSignal, flush } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { installDialogPolyfill } from "../../../test-helpers/modal-dialog.ts";
 import { cleanupSolid, mountSolid } from "../../../test-helpers/mount-solid.ts";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import type { ChatAttachmentControlsProps } from "./chat-attachment-controls.types.ts";
 import { handleChatAttachmentMenuSelection } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
@@ -57,7 +58,7 @@ function mountInputs(initial: ChatAttachmentControlsProps, composerClass?: strin
   return update;
 }
 
-it("keeps the camera idle across unchanged input renders while retaining reactive disabled and read scopes", async () => {
+it("retains the camera across input renders and retires its active read scope", async () => {
   const props: ChatAttachmentControlsProps = {
     readSignal: new AbortController().signal,
     onAttachmentsChange: vi.fn(),
@@ -89,6 +90,14 @@ it("keeps the camera idle across unchanged input renders while retaining reactiv
   await camera.updateComplete;
   expect(camera.readSignal).toBe(readSignal);
   expect(camera.childElementCount).toBe(0);
+
+  draw({ ...props, disabled: false, readSignal });
+  await camera.updateComplete;
+  camera.show();
+  await camera.updateComplete;
+  expect(camera.querySelector("openclaw-modal-dialog")).not.toBeNull();
+  draw({ ...props, readSignal: new AbortController().signal });
+  await waitForSolid(() => expect(camera.querySelector("openclaw-modal-dialog")).toBeNull());
 });
 
 it.each(

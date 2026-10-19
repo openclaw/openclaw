@@ -391,7 +391,7 @@ export function createCliEventHandlers(params: {
     }
   };
   const emitCliCommentaryText = (text: string) => {
-    if (!emitLiveEvents) {
+    if (!emitLiveEvents || params.toolTracking.shouldSuppressAssistantOutput()) {
       return;
     }
     const prepared = prepareAgentRunTerminalReply({ rawText: text });
@@ -415,6 +415,9 @@ export function createCliEventHandlers(params: {
     }));
   };
   const emitCliAssistantDelta = ({ text, delta }: CliStreamingDelta) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text || delta) {
       runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:assistant");
       observedCliActivity = true;
@@ -447,6 +450,9 @@ export function createCliEventHandlers(params: {
     }));
   };
   const emitCliCompletedReply = (text: string, assistantMessageIndex: number) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text) {
       runParams.diagnosticOwner?.watchdogAttempt?.progress("semantic", "cli:completed_reply");
       observedCliActivity = true;
@@ -469,6 +475,9 @@ export function createCliEventHandlers(params: {
   // Emit-always: thinking reaches the event bus and session archive like the
   // embedded reasoning stream; /reasoning and /verbose gate presentation only.
   const emitCliThinkingDelta = ({ text, delta, isReasoningSnapshot }: CliThinkingDelta) => {
+    if (params.toolTracking.shouldSuppressAssistantOutput()) {
+      return;
+    }
     if (text || delta) {
       observedCliActivity = true;
     }

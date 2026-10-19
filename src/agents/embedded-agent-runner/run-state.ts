@@ -386,7 +386,7 @@ function evictPriorLifecycleEmbeddedRuns(): void {
       attachment?.operation &&
       attachment.backend &&
       getSessionControllerEntryForOperation(attachment.operation).active === attachment.operation &&
-      getAttachedBackend(attachment.operation) === attachment.backend
+      getAttachedBackend(attachment.operation) === attachment.backend.handle
     ) {
       controllerOwnedHandles.add(handle);
     }

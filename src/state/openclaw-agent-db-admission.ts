@@ -158,20 +158,20 @@ export function createOpenClawAgentDatabaseAdmissionOwner(
         registrationObserver,
         repairAdmission,
       );
+      const assertCurrent = () => {
+        repairAdmission?.assertCurrent?.();
+        if (preparedLease && !isMainThread) {
+          requestSqliteWorkerOperationAdmission({
+            stage: "prepare",
+            facts: { kind: "agent-open-resume", lease: preparedLease.receipt },
+          });
+        }
+      };
+      const repair = preparedLease?.startupRepair;
       return runSqliteIntegrityOperationSync(
         steps,
-        (preparedLease && !isMainThread) || repairAdmission?.assertCurrent
-          ? () =>
-              assertAgentDatabaseOpenAuthority(steps, () => {
-                repairAdmission?.assertCurrent?.();
-                if (preparedLease && !isMainThread) {
-                  requestSqliteWorkerOperationAdmission({
-                    stage: "prepare",
-                    facts: { kind: "agent-open-resume", lease: preparedLease.receipt },
-                  });
-                }
-              })
-          : undefined,
+        () => assertAgentDatabaseOpenAuthority(steps, assertCurrent),
+        repair && !isMainThread ? (check, error) => repair(check, error, assertCurrent) : undefined,
       );
     };
     const scope = getOpenClawDatabaseMaintenanceScope();

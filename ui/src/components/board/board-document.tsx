@@ -2,6 +2,7 @@ import type { BoardGetParams, BoardSnapshot } from "@openclaw/gateway-protocol";
 import { createMemo, onSettled, Show } from "solid-js";
 import { GATEWAY_SERVER_CAPS } from "../../../../packages/gateway-protocol/src/server-capabilities.js";
 import type { ApplicationGatewaySnapshot } from "../../app/context.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
 import {
   hasOperatorApprovalsAccess,
   hasOperatorReadAccess,
@@ -19,6 +20,7 @@ import {
   isGatewayCapabilityAdvertised,
   isGatewayMethodAdvertised,
 } from "../../lib/gateway-methods.ts";
+import { useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import type { SessionCapability } from "../../lib/sessions/session-capability.ts";
@@ -40,7 +42,7 @@ type ProviderBinding = {
   client: NonNullable<ApplicationGatewaySnapshot["client"]>;
   sessions?: Pick<SessionCapability, "describe">;
   sessionKey: string;
-  capabilityKey: string;
+  presentationScope?: object;
 };
 
 export type BoardDocumentProps = {
@@ -53,7 +55,10 @@ export type BoardDocumentProps = {
 };
 
 // The provider binding remains synchronous; Solid observes its presentation facts.
-function createBoardDocument(props: BoardDocumentProps) {
+function createBoardDocument(
+  props: BoardDocumentProps,
+  readPresentationScope: () => object | undefined,
+) {
   const listeners = new Set<() => void>();
   const notify = () => listeners.forEach((listener) => listener());
   let documentState: DashboardDocumentState = "loading";
@@ -72,10 +77,11 @@ function createBoardDocument(props: BoardDocumentProps) {
   }
 
   function providerCapabilities(snapshot: ApplicationGatewaySnapshot) {
-    const canMutate = hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
+    const connected = snapshot.phase === "connected";
+    const canMutate = connected && hasOperatorWriteAccess(snapshot.hello?.auth ?? null);
     return {
       canMutate,
-      canGrant: hasOperatorApprovalsAccess(snapshot.hello?.auth ?? null),
+      canGrant: connected && hasOperatorApprovalsAccess(snapshot.hello?.auth ?? null),
       canPinWidgets:
         canMutate &&
         isGatewayCapabilityAdvertised(snapshot, GATEWAY_SERVER_CAPS.BOARD_WIDGET_PUT_CANVAS_DOC) ===
@@ -88,6 +94,7 @@ function createBoardDocument(props: BoardDocumentProps) {
   }
 
   function synchronizeProvider(): void {
+    const presentationScope = readPresentationScope();
     const sessionKey = (props.preparedSession?.sessionKey ?? props.sessionKey)?.trim() ?? "";
     if (!sessionKey) {
       releaseProvider();
@@ -102,30 +109,33 @@ function createBoardDocument(props: BoardDocumentProps) {
       return;
     }
     if (
-      !hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
-      isGatewayMethodAdvertised(snapshot, "board.get") === false
+      snapshot.phase === "connected" &&
+      (!hasOperatorReadAccess(snapshot.hello?.auth ?? null) ||
+        isGatewayMethodAdvertised(snapshot, "board.get") === false)
     ) {
       releaseProvider();
       documentState = "unavailable";
       return;
     }
     const capabilities = providerCapabilities(snapshot);
-    const capabilityKey = JSON.stringify(capabilities);
     if (
       ownedBinding?.client === client &&
+      ownedBinding.presentationScope === presentationScope &&
       ownedBinding.sessions === props.sessions &&
       ownedBinding.sessionKey === sessionKey &&
-      (!props.preparedSession || ownedBinding.session.agentId === props.preparedSession.agentId) &&
-      ownedBinding.capabilityKey === capabilityKey
+      (!props.preparedSession || ownedBinding.session.agentId === props.preparedSession.agentId)
     ) {
       providerLease?.update(client, snapshot.phase === "connected", capabilities);
       return;
     }
     releaseProvider();
     documentState = "loading";
+    if (snapshot.phase !== "connected") {
+      return;
+    }
     const generation = bindingGeneration;
     void bindProvider(
-      { client, sessions: props.sessions, sessionKey, capabilityKey },
+      { client, sessions: props.sessions, sessionKey, presentationScope },
       capabilities,
       generation,
       props.preparedSession ?? null,
@@ -158,7 +168,11 @@ function createBoardDocument(props: BoardDocumentProps) {
         return;
       }
       const current = props.gatewaySnapshot;
-      if (!current || current.client !== binding.client) {
+      if (
+        !current ||
+        current.client !== binding.client ||
+        readPresentationScope() !== binding.presentationScope
+      ) {
         return;
       }
       const session = preparedSession ?? {
@@ -173,6 +187,7 @@ function createBoardDocument(props: BoardDocumentProps) {
         capabilities.canPinMcpApps,
         capabilities.canMutate,
         capabilities.canGrant,
+        binding.presentationScope,
       );
       const provider = lease.provider;
       ownedProvider = provider;
@@ -313,12 +328,15 @@ function BoardDocumentContent(
   props: BoardDocumentProps,
   host: SolidBridgeElement<BoardDocumentProps>,
 ) {
-  const document = createBoardDocument(host);
+  const context = useOptionalApplication();
+  const readPresentationScope = () =>
+    context ? gatewayPresentationScope(context.gateway) : undefined;
+  const document = createBoardDocument(host, readPresentationScope);
   const projection = projectOwner(document, (current) => current);
   onSettled(() => {
     let active = true;
     let pending = false;
-    inputUpdates.set(host, () => {
+    const scheduleUpdate = () => {
       if (pending) {
         return;
       }
@@ -329,11 +347,14 @@ function BoardDocumentContent(
           document.update();
         }
       });
-    });
+    };
+    inputUpdates.set(host, scheduleUpdate);
+    const unsubscribeGateway = context?.gateway.subscribe(scheduleUpdate);
     document.update();
     return () => {
       active = false;
       inputUpdates.delete(host);
+      unsubscribeGateway?.();
       document.dispose();
     };
   });

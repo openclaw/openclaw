@@ -1,4 +1,4 @@
-import { Show, createMemo, createUniqueId, mapArray } from "solid-js";
+import { Show, createMemo, createUniqueId, mapArray, onCleanup } from "solid-js";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
 import { readPanelHostedTabs, type PanelHostedTab } from "../../../components/panel-hosted-tabs.ts";
 import {
@@ -35,6 +35,7 @@ type SidebarRegionHeaderProps = RegionProps & {
   hostedRevision: () => number;
   refreshHostedTabs: () => void;
   onFocusActiveReady: (focus: ((options?: FocusOptions) => void) | null) => void;
+  headerRef: (element: HTMLElement | null) => void;
 };
 
 type RegionTab = SolidPanelTabStripTab & {
@@ -173,6 +174,7 @@ function HostedIcon(props: SidebarRegionHeaderProps & { tab: PanelHostedTab }) {
   );
 }
 export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
+  onCleanup(() => props.headerRef(null));
   const state = createMemo(() => {
     props.hostedRevision();
     const column = props.layout.columns[0];
@@ -269,6 +271,7 @@ export function SidebarRegionHeader(props: SidebarRegionHeaderProps) {
   const hostedActions = () => state().activeHosted?.element.hostedActions;
   return (
     <header
+      ref={props.headerRef}
       class="rail-header side-panel__header"
       data-region-header="side"
       onMouseDown={beginNativeWindowDrag}

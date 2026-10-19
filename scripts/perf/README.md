@@ -76,6 +76,47 @@ reference time. Generate a fresh fixture for each startup comparison. Cron jobs,
 heartbeats, channels, plugins, browser automation and network discovery are
 disabled so this workload does not call models or external integrations.
 
+## Measure clean-close seals across app versions
+
+`seal-version-restart.ts` measures the real cold-process agent database open,
+including its integrity gate, without launching a Gateway. Run it only on the
+authorized Linux benchmark host with separate baseline/candidate checkouts and
+state directories. Seed the two fixtures **sequentially**, under the host's
+non-measurement CPU allocation:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/seal-version-restart.ts seed \
+  --state-dir /srv/perf-sandbox/seal-version/base-state --mib 2048
+node --import ./scripts/tsx.mjs scripts/perf/seal-version-restart.ts open \
+  --state-dir /srv/perf-sandbox/seal-version/base-state \
+  --refresh-proof --expect-version 2026.10.4 --expect-full-scans 1
+```
+
+The seed refuses existing directories, writes deterministic high-entropy JSON
+into the existing `cache_entries` table in paced 2 MiB transactions, and uses the
+database owner's checkpoint and close paths. It pauses above 1 GiB of Linux
+`Dirty` memory and stops at 2 GiB. It never copies a database or runs `VACUUM`.
+The fresh `open --refresh-proof` process establishes full verification of the
+populated database. Subsequent `open` commands require the completed fixture
+marker and a physical agent database of at least 2 GiB.
+
+Before each pair, set only `package.json`'s version to the old value in **each
+isolated sandbox checkout**, then run `open --refresh-proof` separately to
+reseal both fixtures. Change only that package version to the new value and run
+the two measured opens concurrently with the same future `--start-at <epoch-ms>`.
+Use `--expect-version` on every open: `OPENCLAW_VERSION` does not override the
+package version in the seal policy, and a nearby `build-info.json` can take
+precedence. Baseline expects `--expect-full-scans 1`; candidate expects `0`.
+
+Hold `/srv/perf-sandbox/.quiet.lock` around the concurrent pair. Use A on CPUs
+96–111 and B on 112–127, then swap those halves for the next pair; take at least
+two pairs and record `mpstat -P 96-127` alongside them. Prepare fixtures and
+reseal on CPUs 64–95. Compare B minus A within each pair. JSON reports include
+effective version, database bytes, seal-match state, full-scan count, integrity
+gate milliseconds, and total cold-open milliseconds including seal lookup.
+This is cold process admission, not cold OS page cache; it does not measure
+Gateway readiness or model/channel startup. Record those limits with results.
+
 ## Shared writer contention from audit retention
 
 `scripts/bench-channel-ingress-writer.ts` measures the real audit FIFO, ingress
@@ -100,6 +141,24 @@ Prepare fixtures separately from measurement and compare paired differences on
 the authorized benchmark host, swapping CPU allocations between pairs.
 
 ## Measure the real list endpoint
+
+For browser-originated model and cron list traffic, point the headless probe at an
+already running isolated Gateway with synthetic state and authentication:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/catalog-polling-measure.ts \
+  --url http://127.0.0.1:40967/ --duration 60 --output /path/to/catalog-traffic.json
+```
+
+The probe creates a fresh browser context and observes real WebSocket frames
+before navigation. It separates cold startup, visible idle, an offline-triggered
+reconnect, Cron navigation and idle, and a retained return to Cron. `--duration`
+is seconds per idle phase. Startup and navigation settle for five seconds after
+UI readiness. If Chromium's offline mode does not close the socket, the report
+marks reconnect unobserved instead of claiming a reconnect measurement. Counts,
+JSON frame bytes and rates per authenticated socket-minute exclude payloads,
+URLs and authentication. Supply any synthetic token through the normal URL
+fragment. The probe builds nothing and neither starts nor stops the Gateway.
 
 Build runtime artifacts on the authorized benchmark host, generate an offline
 fixture, then let the measurement driver own its loopback Gateway:
@@ -157,6 +216,54 @@ then swap halves for the next pair. Record the exact revision, fixture counts
 and physical database bytes; a 64 MiB text fixture preserves roster/run shape
 but does not reproduce multi-GB transcript page-cache pressure.
 
+## Measure history pages and checkout diffs
+
+Prepare a team-shape fixture offline, then add this workload's small synthetic
+transcript and Git worktree. Run generation and measurements on the authorized
+benchmark host:
+
+```sh
+node --import ./scripts/tsx.mjs scripts/perf/history-diff-measure.ts \
+  --state-dir /path/to/team-shape --seed
+node --import ./scripts/tsx.mjs scripts/perf/history-diff-measure.ts \
+  --state-dir /path/to/team-shape --port 41072 --clients 4 \
+  --operations 25 --rounds 5 --revision <commit-sha>
+```
+
+`--seed` requires exclusive offline custody and refuses a second seed. It adds
+one session with 64 completed tool turns (8 KiB, 64 KiB, and 256 KiB tool results),
+captures a clean checkout baseline, then changes 32 tracked files and creates 32
+untracked files. All repositories, worktrees and data remain inside the fixture.
+Measurement never writes the database directly. The driver owns and stops its
+loopback Gateway; `--entry` defaults to `dist/entry.js` and also accepts a prepared
+source entry. It issues small, default, and large `chat.history` requests, plus
+full `sessions.diff` requests for both `all` and `uncommitted` scopes. Summary
+requests are excluded because their 10-second result cache would make repeated
+requests measure cached throughput instead of checkout and baseline work.
+Each operation is one concurrent cohort with one request per client. Empty
+history, missing tracked/untracked changes, missing full patches, or RPC failures
+reject the run.
+
+The first request for each variant is recorded separately as warmup. Later
+cohorts can still include burst-worker startup: warming one client does not warm
+all concurrent readers, and an idle start barrier can retire burst workers.
+Keep those first-cohort tails separate when attributing steady service costs.
+Measured rounds include raw latency samples, p50/p95/p99, payload bytes, returned row
+counts, main-thread/process CPU, CPU profiles and existing worker queue, run,
+and transfer diagnostics. Payload bytes measure re-encoded JSON in the driver,
+not WebSocket frame overhead. Profiles sample the main isolate; worker task
+diagnostics provide worker timings. They do not count Git subprocesses.
+`--output` names a new artifact directory (by default below the fixture).
+`--scenario` defaults to `all`; individual choices are `history-small`,
+`history-default`, `history-large`, `diff-all-full`, and
+`diff-uncommitted-full`. For a concurrent A/B
+comparison, select one matching scenario on both sides so faster completion does
+not move one side into a different workload. Generate independent, identical
+fixtures for each side, with matching client/operation/round counts and the same
+`--start-at <epoch-ms>`. The barrier waits after readiness and warmup, and fails
+if the deadline has passed. Hold the shared measurement lock around the pair,
+and swap the two CPU halves for the next pair.
+
 ## Measure transcript broadcast fanout
 
 With runtime artifacts built on the authorized benchmark host, seed a fixture
@@ -203,6 +310,66 @@ concurrency on both revisions, and report the actual database size. For a roughl
 `--transcript-mib 1500` rather than the 64 MiB logical-text default. The driver
 stops its Gateway and model fixture on completion or interruption and retains
 synthetic state for inspection. Never target a running Gateway's state.
+
+For session-event frame comparisons, add `--session-row-deltas` to negotiate
+row patches and `--session-envelope-refs` to also negotiate
+`session-event-field-refs` (the latter requires row patches). Both are opt-in;
+the default client capabilities are unchanged. A suitable starting swarm for
+each 16-core half is `--clients 38 --runs 8 --rounds 5 --chunks 500`.
+Add `--exact-clients 1 --activity-summaries` to model one transcript subscriber
+and 37 roster viewers receiving Activity recap changes. `--exact-clients`
+defaults to all clients; a mixed audience negotiates optional roster message
+bodies. Recap mode creates ordinary shared sessions, since recaps exclude
+subagents, and requests `sessions.activitySummary.ensure` after each completed
+turn cohort. Measured rounds must observe both recap model requests and recap
+change events; the model fixture serves the recaps without external inference.
+`--list-interval-ms 1000` adds concurrent compact `sessions.list` polling, one
+request at a time per client, and reports successful latency samples and
+p50/p95/p99. Invalid or failed list responses reject the run.
+Add `--diagnostics` identically on both sides to capture per-round Gateway and
+replay-controller event-loop delay (20 ms sampling), GC pause totals, and bounded
+internal operation aggregates without starting CPU or heap profiling. List
+samples also retain the response ID, client index, round, start/end timestamps,
+and duration; `p99Request` identifies the nearest-rank round p99. For a multi-round
+pair, sort all `sessionsList.requests` by duration to identify its pooled p99.
+These records contain timing and identity only, never RPC payloads. Gateway
+metrics cover its main isolate, not worker isolates. Capture adds overhead, so
+compare equally instrumented pairs and keep earlier uncaptured runs distinct.
+
+`eventBytes` measures the exact received, uncompressed JSON frame bytes,
+including the event envelope, before parsing. `sessionEventSizes` splits session
+frame counts and bytes by the existing bounded reason labels and the fixture's
+exact-message subscription membership (`subscribed` or `roster`). Exact clients
+subscribe to the same measured sessions; parent events are roster deliveries.
+Per-round `representativeFrames` retains the largest first-client
+`sessions.changed` frame per bucket as field names and sizes only. Member sizes
+include the JSON key, colon, and value, excluding object braces and separating
+commas; nested session fields describe the full row or patch's `set` object.
+`initialFullFrame` includes setup/warmup and estimates a numeric field-reference
+encoding using matching envelope/full-row fields. This estimate is a diagnostic,
+not a measured candidate result. No message content or row values are retained
+in these size reports. Wire compression and transport headers are not measured.
+
+Pass the same future `--start-at <epoch-ms>` to both sides of a concurrent pair.
+The barrier runs after readiness, warmup, and event drain, and fails if its
+deadline has passed. Hold the shared measurement lock around each pair, use
+independent identical fixtures and ports, then swap the two CPU halves for the
+next pair. Keep fixture generation sequential; `--transcript-mib 1` retains the
+5,000-session roster shape without multi-GB transcript writes when measuring
+event envelopes. Record the actual fixture database size.
+
+For completed-attempt retention, use `--scenario attempt-retention --clients 1
+--runs 10 --rounds 10 --chunks 1 --prompt-kib 128 --heap-snapshot`. Each round
+resets the ten child session generations, submits deterministic synthetic prompt
+text and a 256×128 synthetic noise PNG, executes three real `read` tools with
+16 KiB text results, receives one synthetic output-limit stop,
+and completes the resulting transcript continuation. The driver requires one
+completed tool batch, output-limit response, and recovered response per child,
+and verifies inline images reach all three provider requests. These are
+direct child-session `agent` calls, not model-driven `sessions_spawn` calls.
+Post-GC Gateway heap samples follow every completed cohort, and the optional
+final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
+intentionally retained live histories from the trend.
 
 To start an existing fixture without regenerating it, set `HOME` and
 `OPENCLAW_HOME` to `<state-dir>/home`, `OPENCLAW_STATE_DIR` to `<state-dir>`,

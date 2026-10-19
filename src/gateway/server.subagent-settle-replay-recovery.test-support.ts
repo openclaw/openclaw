@@ -7,7 +7,7 @@ import type { AgentCommandOpts } from "../agents/command/types.js";
 import { buildMainSessionRecoveryClearPatch } from "../agents/main-session-recovery/main-session-recovery-clear.js";
 import { recoverRestartAbortedMainSessions } from "../agents/main-session-recovery/main-session-restart-recovery.js";
 import { createRestartRecoveryOperatorSource } from "../agents/operator-run-recovery-source.js";
-import type { RequesterSettleWakeBatchCallbacks } from "../agents/subagents/announce/subagent-announce.requester-settle-state.js";
+import type { RequesterSettleWakeParams } from "../agents/subagents/announce/subagent-announce.requester-settle-state.js";
 import { subagentRuns } from "../agents/subagents/registry/subagent-registry-memory.js";
 import { loadSubagentRegistryFromSqlite } from "../agents/subagents/registry/subagent-registry-state.fixture.test-support.js";
 import type { SubagentRunRecord } from "../agents/subagents/registry/subagent-registry.types.js";
@@ -36,7 +36,7 @@ type GatewayKernel = Awaited<
 >;
 type RequesterScope = PendingInputScope & { sessionKey: string; storePath: string };
 type SettleReplay = {
-  completeBatch: Mock<RequesterSettleWakeBatchCallbacks["completeBatch"]>;
+  completeBatch: Mock<RequesterSettleWakeParams["completeBatch"]>;
   result: Promise<boolean>;
 };
 

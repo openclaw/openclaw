@@ -80,6 +80,9 @@ export function createMcpBridgeFixture(bridgeMocks: {
       {
         gateway: {
           ...gateway,
+          get connectionRevision() {
+            return gateway.connectionRevision;
+          },
           get snapshot() {
             return gateway.snapshot;
           },

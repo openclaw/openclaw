@@ -63,7 +63,7 @@ export function createQaEvidenceInvocation(params: {
           retryOf: null,
           terminalStatus: null,
           assertions: null,
-          launch: structuredClone(launch),
+          launch,
           receipts: [],
         };
   });
@@ -105,8 +105,8 @@ export function createQaEvidenceInvocation(params: {
     ) {
       throw new Error("continued evidence contains a foreign observation");
     }
-    observations.push(...structuredClone(continuedObservations));
-    entries.push(...structuredClone(continued.entries));
+    observations.push(...continuedObservations);
+    entries.push(...continued.entries);
   }
 
   function anchorFor(index: number) {
@@ -140,14 +140,14 @@ export function createQaEvidenceInvocation(params: {
     const anchor = anchorFor(index);
     const occurrence: QaEvidenceOccurrence = {
       id: randomUUID(),
-      parentCell: structuredClone(anchor.parentCell),
+      parentCell: anchor.parentCell,
       scenario: { kind: "observation", instanceOccurrenceId: anchor.id },
       retryOf,
       terminalStatus: null,
       // Control observations own their diagnostics, not the child's scenario
       // assertions. Actual attempts retain declarations even when no rows return.
-      assertions: options.diagnostic ? null : structuredClone(declarations[index] ?? null),
-      launch: structuredClone(launch),
+      assertions: options.diagnostic ? null : (declarations[index] ?? null),
+      launch,
       receipts: [],
     };
     observations.push(occurrence);
@@ -221,8 +221,8 @@ export function createQaEvidenceInvocation(params: {
         : {}),
     };
     Object.assign(occurrence, completed);
-    observations.push(...structuredClone(childOccurrences));
-    entries.push(...structuredClone(child?.entries ?? []));
+    observations.push(...childOccurrences);
+    entries.push(...(child?.entries ?? []));
     for (const entry of result.entries) {
       entries.push({
         ...structuredClone(entry),
@@ -377,11 +377,9 @@ export function createQaEvidenceInvocation(params: {
       const proposed = {
         observationOffset: observations.length,
         entryOffset: entries.length,
-        additions: structuredClone(additions),
-        completions: structuredClone(completions),
-        rows: structuredClone(
-          child.entries.filter((entry) => addedIds.has(entry.binding.occurrenceId)),
-        ),
+        additions,
+        completions,
+        rows: child.entries.filter((entry) => addedIds.has(entry.binding.occurrenceId)),
         updates: effectiveUpdates,
       };
       const pending = pendingChildren.get(index);

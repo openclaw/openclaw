@@ -503,6 +503,9 @@ function OpenClawApp(host: HTMLElement, runtime: ApplicationRuntime): SolidJSX.E
           prop:client={snapshot().client}
           prop:context={context}
           prop:gateway={context.gateway}
+          prop:lookupSidebarRow={(sessionKey: string) =>
+            shell?.navigationSidebar.findSidebarHovercardRowByKey?.(sessionKey)
+          }
         >
           <ShellLoader
             onShell={(owner) => {

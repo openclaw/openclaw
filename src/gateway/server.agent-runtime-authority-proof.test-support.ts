@@ -386,6 +386,10 @@ export async function holdExecution(signal: AbortSignal) {
   return {
     entered: entered.promise,
     observer,
+    resume: async () => {
+      release.resolve();
+      await execution;
+    },
     cleanup: async () => {
       release.resolve();
       await Promise.allSettled([execution]);

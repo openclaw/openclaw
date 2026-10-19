@@ -62,10 +62,8 @@ function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
     // Admission and writer fencing have composed coverage in run.compaction-runtime.test.ts.
     prepareRecoveryOwner: () => {
       const assertActive = composeSessionSourceAssertion([
-        () => {
-          input.runParams.abortSignal?.throwIfAborted();
-          input.assertRecoveryActive();
-        },
+        () => input.runParams.abortSignal?.throwIfAborted(),
+        input.assertRecoveryActive,
       ]);
       assertActive();
       const session = input.getActiveSession();
@@ -87,12 +85,7 @@ function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
         },
       };
     },
-    prepareRecoverySession: async () => ({
-      sessionManager: undefined,
-      assertActive: composeSessionSourceAssertion([]),
-      withSessionManagerRewriteLock: async <T>(operation: () => Promise<T> | T) =>
-        await operation(),
-    }),
+    prepareRecoverySession: vi.fn<RecoveryInput["prepareRecoverySession"]>(),
     contextEngine: {
       info: { id: "legacy", name: "Legacy" },
       ingest: vi.fn(),
@@ -111,7 +104,6 @@ function makeInput(overrides: Partial<RecoveryInput> = {}): RecoveryInput {
       terminal: { kind: "timeout", phase: "prompt", source: "runtime" },
       sessionIdUsed: "session-1",
       assistantTexts: [],
-      messagesSnapshot: [],
     }),
     runtimeAuthPlan: { providerForAuth: "openai", authProfileProviderForAuth: "openai" },
     resolvedSessionKey: "agent:main:session-1",
@@ -224,9 +216,7 @@ describe("timeout recovery", () => {
       }),
     ).toBe(true);
     const input = makeInput({
-      runOwnsCompactionAfterHook: vi.fn(async () => {
-        throw new Error("after-hook failed");
-      }),
+      runOwnsCompactionAfterHook: vi.fn().mockRejectedValue(new Error("after-hook failed")),
     });
     await expect(recoverEmbeddedRunTimeout(input)).rejects.toThrow("after-hook failed");
     expect(resolveEmbeddedRunAbandonment({ sessionId: "session-1" })).toBe("timeout");
@@ -274,32 +264,30 @@ describe("timeout recovery", () => {
         reservationId: `timeout-recovery-completion:${++deliveryAttempt}`,
         policy: { mode: "followup" },
       });
-    const sendCompletionWithInput = (controllerInput: ReturnType<typeof reserveCompletion>) =>
-      sendSubagentAnnounceDirectly({
-        requesterSessionKey: sessionKey,
-        targetRequesterSessionKey: sessionKey,
-        triggerMessage: "child completed",
-        expectsCompletionMessage: true,
-        requesterIsSubagent: true,
-        directIdempotencyKey: "timeout-recovery-completion",
-        controllerInput,
-      });
     const sendCompletion = async () => {
       const controllerInput = reserveCompletion();
       try {
-        return await sendCompletionWithInput(controllerInput);
+        return await sendSubagentAnnounceDirectly({
+          requesterSessionKey: sessionKey,
+          targetRequesterSessionKey: sessionKey,
+          triggerMessage: "child completed",
+          expectsCompletionMessage: true,
+          requesterIsSubagent: true,
+          directIdempotencyKey: "timeout-recovery-completion",
+          controllerInput,
+        });
       } finally {
         if (!controllerInput.custody.rpcAdopted) {
           retireSessionControllerInput(controllerInput);
         }
       }
     };
-    const abandon = (runId: string) => {
+    const abandonRun = (runId: string, runTarget = target) => {
       const handle = createEmbeddedRunHandle({ runId });
       const operation = createReplyOperation({
         sessionId,
         sessionKey,
-        target,
+        target: runTarget,
         resetTriggered: false,
       });
       attachActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, "main", operation);
@@ -308,6 +296,10 @@ describe("timeout recovery", () => {
       ).toBe(true);
       clearActiveEmbeddedRun(sessionId, handle, sessionKey);
       operation.complete();
+      return operation;
+    };
+    const abandon = (runId: string) => {
+      const operation = abandonRun(runId);
       const marker = markEmbeddedRunRecoveringTimeout({ sessionId, runId, operation });
       expect(marker).toBeDefined();
       return marker!;
@@ -333,24 +325,7 @@ describe("timeout recovery", () => {
       sessionKey,
       incarnation: sessionId,
     });
-    const otherOperation = createReplyOperation({
-      sessionId,
-      sessionKey,
-      target: otherTarget,
-      resetTriggered: false,
-    });
-    const otherHandle = createEmbeddedRunHandle({ runId: "other-store-timeout" });
-    attachActiveEmbeddedRun(sessionId, otherHandle, sessionKey, undefined, "main", otherOperation);
-    expect(
-      markActiveEmbeddedRunAbandoned({
-        sessionId,
-        sessionKey,
-        handle: otherHandle,
-        reason: "timeout",
-      }),
-    ).toBe(true);
-    clearActiveEmbeddedRun(sessionId, otherHandle, sessionKey);
-    otherOperation.complete();
+    abandonRun("other-store-timeout", otherTarget);
     abandon("run-timeout");
     // Delivery is recorded once and never retried (c6ecb5f9f2a), so a recovering requester
     // receives the completion through one dispatch that waits in its mailbox.
@@ -367,27 +342,16 @@ describe("timeout recovery", () => {
     const successor = createEmbeddedRunHandle({
       runId: "run-successor",
       queueMessage,
+      guarded: true,
       supportsTranscriptCommitWait: true,
     });
-    successor.messageInjectionV2 = {
-      version: 2,
-      isAvailable: () => true,
-      queueMessage: async (_text, _options, assertCurrent) => {
-        assertCurrent();
-        await queueMessage();
-      },
-    };
     const successorDelivery = withSessionTurn(
       { sessionKey, sessionId, target },
       async (operation) => {
         setActiveEmbeddedRun(sessionId, successor, sessionKey, undefined, "main", operation);
-        const controllerInput = reserveCompletion();
         try {
-          return await sendCompletionWithInput(controllerInput);
+          return await sendCompletion();
         } finally {
-          if (!controllerInput.custody.rpcAdopted) {
-            retireSessionControllerInput(controllerInput);
-          }
           clearActiveEmbeddedRun(sessionId, successor, sessionKey);
         }
       },

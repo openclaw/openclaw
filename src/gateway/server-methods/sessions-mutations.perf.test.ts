@@ -142,8 +142,8 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
       }
 
       await rotateDatabaseWorkers(historyLane);
-      const historySequence = historyLane.nativeSequence;
-      expect(historySequence).toBe(historyLane.retiredSequence);
+      const historyWorkers = historyLane.pool.getSnapshot();
+      expect(historyWorkers.workers).toBe(0);
       const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
       const statements = trackReads(database);
       const respond = vi.fn();
@@ -155,7 +155,7 @@ test.each([{ pinned: true }, { label: "Renamed" }, { label: " Taken " }])(
           context: mutationContext(),
           client: humanClient(),
         } as never);
-        expect(historyLane.nativeSequence).toBe(historySequence);
+        expect(historyLane.pool.getSnapshot().workersCreated).toBe(historyWorkers.workersCreated);
       } finally {
         hostSql.restore();
         statements.restore();

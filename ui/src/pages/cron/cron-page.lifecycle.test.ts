@@ -507,7 +507,7 @@ it("refreshes trigger authoring from scheduler status after reconnect", async ()
   );
   schedulerStatus.triggersEnabled = false;
   gateway.emitSnapshot({ phase: "stopped" });
-  expect(page.cron.cronStatus).toBeNull();
+  expect(page.cron.cronStatus).toMatchObject({ enabled: true, jobs: 0 });
   gateway.emitSnapshot({ phase: "connected" });
   await waitForCronPage(() =>
     expect(page.cron.cronStatus).toMatchObject({ triggersEnabled: false }),

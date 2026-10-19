@@ -40,7 +40,7 @@ export function resolveRequesterSettleRetryState(params: {
   };
 }
 
-export type RequesterSettleWakeBatchCallbacks = {
+type RequesterSettleWakeBatchCallbacks = {
   transitionBatch: (
     batch: readonly SubagentRunRecord[],
     state: RequesterSettleWakeBatchState,

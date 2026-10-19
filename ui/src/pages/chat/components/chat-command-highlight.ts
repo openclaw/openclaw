@@ -1,5 +1,3 @@
-// ── Command syntax highlighting ──
-
 type CommandToken = { text: string; cls: "name" | "flag" | "str" | "num" | "op" | "plain" | "ws" };
 
 export const COMMAND_HIGHLIGHT_MAX_CHARS = 2_000;

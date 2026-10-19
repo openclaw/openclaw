@@ -126,6 +126,115 @@ describe("guardSessionManager integration", () => {
     ]);
   });
 
+  it("rebinds and retires user persistence callbacks without clearing a newer attempt", async () => {
+    installWriteHook((event) => {
+      const { message } = event as { message: AgentMessage };
+      return message.role === "user" && message.content === "blocked" ? { block: true } : undefined;
+    });
+    const callbacks = () => ({
+      onUserMessagePreparingForPersistence: vi.fn(),
+      onUserMessagePersisted: vi.fn(),
+      onUserMessagePersistenceSuppressed: vi.fn(),
+      onUserMessageBlocked: vi.fn(),
+      onMessagePersisted: vi.fn(),
+    });
+    const previous = callbacks();
+    const current = callbacks();
+    const { sm } = createGuard({ runId: "reused-run", ...previous });
+    const clearPrevious = sm.clearTranscriptRunCallbacks;
+    guardSessionManager(sm, { runId: "reused-run", ...current });
+    clearPrevious?.();
+
+    await sm.appendMessageAsync(makeUserMessage("persisted", 1));
+    sm.setNextUserMessagePersistence?.("suppress");
+    await sm.appendMessageAsync(makeUserMessage("suppressed", 2));
+    await sm.appendMessageAsync(makeUserMessage("blocked", 3));
+    sm.clearTranscriptRunCallbacks?.();
+    await sm.appendMessageAsync(makeUserMessage("after cleanup", 4));
+
+    for (const callback of Object.values(previous)) {
+      expect(callback).not.toHaveBeenCalled();
+    }
+    expect(current.onUserMessagePreparingForPersistence).toHaveBeenCalledTimes(3);
+    expect(current.onUserMessagePersisted).toHaveBeenCalledOnce();
+    expect(current.onUserMessagePersistenceSuppressed).toHaveBeenCalledOnce();
+    expect(current.onUserMessageBlocked).toHaveBeenCalledOnce();
+    expect(current.onMessagePersisted).toHaveBeenCalledOnce();
+    expect(getMessages(sm)).toEqual([
+      makeUserMessage("persisted", 1),
+      makeUserMessage("after cleanup", 4),
+    ]);
+  });
+
+  it("keeps accepted writes bound to their run while the manager is rebound", async () => {
+    const manager = SessionManager.inMemory();
+    const entered = createDeferredCore();
+    const release = createDeferredCore();
+    const append = manager.appendMessageWithTranscriptAnchorAsync.bind(manager);
+    vi.spyOn(manager, "appendMessageWithTranscriptAnchorAsync").mockImplementationOnce(
+      async (...args) => {
+        entered.resolve();
+        await release.promise;
+        return append(...args);
+      },
+    );
+    const previous = { onMessagePersisted: vi.fn(), onUserMessagePersisted: vi.fn() };
+    const current = { onMessagePersisted: vi.fn(), onUserMessagePersisted: vi.fn() };
+    const sm = guardSessionManager(manager, {
+      runId: "previous",
+      privateCompletion: true,
+      inputProvenance: { kind: "internal_system", sourceTool: "previous" },
+      preparedUserTurnMessage: makeUserMessage("prepared previous turn", 2),
+      prepareAssistantTranscriptMessage: (message) => ({
+        ...message,
+        openclawDelivery: { mediaUrls: ["./previous.png"] },
+      }),
+      ...previous,
+    });
+    const pending = sm.appendMessageAsync(makeAgentAssistantMessage({ content: text("previous") }));
+    await entered.promise;
+    const queued = sm.appendMessageAsync(makeUserMessage("queued previous turn", 2));
+    const queuedAssistant = sm.appendMessageAsync(
+      makeAgentAssistantMessage({ content: text("queued previous reply") }),
+    );
+    guardSessionManager(sm, {
+      runId: "current",
+      inputProvenance: { kind: "external_user" },
+      preparedUserTurnMessage: makeUserMessage("prepared current turn", 3),
+      ...current,
+    });
+    release.resolve();
+    await Promise.all([pending, queued, queuedAssistant]);
+
+    expect(getMessages(sm)).toMatchObject([
+      { role: "assistant", display: false, __openclaw: { runId: "previous" } },
+      {
+        role: "user",
+        content: "prepared previous turn",
+        display: false,
+        provenance: { kind: "internal_system", sourceTool: "previous" },
+      },
+      {
+        role: "assistant",
+        display: false,
+        __openclaw: { runId: "previous" },
+        openclawDelivery: { mediaUrls: ["./previous.png"] },
+      },
+    ]);
+    expect(previous.onMessagePersisted).toHaveBeenCalledTimes(3);
+    expect(previous.onUserMessagePersisted).toHaveBeenCalledOnce();
+    expect(current.onMessagePersisted).not.toHaveBeenCalled();
+    expect(current.onUserMessagePersisted).not.toHaveBeenCalled();
+    await sm.appendMessageAsync(makeUserMessage("current turn", 3));
+    expect(getMessages(sm)[3]).toMatchObject({
+      content: "prepared current turn",
+      provenance: { kind: "external_user" },
+    });
+    expect(getMessages(sm)[3]).not.toHaveProperty("display");
+    expect(current.onMessagePersisted).toHaveBeenCalledOnce();
+    expect(current.onUserMessagePersisted).toHaveBeenCalledOnce();
+  });
+
   it("publishes a suppressed user envelope while preserving runtime media facts", () => {
     const media = [
       { path: "/workspace/current.mp4", contentType: "video/mp4", kind: "video" as const },
@@ -155,6 +264,42 @@ describe("guardSessionManager integration", () => {
       expect.objectContaining(prepared),
       runtimeMessage,
     );
+  });
+
+  it("keeps a retired prompt's persistence-mode setter bound to its own run", async () => {
+    const { sm } = createGuard();
+    const previousSetPersistence = sm.setNextUserMessagePersistence;
+    guardSessionManager(sm, { suppressNextUserMessagePersistence: true });
+    previousSetPersistence?.("normal");
+
+    await sm.appendMessageAsync(makeUserMessage("already persisted current turn", 1));
+    await sm.appendMessageAsync(makeUserMessage("next current turn", 2));
+
+    expect(getMessages(sm)).toEqual([makeUserMessage("next current turn", 2)]);
+  });
+
+  it("keeps synthetic-result cleanup private after retiring callbacks", async () => {
+    const onMessagePersisted = vi.fn();
+    const { sm } = createGuard({
+      runId: "private-run",
+      privateCompletion: true,
+      onMessagePersisted,
+    });
+    await sm.appendMessageAsync(
+      makeAgentAssistantMessage({
+        content: [{ type: "toolCall", id: "unfinished", name: "n", arguments: {} }],
+        stopReason: "toolUse",
+      }),
+    );
+    sm.clearTranscriptRunCallbacks?.();
+    await sm.flushPendingToolResultsAsync?.();
+
+    expect(getMessages(sm)[1]).toMatchObject({
+      role: "toolResult",
+      display: false,
+      __openclaw: { runId: "private-run" },
+    });
+    expect(onMessagePersisted).toHaveBeenCalledOnce();
   });
 
   it.each(["user", "assistant"] as const)(

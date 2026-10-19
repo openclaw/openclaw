@@ -1,3 +1,4 @@
+import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type {
   SessionProcessSummary,
   SessionsProcessesListResult,
@@ -9,11 +10,14 @@ import { registerProcessesEnglish } from "../../i18n/locales/en-processes.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import type { SessionConnectionScope } from "../../lib/sessions/session-capability.ts";
-import { resolveUiConversationIdentity } from "../../lib/sessions/session-key.ts";
+import {
+  resolveUiConversationIdentity,
+  uiConversationMatches,
+} from "../../lib/sessions/session-key.ts";
 
 registerProcessesEnglish();
 
-const REFRESH_INTERVAL_MS = 5_000;
+const REFRESH_INTERVAL_MS = 60_000;
 type ProcessesPanelInput = { sessionKey: string; agentId: string; presented: boolean };
 type ProcessSnapshot = Pick<
   ProcessObservation,
@@ -114,10 +118,12 @@ class ProcessObservation {
   private generation = 0;
   private disposed = false;
   private pending: Promise<void> | null = null;
+  private refreshAgain = false;
   private timer: ReturnType<typeof setTimeout> | null = null;
   private readonly visibilityDocument = globalThis.document;
   private readonly visibilityChanged = () => this.reconcile();
   private readonly unsubscribe: () => void;
+  private readonly unsubscribeEvents: () => void;
   private readonly stopVisibility: (() => void) | undefined;
 
   constructor(
@@ -125,9 +131,45 @@ class ProcessObservation {
     private readonly input: ProcessesPanelInput,
     private readonly changed: () => void,
   ) {
-    // Connection edges retire polling scopes synchronously, including while the pane is hidden.
+    // Connection edges retire observation scopes synchronously, including while hidden.
     this.unsubscribe = context.gateway.subscribe(() => this.reconcile());
-    // This synchronous polling owner binds document visibility until dispose().
+    this.unsubscribeEvents = context.gateway.subscribeEvents(({ event, payload }) => {
+      if (!isRecord(payload)) {
+        return;
+      }
+      const sessionChanged =
+        event === "sessions.changed" &&
+        ["delete", "reset", "sharing", "profile-identity", "placement"].includes(
+          String(payload.reason),
+        );
+      if (
+        (event !== "sessions.processes.changed" && !sessionChanged) ||
+        (typeof payload.sessionKey !== "string" &&
+          !(sessionChanged && payload.sessionKey === undefined)) ||
+        (payload.agentId !== undefined && typeof payload.agentId !== "string") ||
+        this.error ||
+        !this.current(this.generation) ||
+        (typeof payload.sessionKey === "string" &&
+          !uiConversationMatches(
+            {
+              assistantAgentId: this.input.agentId,
+              agentsList: context.agents.state.agentsList,
+              hello: context.gateway.snapshot.hello,
+            },
+            this.input.sessionKey,
+            payload.sessionKey,
+            payload.agentId,
+            this.input.agentId,
+          ))
+      ) {
+        return;
+      }
+      if (this.pending) {
+        this.refreshAgain = true;
+      } else {
+        void this.refresh();
+      }
+    });
     this.stopVisibility = this.visibilityDocument
       ? listen(this.visibilityDocument, "visibilitychange", this.visibilityChanged)
       : undefined;
@@ -176,6 +218,7 @@ class ProcessObservation {
       return Promise.resolve();
     }
     const generation = this.generation;
+    this.refreshAgain = false;
     this.clearTimer();
     this.loading = true;
     this.error = null;
@@ -215,10 +258,14 @@ class ProcessObservation {
         }
         this.loading = false;
         this.changed();
-        // The process registry has no subscription feed. Refresh only this visible
-        // presentation; errors require explicit Retry rather than a request storm.
+        // A change arriving during the read needs one trailing snapshot. Otherwise
+        // retain only a slow recovery poll; errors require explicit Retry.
         if (!this.error) {
-          this.timer = setTimeout(() => void this.refresh(), REFRESH_INTERVAL_MS);
+          if (this.refreshAgain) {
+            void this.refresh();
+          } else {
+            this.timer = setTimeout(() => void this.refresh(), REFRESH_INTERVAL_MS);
+          }
         }
       });
     this.pending = pending;
@@ -300,6 +347,7 @@ class ProcessObservation {
     this.clearTimer();
     this.scope = null;
     this.pending = null;
+    this.refreshAgain = false;
     this.rows = [];
     this.sessionId = null;
     this.stopping.clear();
@@ -313,6 +361,7 @@ class ProcessObservation {
     this.disposed = true;
     this.retire();
     this.unsubscribe();
+    this.unsubscribeEvents();
     this.stopVisibility?.();
   }
 }

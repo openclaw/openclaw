@@ -1,7 +1,7 @@
 import "../../styles/approval.css";
 import "../../styles/chat/question-card.css";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
-import { createEffect, createSignal, onCleanup, For, Show } from "solid-js";
+import { createSignal, onCleanup, For, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { canUseQuestionPrompts, requestQuestionGateway } from "../../app/question-prompt-client.ts";
@@ -19,6 +19,7 @@ import {
 import { useApplication } from "../../lib/reactive/context.ts";
 import { createDocumentTitle } from "../../lib/reactive/document-title.ts";
 import { t } from "../../lib/reactive/i18n.ts";
+import { createPendingFocus } from "../../lib/reactive/pending-focus.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { ChatQuestionCard } from "../chat/components/chat-question-card-view.tsx";
@@ -102,10 +103,9 @@ function createQuestionPage(
   });
   const title = () => `${pageTitle(prompt())} — ${t("approvalPage.brandName")}`;
   createDocumentTitle(title);
-  createEffect(title, () => {
-    if (questionPanelHadFocus && !questionPanel?.isConnected) {
-      heading?.focus({ preventScroll: true });
-    }
+  createPendingFocus(title, {
+    requested: () => questionPanelHadFocus && !questionPanel?.isConnected,
+    focus: () => heading?.focus({ preventScroll: true }),
   });
 
   function applyGatewaySnapshot(snapshot: ApplicationGatewaySnapshot): void {

@@ -279,6 +279,7 @@ export async function captureGatewayOperatorRunAuthority(input: {
   const ingressPrincipal = client?.internal?.remoteIngressPrincipal;
   // An owner subject requires a real socket or the host-bound ingress grant.
   // Autonomous/synthetic system callers must not acquire the owner profile.
+  // Ephemeral shared-secret sockets attest the owner without display attribution.
   const isAuthenticatedOwner = (currentActor: typeof actor) =>
     client?.internal?.authenticatedOperator === true &&
     (currentActor === undefined || currentActor.kind === "system") &&
@@ -293,7 +294,14 @@ export async function captureGatewayOperatorRunAuthority(input: {
     !client.internal.syntheticClient &&
     !client.internal.agentRuntimeIdentity &&
     !client.internal.agentToolCaller &&
-    client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID;
+    (client.authenticatedUserProfile?.profileId === GATEWAY_OWNER_PROFILE_ID ||
+      (currentActor?.kind === "system" &&
+        !client.authenticatedUserProfile &&
+        !client.authenticatedUserId &&
+        client.usesSharedGatewayAuth === true &&
+        Boolean(client.sharedGatewaySessionGeneration) &&
+        (client.authPolicy?.authMethod === "token" ||
+          client.authPolicy?.authMethod === "password")));
   const authenticatedOwner = isAuthenticatedOwner(actor);
   if (!client || (actor?.kind !== "operator" && !authenticatedOwner)) {
     return undefined;

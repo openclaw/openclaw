@@ -1141,6 +1141,7 @@ src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-maintenance-integrity.ts
 src/infra/sqlite-native-admission.ts
 src/infra/sqlite-native-observer.ts
+src/infra/sqlite-native-runtime.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-page-cache-residency.ts
 src/infra/sqlite-page-cache.worker.ts
@@ -1932,6 +1933,7 @@ src/state/openclaw-database-preflight.ts
 src/state/openclaw-database-seal-schema.ts
 src/state/openclaw-quarantine-error.ts
 src/state/openclaw-quarantine-store.ts
+src/state/openclaw-schema-versions.ts
 src/state/openclaw-state-db-additive-columns.ts
 src/state/openclaw-state-db-admission.ts
 src/state/openclaw-state-db-async-lifecycle.ts

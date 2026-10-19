@@ -28,7 +28,7 @@ import { resolveReplyBackendMessageInjectionRejection } from "./session-controll
 import { resolveReplyMessageInjectionFailure } from "./session-controller.message-injection-failure.js";
 import {
   getSessionControllerOperation,
-  getAttachedBackend,
+  getAttachedBackendAttachment,
   isReplyRunEvidenceStale,
   isCurrentSessionControllerOperation,
   getSessionControllerEntryForOperation,
@@ -47,7 +47,8 @@ export function captureReplyMessageInjectionTarget(
   }
   const entry = getSessionControllerEntryForOperation(operation);
   const attachment = entry.attachment;
-  if (!attachment) {
+  const backendAttachment = getAttachedBackendAttachment(operation);
+  if (!attachment || !backendAttachment) {
     return undefined;
   }
   const toolAuthority = "toolAuthority" in attachment ? attachment.toolAuthority : undefined;
@@ -63,7 +64,7 @@ export function captureReplyMessageInjectionTarget(
   return {
     [replyMessageInjectionTargetOwner]: {
       backendIdentity: backend,
-      admissionIdentity: attachment,
+      admissionIdentity: backendAttachment,
       get toolAuthorityFingerprint() {
         return "handle" in attachment
           ? backend.toolAuthorityFingerprint
@@ -113,8 +114,7 @@ export function captureReplyMessageInjectionTarget(
         }
       },
       resolve: (params) =>
-        getSessionControllerEntryForOperation(operation).attachment === attachment &&
-        getAttachedBackend(operation) === backend
+        getAttachedBackendAttachment(operation) === backendAttachment
           ? resolveReplyMessageInjectionRejection({ ...params, operation })
           : { reason: "no_active_run" },
       recordAccepted: (options) => {
@@ -150,15 +150,14 @@ function resolveReplyMessageInjectionRejection(params: {
     return { reason: "stale_run" };
   }
   const attachment = getSessionControllerEntryForOperation(operation).attachment;
-  const backend = getAttachedBackend(operation);
-  // Native registration publishes commit capability; the released attachBackend contract
-  // delegates transcript waiting to its sink without requiring that observation.
-  if (
-    attachment &&
-    "handle" in attachment &&
-    params.options?.waitForTranscriptCommit === true &&
-    attachment.handle.supportsTranscriptCommitWait !== true
-  ) {
+  const backendAttachment = getAttachedBackendAttachment(operation);
+  const backend = backendAttachment?.handle;
+  const native = attachment && "handle" in attachment ? attachment.handle : undefined;
+  // Released backends may delegate commit waiting without advertising a capability.
+  const supportsTranscriptCommitWait = backend
+    ? backend.supportsTranscriptCommitWait !== false
+    : native?.supportsTranscriptCommitWait === true;
+  if (params.options?.waitForTranscriptCommit === true && !supportsTranscriptCommitWait) {
     return { reason: "transcript_commit_wait_unsupported" };
   }
   const toolAuthority =
@@ -191,8 +190,7 @@ function resolveReplyMessageInjectionRejection(params: {
       !isCurrentSessionControllerOperation(operation) ||
       operation.result ||
       operationState?.phase !== "running" ||
-      getSessionControllerEntryForOperation(operation).attachment !== attachment ||
-      getAttachedBackend(operation) !== backend
+      getAttachedBackendAttachment(operation) !== backendAttachment
     ) {
       return false;
     }

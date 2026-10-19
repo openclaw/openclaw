@@ -80,6 +80,12 @@ const repositoryScriptEntries = [
   "scripts/perf/team-shape-measure.ts",
   "scripts/perf/transcript-broadcast-measure.ts",
   "scripts/perf/post-restart-burst-measure.ts",
+  "scripts/perf/catalog-polling-measure.ts",
+  // The history/diff benchmark guide invokes this measurement CLI by path.
+  "scripts/perf/history-diff-measure.ts!",
+  "scripts/perf/seal-version-restart.ts!",
+  // Worker-environment shutdown proof invokes this measurement CLI by path.
+  "scripts/perf/worker-environment-shutdown-measure.ts!",
   "scripts/bundle-a2ui.mts!",
   // The standalone build guide invokes this builder by path.
   "scripts/build-bun-standalone.mjs!",

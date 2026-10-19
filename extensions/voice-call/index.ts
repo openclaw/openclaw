@@ -473,7 +473,7 @@ export default definePluginEntry({
                   return json(
                     await commands.steer({
                       callId: normalizeOptionalString(rawParams.callId),
-                      message: normalizeOptionalString(rawParams.message),
+                      message: initiateParams.message,
                       mode: rawParams.mode,
                       requesterSessionKey,
                       assertCurrent: () => signal?.throwIfAborted(),
@@ -483,14 +483,14 @@ export default definePluginEntry({
                   return json(
                     await commands.continueCall(
                       normalizeOptionalString(rawParams.callId),
-                      normalizeOptionalString(rawParams.message),
+                      initiateParams.message,
                     ),
                   );
                 case "speak_to_user":
                   return json(
                     await commands.speak({
                       callId: normalizeOptionalString(rawParams.callId),
-                      message: normalizeOptionalString(rawParams.message),
+                      message: initiateParams.message,
                     }),
                   );
                 case "send_dtmf":

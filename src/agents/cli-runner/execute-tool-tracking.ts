@@ -6,6 +6,7 @@ import {
   waitForMcpLoopbackToolCallCaptureIdle,
 } from "../../gateway/mcp-http.loopback-runtime.js";
 import { shouldUseInternalSourceReplySink } from "../../infra/outbound/internal-source-reply.js";
+import type { CliBackendTurnInterrupt } from "../../plugins/cli-backend.types.js";
 import {
   normalizeAcceptedSessionSpawnResult,
   type AcceptedSessionSpawn,
@@ -65,6 +66,20 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   let gatewayCaptureKey: string | undefined;
   let yielded = false;
   let yieldAcknowledgment: string | undefined;
+  let turnInterrupt: CliBackendTurnInterrupt | undefined;
+  let supportsTurnInterrupt = false;
+  let yieldToolResultObserved = false;
+  let yieldInterrupt: Promise<void> | undefined;
+  const requestYieldInterrupt = () => {
+    if (!yielded || !yieldToolResultObserved || !turnInterrupt || yieldInterrupt) {
+      return;
+    }
+    const interrupt = turnInterrupt;
+    yieldInterrupt = Promise.resolve().then(() => interrupt.interrupt("yield"));
+    // The execution owner joins this promise and cancels the transport on failure.
+    void yieldInterrupt.catch(() => {});
+  };
+  const shouldSuppressAssistantOutput = () => yielded && supportsTurnInterrupt;
   let didSendViaMessagingTool = false;
   let didDeliverSourceReplyViaMessageTool = false;
   let sourceReplyDelivered: true | undefined;
@@ -534,6 +549,15 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   };
   const handleCliToolResult = (event: CliToolResultDelta) => {
     const activeTool = activeCliTools.get(event.toolCallId);
+    if (
+      yielded &&
+      !event.isError &&
+      stripOpenClawMcpToolPrefix(activeTool?.toolName ?? event.name) === "sessions_yield"
+    ) {
+      // Native's tool-result record confirms the yield response was consumed before interruption.
+      yieldToolResultObserved = true;
+      requestYieldInterrupt();
+    }
     if (activeTool?.loopbackCall) {
       askUserDeadlines.clear(activeTool.loopbackCall);
     }
@@ -647,6 +671,15 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
   });
   return {
     beginGatewayCapture,
+    registerTurnInterrupt(this: void, interrupt: CliBackendTurnInterrupt | undefined) {
+      turnInterrupt = interrupt;
+      supportsTurnInterrupt ||= interrupt !== undefined;
+      requestYieldInterrupt();
+    },
+    async waitForTurnInterrupt(this: void) {
+      await yieldInterrupt;
+    },
+    shouldSuppressAssistantOutput,
     getActiveLoopbackAskUserDeadline: askUserDeadlines.get,
     onActiveLoopbackAskUserDeadlineChange: askUserDeadlines.onChange,
     handleCliToolUseStart,
@@ -659,6 +692,9 @@ export function createCliToolTracking(context: PreparedCliRunContext) {
       current.messagingToolSourceReplyPayloads = current.messagingToolSourceReplyPayloads.slice();
       return {
         ...output,
+        ...(shouldSuppressAssistantOutput()
+          ? { text: "", rawText: "", rawFinalText: "", textParts: undefined }
+          : {}),
         ...(yielded ? { yielded: true as const } : {}),
         ...(yieldAcknowledgment ? { yieldAcknowledgment } : {}),
         ...projectCliMessagingDeliveryEvidence(current),

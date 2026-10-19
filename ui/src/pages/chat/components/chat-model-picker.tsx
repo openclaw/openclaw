@@ -418,15 +418,17 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
     <details
       ref={(element) => {
         details = element;
-        pickerOverlay(element);
+        pickerOverlay.details(element);
       }}
+      onClick={pickerOverlay.onClick}
+      onToggle={pickerOverlay.onToggle}
       class="chat-controls__inline-select chat-controls__model-picker"
       data-chat-autotype-shortcuts
       prop:open={params.open === true}
       onKeyDown={handleModelPickerKeydown}
     >
       <summary
-        ref={(element) => (summary = element)}
+        ref={[(element) => (summary = element), pickerOverlay.trigger]}
         class={[
           "chat-controls__inline-select-trigger chat-controls__model-trigger",
           {
@@ -480,6 +482,7 @@ export function ChatModelPicker(params: ChatModelPickerParams) {
         </span>
       </summary>
       <div
+        ref={pickerOverlay.surface}
         class="oc-overlay chat-picker-overlay"
         data-anchored-overlay
         popover="manual"

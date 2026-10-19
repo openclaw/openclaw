@@ -217,6 +217,7 @@ export function readShellView(host: ShellViewHost) {
     sessionKey: host.activeSessionKey,
     connected: gatewayConnected,
     connectionStatus,
+    footerControlsOverlap: host.shellLayout.footerControlsOverlap,
     storedOutboxes: host.storedOutboxes,
     terminalAvailable,
     catalogOpenTarget: normalizeCatalogOpenTarget(uiSettings.catalogOpenTarget),

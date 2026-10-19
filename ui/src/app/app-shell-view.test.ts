@@ -623,6 +623,7 @@ it("checks writing-surface clearance only when the avatar flag would open", asyn
   vi.spyOn(composer, "getBoundingClientRect").mockImplementation(() => bounds);
   footer.append(composer);
   view.container.querySelector("main.content")!.append(footer);
+  owner.shellLayout.registerFooterControlSurface(composer);
   vi.useFakeTimers();
   snapshot.mockReturnValue({ ...connected, phase: "offline", offlineStable: true });
   await settle();
@@ -640,20 +641,12 @@ it("checks writing-surface clearance only when the avatar flag would open", asyn
   vi.advanceTimersByTime(4_000);
   await settle();
 
-  for (const name of [
-    "agent-chat__composer-shell",
-    "new-session-page__composer",
-    "creation-composer",
-    "cron-editor-actions",
-  ]) {
-    composer.className = name;
-    anchor.dispatchEvent(new Event("pointerenter"));
-    flush();
-    expect(flag.hasAttribute("data-open"), name).toBe(false);
-    expect(card.title).toBe(card.getAttribute("aria-label"));
-    anchor.dispatchEvent(new Event("pointerleave"));
-    flush();
-  }
+  anchor.dispatchEvent(new Event("pointerenter"));
+  flush();
+  expect(flag.hasAttribute("data-open")).toBe(false);
+  expect(card.title).toBe(card.getAttribute("aria-label"));
+  anchor.dispatchEvent(new Event("pointerleave"));
+  flush();
   visible = false;
   anchor.dispatchEvent(new Event("pointerenter"));
   flush();
