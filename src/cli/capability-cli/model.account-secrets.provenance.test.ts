@@ -9,7 +9,6 @@ import {
   getRuntimeConfigSourceSnapshot,
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
-import type { ModelDefinitionConfig } from "../../config/types.models.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearSecretsRuntimeSnapshotState } from "../../secrets/runtime-state.js";
 import { setupSecretsRuntimeSnapshotTestHooks } from "../../secrets/runtime.test-support.ts";
@@ -39,9 +38,8 @@ const hoisted = vi.hoisted(() => {
   };
 });
 
-const completeWithPreparedSimpleCompletionModelMock =
-  hoisted.completeWithPreparedSimpleCompletionModel;
-const emitJsonOrTextMock = hoisted.emitJsonOrText;
+const completeMock = hoisted.completeWithPreparedSimpleCompletionModel;
+const emitMock = hoisted.emitJsonOrText;
 
 vi.mock("../../agents/simple-completion-execution.js", () => ({
   completeWithPreparedSimpleCompletionModel: hoisted.completeWithPreparedSimpleCompletionModel,
@@ -87,36 +85,34 @@ const CONFIG_KEY_VALUE = "customcfg:decoy"; // pragma: allowlist secret
 const ACCOUNT_KEY_VALUE = "synthetic-account-key"; // pragma: allowlist secret
 
 function buildRawCfg(agentDir: string): OpenClawConfig {
-  const model: ModelDefinitionConfig = {
-    id: "test-model",
-    name: "Test model",
-    reasoning: false,
-    input: ["text"],
-    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-    contextWindow: 8192,
-    maxTokens: 128,
+  const provider = {
+    api: "openai-completions" as const,
+    baseUrl: "http://127.0.0.1:1/v1",
+    models: [
+      {
+        id: "test-model",
+        name: "Test model",
+        reasoning: false,
+        input: ["text" as const],
+        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+        contextWindow: 8192,
+        maxTokens: 128,
+      },
+    ],
   };
   return {
     agents: {
       defaults: { workspace: join(agentDir, "workspace") },
-      entries: {
-        ops: { agentDir, model: "customcfg/test-model" },
-      },
+      entries: { ops: { agentDir, model: "customcfg/test-model" } },
     },
     models: {
       providers: {
         customcfg: {
-          api: "openai-completions",
+          ...structuredClone(provider),
           auth: "api-key",
-          baseUrl: "http://127.0.0.1:1/v1",
           apiKey: { source: "env", provider: "default", id: ENV_CONFIG_KEY },
-          models: [structuredClone(model)],
         },
-        customacct: {
-          api: "openai-completions",
-          baseUrl: "http://127.0.0.1:1/v1",
-          models: [structuredClone(model)],
-        },
+        customacct: structuredClone(provider),
       },
     },
   };
@@ -136,6 +132,14 @@ async function seedProfiles(
   expect(seededStore).not.toBeNull();
 }
 
+function accountProfile(provider = "customacct", id = ENV_ACCOUNT_KEY) {
+  return {
+    type: "api_key" as const,
+    provider,
+    keyRef: { source: "env" as const, provider: "default", id },
+  };
+}
+
 function seedStandardProfiles(agentDir: string): Promise<void> {
   return seedProfiles(agentDir, {
     "customcfg:decoy": {
@@ -143,11 +147,7 @@ function seedStandardProfiles(agentDir: string): Promise<void> {
       provider: "customcfg",
       key: "synthetic-decoy-key", // pragma: allowlist secret
     },
-    "customacct:healthy": {
-      type: "api_key",
-      provider: "customacct",
-      keyRef: { source: "env", provider: "default", id: ENV_ACCOUNT_KEY },
-    },
+    "customacct:healthy": accountProfile(),
   });
 }
 
@@ -155,32 +155,23 @@ async function runLocalModelRun(model: string): Promise<void> {
   const capability = new Command();
   registerModelCapabilityCommands(capability);
   const work = new AsyncWorkScope();
+  const args = ["model", "run", "--prompt", "hello", "--agent", "ops"];
   try {
     await work.track(() =>
-      capability.parseAsync(
-        [
-          "model",
-          "run",
-          "--prompt",
-          "hello",
-          "--agent",
-          "ops",
-          "--model",
-          model,
-          "--local",
-          "--json",
-        ],
-        { from: "user" },
-      ),
+      capability.parseAsync([...args, "--model", model, "--local", "--json"], { from: "user" }),
     );
   } finally {
     await work.drain();
   }
 }
 
-/** Reads the auth captured by the faked provider-egress boundary. */
-function getCompletionAuth() {
-  return completeWithPreparedSimpleCompletionModelMock.mock.calls.at(-1)?.[0]?.auth;
+/** Checks the auth captured by the faked provider-egress boundary. */
+function expectCompletionAuth(source: string, value: string) {
+  expect(completeMock).toHaveBeenCalledTimes(1);
+  const auth = completeMock.mock.calls.at(-1)?.[0]?.auth;
+  expect(auth?.source).toBe(source);
+  expect(looksLikeSecretSentinel(auth?.apiKey ?? "")).toBe(true);
+  expect(resolveSecretSentinel(auth?.apiKey ?? "")).toBe(value);
 }
 
 describe("local model run config SecretRef provenance", () => {
@@ -202,8 +193,8 @@ describe("local model run config SecretRef provenance", () => {
     // as the runtime source before any command runs). Without this the helper
     // would fall back to the resolved config, exactly like a bootless process.
     setRuntimeConfigSnapshot(structuredClone(hoisted.rawCfg), structuredClone(hoisted.rawCfg));
-    completeWithPreparedSimpleCompletionModelMock.mockClear();
-    emitJsonOrTextMock.mockClear();
+    completeMock.mockClear();
+    emitMock.mockClear();
   });
 
   afterEach(async () => {
@@ -215,61 +206,38 @@ describe("local model run config SecretRef provenance", () => {
     await seedStandardProfiles(agentDir);
     await runLocalModelRun("customcfg/test-model");
 
-    expect(emitJsonOrTextMock).toHaveBeenCalledTimes(1);
+    expect(emitMock).toHaveBeenCalledTimes(1);
     const source = getRuntimeConfigSourceSnapshot();
     const { ref } = resolveProviderConfigSecretInput(source ?? undefined, "customcfg");
     expect(ref).toMatchObject({ source: "env", id: ENV_CONFIG_KEY });
-    expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
-    const auth = getCompletionAuth();
-    expect(auth?.source).toBe("models.providers.customcfg");
-    expect(looksLikeSecretSentinel(auth?.apiKey ?? "")).toBe(true);
-    expect(resolveSecretSentinel(auth?.apiKey ?? "")).toBe(CONFIG_KEY_VALUE);
+    expectCompletionAuth("models.providers.customcfg", CONFIG_KEY_VALUE);
   });
 
   it("materializes a persisted account SecretRef for the selected provider", async () => {
     await seedStandardProfiles(agentDir);
     await runLocalModelRun("customacct/test-model");
 
-    expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
-    const auth = getCompletionAuth();
-    expect(auth?.source).toBe("profile:customacct:healthy");
-    expect(looksLikeSecretSentinel(auth?.apiKey ?? "")).toBe(true);
-    expect(resolveSecretSentinel(auth?.apiKey ?? "")).toBe(ACCOUNT_KEY_VALUE);
+    expectCompletionAuth("profile:customacct:healthy", ACCOUNT_KEY_VALUE);
   });
 
   it("keeps a healthy selected provider usable while an unrelated sibling is unavailable", async () => {
     await seedProfiles(agentDir, {
-      "otherprovider:cold": {
-        type: "api_key",
-        provider: "otherprovider",
-        keyRef: { source: "env", provider: "default", id: ENV_MISSING_KEY },
-      },
-      "customacct:healthy": {
-        type: "api_key",
-        provider: "customacct",
-        keyRef: { source: "env", provider: "default", id: ENV_ACCOUNT_KEY },
-      },
+      "otherprovider:cold": accountProfile("otherprovider", ENV_MISSING_KEY),
+      "customacct:healthy": accountProfile(),
     });
     await runLocalModelRun("customacct/test-model");
 
-    expect(completeWithPreparedSimpleCompletionModelMock).toHaveBeenCalledTimes(1);
-    const auth = getCompletionAuth();
-    expect(auth?.source).toBe("profile:customacct:healthy");
-    expect(resolveSecretSentinel(auth?.apiKey ?? "")).toBe(ACCOUNT_KEY_VALUE);
+    expectCompletionAuth("profile:customacct:healthy", ACCOUNT_KEY_VALUE);
   });
 
   it("fails closed when the selected account SecretRef is unavailable", async () => {
     await seedProfiles(agentDir, {
-      "customacct:healthy": {
-        type: "api_key",
-        provider: "customacct",
-        keyRef: { source: "env", provider: "default", id: ENV_MISSING_KEY },
-      },
+      "customacct:healthy": accountProfile("customacct", ENV_MISSING_KEY),
     });
 
     await expect(runLocalModelRun("customacct/test-model")).rejects.toThrow(
       /Auth lookup failed for provider "customacct": .*customacct:healthy.*is configured but unavailable \(secret reference was not found\)/,
     );
-    expect(completeWithPreparedSimpleCompletionModelMock).not.toHaveBeenCalled();
+    expect(completeMock).not.toHaveBeenCalled();
   });
 });

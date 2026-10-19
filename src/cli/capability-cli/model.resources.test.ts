@@ -108,13 +108,11 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
           OPENCLAW_STATE_DIR: path.join(root, "state"),
         },
         async () => {
-          const config = vi
-            .spyOn(shared, "resolveLocalCapabilityRuntimeConfig")
-            .mockResolvedValue(cfg);
+          vi.spyOn(shared, "resolveLocalCapabilityRuntimeConfig").mockResolvedValue(cfg);
           const builds = vi.spyOn(ModelRegistry, "fromCapturedSources");
           const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
           const errors = vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
-          const exit = vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
+          vi.spyOn(defaultRuntime, "exit").mockImplementation(() => {
             throw new Error("CLI failed");
           });
           const finishCancel = createDeferred();
@@ -122,7 +120,6 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
           const cancelStarted = createDeferred();
           const parent = new AsyncWorkScope();
           const pending: Promise<unknown>[] = [];
-          const transportSpies: Array<{ mockRestore(): void }> = [];
           let drained = false;
           let drainage: Promise<void> | undefined;
           if (mode === "callback-drain" || mode === "cancel-drain") {
@@ -132,61 +129,57 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
             const plugin = getAiTransportHost().plugin;
             const wrap = plugin.wrapSimpleCompletionStream;
             let first = true;
-            transportSpies.push(
-              vi.spyOn(plugin, "wrapSimpleCompletionStream").mockImplementation((params) => {
-                const stream = wrap(params) ?? params.context.streamFn;
-                return (model, context, options) =>
-                  stream(model, context, {
-                    ...options,
-                    onResponse: async (response, responseModel) => {
-                      await options?.onResponse?.(response, responseModel);
-                      if (first) {
-                        first = false;
-                        if (mode === "cancel-drain") {
-                          throw new Error("fixture response rejected");
-                        }
-                        callbackStarted.resolve();
-                        await finishCancel.promise;
+            vi.spyOn(plugin, "wrapSimpleCompletionStream").mockImplementation((params) => {
+              const stream = wrap(params) ?? params.context.streamFn;
+              return (model, context, options) =>
+                stream(model, context, {
+                  ...options,
+                  onResponse: async (response, responseModel) => {
+                    await options?.onResponse?.(response, responseModel);
+                    if (first) {
+                      first = false;
+                      if (mode === "cancel-drain") {
+                        throw new Error("fixture response rejected");
                       }
-                    },
-                  });
-              }),
-            );
+                      callbackStarted.resolve();
+                      await finishCancel.promise;
+                    }
+                  },
+                });
+            });
           }
           if (mode === "cancel-drain") {
             const fetch = globalThis.fetch;
             let wrapped = false;
-            transportSpies.push(
-              vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
-                const response = await fetch(...args);
-                if (wrapped || !response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
-                  return response;
-                }
-                wrapped = true;
-                const reader = response.body?.getReader();
-                if (!reader) {
-                  throw new Error("Fixture response has no body");
-                }
-                return new Response(
-                  new ReadableStream<Uint8Array>({
-                    async pull(controller) {
-                      const { value, done } = await reader.read();
-                      if (done) {
-                        controller.close();
-                      } else {
-                        controller.enqueue(value);
-                      }
-                    },
-                    async cancel(reason) {
-                      cancelStarted.resolve();
-                      await finishCancel.promise;
-                      await reader.cancel(reason);
-                    },
-                  }),
-                  { status: response.status, headers: response.headers },
-                );
-              }),
-            );
+            vi.spyOn(globalThis, "fetch").mockImplementation(async (...args) => {
+              const response = await fetch(...args);
+              if (wrapped || !response.url.startsWith(`http://127.0.0.1:${address.port}/`)) {
+                return response;
+              }
+              wrapped = true;
+              const reader = response.body?.getReader();
+              if (!reader) {
+                throw new Error("Fixture response has no body");
+              }
+              return new Response(
+                new ReadableStream<Uint8Array>({
+                  async pull(controller) {
+                    const { value, done } = await reader.read();
+                    if (done) {
+                      controller.close();
+                    } else {
+                      controller.enqueue(value);
+                    }
+                  },
+                  async cancel(reason) {
+                    cancelStarted.resolve();
+                    await finishCancel.promise;
+                    await reader.cancel(reason);
+                  },
+                }),
+                { status: response.status, headers: response.headers },
+              );
+            });
           }
           const start = (managed = false) => {
             const command = new Command();
@@ -208,10 +201,8 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
               }),
             ]);
           try {
-            const started = performance.now();
             const first = start(true);
             await arrive(0, first);
-            const coldMs = performance.now() - started;
             const firstBuilds = builds.mock.calls.length;
             expect(firstBuilds).toBeGreaterThan(0);
             if (mode === "provider-error") {
@@ -234,14 +225,8 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
                 drained = true;
               });
             }
-            const nextStarted = performance.now();
             const second = start();
             await arrive(1, second);
-            console.info("CLI completion preparation", {
-              mode,
-              coldMs,
-              overlapMs: performance.now() - nextStarted,
-            });
             expect
               .soft(builds.mock.calls.length)
               .toBe(firstBuilds + (mode === "provider-error" ? 1 : 0));
@@ -271,14 +256,7 @@ it.each(["overlap", "provider-error", "callback-drain", "cancel-drain"] as const
             requests.forEach(finish);
             await Promise.allSettled(pending);
             await parent.drain();
-            for (const spy of transportSpies) {
-              spy.mockRestore();
-            }
-            config.mockRestore();
-            builds.mockRestore();
-            output.mockRestore();
-            errors.mockRestore();
-            exit.mockRestore();
+            vi.restoreAllMocks();
             await resetPreparedModelRuntimeSnapshotsForTest();
             clearPluginMetadataLifecycleCaches();
             resetPluginLoaderTestStateForTest();
