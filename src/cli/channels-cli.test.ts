@@ -60,7 +60,8 @@ vi.mock("../commands/channels/dead-letters.js", () => channelsDeadLettersMocks);
 
 vi.mock("./channel-auth.js", () => channelAuthMocks);
 
-vi.mock("../runtime.js", () => ({
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
   defaultRuntime: runtimeMock,
 }));
 
@@ -393,6 +394,15 @@ describe("registerChannelsCli", () => {
       "tok",
     ]);
     expectAddCall(expect.objectContaining({ channel: "Telegram", token: "tok" }));
+  });
+
+  it("accepts a positional alias that names the same channel as --channel", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValue([
+      { ...telegramChannel, aliases: ["tg"] },
+    ]);
+    await runChannelsCli(["channels", "add", "tg", "--channel", "telegram", "--token", "tok"]);
+    expectAddCall(expect.objectContaining({ channel: "telegram", token: "tok" }));
+    expect(runtimeMock.exit).not.toHaveBeenCalled();
   });
 
   it("keeps conflicting all-channel flag arities before a positional channel ambiguous", async () => {

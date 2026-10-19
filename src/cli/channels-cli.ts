@@ -131,7 +131,15 @@ async function resolveChannelsAddChannelFromArgv(argv: string[]): Promise<string
   return undefined;
 }
 
-function resolveChannelsAddOptions(
+async function resolveChannelSelectorId(selector: string): Promise<string> {
+  const normalized = selector.trim().toLowerCase();
+  const { resolveChannelSetupCliOptionMetadata } =
+    await import("../channels/plugins/cli-add-options.js");
+  const { selectedChannel } = resolveChannelSetupCliOptionMetadata(normalized);
+  return selectedChannel?.id?.toLowerCase() ?? normalized;
+}
+
+async function resolveChannelsAddOptions(
   channelArg: string | undefined,
   opts: Record<string, unknown>,
   command: Pick<Command, "getOptionValueSource">,
@@ -140,7 +148,7 @@ function resolveChannelsAddOptions(
     /** Attribute names whose empty Commander defaults should be dropped (legacy int options). */
     dropEmptyLegacyDefaultsForAttributeNames?: ReadonlySet<string>;
   },
-): Record<string, unknown> {
+): Promise<Record<string, unknown>> {
   const forwardedOpts = Object.fromEntries(
     Object.entries(opts).filter(([key, value]) => {
       const source = command.getOptionValueSource(key);
@@ -164,7 +172,7 @@ function resolveChannelsAddOptions(
   if (
     flagChannel &&
     channelArg &&
-    flagChannel.trim().toLowerCase() !== channelArg.trim().toLowerCase()
+    (await resolveChannelSelectorId(flagChannel)) !== (await resolveChannelSelectorId(channelArg))
   ) {
     throw new Error(
       `Conflicting channels: positional "${channelArg}" and --channel "${flagChannel}". Pass only one.`,
@@ -492,7 +500,7 @@ export async function registerChannelsCli(
       );
       await channelsAddCommand(
         {
-          ...resolveChannelsAddOptions(channelArg, opts, command, channelSetupRegistration),
+          ...(await resolveChannelsAddOptions(channelArg, opts, command, channelSetupRegistration)),
           agent: resolveStringOption(command, "agent"),
         },
         defaultRuntime,
