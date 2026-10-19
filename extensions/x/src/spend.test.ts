@@ -17,7 +17,6 @@ function fixture(config: Partial<XCostLimits> = {}) {
   return {
     runtime,
     limits,
-    logger,
     spend: openXSpend(runtime, "default", () => limits),
     store: openKeyedStore<number>({ namespace: "x.spend" }),
   };
@@ -66,22 +65,33 @@ beforeEach(() => {
 });
 afterEach(() => vi.useRealTimers());
 
-describe("X spend reservations", () => {
+describe("X spend", () => {
   it.each([
-    { dailyUsd: 1, monthlyUsd: 10, reason: "daily" },
-    { dailyUsd: 10, monthlyUsd: 1, reason: "billing-cycle" },
-  ])("reserves and releases unused $reason capacity", async ({ reason, ...limits }) => {
-    const { spend } = fixture(limits);
-    const reservation = await spend.reserve(800_000);
-    await expect(spend.reserve(300_000)).rejects.toThrow(`${reason} budget`);
-    await reservation.settle(200_000);
-    await reservation.settle(200_000);
-    expect(await spend.status()).toMatchObject({ dayUsd: 0.2, cycleUsd: 0.2 });
-    const next = await spend.reserve(800_000);
-    await expect(spend.reserve(1)).rejects.toBeInstanceOf(XBudgetExceededError);
-    await next.settle(0);
-    expect(await spend.status()).not.toHaveProperty("exhaustedUntil");
-  });
+    [1, 10, "daily", false],
+    [10, 1, "billing-cycle", false],
+    [1, 1, "billing-cycle", true],
+  ] as const)(
+    "reserves and releases capacity (daily=%s monthly=%s reason=%s midnight=%s)",
+    async (dailyUsd, monthlyUsd, reason, midnight) => {
+      const limits = { dailyUsd, monthlyUsd, cycleStartDay: midnight ? 20 : 1 };
+      const { spend } = fixture(limits);
+      const reservation = await spend.reserve(800_000);
+      if (midnight) {
+        vi.setSystemTime("2026-10-20T00:00:00Z");
+      }
+      const denied = spend.reserve(300_000);
+      await expect(denied).rejects.toThrow(`${reason} budget`);
+      await expect(denied).rejects.toBeInstanceOf(XBudgetExceededError);
+      await reservation.settle(200_000);
+      await reservation.settle(200_000);
+      expect(await spend.status()).toMatchObject({ dayUsd: 0.2, cycleUsd: 0.2 });
+      const next = await spend.reserve(800_000);
+      expect(next).toHaveProperty("settle");
+      await expect(spend.reserve(1)).rejects.toBeInstanceOf(XBudgetExceededError);
+      await next.settle(0);
+      expect(await spend.status()).not.toHaveProperty("exhaustedUntil");
+    },
+  );
 
   it("serializes concurrent callers across replacement runtime handles before dispatch", async () => {
     const test = fixture({ dailyUsd: 1 });
@@ -97,20 +107,18 @@ describe("X spend reservations", () => {
     expect(await second.status()).toMatchObject({ dayUsd: 0.6, cycleUsd: 0.6 });
   });
 
-  it.each(["completion day", "cycle", "pending deletion"] as const)(
+  it.each([
+    ["completion day", "register", "default:day:2026-10-20", undefined],
+    ["cycle", "register", "default:cycle:2026-10-01", undefined],
+    ["pending deletion", "delete", null, 100_000],
+  ] as const)(
     "keeps failed %s settlement conservative and stops subsequent paid calls",
-    async (failedAt) => {
+    async (_failedAt, rejectedOperation, rejectedKey, overlap) => {
       const test = fixture({ dailyUsd: 1 });
       const reservation = await test.spend.reserve(800_000);
       vi.setSystemTime("2026-10-20T00:00:00Z");
-      const rejectedKey =
-        failedAt === "completion day" ? "default:day:2026-10-20" : "default:cycle:2026-10-01";
       replaceStore(test, (operation, key) => {
-        if (
-          operation === "delete"
-            ? failedAt === "pending deletion"
-            : failedAt !== "pending deletion" && key === rejectedKey
-        ) {
+        if (operation === rejectedOperation && (rejectedKey === null || key === rejectedKey)) {
           throw new Error("synthetic disk failure");
         }
       });
@@ -121,9 +129,7 @@ describe("X spend reservations", () => {
           (entry) => entry.key.includes(":pending:") && entry.value === 800_000,
         ),
       ).toBe(true);
-      expect(await test.store.lookup("default:overlap:2026-10-19:2026-10-20")).toBe(
-        failedAt === "pending deletion" ? 100_000 : undefined,
-      );
+      expect(await test.store.lookup("default:overlap:2026-10-19:2026-10-20")).toBe(overlap);
     },
   );
 
@@ -158,9 +164,6 @@ describe("X spend reservations", () => {
     await (await spend.reserve(0)).settle(0);
     expect(await spend.status()).toMatchObject({ dayUsd: 0, cycleUsd: 0 });
   });
-});
-
-describe("X spend period boundaries", () => {
   it("retains an event's receipt periods when its charge waits across midnight", async () => {
     const test = fixture({ cycleStartDay: 20 });
     const { entered, release } = blockWrites(test);
@@ -247,17 +250,13 @@ describe("X spend period boundaries", () => {
     const reservation = await spend.reserve(200_000);
     vi.setSystemTime("2026-10-20T00:00:00Z");
     await reservation.settle(200_000);
-    limits.cycleStartDay = 20;
-    expect(await spend.status()).toMatchObject({
-      dayUsd: 0.2,
-      cycleUsd: 0.2,
-      cycleStart: "2026-10-20",
-    });
-    limits.cycleStartDay = 19;
-    expect(await spend.status()).toMatchObject({
-      dayUsd: 0.2,
-      cycleUsd: 0.2,
-      cycleStart: "2026-10-19",
-    });
+    for (const day of [20, 19]) {
+      limits.cycleStartDay = day;
+      expect(await spend.status()).toMatchObject({
+        dayUsd: 0.2,
+        cycleUsd: 0.2,
+        cycleStart: `2026-10-${day}`,
+      });
+    }
   });
 });

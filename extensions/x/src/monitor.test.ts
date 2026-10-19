@@ -20,11 +20,25 @@ import {
 import { createQueue } from "./test-support/monitor.js";
 import { openXWorkOrigins } from "./work-origin.js";
 
-const active: ReturnType<typeof createFixture>[] = [];
-function fixture(options: Parameters<typeof createFixture>[0]) {
-  const test = createFixture(options);
+type MonitorFixture = ReturnType<typeof createFixture>;
+const active: MonitorFixture[] = [];
+function fixture({
+  completeOn,
+  ...options
+}: Parameters<typeof createFixture>[0] & { completeOn?: string }) {
+  const completed = Promise.withResolvers<void>();
+  const queue =
+    options.queue ??
+    createQueue<Payload>({
+      onCompleted: (id) => {
+        if (!completeOn || id === completeOn) {
+          completed.resolve();
+        }
+      },
+    });
+  const test = createFixture({ ...options, queue });
   active.push(test);
-  return test;
+  return { ...test, completed: completed.promise };
 }
 function guestConfig(maxMentionsPerAuthorPerDay?: number) {
   return {
@@ -36,11 +50,24 @@ function guestConfig(maxMentionsPerAuthorPerDay?: number) {
     },
   };
 }
+function withRecipient(value: ReturnType<typeof post>, id = "100", username = "roboclawbot") {
+  return { ...value, entities: { mentions: [{ id, username }] } };
+}
 function registerWork(
-  test: ReturnType<typeof fixture>,
+  test: MonitorFixture,
   key: string,
   origin: Partial<Parameters<ReturnType<typeof openXWorkOrigins>["registerIfAbsent"]>[1]> = {},
+  entry: Partial<Parameters<MonitorFixture["sessionEntries"]["set"]>[1]> | null = {},
 ) {
+  if (entry) {
+    test.sessionEntries.set(key, {
+      sessionId: key.split(":").at(-1)!,
+      updatedAt: 1,
+      createdVia: "spawn",
+      spawnedBy: "agent:maintainer:x:group:500",
+      ...entry,
+    });
+  }
   return openXWorkOrigins(test.runtime).registerIfAbsent(key, {
     accountId: "default",
     conversationId: "500",
@@ -76,17 +103,10 @@ afterEach(async () => {
 describe("X account monitor", () => {
   it("carries a previous work session into a later mention without rerouting the front door", async () => {
     const workKey = "agent:worker:dashboard:existing-demo";
-    const completed = Promise.withResolvers<void>();
     const test = fixture({
       posts: [post("501", "10")],
       visibleSessionKey: workKey,
-      queue: createQueue<Payload>({
-        onCompleted: (id) => {
-          if (id === "502") {
-            completed.resolve();
-          }
-        },
-      }),
+      completeOn: "502",
     });
     test.start();
     await vi.advanceTimersByTimeAsync(0);
@@ -103,7 +123,7 @@ describe("X account monitor", () => {
       page([post("502", "10", "@roboclawbot update your demo")]),
     );
     await vi.advanceTimersByTimeAsync(60_000);
-    await completed.promise;
+    await test.completed;
     const followup = test.dispatch.mock.calls[1]![0];
     expect(followup.route).toEqual(first.route);
     expect(followup.ctxPayload.BodyForAgent).toContain("X work-session references");
@@ -118,120 +138,83 @@ describe("X account monitor", () => {
   });
 
   it.each([
-    "other account",
-    "other conversation",
-    "guest origin",
-    "guest turn",
-    "hidden helper",
-    "deleted",
-    "archived",
-    "draft",
-    "incognito",
-    "initializing",
-    "other source",
-    "not spawned",
-  ])("omits %s work-session references", async (reason) => {
-    const completed = Promise.withResolvers<void>();
-    const test = fixture({
-      posts: [post("502", reason === "guest turn" ? "20" : "10")],
-      cfg: reason === "guest turn" ? guestConfig() : config,
-      queue: createQueue<Payload>({ onCompleted: () => completed.resolve() }),
-    });
-    const key =
-      reason === "hidden helper"
-        ? "agent:maintainer:subagent:hidden"
-        : "agent:maintainer:dashboard:previous";
-    await registerWork(test, key, {
-      accountId: reason === "other account" ? "other" : "default",
-      conversationId: reason === "other conversation" ? "600" : "500",
-      senderTier: reason === "guest origin" ? "guest" : "maintainer",
-    });
-    if (reason !== "deleted") {
-      test.sessionEntries.set(key, {
-        sessionId: "previous",
-        updatedAt: 1,
-        createdVia: reason === "not spawned" ? "internal" : "spawn",
-        spawnedBy:
-          reason === "other source"
-            ? "agent:maintainer:x:group:600"
-            : "agent:maintainer:x:group:500",
-        ...(reason === "archived" ? { archivedAt: 1 } : {}),
-        ...(reason === "draft" ? { visibility: "draft" as const } : {}),
-        ...(reason === "incognito" ? { incognito: true as const } : {}),
-        ...(reason === "initializing" ? { initializationPending: true as const } : {}),
-      });
-    }
-    test.start();
-    await vi.advanceTimersByTimeAsync(0);
-    await completed.promise;
-    expect(test.dispatch).toHaveBeenCalledOnce();
-    expect(test.dispatch.mock.calls[0]![0].ctxPayload.BodyForAgent).not.toContain(
-      "X work-session references",
-    );
-  });
-
-  it.each([
-    ["self", "maintainer", true, false, false],
-    ["tree", "maintainer", true, false, true],
-    ["tree", "worker", true, false, false],
-    ["all", "worker", false, false, false],
-    ["all", "worker", true, true, false],
+    ["other account", { accountId: "other" }, {}],
+    ["other conversation", { conversationId: "600" }, {}],
+    ["guest origin", { senderTier: "guest" }, {}],
+    ["guest turn", {}, {}],
+    ["hidden helper", {}, {}],
+    ["deleted", {}, null],
+    ["archived", {}, { archivedAt: 1 }],
+    ["draft", {}, { visibility: "draft" }],
+    ["incognito", {}, { incognito: true }],
+    ["initializing", {}, { initializationPending: true }],
+    ["other source", {}, { spawnedBy: "agent:maintainer:x:group:600" }],
+    ["not spawned", {}, { createdVia: "internal" }],
+    ["self visibility", {}, {}, "maintainer", "self", true, false, false],
+    ["tree visibility", {}, {}, "maintainer", "tree", true, false, true],
+    ["cross-agent tree", {}, {}, "worker", "tree", true, false, false],
+    ["disabled a2a", {}, {}, "worker", "all", false, false, false],
+    ["sandboxed a2a", {}, {}, "worker", "all", true, true, false],
   ] as const)(
-    "respects visibility=%s target=%s a2a=%s sandbox=%s included=%s",
-    async (visibility, targetAgent, enabled, sandboxed, included) => {
-      const completed = Promise.withResolvers<void>();
-      const test = fixture({
-        posts: [post("502", "10")],
-        cfg: { ...config, tools: { sessions: { visibility }, agentToAgent: { enabled } } },
-        queue: createQueue<Payload>({ onCompleted: () => completed.resolve() }),
-      });
-      const key = "agent:" + targetAgent + ":dashboard:previous";
-      const source = "agent:maintainer:x:group:500";
-      await registerWork(test, key);
-      test.sessionEntries.set(key, {
-        sessionId: "previous",
-        updatedAt: 1,
-        createdVia: "spawn",
-        spawnedBy: source,
-      });
+    "filters work-session references: %s",
+    async (
+      reason,
+      origin,
+      entry,
+      agent = "maintainer",
+      visibility?: "self" | "tree" | "all",
+      enabled = true,
+      sandboxed = false,
+      included = false,
+    ) => {
+      const cfg = visibility
+        ? { ...config, tools: { sessions: { visibility }, agentToAgent: { enabled } } }
+        : reason === "guest turn"
+          ? guestConfig()
+          : config;
+      const test = fixture({ posts: [post("502", reason === "guest turn" ? "20" : "10")], cfg });
+      const key =
+        reason === "hidden helper"
+          ? "agent:maintainer:subagent:hidden"
+          : `agent:${agent}:dashboard:previous`;
+      await registerWork(test, key, origin, entry);
       if (sandboxed) {
-        test.sessionEntries.set(source, { sessionId: "source", updatedAt: 1, sandbox: "required" });
+        test.sessionEntries.set("agent:maintainer:x:group:500", {
+          sessionId: "source",
+          updatedAt: 1,
+          sandbox: "required",
+        });
       }
       test.start();
       await vi.advanceTimersByTimeAsync(0);
-      await completed.promise;
-      expect(test.dispatch.mock.calls[0]![0].ctxPayload.BodyForAgent?.includes(key)).toBe(included);
+      await test.completed;
+      expect(test.dispatch).toHaveBeenCalledOnce();
+      const body = test.dispatch.mock.calls[0]![0].ctxPayload.BodyForAgent;
+      if (included) {
+        expect(body).toContain(key);
+      } else {
+        expect(body).not.toContain("X work-session references");
+      }
     },
   );
 
   it("bounds references deterministically without treating a new topic as routed work", async () => {
-    const completed = Promise.withResolvers<void>();
     const test = fixture({
       posts: [post("502", "10", "@roboclawbot a new, unrelated topic"), post("501", "10")],
-      queue: createQueue<Payload>({
-        onCompleted: (id) => {
-          if (id === "502") {
-            completed.resolve();
-          }
-        },
-      }),
+      completeOn: "502",
     });
     for (let index = 9; index >= 0; index--) {
       const key = "agent:maintainer:dashboard:work-" + index;
-      await registerWork(test, key, {
-        postId: "499",
-        postUrl: "https://x.com/config_maintainer/status/499",
-      });
-      test.sessionEntries.set(key, {
-        sessionId: "work-" + index,
-        updatedAt: index,
-        createdVia: "spawn",
-        spawnedBy: "agent:maintainer:x:group:500",
-      });
+      await registerWork(
+        test,
+        key,
+        { postId: "499", postUrl: "https://x.com/config_maintainer/status/499" },
+        { updatedAt: index },
+      );
     }
     test.start();
     await vi.advanceTimersByTimeAsync(0);
-    await completed.promise;
+    await test.completed;
     const [first, second] = test.dispatch.mock.calls.map(([plan]) => plan);
     const context = second!.ctxPayload.BodyForAgent!.split("X work-session references")[1]!;
     expect(context).toBe(first!.ctxPayload.BodyForAgent!.split("X work-session references")[1]);
@@ -280,33 +263,21 @@ describe("X account monitor", () => {
         );
       const encoder = new TextEncoder();
       let stream!: ReadableStreamDefaultController<Uint8Array>;
-      test.api.openActivityStream.mockImplementationOnce(
-        async () =>
-          new Response(
-            new ReadableStream<Uint8Array>({
-              start(controller) {
-                stream = controller;
-              },
-            }),
-          ),
+      test.api.openActivityStream.mockResolvedValueOnce(
+        new Response(
+          new ReadableStream<Uint8Array>({
+            start(controller) {
+              stream = controller;
+            },
+          }),
+        ),
       );
       const running = test.start();
       let keepAlive: ReturnType<typeof setInterval> | undefined;
       try {
         await vi.advanceTimersByTimeAsync(0);
-        stream.enqueue(
-          encoder.encode(
-            `${JSON.stringify({
-              data: {
-                event_type: "post.mention.create",
-                payload: {
-                  ...mentions[0],
-                  entities: { mentions: [{ id: "100", username: "roboclawbot" }] },
-                },
-              },
-            })}\n`,
-          ),
-        );
+        const data = { event_type: "post.mention.create", payload: withRecipient(mentions[0]!) };
+        stream.enqueue(encoder.encode(`${JSON.stringify({ data })}\n`));
         await vi.advanceTimersByTimeAsync(0);
         expect(admitted).toEqual(["502"]);
         expect(test.replies.map((reply) => reply.parent)).toEqual(["502"]);
@@ -358,11 +329,7 @@ describe("X account monitor", () => {
         },
         { laneKey: "500" },
       );
-      const test = fixture({
-        posts: [],
-        queue,
-        cfg: guest ? guestConfig(1) : config,
-      });
+      const test = fixture({ posts: [], queue, cfg: guest ? guestConfig(1) : config });
       const guestUsage = openXGuestUsage(test.runtime);
       await test.api.spend.charge(99_995_000);
       let lookups = 0;
@@ -378,12 +345,7 @@ describe("X account monitor", () => {
           }
           lookups++;
           return Response.json({
-            data: [
-              {
-                ...post("501", authorId),
-                entities: { mentions: [{ id: recipientId, username: "bot" }] },
-              },
-            ],
+            data: [withRecipient(post("501", authorId), recipientId, "bot")],
             includes: {
               users: [{ id: authorId, username: guest ? "guest" : "config_maintainer" }],
             },
@@ -402,10 +364,7 @@ describe("X account monitor", () => {
       await blocked.promise;
       expect(test.dispatch).not.toHaveBeenCalled();
       expect(lookups).toBe(0);
-      expect(await guestUsage.counts("default")).toEqual({
-        admittedToday: 0,
-        rateLimitedToday: 0,
-      });
+      expect(await guestUsage.counts("default")).toEqual({ admittedToday: 0, rateLimitedToday: 0 });
       expect(running.status()).toMatchObject({
         spend: { dayUsd: 100, dailyLimitUsd: 100, monthlyLimitUsd: 1000 },
       });
@@ -426,12 +385,7 @@ describe("X account monitor", () => {
 
   it("uses a binding published while fetching the thread for the incoming turn", async () => {
     setRuntimeConfigSnapshot(config);
-    const completed = Promise.withResolvers<void>();
-    const test = fixture({
-      posts: [post("501", "10")],
-      cfg: getRuntimeConfigSnapshot() ?? config,
-      queue: createQueue<Payload>({ onCompleted: () => completed.resolve() }),
-    });
+    const test = fixture({ posts: [post("501", "10")], cfg: getRuntimeConfigSnapshot() ?? config });
     test.api.searchConversation.mockImplementationOnce(async () => {
       setRuntimeConfigSnapshot({
         ...config,
@@ -446,7 +400,7 @@ describe("X account monitor", () => {
       return page([post("500", "10", "Original thread")]);
     });
     test.start();
-    await completed.promise;
+    await test.completed;
     expect(test.dispatch).toHaveBeenCalledOnce();
     expect(test.dispatch.mock.calls[0]![0].route).toEqual({
       agentId: "updated",
@@ -496,16 +450,12 @@ describe("X account monitor", () => {
       cursor: "503",
       mode: "poll",
     });
-    expect(test.replies).toEqual([
-      {
-        parent: "501",
+    expect(test.replies).toEqual(
+      ["501", "503"].map((parent) => ({
+        parent,
         text: "I am on it.\nWork session (sign-in required): https://example.test/work/42",
-      },
-      {
-        parent: "503",
-        text: "I am on it.\nWork session (sign-in required): https://example.test/work/42",
-      },
-    ]);
+      })),
+    );
     const turn = test.dispatch.mock.calls[0]![0];
     expect(turn.route).toEqual({
       agentId: "maintainer",
@@ -525,13 +475,14 @@ describe("X account monitor", () => {
     });
     expect(turn.ctxPayload.BodyForAgent).toContain("Original thread");
     expect(turn.ctxPayload.BodyForAgent).toContain("[triggering mention]");
-    expect(
-      test.resolveStable.mock.calls.some(
-        ([input]) =>
-          input.contextBinding?.sessionKey === "agent:maintainer:x:group:500" &&
-          input.contextBinding.inboundEventKind === "user_request",
-      ),
-    ).toBe(true);
+    expect(test.resolveStable).toHaveBeenCalledWith(
+      expect.objectContaining({
+        contextBinding: expect.objectContaining({
+          sessionKey: "agent:maintainer:x:group:500",
+          inboundEventKind: "user_request",
+        }),
+      }),
+    );
     expect(test.logger.warn).not.toHaveBeenCalled();
     first.abort.abort();
     await first.run;
@@ -582,10 +533,7 @@ describe("X direct delivery admission", () => {
     { label: "unmentioned post", authorId: "10", mentions: false, error: "only replies to posts" },
     { label: "unknown author", authorId: "99", mentions: true, error: "no longer allowed" },
   ])("refuses $label without posting", async ({ authorId, mentions, error }) => {
-    const target = post("501", authorId);
-    if (mentions) {
-      target.entities = { mentions: [{ id: "100", username: "roboclawbot" }] };
-    }
+    const target = mentions ? withRecipient(post("501", authorId)) : post("501", authorId);
     const test = fixture({ posts: [target] });
     await expect(
       sendXDelivery({ cfg: config, to: "https://x.com/person/status/501", text: "Reply" }),
