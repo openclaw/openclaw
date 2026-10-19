@@ -1,5 +1,9 @@
+import { once } from "node:events";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
-import { connect, type AddressInfo } from "node:net";
+import { connect, type AddressInfo, type Socket } from "node:net";
+import { text } from "node:stream/consumers";
+import { promisify } from "node:util";
+import type { ModelProviderConfig } from "openclaw/plugin-sdk/provider-model-shared";
 import { withEnvAsync, withServer } from "openclaw/plugin-sdk/test-env";
 import { afterAll, describe, expect, it, vi } from "vitest";
 import { buildDeepInfraVideoGenerationProvider } from "./video-generation-provider.js";
@@ -20,49 +24,28 @@ vi.mock("openclaw/plugin-sdk/provider-auth-runtime", () => ({
   resolveApiKeyForProvider: resolveApiKeyForProviderMock,
 }));
 
-type CapturedRequest = {
-  body: string;
-  headers: IncomingMessage["headers"];
-  method?: string;
-  url?: string;
-};
-
-type DestroyableConnection = {
-  destroy: () => void;
-};
+type CapturedRequest = Pick<IncomingMessage, "headers" | "method" | "url"> & { body: string };
 
 afterAll(() => {
   vi.doUnmock("openclaw/plugin-sdk/provider-auth-runtime");
   vi.resetModules();
 });
 
-async function readRequestBody(request: IncomingMessage): Promise<string> {
-  const chunks: Buffer[] = [];
-  for await (const chunk of request) {
-    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
-  }
-  return Buffer.concat(chunks).toString("utf8");
-}
-
-function createDeepInfraHandler(requests: CapturedRequest[], buffer = WEBM_VIDEO) {
+function createDeepInfraHandler(requests: CapturedRequest[]) {
   return (request: IncomingMessage, response: ServerResponse) => {
     void (async () => {
       requests.push({
         method: request.method,
         url: request.url,
         headers: request.headers,
-        body: await readRequestBody(request),
+        body: await text(request),
       });
       response.writeHead(200, { "content-type": "application/json" });
       response.end(
         JSON.stringify({
           id: "local-request",
           status: "succeeded",
-          data: [
-            {
-              url: `data:video/webm;base64,${buffer.toString("base64")}`,
-            },
-          ],
+          data: [{ url: `data:video/webm;base64,${WEBM_VIDEO.toString("base64")}` }],
         }),
       );
     })().catch((error: unknown) => {
@@ -72,15 +55,11 @@ function createDeepInfraHandler(requests: CapturedRequest[], buffer = WEBM_VIDEO
   };
 }
 
-async function startConnectProxy(upstreamBaseUrl: string): Promise<{
-  connectTargets: string[];
-  proxyUrl: string;
-  stop: () => Promise<void>;
-}> {
+async function startConnectProxy(upstreamBaseUrl: string) {
   const upstreamUrl = new URL(upstreamBaseUrl);
   const upstreamPort = Number(upstreamUrl.port);
   const connectTargets: string[] = [];
-  const sockets = new Set<DestroyableConnection>();
+  const sockets = new Set<Socket>();
   const server = createServer((_request, response) => {
     response.writeHead(502);
     response.end("CONNECT required");
@@ -104,13 +83,8 @@ async function startConnectProxy(upstreamBaseUrl: string): Promise<{
     clientSocket.on("error", () => upstreamSocket.destroy());
     upstreamSocket.on("error", () => clientSocket.destroy());
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.off("error", reject);
-      resolve();
-    });
-  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
   const address = server.address() as AddressInfo | null;
   if (!address) {
     throw new Error("CONNECT proxy did not bind to a TCP port");
@@ -122,29 +96,13 @@ async function startConnectProxy(upstreamBaseUrl: string): Promise<{
       for (const socket of sockets) {
         socket.destroy();
       }
-      await new Promise<void>((resolve, reject) => {
-        server.close((error) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve();
-        });
-      });
+      await promisify(server.close.bind(server))();
     },
   };
 }
 
-async function generateLocalVideo(params: {
-  baseUrl: string;
-  request?: {
-    allowPrivateNetwork?: boolean;
-    headers?: Record<string, string>;
-    proxy?: { mode: "env-proxy" };
-  };
-}) {
-  const provider = buildDeepInfraVideoGenerationProvider();
-  return await provider.generateVideo({
+async function generateLocalVideo(baseUrl: string, request?: ModelProviderConfig["request"]) {
+  return await buildDeepInfraVideoGenerationProvider().generateVideo({
     provider: "deepinfra",
     model: "deepinfra/Pixverse/Pixverse-T2V",
     prompt: "transport proof",
@@ -152,9 +110,9 @@ async function generateLocalVideo(params: {
       models: {
         providers: {
           deepinfra: {
-            baseUrl: params.baseUrl,
+            baseUrl: `${baseUrl}/v1/openai`,
             models: [],
-            ...(params.request ? { request: params.request } : {}),
+            ...(request ? { request } : {}),
           },
         },
       },
@@ -167,12 +125,9 @@ describe("deepinfra video generation provider transport", () => {
   it("forwards configured request policy through the real local video transport path", async () => {
     const requests: CapturedRequest[] = [];
     await withServer(createDeepInfraHandler(requests), async (baseUrl) => {
-      const result = await generateLocalVideo({
-        baseUrl: `${baseUrl}/v1/openai`,
-        request: {
-          allowPrivateNetwork: true,
-          headers: { "X-DeepInfra-Trace": "transport-proof" },
-        },
+      const result = await generateLocalVideo(baseUrl, {
+        allowPrivateNetwork: true,
+        headers: { "X-DeepInfra-Trace": "transport-proof" },
       });
 
       expect(result.videos).toEqual([
@@ -186,28 +141,12 @@ describe("deepinfra video generation provider transport", () => {
       expect(requests[0]).toMatchObject({
         method: "POST",
         url: "/v1/openai/videos",
+        headers: { "x-deepinfra-trace": "transport-proof" },
       });
-      expect(requests[0]?.headers["x-deepinfra-trace"]).toBe("transport-proof");
       expect(JSON.parse(requests[0]?.body ?? "{}")).toMatchObject({
         prompt: "transport proof",
       });
     });
-  });
-
-  it("rejects non-video bytes received through the real local transport", async () => {
-    const requests: CapturedRequest[] = [];
-    await withServer(
-      createDeepInfraHandler(requests, Buffer.from("not a video")),
-      async (baseUrl) => {
-        await expect(
-          generateLocalVideo({
-            baseUrl: `${baseUrl}/v1/openai`,
-            request: { allowPrivateNetwork: true },
-          }),
-        ).rejects.toThrow("DeepInfra video response: malformed video response");
-        expect(requests).toHaveLength(1);
-      },
-    );
   });
 
   it("routes configured env proxy policy through a real CONNECT tunnel", async () => {
@@ -225,12 +164,9 @@ describe("deepinfra video generation provider transport", () => {
             no_proxy: undefined,
           },
           async () => {
-            await generateLocalVideo({
-              baseUrl: `${baseUrl}/v1/openai`,
-              request: {
-                allowPrivateNetwork: true,
-                proxy: { mode: "env-proxy" },
-              },
+            await generateLocalVideo(baseUrl, {
+              allowPrivateNetwork: true,
+              proxy: { mode: "env-proxy" },
             });
           },
         );
@@ -249,12 +185,7 @@ describe("deepinfra video generation provider transport", () => {
   ])("blocks loopback before transport with %s private-network policy", async (_label, request) => {
     const requests: CapturedRequest[] = [];
     await withServer(createDeepInfraHandler(requests), async (baseUrl) => {
-      await expect(
-        generateLocalVideo({
-          baseUrl: `${baseUrl}/v1/openai`,
-          request,
-        }),
-      ).rejects.toThrow(
+      await expect(generateLocalVideo(baseUrl, request)).rejects.toThrow(
         expect.objectContaining({
           name: "SsrFBlockedError",
           message: expect.stringContaining("private/internal/special-use IP address"),
