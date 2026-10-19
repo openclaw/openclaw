@@ -140,13 +140,12 @@ export function loadControlUiSourceCatalog(): TranslationMap {
     }
   }
   const sessionsView: TranslationMap = {};
-  for (const [key, value] of Object.entries(en.sessionsView)) {
+  for (const [key, value] of Object.entries(
+    registerSessionOrganizationEnglish.catalog.sessionsView,
+  )) {
     sessionsView[key] = value;
     if (key === "searchPlaceholder") {
       Object.assign(sessionsView, registerCommandPaletteEnglish.catalog.sessionsView);
-    }
-    if (key === "archiveSession") {
-      Object.assign(sessionsView, registerSessionOrganizationEnglish.catalog.sessionsView);
     }
     if (key === "assignToMe") {
       Object.assign(sessionsView, registerSessionPeopleEnglish.catalog.sessionsView);

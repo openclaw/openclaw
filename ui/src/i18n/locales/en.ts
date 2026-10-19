@@ -117,7 +117,93 @@ export const en: TranslationMap & {
     placeholder: string;
     categories: TranslationMap & { navigation: string };
   };
-  sessionsView: TranslationMap;
+  sessionsView: TranslationMap &
+    Record<
+      | "pullRequestCount"
+      | "subagentPrefix"
+      | "automationPrefix"
+      | "actionRequiresConnection"
+      | "actionUnavailable"
+      | "actionRequiresScope"
+      | "actionRequiresOwnership"
+      | "draftCleanupFailed"
+      | "createdBy"
+      | "ownedBy"
+      | "archivedBy"
+      | "viewingNow"
+      | "owners"
+      | "allOwners"
+      | "involvingMe"
+      | "withParticipant"
+      | "withMoreParticipants"
+      | "snoozeWakes"
+      | "snoozeTomorrowTime"
+      | "user"
+      | "assistant"
+      | "opensAsDashboard"
+      | "approvalNeeded"
+      | "messageNeedsAttention"
+      | "messagesNeedAttention"
+      | "unsentDraft"
+      | "noArchivedSessions"
+      | "status"
+      | "statusLive"
+      | "statusIdle"
+      | "statusUnknown"
+      | "statusQueued"
+      | "statusRunning"
+      | "statusDone"
+      | "statusFailed"
+      | "statusInterrupted"
+      | "statusKilled"
+      | "statusTimeout"
+      | "waitingForAnswer"
+      | "waitingForApproval"
+      | "questionsNeedAnswer"
+      | "approvalsNeedApproval"
+      | "attentionMore"
+      | "runFailedReason"
+      | "childRunFailedReason"
+      | "runErrorTimedOut"
+      | "runErrorUnknown"
+      | "attentionRequired"
+      | "openSession"
+      | "provider"
+      | "lastActive"
+      | "activeRun"
+      | "subagentsWorking"
+      | "showChildSessions"
+      | "hideChildSessions"
+      | "childSessions"
+      | "showMoreChildren"
+      | "archived"
+      | "unread"
+      | "automationAttached"
+      | "incognito"
+      | "incognitoLabel"
+      | "incognitoDescription"
+      | "incognitoLimits"
+      | "cloudWorkerPlacement"
+      | "placementWorkspaceConflict"
+      | "placementWorkspaceConflicts"
+      | "cloudWorkerDiskWarning"
+      | "cloudWorkerDiskCritical"
+      | "cloudWorkerDescendantConflict"
+      | "cloudWorkerDescendantConflicts"
+      | "sessionColor"
+      | "pinSession"
+      | "unpinSession"
+      | "forkedSession"
+      | "archiveSession"
+      | "restoreSession"
+      | "deleteSessionStale"
+      | "deleteSessionsStale"
+      | "groupMenu"
+      | "newSessionInGroup"
+      | "groupDefaultsStale"
+      | "moveToTopLevel",
+      string
+    > & { colors: TranslationMap };
   skillWorkshop: TranslationMap;
   systems: TranslationMap;
   talkPage: TranslationMap;
@@ -618,153 +704,32 @@ export const en: TranslationMap & {
   },
   sessionsView: {
     pullRequestCount: "{count} pull requests",
-    advanced: "Advanced",
-    copyDetails: "Copy details",
-    copyLink: "Copy link",
-    communication: {
-      title: "Cross-session messaging",
-      send: "Send messages",
-      receive: "Receive messages",
-      always: "Always",
-      ask: "Ask",
-      never: "Never",
-      default: "default",
-      sendDescription:
-        "Allow this session to initiate messages to other sessions. Ask requires human approval; Never blocks them.",
-      receiveDescription:
-        "Allow other sessions to initiate messages to this session. Ask requires human approval; Never blocks them.",
-      resetDescription: "Use the configured defaults for sending and receiving messages.",
-    },
     subagentPrefix: "Subagent:",
     automationPrefix: "Automation:",
     actionRequiresConnection: "Connect to the Gateway to change sessions.",
     actionUnavailable: "This Gateway does not support this session action.",
     actionRequiresScope: "This action requires {scope} access.",
     actionRequiresOwnership: "Only the session creator or an admin can make this change.",
-    deletePreservedReasons: {
-      "owner-mismatch": "owned elsewhere",
-      busy: "live run or cleanup active",
-      "foreign-lock": "foreign Git lock",
-      "snapshot-failed": "OpenClaw could not create a safety snapshot",
-      "cleanup-failed": "cleanup failed",
-    },
     draftCleanupFailed: "Session deleted; browser draft remains. Clear site data.",
-    title: "Sessions",
-    subtitle: "Browse sessions and manage per-session overrides.",
-    store: "Store: {path}",
-    active: "Updated within",
-    limit: "Limit",
     createdBy: "Created by {name}",
     ownedBy: "Owned by {name}",
     archivedBy: "Archived by {name}",
-    archiveReason: "Archive reason",
-    archiveReasonManual: "Archived manually",
-    archiveReasonAgeRetention: "Automatically archived by age retention",
-    archiveReasonActiveSessionCap:
-      "Automatically archived because the active-session limit was reached",
-    archiveReasonStaleDashboard: "Automatically archived after dashboard inactivity",
-    archiveReasonRestartRecovery: "Archived when a replacement session was recovered",
     viewingNow: "viewing now",
     owners: "Owners",
     allOwners: "All owners",
     involvingMe: "Involving me",
-    hideFromInvolvingMe: "Hide from Involving me",
-    showInInvolvingMe: "Show in Involving me",
-    specificOwner: "Specific owner",
-    specificOwnerAvailable: "Specific owner: {count} available",
-    specificOwnerSelected: "Specific owner: {name}",
-    ownerYou: "{name} (You)",
     withParticipant: "with {name}",
     withMoreParticipants: "+{count} more",
-    assignToMe: "Me",
-    assignTo: "Assign to…",
-    filterControls: "Session filters",
-    filters: "Filters",
-    sourceFilters: "Session source filters",
-    global: "Global",
-    unknown: "Unknown",
-    sessionState: "Session state",
-    all: "All",
-    snooze: "Snooze",
-    wakeSession: "Wake session",
-    snoozeChooseTime: "Choose another time",
-    snoozeCustom: "Custom",
-    snoozeDateTime: "Date and time",
-    snoozeLocalTime: "Your local time ({zone})",
-    snoozeFutureRequired: "Choose a date and time in the future.",
-    snoozeHour: "In 1 hour",
-    snoozeThreeHours: "In 3 hours",
-    snoozeEvening: "This evening",
-    snoozeTomorrow: "Tomorrow",
-    snoozeNextWeek: "Next week",
-    snoozed: "Snoozed",
     snoozeWakes: "Wakes {time}",
     snoozeTomorrowTime: "tomorrow {time}",
-    sessionArchived: "Session archived",
-    archiving: "Archiving…",
-    deleteAllArchived: "Delete all archived…",
-    deleteAllArchivedConfirm:
-      "Delete {count} archived sessions and their transcripts? Any attached workers will be stopped safely first.",
-    activeTooltip: "Loads sessions updated in the last {count} minutes.",
-    limitTooltip: "Max sessions to load.",
-    globalTooltip: "Include global sessions.",
-    unknownTooltip: "Include unknown sessions.",
-    archivedOnlyTooltip: "Show only archived sessions.",
-    minutesPlaceholder: "min",
-    searchPlaceholder: "Filter by key, agent, label, kind…",
-    clearSearch: "Clear search",
     user: "User",
     assistant: "Assistant",
-    selected: "{count} selected",
-    deleteSelected: "Delete",
-    selectAllOnPage: "Select all on page",
-    selectSession: "Select session",
-    optionalPlaceholder: "(optional)",
-    session: "Session",
-    agent: "Agent",
-    key: "Key",
-    label: "Label",
-    kind: "Kind",
-    updated: "Updated",
-    tokens: "Tokens",
-    goal: "Goal",
-    goalNote: "Goal note",
-    thinking: "Thinking",
-    fast: "Fast",
-    verbose: "Verbose",
-    reasoning: "Reasoning",
-    actions: "Actions",
-    addToWorkboard: "Add to Workboard",
-    openWorkboardCard: "Open Workboard card",
     opensAsDashboard: "Opens as dashboard",
     approvalNeeded: "Approval needed",
     messageNeedsAttention: "{count} message needs attention",
     messagesNeedAttention: "{count} messages need attention",
     unsentDraft: "Unsent draft",
-    noSessions: "No sessions found.",
-    noActiveSessions: "No active sessions.",
     noArchivedSessions: "No archived sessions.",
-    noSessionsMatchFilters: "No sessions match your filters.",
-    pagination: "{start}-{end} of {total} rows",
-    pageSize: "Rows per page",
-    rowsPerPage: "{count} per page",
-    showAll: "Show all",
-    inherit: "inherit",
-    offExplicit: "off (explicit)",
-    auto: "auto",
-    on: "on",
-    off: "off",
-    full: "full",
-    stream: "stream",
-    contextUsage: "{percent}% of context used ({used} / {context} tokens)",
-    promptBudgetUsage: "{percent}% of last-run prompt budget used ({used} / {context} tokens)",
-    promptBudgetUsageApprox:
-      "Approximately {percent}% of last-run prompt budget used ({used} / {context} tokens)",
-    contextUsageApprox: "~{percent}% of context used ({used} / {context} tokens, approximate)",
-    showSessionDetails: "Show session details for {count}",
-    hideSessionDetails: "Hide session details for {count}",
-    sessionDetails: "Session details",
-    overrides: "Overrides",
     status: "Status",
     statusLive: "Live",
     statusIdle: "Idle",
@@ -787,17 +752,8 @@ export const en: TranslationMap & {
     runErrorUnknown: "Unknown error",
     attentionRequired: "Session needs attention",
     openSession: "Open session",
-    openFailed: "Could not open this session. Try again.",
-    model: "Model",
     provider: "Provider",
-    runtime: "Runtime",
-    runDuration: "Run duration",
     lastActive: "Last active {time}",
-    surface: "Surface",
-    subject: "Subject",
-    room: "Room",
-    space: "Space",
-    sessionId: "Session ID",
     activeRun: "Active run",
     subagentsWorking: "Subagents working",
     showChildSessions: "Show {count} child sessions for {session}",
@@ -805,7 +761,6 @@ export const en: TranslationMap & {
     childSessions: "Child sessions",
     showMoreChildren: "Show {count} more",
     archived: "Archived",
-    pinned: "Pinned",
     unread: "Unread",
     automationAttached: "Automation attached",
     incognito: "Incognito session",
@@ -821,11 +776,6 @@ export const en: TranslationMap & {
     cloudWorkerDiskCritical: "Cloud session disk space is critically low",
     cloudWorkerDescendantConflict: "Cloud worker child: 1 workspace conflict",
     cloudWorkerDescendantConflicts: "Cloud worker children: {count} workspace conflicts",
-    renameSession: "Rename session",
-    renameSessionMenu: "Rename…",
-    setIconMenu: "Set icon",
-    setColorMenu: "Color",
-    setIconColorMenu: "Icon & color",
     sessionColor: "Session color: {color}",
     colors: {
       red: "Red",
@@ -837,118 +787,18 @@ export const en: TranslationMap & {
       pink: "Pink",
       cyan: "Cyan",
     },
-    iconEmojiSection: "Emoji",
-    iconGlyphSection: "Icons",
-    noIcon: "No icon",
-    noColor: "No color",
-    customEmojiCell: "Custom emoji…",
-    customEmojiTitle: "Custom emoji",
-    customEmojiSet: "Set",
-    customEmojiHint: "Any emoji works. Press {shortcut} for the system emoji picker.",
-    customEmojiHintNoShortcut: "Any emoji works.",
-    customIconCell: "Custom icon…",
-    customIconTitle: "Custom icon",
-    customIconHint: "Paste an emoji or SVG. Press {shortcut} for the system emoji picker.",
-    customIconHintNoShortcut: "Paste an emoji or SVG.",
-    removeIcon: "Remove icon",
     pinSession: "Pin session",
-    pinRootSessionsOnly: "Only root sessions can be pinned; pin the parent session instead.",
     unpinSession: "Unpin session",
-    markUnread: "Mark as unread",
-    markRead: "Mark as read",
-    markUnreadCount: "Mark {count} as unread",
-    markReadCount: "Mark {count} as read",
-    forkSession: "Fork conversation",
-    forkFromLastCompleted: "Fork from last completed message",
     forkedSession: "Forked session",
-    copySessionId: "Session ID",
-    copySessionLink: "Session link",
-    copySessionPreviewLink: "Preview link",
-    copyMarkdown: "Conversation as Markdown",
-    openNewTab: "New tab",
-    openNewWindow: "New window",
-    splitBelow: "Split below",
-    workspaceEditors: "Workspace · editor",
-    resetAppearance: "Reset to default",
-    copyTranscriptChanged: "Conversation changed while copying. Try again.",
-    openWindowBlocked: "Allow pop-ups for this site, then try again.",
-    splitUnavailable: "Open a conversation on a wide screen to use split view.",
-    openPullRequest: "Open PR",
-    openInEditorMenu: "Open in",
     archiveSession: "Archive session",
-    archiveSessionCount: "Archive {count}",
     restoreSession: "Restore session",
-    restoreSessionCount: "Restore {count}",
-    moveSession: "Move session…",
-    moveSessionTitle: "Move session",
-    moveSessionDescription: 'Choose where "{session}" should continue.',
-    moveSessionNoReplayWarning:
-      "OpenClaw safely reconciles the current workspace before moving. Active work is never replayed.",
-    moveSessionActiveRunWarning:
-      "The active turn will be interrupted. Partial output is not replayed; send the next turn again after the move.",
-    moveSessionAction: "Move session",
-    moveSessionCatalogFailed: "Could not load available destinations.",
-    moveSessionFailed: "Move failed",
-    moveSessionGatewayTarget: "Gateway",
-    movingSession: "Moving to {target}…",
-    movingSessionGeneric: "Moving session…",
-    stopCloudWorker: "Stop cloud worker…",
-    initialTurnPausedByWorkerStop:
-      "Worker stop requested. Review the initial message before retrying.",
-    deleteSessionMenu: "Delete…",
-    deleteSessionCount: "Delete {count}…",
     deleteSessionStale: 'Gateway connection replaced before "{session}" was deleted. Try again.',
     deleteSessionsStale:
       "Gateway connection replaced before {count} sessions were deleted. Try again.",
-    groupBy: "Group by",
-    groupByNone: "None",
-    groupByCategory: "Custom groups",
-    groupByPerson: "Person",
-    showSessionPreview: "Show message preview",
-    hideEmptyGroups: "Hide empty groups",
-    hideEmptyGroupsSelected: "Hide empty groups: {mode}",
-    emptyGroupsWhenFiltering: "When filtering",
-    emptyGroupsAlways: "Always",
-    emptyGroupsNever: "Never",
-    showCronSessions: "Show automation sessions",
-    showSystemSessions: "Show system sessions",
-    groupByChannel: "Channel",
-    groupByKind: "Kind",
-    groupByAgent: "Agent",
-    groupByDate: "Date",
-    group: "Group",
-    ungrouped: "Ungrouped",
-    newGroup: "New group",
-    newGroupPrompt: "New group name",
-    newGroupTitle: "New group",
-    newGroupCreate: "Create group",
-    newGroupFailed: "Could not create the group.",
-    newGroupStale: "Gateway connection replaced before the group was saved. Try again.",
-    moveToGroup: "Move session to a group",
-    moveToGroupMenu: "Move to group",
-    moveToGroupMenuCount: "Move {count} to group",
-    removeFromGroup: "Remove from group",
-    moveBackToGroups: "Move back to Groups",
     groupMenu: "Group options for {group}",
     newSessionInGroup: "New session in {group}",
-    groupDefaultsMenu: "New session defaults",
-    groupDefaultsFailed: "Could not save the group defaults.",
     groupDefaultsStale: "Gateway connection replaced before the defaults were saved. Try again.",
-    renameGroupMenu: "Rename group",
-    renameGroupTitle: 'Rename group "{group}"',
-    groupNameLabel: "Group name",
-    deleteGroupMenu: "Delete group",
-    deleteGroupTitle: 'Delete group "{group}"',
-    deleteGroupConfirm: "The group is removed. Its sessions move back to the session list.",
-    deleteGroupStale: 'Gateway connection replaced before "{group}" was deleted. Try again.',
-    dragSessionHint: "Drag session to move between groups",
-    dateToday: "Today",
-    dateYesterday: "Yesterday",
-    dateThisWeek: "This week",
-    dateOlder: "Older",
-    dateNoActivity: "No activity",
-    groupRowCount: "{count} sessions",
-    groupRowCountOne: "{count} session",
+    moveToTopLevel: "Move to top level",
   },
   agents: {
     noAgents: "No agents",
