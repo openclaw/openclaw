@@ -84,15 +84,17 @@ it.each(["connected", "throw", "abort", "error", "message rejection"] as const)(
       );
       createZaloMock.mockResolvedValue({ login: async () => sessionApi(listener) });
       const onError = vi.fn();
+      const start = (
+        abortSignal: AbortSignal,
+        onMessage: Parameters<typeof startZaloListener>[0]["onMessage"] = vi.fn(),
+      ) => startZaloListener({ accountId: "default", abortSignal, onMessage, onError });
       try {
-        const run = startZaloListener({
-          accountId: "default",
-          abortSignal: abort.signal,
-          onMessage: vi.fn(async () => {
+        const run = start(
+          abort.signal,
+          vi.fn(async () => {
             throw failure;
           }),
-          onError,
-        });
+        );
         if (event === "throw") {
           await expect(run).rejects.toBe(failure);
         } else {
@@ -112,12 +114,7 @@ it.each(["connected", "throw", "abort", "error", "message rejection"] as const)(
         expect(listener.eventNames()).toEqual([]);
         const next = new TestListener();
         createZaloMock.mockResolvedValue({ login: async () => sessionApi(next) });
-        const handle = await startZaloListener({
-          accountId: "default",
-          abortSignal: new AbortController().signal,
-          onMessage: vi.fn(),
-          onError,
-        });
+        const handle = await start(new AbortController().signal);
         expect(next.start).toHaveBeenCalledOnce();
         handle.stop();
       } finally {

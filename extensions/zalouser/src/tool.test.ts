@@ -48,13 +48,7 @@ async function execute(
 }
 
 beforeEach(() => {
-  send.mockReset();
-  image.mockReset();
-  link.mockReset();
-  auth.mockReset();
-  me.mockReset();
-  friends.mockReset();
-  groups.mockReset();
+  [send, image, link, auth, me, friends, groups].forEach((mock) => mock.mockReset());
 });
 
 it.each([
@@ -157,10 +151,7 @@ it.each([
   };
   await execute(
     { action: "image", threadId: "123", url: "https://example.com/image.png", profile },
-    {
-      runtimeConfig,
-      deliveryContext: { channel: "zalouser", accountId: "support" },
-    },
+    { runtimeConfig, deliveryContext: { channel: "zalouser", accountId: "support" } },
   );
   expect(image).toHaveBeenCalledWith(
     "123",

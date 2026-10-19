@@ -21,10 +21,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
   }),
 );
 
-vi.mock("./zca-client.js", () => ({
-  createZalo: createZaloMock,
-  TextStyle: { Indent: 9 },
-}));
+vi.mock("./zca-client.js", () => ({ createZalo: createZaloMock, TextStyle: { Indent: 9 } }));
 
 import { zalouserMessageAdapter } from "./channel.adapters.js";
 import { setZalouserRuntime } from "./runtime.js";
@@ -134,9 +131,7 @@ it("keeps the 2,000-code-unit transport payload UTF-16 well-formed", async () =>
 
   await withStoredSession("payload-bounds", api, async () => {
     await expect(
-      sendZaloTextMessage("thread-1", `${"x".repeat(1_999)}🚀tail`, {
-        profile: "payload-bounds",
-      }),
+      sendZaloTextMessage("thread-1", `${"x".repeat(1_999)}🚀tail`, { profile: "payload-bounds" }),
     ).resolves.toMatchObject({
       messageId: "message-1",
       receipt: { platformMessageIds: ["message-1"] },
