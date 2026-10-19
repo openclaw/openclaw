@@ -48,12 +48,9 @@ export function countActiveStatusAgents(params: {
   ).length;
 }
 
-export function buildStatusAllAgentsValue(params: {
-  agentStatus: AgentStatusLike;
-  activeThresholdMs?: number;
-}) {
-  const activeAgents = countActiveStatusAgents(params);
-  return `${params.agentStatus.agents.length} total · ${params.agentStatus.bootstrapPendingCount} bootstrapping · ${activeAgents} active · ${params.agentStatus.totalSessions} sessions`;
+export function buildStatusAllAgentsValue(agentStatus: AgentStatusLike) {
+  const activeAgents = countActiveStatusAgents({ agentStatus });
+  return `${agentStatus.agents.length} total · ${agentStatus.bootstrapPendingCount} bootstrapping · ${activeAgents} active · ${agentStatus.totalSessions} sessions`;
 }
 
 export function buildStatusSecretsValue(count: number) {

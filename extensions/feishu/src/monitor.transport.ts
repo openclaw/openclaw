@@ -41,7 +41,7 @@ import {
   wsClients,
 } from "./monitor.state.js";
 import type { ResolvedFeishuAccount } from "./types.js";
-import { DEFAULT_FEISHU_WEBHOOK_PATH, normalizeFeishuWebhookPath } from "./webhook-path.js";
+import { normalizeFeishuWebhookPath } from "./webhook-path.js";
 import {
   describeFeishuWebhookPathConflict,
   resolveFeishuLegacyWebhookListener,
@@ -555,7 +555,7 @@ export async function monitorWebhook(params: MonitorTransportParams): Promise<vo
   if (!encryptKey) {
     throw new Error(`Feishu account "${accountId}" webhook mode requires encryptKey`);
   }
-  const rawPath = account.config.webhookPath ?? DEFAULT_FEISHU_WEBHOOK_PATH;
+  const rawPath = account.config.webhookPath;
   if (normalizeFeishuWebhookPath(rawPath) !== rawPath) {
     throw new Error(
       `Feishu account "${accountId}" webhookPath must be a normalized HTTP request path; ` +

@@ -350,6 +350,8 @@ describe.skipIf(!connection)("PostgreSQL memory search worker", () => {
       keyword: keyword.body.rows,
       vectorWeight: 0.7,
       textWeight: 0.3,
+      mmr: { enabled: false, lambda: 0.7 },
+      temporalDecay: { enabled: false, halfLifeDays: 30 },
     });
     expect(merged.map((row) => row.path)).toEqual([
       "memory/semantic.md",

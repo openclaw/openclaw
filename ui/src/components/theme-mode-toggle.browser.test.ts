@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { ThemeMode } from "../app/theme.ts";
-import type { ThemeModeChangeDetail } from "./theme-mode-toggle.ts";
 import "./theme-mode-toggle.ts";
 
 type ThemeModeToggleElement = HTMLElement & {
   mode: ThemeMode;
+  onChange: (mode: ThemeMode, element: HTMLElement) => void;
   updateComplete: Promise<boolean>;
 };
 
@@ -12,10 +12,10 @@ describe("theme mode toggle", () => {
   it("defaults to system and cycles one button through every mode", async () => {
     const toggle = document.createElement("openclaw-theme-mode-toggle") as ThemeModeToggleElement;
     const modes: ThemeMode[] = [];
-    toggle.addEventListener("theme-change", ((event: CustomEvent<ThemeModeChangeDetail>) => {
-      modes.push(event.detail.mode);
-      toggle.mode = event.detail.mode;
-    }) as EventListener);
+    toggle.onChange = (mode) => {
+      modes.push(mode);
+      toggle.mode = mode;
+    };
     document.body.append(toggle);
 
     try {

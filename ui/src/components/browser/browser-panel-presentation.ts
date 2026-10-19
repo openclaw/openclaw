@@ -59,7 +59,7 @@ export function createBrowserPanelPresentation(
   let consumedPreferredRevision: string | undefined;
   let completion: Promise<boolean> = Promise.resolve(true);
   let complete: ((value: boolean) => void) | undefined;
-  const listeners = new Set<() => void>();
+  let render: (() => void) | undefined;
   let changes = new Set<keyof BrowserPanelInputs>([
     "client",
     "available",
@@ -78,9 +78,7 @@ export function createBrowserPanelPresentation(
       });
     }
     const pending = complete;
-    for (const listener of listeners) {
-      listener();
-    }
+    render?.();
     if (needsCommit) {
       scheduleAfterRender(() => {
         // Detach retires this receipt before a retained host starts another render.
@@ -360,9 +358,9 @@ export function createBrowserPanelPresentation(
       return completion;
     },
     subscribe(listener: () => void) {
-      listeners.add(listener);
+      render = listener;
       return () => {
-        listeners.delete(listener);
+        render = undefined;
       };
     },
     inputsChanged(key: keyof BrowserPanelInputs) {

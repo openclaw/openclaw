@@ -6,12 +6,11 @@ import type {
 } from "./provider-usage.types.js";
 
 // Compact reset times for chat/status lines; long windows fall back to a date.
-function formatResetRemaining(targetMs?: number, now?: number): string | null {
+function formatResetRemaining(targetMs?: number): string | null {
   if (!targetMs) {
     return null;
   }
-  const base = now ?? Date.now();
-  const diffMs = targetMs - base;
+  const diffMs = targetMs - Date.now();
   if (diffMs <= 0) {
     return "now";
   }
@@ -59,10 +58,7 @@ function formatBillingEntry(entry: ProviderUsageBilling): string {
   return `${label}: ${formatBillingAmount(entry.amount, entry.unit)}`;
 }
 
-export function formatUsageWindowSummary(
-  snapshot: ProviderUsageSnapshot,
-  opts?: { now?: number; maxWindows?: number; includeResets?: boolean },
-): string | null {
+export function formatUsageWindowSummary(snapshot: ProviderUsageSnapshot): string | null {
   if (snapshot.error) {
     return null;
   }
@@ -70,23 +66,17 @@ export function formatUsageWindowSummary(
     const billing = snapshot.billing?.[0];
     return snapshot.summary?.trim() || (billing ? formatBillingEntry(billing) : null);
   }
-  const now = opts?.now ?? Date.now();
-  const maxWindows =
-    typeof opts?.maxWindows === "number" && opts.maxWindows > 0
-      ? Math.min(opts.maxWindows, snapshot.windows.length)
-      : snapshot.windows.length;
-  const includeResets = opts?.includeResets ?? false;
-  const windows = snapshot.windows.slice(0, maxWindows);
+  const windows = snapshot.windows.slice(0, 2);
   const parts = windows.map((window) => {
     const remaining = clampPercent(100 - window.usedPercent);
-    const reset = includeResets ? formatResetRemaining(window.resetAt, now) : null;
+    const reset = formatResetRemaining(window.resetAt);
     const resetSuffix = reset ? ` ⏱${reset}` : "";
     return `${window.label} ${remaining.toFixed(0)}% left${resetSuffix}`;
   });
   return parts.join(" · ");
 }
 
-export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: number }): string[] {
+export function formatUsageReportLines(summary: UsageSummary): string[] {
   if (summary.providers.length === 0) {
     return ["Usage: no provider usage available."];
   }
@@ -108,7 +98,7 @@ export function formatUsageReportLines(summary: UsageSummary, opts?: { now?: num
     }
     for (const window of entry.windows) {
       const remaining = clampPercent(100 - window.usedPercent);
-      const reset = formatResetRemaining(window.resetAt, opts?.now);
+      const reset = formatResetRemaining(window.resetAt);
       const resetSuffix = reset ? ` · resets ${reset}` : "";
       lines.push(`    ${window.label}: ${remaining.toFixed(0)}% left${resetSuffix}`);
     }

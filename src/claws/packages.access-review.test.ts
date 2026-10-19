@@ -42,7 +42,7 @@ describe("Claw package reviewed access", () => {
                 key: "test-package",
                 owner: "test-owner",
               },
-              heartbeat: vi.fn(),
+              assertCurrent: vi.fn(),
               release: vi.fn(),
             })),
           },

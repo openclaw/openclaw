@@ -315,7 +315,7 @@ function resolveDetailFromKeys(
   return parts.join(", ");
 }
 
-export function resolveToolVerbAndDetailForArgs(params: {
+export function resolveToolDetailForArgs(params: {
   toolKey: string;
   args?: unknown;
   meta?: string;
@@ -325,10 +325,10 @@ export function resolveToolVerbAndDetailForArgs(params: {
   toolDetailMode?: ToolDetailMode;
   detailCoerce?: CoerceDisplayValueOptions;
   detailFormatKey?: (raw: string) => string;
-}): { verb?: string; detail?: string } {
+}): string | undefined {
   // Card arguments belong to the card renderer; generic summaries must not expose them.
   if (isAgentPlanProgressToolName(params.toolKey)) {
-    return {};
+    return undefined;
   }
   // Keep the existing read order when caller-owned options expose accessors.
   const { toolKey, args, meta } = params;
@@ -336,17 +336,6 @@ export function resolveToolVerbAndDetailForArgs(params: {
   const { spec, fallbackDetailKeys, detailMode, toolDetailMode, detailCoerce, detailFormatKey } =
     params;
   const actionSpec = spec && action ? (spec.actions?.[action] ?? undefined) : undefined;
-  const fallbackVerb =
-    toolKey === "web_search"
-      ? "search"
-      : toolKey === "web_fetch"
-        ? "fetch"
-        : toolKey.replace(/[_.]/g, " ");
-  const verb = normalizeOptionalString(actionSpec?.label ?? action ?? fallbackVerb)?.replace(
-    /_/g,
-    " ",
-  );
-
   let detail: string | undefined;
   if (toolKey === "exec" || toolKey === "bash" || toolKey === "shell") {
     detail = resolveExecDetail(args, { detailMode: toolDetailMode });
@@ -375,5 +364,5 @@ export function resolveToolVerbAndDetailForArgs(params: {
   if (!detail && meta) {
     detail = meta;
   }
-  return { verb, detail };
+  return detail;
 }

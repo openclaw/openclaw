@@ -51,11 +51,8 @@ function expectTemplate(
 }
 
 describe("vLLM streaming", () => {
-  it("patches configured Qwen models unless reasoning is explicitly disabled", () => {
-    expectTemplate(
-      { format: "chat-template", model: { reasoning: undefined } },
-      { enable_thinking: true, preserve_thinking: true },
-    );
+  it("patches configured Qwen reasoning models and skips non-reasoning models", () => {
+    expectTemplate({ format: "chat-template" }, { enable_thinking: true, preserve_thinking: true });
     expect(
       capturePayload({
         format: "chat-template",

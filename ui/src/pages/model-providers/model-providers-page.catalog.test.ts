@@ -76,6 +76,45 @@ function createCatalogHarness(lastAcceptedCatalog?: ModelCatalogResult) {
 }
 
 describe("Models page catalog publication", () => {
+  it("adopts a ready catalog published while the initial auth read is pending", async () => {
+    const { context, request, readPublished, publishEvent, catalogRequest } =
+      createCatalogHarness();
+    const readyCatalog: ModelCatalogResult = {
+      ...preparedCatalog,
+      providerOutcomes: [{ provider: "openai", status: "ready" }],
+    };
+    const auth = deferred<ModelAuthStatusResult>();
+    let authStarted = false;
+    request.mockImplementation((method: string, params?: { refresh?: boolean }) => {
+      if (method === "models.authStatus") {
+        if (!authStarted) {
+          authStarted = true;
+          return auth.promise;
+        }
+        return Promise.resolve(createAuthStatus());
+      }
+      return catalogRequest(method, params);
+    });
+    readPublished.mockReturnValue({ ...readyCatalog, pendingProviders: ["openai"] });
+    const page = appendPage(context);
+    await waitForSolid(() => {
+      expect(authStarted).toBe(true);
+      expect(displayedCatalog(page)?.pendingProviders).toEqual(["openai"]);
+    });
+
+    readPublished.mockReturnValue(readyCatalog);
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    publishEvent({ type: "event", event: "chat.metadata.changed", payload: {} });
+    auth.resolve(createAuthStatus());
+
+    await waitForSolid(() =>
+      expect(page.querySelector('[data-provider-id="openai"]')?.textContent).toContain("Ready"),
+    );
+    expect(page.querySelector(".model-providers__checking")).toBeNull();
+    expect(displayedCatalog(page)?.pendingProviders).toBeUndefined();
+    expect(readPublished).toHaveBeenCalledTimes(2);
+  });
+
   it.each([
     {
       profile: "openai:second",

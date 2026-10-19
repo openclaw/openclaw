@@ -3,15 +3,12 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
 } from "../lib/keyboard-shortcut-contract.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./tooltip.ts";
 
-defineSolidBridge<{ onToggle?: () => void }>(
-  "openclaw-sidebar-collapse-toggle",
-  (props, host) => {
-    host.style.display = "contents";
-    return (
+export function SidebarCollapseToggle(props: { onToggle?: () => void }) {
+  return (
+    <openclaw-sidebar-collapse-toggle style={{ display: "contents" }}>
       <openclaw-tooltip
         prop:content={`${t("nav.collapse")} (${formatKeyboardShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.toggleSidebar)})`}
       >
@@ -25,7 +22,6 @@ defineSolidBridge<{ onToggle?: () => void }>(
           <Icon name="panelLeftClose" />
         </button>
       </openclaw-tooltip>
-    );
-  },
-  { properties: { onToggle: { default: undefined, attribute: false } } },
-);
+    </openclaw-sidebar-collapse-toggle>
+  );
+}

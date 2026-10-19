@@ -4540,13 +4540,15 @@ complete owner publication. An admitted cross-store durable voice write may fini
 after session or membership revocation; new admissions fail once revocation starts.
 Disclosure, credential handoff, tool launch, and external sends still check live
 authority immediately before their effect. Incognito sources carry
-committed memory actor facts into the durable voice owner. Uncovered foreign predicates
-and opaque SDK compositions retain native admission and use their retained connection before and after the native mutation;
-same-store predicates use that transaction's connection. This preserves event-loop
-atomicity with synchronous SDK writers without reopening source readers or
-discovering schema capabilities under the write lock. These final native authority
-checks remain until the deprecated synchronous SDK APIs are removed and owner
-publications cover revocation completely.
+committed memory actor facts into the durable voice owner. Covered foreign sharing
+predicates use current published facts even when an opaque SDK callback selects
+the native voice writer. That writer runs the callback and then checks those
+facts at its existing mutation and commit boundaries, so callback-triggered
+membership removal or session replacement still rolls back the voice mutation.
+Uncovered foreign predicates retain their native reader before and after the
+mutation; same-store predicates use the transaction's connection. This preserves
+the released callback contract without reopening covered source readers or
+discovering schema capabilities under the write lock.
 Native SDK opening hands its admitted file identity to that same executor; refused
 worker preparations finish cleanup before the handoff. Fixed stores retain their
 physical schema owner independently of logical agent routing. Each create/resume
@@ -4691,6 +4693,9 @@ invalidate the preservation inventory, while ordinary local claims leave it curr
 Pending or uncertain writes and database retirement retain the existing authority
 checks. Remote environment projections remain direct reads through their own owner.
 Eviction only requires another worker read; it does not change durable ownership.
+Internal projections borrow owner-frozen placement facts instead of copying the
+whole inventory on every read. The public runtime-refresh adapter still returns
+independent mutable placement, move, and pending-result values.
 
 Placement `get` and `getMany` now read only that receipt owner; cold or invalidated
 entries require `getAsync` or `getManyAsync`. Synchronous inventory, retirement,

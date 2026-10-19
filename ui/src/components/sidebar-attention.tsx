@@ -1,4 +1,4 @@
-import { createMemo, createSignal, flush, onCleanup, Show } from "solid-js";
+import { createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import type { NavigationRouteId } from "../app-navigation.ts";
 import type { ApplicationContext } from "../app/context-types.ts";
 import type { ExecApprovalDecision } from "../app/exec-approval.ts";
@@ -216,12 +216,13 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
     const rowIndex = focusOrder.findIndex((element) => row?.contains(element));
     const generation = panelGeneration;
     await context.overlays.decideApproval(decision, approvalId);
-    flush();
-    if (disposed || generation !== panelGeneration || target.isConnected) {
-      return;
-    }
-    const remaining = panelFocus?.rows() ?? [];
-    remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
+    onSettled(() => {
+      if (disposed || generation !== panelGeneration || target.isConnected) {
+        return;
+      }
+      const remaining = panelFocus?.rows() ?? [];
+      remaining[Math.min(Math.max(rowIndex, 0), remaining.length - 1)]?.focus();
+    });
   }
 
   onCleanup(listen(document, "pointerdown", handleOutsideInteraction, true));

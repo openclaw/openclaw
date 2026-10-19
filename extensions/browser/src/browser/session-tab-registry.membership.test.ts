@@ -186,6 +186,43 @@ describe("session tab membership and lifecycle", () => {
     expect(openStore().entries()).toEqual(before);
   });
 
+  it("preserves both ownership kinds when untracking their shared non-exact alias", async () => {
+    const { registry, track } = await session("untrack-shared-alias");
+    await track("DURABLE-RAW", "DURABLE-NATIVE", { aliases: ["shared"], now: 1_000 });
+    await track("VOLATILE-RAW", undefined, { aliases: ["shared"], now: 2_000 });
+    const before = openStore().entries();
+
+    await registry.untrackSessionBrowserTab({ ...main, targetId: "shared" });
+
+    expect(openStore().entries()).toEqual(before);
+    const tabs = targetRows("DURABLE-RAW", "VOLATILE-RAW");
+    await expect(registry.filterTrackedSessionBrowserTabs({ ...main, tabs })).resolves.toEqual(
+      tabs,
+    );
+  });
+
+  it("retires cold native activity when untracking an identity without aliases", async () => {
+    const { registry, track } = await session("untrack-cold-native");
+    const cold = { ...main, targetId: "NATIVE-COLD-UNTRACK" };
+    await track(cold.targetId, cold.targetId, { now: 1_000 });
+    // Keep the admitted store and persisted row, but lose process-local aliases.
+    clearProcessLocalTabState();
+    await registry.touchSessionBrowserTab({ ...cold, now: 10_000 });
+    expect(openStore().entries()[0]?.value).toMatchObject({ lastUsedAt: 1_000 });
+    const closeDurableTab = vi.fn(async () => ({ status: "closed" }) as const);
+    const sweep = () =>
+      registry.sweepTrackedBrowserTabs({ now: 12_000, idleMs: 5_000, closeDurableTab });
+    await expect(sweep()).resolves.toBe(0);
+    expect(closeDurableTab).not.toHaveBeenCalled();
+
+    await registry.untrackSessionBrowserTab(cold);
+
+    expect(openStore().entries()).toHaveLength(1);
+    await expect(sweep()).resolves.toBe(1);
+    expect(closeDurableTab).toHaveBeenCalledOnce();
+    expect(openStore().entries()).toEqual([]);
+  });
+
   it("rejects membership when requester authority expires during the worker read", async () => {
     const { registry, track } = await session("membership-authority", owner);
     await track(owner.targetId, owner.targetId);
