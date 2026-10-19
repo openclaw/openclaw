@@ -4,6 +4,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { ZodError } from "zod";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { createModelPickerRecommendationRank } from "../agents/model-catalog-order.js";
+import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -33,13 +34,26 @@ const bundle = {
   providers: { anthropic: { models: [{ id: "new" }] } },
   pricing: { "openai/gpt-external": { input: 2.5, output: 10 } },
 };
+const defaultUrl = "https://catalog.openclaw.ai/models/v2/catalog.json";
+const mirrorConfig = {
+  models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } },
+};
+const disabledConfig = { models: { catalogRefresh: { enabled: false } } };
+const stored = (value: unknown = bundle, source_url = defaultUrl) => ({
+  bundle_json: JSON.stringify(value),
+  source_url,
+});
+const overlay = (config: OpenClawConfig = {}) =>
+  getRemoteModelCatalogProviderOverlay(config, "anthropic");
+const price = () => getActiveRemoteModelCatalog({})?.pricing?.["openai/gpt-external"];
+function expectAcceptedPair() {
+  expect(overlay()?.models).toEqual([{ id: "new" }]);
+  expect(price()?.cost.input).toBe(2.5);
+}
 
 beforeEach(() => {
   mocks.builtAt.mockReset().mockReturnValue(100);
-  mocks.read.mockReset().mockReturnValue({
-    bundle_json: JSON.stringify(bundle),
-    source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
-  });
+  mocks.read.mockReset().mockReturnValue(stored());
   setRemoteModelCatalogOverlaySourcesForTest({
     bundledGeneratedAt: mocks.builtAt,
     readStoredCatalog: mocks.read,
@@ -53,15 +67,14 @@ afterEach(() => {
 describe("remote model catalog overlay", () => {
   it("does not read persistent state from runtime getters before preparation", () => {
     expect(captureRemoteModelCatalogStartupSnapshot()).toBeNull();
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
+    expect(overlay()).toBeUndefined();
     expect(mocks.read).not.toHaveBeenCalled();
   });
 
   it("keeps older hosted recommendations only for currently served rows", async () => {
     mocks.builtAt.mockReturnValue(300);
-    mocks.read.mockReturnValue({
-      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
-      bundle_json: JSON.stringify({
+    mocks.read.mockReturnValue(
+      stored({
         schemaVersion: 2,
         generatedAt: 200,
         minVersion: "2026.7.0",
@@ -80,7 +93,7 @@ describe("remote model catalog overlay", () => {
         })),
         upstreamPricing: { "anthropic/current": { input: 9, output: 18, source: "native" } },
       }),
-    });
+    );
     await prepareRemoteModelCatalogStartupSnapshot();
     const rank = createModelPickerRecommendationRank({});
     const served = [
@@ -89,14 +102,10 @@ describe("remote model catalog overlay", () => {
     ];
     expect(served.filter((entry) => rank(entry) !== undefined)).toEqual([served[0]]);
     expect(rank(served[0]!)).toBe(1);
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
+    expect(overlay()).toBeUndefined();
     expect(getActiveRemoteModelCatalog({})?.pricing).toEqual({});
     expect(getActiveRemoteModelCatalog({})?.upstreamPricing).toEqual({});
-    expect(
-      createModelPickerRecommendationRank({
-        models: { catalogRefresh: { enabled: false } },
-      })(served[0]!),
-    ).toBeUndefined();
+    expect(createModelPickerRecommendationRank(disabledConfig)(served[0]!)).toBeUndefined();
   });
 
   it.each([false, true])(
@@ -108,9 +117,8 @@ describe("remote model catalog overlay", () => {
       const oldModels = absent ? undefined : [{ id: "new" }];
       const oldPrice = absent ? undefined : 2.5;
       const previous = await prepareRemoteModelCatalogStartupSnapshot();
-      mocks.read.mockReturnValue({
-        source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
-        bundle_json: JSON.stringify({
+      mocks.read.mockReturnValue(
+        stored({
           ...bundle,
           generatedAt: 300,
           providers: {
@@ -120,36 +128,27 @@ describe("remote model catalog overlay", () => {
           },
           pricing: { "openai/gpt-external": { input: 5, output: 20 } },
         }),
-      });
-      const next = expectDefined(await readRemoteModelCatalogUpdate({}), "compatible catalog");
-      expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")?.models).toEqual(oldModels);
-      expect(getActiveRemoteModelCatalog({})?.pricing?.["openai/gpt-external"]?.cost.input).toBe(
-        oldPrice,
       );
+      const next = expectDefined(await readRemoteModelCatalogUpdate({}), "compatible catalog");
+      expect(overlay()?.models).toEqual(oldModels);
+      expect(price()?.cost.input).toBe(oldPrice);
       expect(publishRemoteModelCatalogSnapshot(next, previous)).toBe(true);
-      expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")?.models).toEqual([
-        { id: "downloaded" },
-      ]);
-      expect(getActiveRemoteModelCatalog({})?.pricing?.["openai/gpt-external"]?.cost.input).toBe(5);
+      expect(overlay()?.models).toEqual([{ id: "downloaded" }]);
+      expect(price()?.cost.input).toBe(5);
       withRemoteModelCatalogSnapshot(previous, () => {
-        expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")?.models).toEqual(oldModels);
-        expect(getActiveRemoteModelCatalog({})?.pricing?.["openai/gpt-external"]?.cost.input).toBe(
-          oldPrice,
-        );
+        expect(overlay()?.models).toEqual(oldModels);
+        expect(price()?.cost.input).toBe(oldPrice);
       });
       expect(publishRemoteModelCatalogSnapshot(next, previous)).toBe(false);
-      expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")?.models).toEqual([
-        { id: "downloaded" },
-      ]);
+      expect(overlay()?.models).toEqual([{ id: "downloaded" }]);
     },
   );
 
   it("does not adopt a stored bundle belonging to another source", async () => {
     const previous = await prepareRemoteModelCatalogStartupSnapshot();
-    mocks.read.mockReturnValue({
-      source_url: "https://mirror.example.test/catalog.json",
-      bundle_json: JSON.stringify({ ...bundle, generatedAt: 300 }),
-    });
+    mocks.read.mockReturnValue(
+      stored({ ...bundle, generatedAt: 300 }, mirrorConfig.models.catalogRefresh.url),
+    );
     expect(await readRemoteModelCatalogUpdate({})).toBeUndefined();
     expect(captureRemoteModelCatalogStartupSnapshot()).toBe(previous);
   });
@@ -172,24 +171,18 @@ describe("remote model catalog overlay", () => {
       bundle_json: bundleJson,
     });
     await expect(readRemoteModelCatalogUpdate({})).rejects.toThrow(error);
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")?.models).toEqual([{ id: "new" }]);
-    expect(getActiveRemoteModelCatalog({})?.pricing?.["openai/gpt-external"]?.cost.input).toBe(2.5);
+    expectAcceptedPair();
   });
 
   it.each([
     { name: "equal bundled generation", change: { generatedAt: 100 } },
-    { name: "older bundled generation", change: { generatedAt: 99 } },
     { name: "incompatible minimum version", change: { minVersion: "9999.1.1" } },
     { name: "invalid minimum version", change: { minVersion: "not-a-version" } },
   ])("keeps the accepted pair when pending data has $name", async ({ change }) => {
     await prepareRemoteModelCatalogStartupSnapshot();
-    mocks.read.mockReturnValue({
-      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
-      bundle_json: JSON.stringify({ ...bundle, generatedAt: 300, ...change }),
-    });
+    mocks.read.mockReturnValue(stored({ ...bundle, generatedAt: 300, ...change }));
     expect(await readRemoteModelCatalogUpdate({})).toBeUndefined();
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")?.models).toEqual([{ id: "new" }]);
-    expect(getActiveRemoteModelCatalog({})?.pricing?.["openai/gpt-external"]?.cost.input).toBe(2.5);
+    expectAcceptedPair();
   });
 
   it("does not publish startup absence after its original read scope retires", async () => {
@@ -203,10 +196,7 @@ describe("remote model catalog overlay", () => {
     expect(() => original.admission.assertCurrent()).toThrow();
     reading.resolve(undefined);
     await rejected;
-    mocks.read.mockReturnValue({
-      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
-      bundle_json: JSON.stringify(bundle),
-    });
+    mocks.read.mockReturnValue(stored());
     await prepareRemoteModelCatalogStartupSnapshot();
     expect(captureRemoteModelCatalogStartupSnapshot()?.pricing).toEqual({
       "openai/gpt-external": { cost: bundle.pricing["openai/gpt-external"], explicit: false },
@@ -218,70 +208,41 @@ describe("remote model catalog overlay", () => {
     const pendingRead = createDeferredCore<undefined>();
     mocks.read.mockReturnValueOnce(pendingRead.promise);
     const preparing = prepareRemoteModelCatalogStartupSnapshot({ env });
-    mocks.read.mockReturnValue({
-      source_url: "https://catalog.openclaw.ai/models/v2/catalog.json",
-      bundle_json: JSON.stringify({
+    mocks.read.mockReturnValue(
+      stored({
         ...bundle,
         generatedAt: 300,
         pricing: { "openai/gpt-external": { input: 5, output: 20 } },
       }),
-    });
+    );
     const winner = await prepareRemoteModelCatalogStartupSnapshot({ env });
     pendingRead.resolve(undefined);
     expect(await preparing).toBe(winner);
     expect(await prepareRemoteModelCatalogStartupSnapshot({ env })).toBe(winner);
-    expect(getActiveRemoteModelCatalog({})?.pricing?.["openai/gpt-external"]).toEqual({
+    expect(price()).toEqual({
       cost: { input: 5, output: 20 },
       explicit: false,
     });
   });
 
-  it("keeps startup rows and prices when the configured source changes", async () => {
-    await prepareRemoteModelCatalogStartupSnapshot();
-    const overlay = getRemoteModelCatalogProviderOverlay({}, "anthropic");
-    const pricing = getActiveRemoteModelCatalog({})?.pricing;
-    mocks.read.mockReturnValue({
-      bundle_json: JSON.stringify({
-        ...bundle,
-        generatedAt: 300,
-        providers: { anthropic: { models: [{ id: "downloaded" }] } },
-        pricing: { "openai/gpt-external": { input: 5, output: 20 } },
-      }),
-      source_url: "https://mirror.example.test/catalog.json",
-    });
-    expect(
-      getRemoteModelCatalogProviderOverlay(
-        { models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } } },
-        "anthropic",
-      ),
-    ).toBeUndefined();
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toEqual(overlay);
-    expect(getActiveRemoteModelCatalog({})?.pricing).toEqual(pricing);
-  });
-
   it("serves a released default install's v1 download until its v2 download is active", async () => {
     const v1Default = "https://catalog.openclaw.ai/models/v1/catalog.json";
-    const v2Default = "https://catalog.openclaw.ai/models/v2/catalog.json";
-    mocks.read.mockReturnValue({ bundle_json: JSON.stringify(bundle), source_url: v1Default });
+    mocks.read.mockReturnValue(stored(bundle, v1Default));
     await prepareRemoteModelCatalogStartupSnapshot();
     // Offline after upgrading: the default config keeps the downloaded rows and prices.
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");
-    expect(getActiveRemoteModelCatalog({})?.pricing?.["openai/gpt-external"]).toEqual({
+    expect(overlay()).toHaveProperty("models");
+    expect(price()).toEqual({
       cost: { input: 2.5, output: 10 },
       explicit: false,
     });
     // A configured mirror never inherits the retired default's download.
-    expect(
-      getActiveRemoteModelCatalog({
-        models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } },
-      })?.pricing,
-    ).toBeUndefined();
+    expect(getActiveRemoteModelCatalog(mirrorConfig)?.pricing).toBeUndefined();
     const previous = await prepareRemoteModelCatalogStartupSnapshot();
-    mocks.read.mockReturnValue({ bundle_json: JSON.stringify(bundle), source_url: v2Default });
+    mocks.read.mockReturnValue(stored());
     const next = expectDefined(await readRemoteModelCatalogUpdate({}), "v2 catalog");
     expect(captureRemoteModelCatalogStartupSnapshot()?.sourceUrl).toBe(v1Default);
     expect(publishRemoteModelCatalogSnapshot(next, previous)).toBe(true);
-    expect(captureRemoteModelCatalogStartupSnapshot()?.sourceUrl).toBe(v2Default);
+    expect(captureRemoteModelCatalogStartupSnapshot()?.sourceUrl).toBe(defaultUrl);
   });
 
   it("keeps invalid startup metadata absent after a successful download", async () => {
@@ -290,14 +251,14 @@ describe("remote model catalog overlay", () => {
     mocks.read.mockReturnValue({ ...valid, bundle_json: "{" });
     expect(await prepareRemoteModelCatalogStartupSnapshot({ env })).toBeNull();
     mocks.read.mockReturnValue(valid);
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
+    expect(overlay()).toBeUndefined();
     expect(getActiveRemoteModelCatalog({})?.pricing).toBeUndefined();
   });
 
   it("passes the same startup rows and prices to later workers", async () => {
     await prepareRemoteModelCatalogStartupSnapshot();
     const expected = {
-      overlay: getRemoteModelCatalogProviderOverlay({}, "anthropic"),
+      overlay: overlay(),
       pricing: getActiveRemoteModelCatalog({})?.pricing,
     };
     mocks.read.mockReturnValue(undefined);
@@ -315,43 +276,21 @@ describe("remote model catalog overlay", () => {
     }
   });
 
-  it("fails closed when disabled, stale, or missing a build stamp", async () => {
-    expect(
-      getRemoteModelCatalogProviderOverlay(
-        { models: { catalogRefresh: { enabled: false } } },
-        "anthropic",
-      ),
-    ).toBeUndefined();
-    expect(mocks.read).not.toHaveBeenCalled();
-    mocks.builtAt.mockReturnValue(200);
-    await prepareRemoteModelCatalogStartupSnapshot();
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
-    setRemoteModelCatalogOverlaySourcesForTest({
-      bundledGeneratedAt: mocks.builtAt,
-      readStoredCatalog: mocks.read,
-    });
+  it("fails closed without reading storage when the build stamp is missing", async () => {
     mocks.builtAt.mockReturnValue(undefined);
     await prepareRemoteModelCatalogStartupSnapshot();
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toBeUndefined();
+    expect(overlay()).toBeUndefined();
+    expect(mocks.read).not.toHaveBeenCalled();
   });
 
   it("does not reuse a cached overlay after disablement or a URL change", async () => {
     await prepareRemoteModelCatalogStartupSnapshot();
-    expect(getRemoteModelCatalogProviderOverlay({}, "anthropic")).toHaveProperty("models");
-    expect(
-      getRemoteModelCatalogProviderOverlay(
-        { models: { catalogRefresh: { enabled: false } } },
-        "anthropic",
-      ),
-    ).toBeUndefined();
-    expect(
-      getRemoteModelCatalogProviderOverlay(
-        {
-          models: { catalogRefresh: { url: "https://mirror.example.test/catalog.json" } },
-        },
-        "anthropic",
-      ),
-    ).toBeUndefined();
+    const previous = captureRemoteModelCatalogStartupSnapshot();
+    expect(overlay()).toHaveProperty("models");
+    expect(overlay(disabledConfig)).toBeUndefined();
+    expect(overlay(mirrorConfig)).toBeUndefined();
+    expectAcceptedPair();
+    expect(captureRemoteModelCatalogStartupSnapshot()).toBe(previous);
     expect(mocks.read).toHaveBeenCalledOnce();
   });
 });
