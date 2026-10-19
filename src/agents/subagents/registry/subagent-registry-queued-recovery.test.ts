@@ -817,7 +817,10 @@ it.each(["current", "during hydration"] as const)(
       }
       expect(ensureListener).toHaveBeenCalledTimes(2);
       expect(startSweeper).toHaveBeenCalledOnce();
-      expect(resumeRun.mock.calls).toEqual([["first-child"], ["later-child"]]);
+      // Independent requester sessions have no cross-session resume order.
+      expect(resumeRun).toHaveBeenCalledTimes(2);
+      expect(resumeRun).toHaveBeenCalledWith("first-child");
+      expect(resumeRun).toHaveBeenCalledWith("later-child");
       expect(subagentRuns.get("first-child")?.requesterTurnRunId).toBe("first-child-turn");
       expect(subagentRuns.get("later-child")?.requesterTurnRunId).toBeUndefined();
       expect(firstAttempts).toBe(1);
