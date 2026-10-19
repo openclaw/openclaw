@@ -5,13 +5,13 @@ import { resolveRuntimeWorkerUrl } from "openclaw/plugin-sdk/process-runtime";
 import { openNodeSqliteDatabase } from "openclaw/plugin-sdk/sqlite-runtime";
 import { afterEach, describe, expect, it } from "vitest";
 import { describePeriod } from "./periods.js";
+import { reportDocument, reportMember } from "./reports-data.test-support.js";
 import { githubCounts as counts } from "./reports.fixtures.js";
 import { buildRoster } from "./roster.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
 import type { ReportDocument, SummaryDocument } from "./types.js";
 
-const DAY_MS = 86_400_000;
 const workerModuleUrl = resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint);
 const resources: Array<{ store: TeamReportsStore; directory: string }> = [];
 
@@ -44,32 +44,34 @@ async function expectStored(
 }
 
 function report(key = "2026-08-20", logins = ["alice", "bob"]): ReportDocument {
-  const sinceMs = Date.parse(`${key}T00:00:00Z`);
-  return {
-    version: 1,
-    period: { period: "day", key, sinceMs, untilMs: sinceMs + DAY_MS, title: key },
-    generatedAtMs: sinceMs + DAY_MS,
-    status: "closed",
-    orgs: ["example"],
-    memberCount: logins.length,
-    activeMembers: logins.length,
-    totals: {
-      github: counts(logins.length),
-      discord: { messages: logins.length * 2, channels: { general: logins.length * 2 } },
+  return reportDocument(
+    logins.map((login) =>
+      reportMember(login, {
+        discord: { total: 2, channels: { general: 2 }, excerpts: [] },
+      }),
+    ),
+    {
+      period: { ...describePeriod("day", key), title: key },
+      totals: {
+        github: counts(logins.length),
+        discord: { messages: logins.length * 2, channels: { general: logins.length * 2 } },
+      },
+      sources: { github: { ok: true, warnings: [], stats: { apiCalls: 1 } } },
     },
-    members: logins.map((login) => ({
-      login,
-      display: login,
-      access: [],
-      areas: [],
-      aliases: [],
-      github: { ...counts(1), items: [] },
-      discord: { total: 2, channels: { general: 2 }, excerpts: [] },
-    })),
-    otherActors: [],
-    unmatchedDiscord: [],
-    sources: { github: { ok: true, warnings: [], stats: { apiCalls: 1 } } },
-  };
+  );
+}
+
+async function expectSameError(
+  read: () => Promise<unknown>,
+  ...others: (() => Promise<unknown>)[]
+) {
+  const error = await read().catch((reason: unknown) => reason);
+  if (!(error instanceof Error)) {
+    throw new Error("The existing period read must reject this fixture");
+  }
+  for (const other of others) {
+    await expect(other()).rejects.toMatchObject({ name: error.name, message: error.message });
+  }
 }
 
 const summary: SummaryDocument = {
@@ -291,18 +293,11 @@ describe("Team Reports storage", () => {
           const latest = (await store.listPeriods({ period: "day", limit: 1 }))[0];
           return latest ? store.getPeriod("day", latest.key) : undefined;
         };
-        const originalError = await originalRead().catch((error: unknown) => error);
-        if (!(originalError instanceof Error)) {
-          throw new Error("The existing period read must reject this fixture");
-        }
-        await expect(store.latestSourceWarnings()).rejects.toMatchObject({
-          name: originalError.name,
-          message: originalError.message,
-        });
-        await expect(store.latestPeople()).rejects.toMatchObject({
-          name: originalError.name,
-          message: originalError.message,
-        });
+        await expectSameError(
+          originalRead,
+          () => store.latestSourceWarnings(),
+          () => store.latestPeople(),
+        );
         if (failure === "unsafe extracted total") {
           // Direct document reads validate JSON numbers without SQLite's integer extraction.
           expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
@@ -310,16 +305,10 @@ describe("Team Reports storage", () => {
             summary,
           });
         } else {
-          const directError = await store
-            .getPeriod("day", "2026-08-20")
-            .catch((error: unknown) => error);
-          if (!(directError instanceof Error)) {
-            throw new Error("The complete period read must reject this fixture");
-          }
-          await expect(store.getPeriodDocument("day", "2026-08-20")).rejects.toMatchObject({
-            name: directError.name,
-            message: directError.message,
-          });
+          await expectSameError(
+            () => store.getPeriod("day", "2026-08-20"),
+            () => store.getPeriodDocument("day", "2026-08-20"),
+          );
         }
       } finally {
         database.close();

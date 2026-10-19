@@ -1,68 +1,22 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { describePeriod } from "./periods.js";
+import { githubItem, reportDocument, reportMember } from "./reports-data.test-support.js";
 import { completion, githubCounts as counts, type Complete } from "./reports.fixtures.js";
 import { generateSummaries } from "./summaries.js";
-import type { PersonReport, ReportDocument } from "./types.js";
-
-function member(login: string, items: PersonReport["github"]["items"] = []): PersonReport {
-  return {
-    login,
-    display: login,
-    access: [],
-    areas: [],
-    aliases: [],
-    github: { ...counts(items.length), items },
-    discord: { total: 0, channels: {}, excerpts: [] },
-  };
-}
+import type { ReportDocument } from "./types.js";
 
 function report(): ReportDocument {
-  const alex = member("alex", [
-    {
-      kind: "commit",
-      repo: "sample/widgets",
-      title: "Correct the widget resize calculation",
-      url: "https://github.com/sample/widgets/commit/abc",
-      actor: "alex",
-      atMs: Date.parse("2026-08-20T12:00:00Z"),
-    },
+  return reportDocument([
+    reportMember("alex", { github: { ...counts(1), items: [githubItem({ actor: "alex" })] } }),
+    reportMember("blair", { github: { ...counts(), items: [] } }),
   ]);
-  alex.github.repos = { "sample/widgets": 1 };
-  return {
-    version: 1,
-    period: describePeriod("day", "2026-08-20"),
-    generatedAtMs: 1,
-    status: "closed",
-    orgs: ["sample"],
-    memberCount: 2,
-    activeMembers: 1,
-    totals: {
-      github: { ...counts(), total: 1, commits: 1 },
-      discord: { messages: 0, channels: {} },
-    },
-    members: [alex, member("blair")],
-    otherActors: [],
-    unmatchedDiscord: [],
-    sources: { github: { ok: true, warnings: [], stats: {} } },
-  };
 }
 
 function response() {
   return {
-    globalSummary:
-      "One member corrected widget resizing. The other member has no recorded activity.\n\n- **Widgets:** Corrected resize calculations.\n- **Reviews:** None recorded.\n- **Discord:** No messages recorded.\n- **Coverage:** GitHub collection succeeded.",
-    highlights: [
-      "Resize corrected.",
-      "No reviews.",
-      "No Discord messages.",
-      "One inactive member.",
-    ],
+    globalSummary: "One active member.\n\n- **Widgets:** Fixed.\n- **Coverage:** Complete.",
+    highlights: ["Fixed.", "No reviews.", "No messages.", "One inactive."],
     members: [
-      {
-        login: "alex",
-        summary: "Corrected widget resizing in sample/widgets.",
-        confidence: "high",
-      },
+      { login: "alex", summary: "Corrected widget resizing.", confidence: "high" },
       { login: "blair", summary: "No visible activity was recorded.", confidence: "low" },
     ],
   };
@@ -124,8 +78,10 @@ describe("team report summaries", () => {
     const logger = { warn: vi.fn() };
     const result = await summarize(complete, { report: input, logger });
     expect(complete).toHaveBeenCalledTimes(2);
-    expect(result.summary.source).toBe("fallback");
-    expect(result.summary.warnings).toEqual([expect.stringContaining(cause)]);
+    expect(result.summary).toMatchObject({
+      source: "fallback",
+      warnings: [expect.stringContaining(cause)],
+    });
     expect(result.summary.warnings?.[0]?.length).toBeLessThanOrEqual(300);
     expect(logger.warn.mock.calls).toEqual([[result.summary.warnings?.[0]]]);
     expect(JSON.stringify([result.summary, logger.warn.mock.calls])).not.toContain(
@@ -150,10 +106,8 @@ describe("team report summaries", () => {
     expect(logger.warn.mock.calls).toEqual([["Model summary unavailable: completion failed"]]);
     expect(JSON.stringify(result)).not.toContain("private-provider-error-marker");
     expect(complete).toHaveBeenCalledOnce();
-    const disabled = await generateSummaries({
-      report: report(),
+    const disabled = await summarize(complete, {
       options: { enabled: false },
-      llm: { complete },
       logger,
       previous: result,
     });
@@ -167,9 +121,9 @@ describe("team report summaries", () => {
     const complete = vi.fn<Complete>();
     const input = report();
     input.sources.github = { ok: false, warnings: ["Collection incomplete"], stats: {} };
-    const params = { report: input, options: { enabled: false }, llm: { complete } };
-    const first = await generateSummaries(params);
-    const second = await generateSummaries(params);
+    const params = { report: input, options: { enabled: false } };
+    const first = await summarize(complete, params);
+    const second = await summarize(complete, params);
     expect(first).toEqual(second);
     expect(first.summary.globalSummary).toContain("Source coverage has gaps");
     expect(first.report.members).toHaveLength(2);
@@ -195,19 +149,16 @@ describe("team report summaries", () => {
 
   it("bounds member evidence and excludes raw comment bodies from model input", async () => {
     const input = report();
-    const alex = input.members[0];
-    if (!alex) {
-      throw new Error("Missing fixture member");
-    }
-    alex.github.items = Array.from({ length: 100 }, (_, index) => ({
-      kind: "issue_comment",
-      repo: "sample/widgets",
-      title: `Public summary ${index}`,
-      body: "RAW BODY MUST NOT REACH THE MODEL",
-      url: `https://github.com/sample/widgets/issues/1#comment-${index}`,
-      actor: "alex",
-      atMs: index,
-    }));
+    input.members[0]!.github.items = Array.from({ length: 100 }, (_, index) =>
+      githubItem({
+        kind: "issue_comment",
+        title: `Public summary ${index}`,
+        body: "RAW BODY MUST NOT REACH THE MODEL",
+        url: `https://github.com/sample/widgets/issues/1#comment-${index}`,
+        actor: "alex",
+        atMs: index,
+      }),
+    );
     const complete = vi.fn<Complete>().mockResolvedValue(modelCompletion());
     await summarize(complete, { report: input });
     const digest = complete.mock.calls[0]?.[0].messages[1]?.content;

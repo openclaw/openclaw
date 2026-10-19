@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { aggregateDay, aggregateDays, type AggregateDayOptions } from "./aggregate.js";
 import { describePeriod } from "./periods.js";
+import { discordMessage as message, githubItem as item } from "./reports-data.test-support.js";
 import { buildRoster } from "./roster.js";
 import type { DiscordMessage, GithubItem, Person, ReportDocument } from "./types.js";
 
@@ -11,31 +12,6 @@ const people: Person[] = [
   { github: ["former"], discordUserId: "44", status: "archived", archivedAt: "2026-08-01" },
 ];
 const period = describePeriod("day", "2026-08-18");
-
-function item(overrides: Partial<GithubItem> = {}): GithubItem {
-  return {
-    kind: "commit",
-    repo: "sample/project",
-    title: "Improve request handling",
-    url: "https://github.com/sample/project/commit/one",
-    atMs: period.sinceMs + 1000,
-    actor: "alpha",
-    ...overrides,
-  };
-}
-
-function message(overrides: Partial<DiscordMessage> = {}): DiscordMessage {
-  return {
-    channelId: "100",
-    parentChannelId: "100",
-    channelName: "planning",
-    authorId: "11",
-    authorIsBot: false,
-    atMs: period.sinceMs + 1000,
-    content: "Discuss release readiness",
-    ...overrides,
-  };
-}
 
 function comment(suffix: string, overrides: Partial<GithubItem> = {}) {
   return item({
@@ -84,22 +60,14 @@ function member(report: ReportDocument, login: string) {
 describe("team report attribution", () => {
   it("credits the merger and each mapped commit coauthor once, keeping external authors outside the roster", () => {
     const report = day([
-      item({
-        kind: "pr_opened",
-        actor: "outside",
-        url: "https://github.com/sample/project/pull/1",
-      }),
-      item({ kind: "pr_merged", actor: "beta", url: "https://github.com/sample/project/pull/1" }),
+      item({ kind: "pr_opened", actor: "outside", url: "pull/1" }),
+      item({ kind: "pr_merged", actor: "beta", url: "pull/1" }),
       item({
         actor: "alpha-work",
         coauthors: ["alpha", "alpha-work", "42+beta@users.noreply.github.com", "beta", "outsider"],
       }),
       item({ actor: "alpha", coauthors: ["beta"] }),
-      item({
-        kind: "security_advisory",
-        actor: "beta",
-        url: "https://github.com/sample/project/security/advisories/GHSA-example",
-      }),
+      item({ kind: "security_advisory", actor: "beta", url: "GHSA-example" }),
     ]);
     expect(member(report, "alpha").github).toMatchObject({ total: 1, commits: 1, prsMerged: 0 });
     expect(member(report, "beta").github).toMatchObject({
@@ -129,12 +97,8 @@ describe("team report attribution", () => {
   it("collapses exact comment bodies by actor and kind, ignores patterns, and removes bodies from stored evidence", () => {
     const comments = [
       comment("issues/1#issuecomment-1"),
-      comment("issues/2#issuecomment-2", {
-        atMs: period.sinceMs + 2000,
-      }),
-      comment("pull/3#discussion_r3", {
-        kind: "review_comment",
-      }),
+      comment("issues/2#issuecomment-2", { atMs: period.sinceMs + 2000 }),
+      comment("pull/3#discussion_r3", { kind: "review_comment" }),
       comment("issues/1#issuecomment-4", { actor: "beta" }),
       comment("issues/1#issuecomment-5", { body: "automation: label backfill" }),
       ...["\ud800", "\ud801"].map((body, index) => comment(`issues/1#unicode-${index}`, { body })),
@@ -191,8 +155,7 @@ describe("team report attribution", () => {
       { authorId: "44", messages: 1 },
       { authorId: "unmapped", messages: 1 },
     ]);
-    expect(JSON.stringify(report)).not.toContain("Unmatched content");
-    expect(JSON.stringify(report)).not.toContain("Archived content");
+    expect(JSON.stringify(report)).not.toMatch(/Unmatched content|Archived content/);
   });
 
   it("marks an open UTC day partial and excludes future activity", () => {
@@ -201,8 +164,7 @@ describe("team report attribution", () => {
       nowMs,
       discordStatus: undefined,
     });
-    expect(report.status).toBe("partial");
-    expect(report.totals.github.total).toBe(1);
+    expect(report).toMatchObject({ status: "partial", totals: { github: { total: 1 } } });
     expect(day().status).toBe("closed");
   });
 });
@@ -233,11 +195,9 @@ describe("stored day aggregation", () => {
     expect(report.totals.github).toMatchObject({ total: 2, commits: 1, issuesClosed: 1 });
     expect(report.totals.discord.messages).toBe(1);
     expect(report.sources.github.warnings).toContain("One repository was unavailable");
-    expect(
-      report.sources.github.warnings.some(
-        (warning) => warning.startsWith("Missing day reports:") && warning.includes("2026-08-17"),
-      ),
-    ).toBe(true);
+    expect(report.sources.github.warnings).toContainEqual(
+      expect.stringMatching(/^Missing day reports:.*2026-08-17/),
+    );
     expect(report.sources.github.warnings.join(" ")).not.toContain("2026-08-20");
     expect(first.totals.github.total).toBe(1);
   });
@@ -300,7 +260,7 @@ describe("report evidence bounds", () => {
       item({
         title: "Newest small event",
         atMs: period.sinceMs + 2000,
-        url: "https://github.com/sample/project/commit/new",
+        url: "new",
       }),
     ]);
     expect(report.truncated).toBe(true);
