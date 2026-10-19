@@ -294,7 +294,12 @@ describe("watched session PR retention", () => {
     let fetchFailure = false;
     stubPulls(() => githubJson(fetchFailure ? {} : [], fetchFailure ? 503 : 200), true);
     mockCheckout(
-      () => branch,
+      () => {
+        if (rootFailure) {
+          throw new Error("session unavailable");
+        }
+        return branch;
+      },
       () => branch,
     );
     const load = () =>
@@ -302,12 +307,7 @@ describe("watched session PR retention", () => {
         { sessionKey: "retained", refresh: true },
         {
           cacheSignal: cacheLifetime.signal,
-          resolveGitRoot: async () => {
-            if (rootFailure) {
-              throw new Error("session unavailable");
-            }
-            return root;
-          },
+          resolveGitRoot: async () => root,
         },
       );
     const pins = () => listenerCount(cacheLifetime.signal);
@@ -340,6 +340,9 @@ describe("watched session PR retention", () => {
       branch = null;
       await load();
       expect(pins()).toBe(0);
+      branch = "feature-c";
+      await load();
+      expect(pins()).toBe(1);
       rootFailure = true;
       await expect(load()).rejects.toThrow("session unavailable");
       expect(pins()).toBe(0);

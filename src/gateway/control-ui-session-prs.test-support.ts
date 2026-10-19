@@ -8,6 +8,7 @@ import {
   upsertSessionEntryCore,
 } from "../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { GitCheckoutContext } from "../infra/git-read-operations.js";
 import { getSessionRepositoryWorkspaceStore } from "../state/session-repository-workspaces.js";
 import {
   createOpenClawTestState,
@@ -22,7 +23,10 @@ import { resolveSessionStoreKey } from "./session-store-key.js";
 import { loadGatewaySessionEntryReadOnlyAsync as loadEntry } from "./session-utils-store.js";
 
 type PrRequest = Parameters<typeof loadPrs>[0];
-type PrDeps = Omit<Parameters<typeof loadPrs>[1], "read">;
+type PrDeps = Omit<Parameters<typeof loadPrs>[1], "read"> & {
+  resolveGitRoot?: (params: PrRequest) => Promise<string | null>;
+  resolveGitContext?: (params: PrRequest) => Promise<GitCheckoutContext | null>;
+};
 
 function requestAgent(params: PrRequest, cfg = getRuntimeConfig()) {
   const requested = resolveRequestedSessionAgentId(cfg, params.sessionKey, params.agentId);
@@ -95,24 +99,35 @@ export async function loadTestSessionPullRequests(
     const original = facts.readCurrent(getRuntimeConfig()).target.entry;
     return await withControlUiSessionPrSource(
       target.readSource,
-      (assertSourceCurrent, sourceIdentity) =>
-        loadPrs(params, {
-          ...deps,
+      async (assertSourceCurrent, sourceIdentity) => {
+        const assertCurrent = () => {
+          assertSourceCurrent();
+          const current = facts.readCurrent(getRuntimeConfig()).target.entry;
+          if (
+            current.sessionId !== original.sessionId ||
+            current.lifecycleRevision !== original.lifecycleRevision
+          ) {
+            throw new Error("Session pull-request target changed");
+          }
+        };
+        const { resolveGitRoot, resolveGitContext, ...ownerDeps } = deps;
+        const request = { ...params, ...target.params };
+        assertCurrent();
+        const source = resolveGitContext
+          ? await resolveGitContext(request)
+          : resolveGitRoot
+            ? await resolveGitRoot(request)
+            : target.source;
+        assertCurrent();
+        return loadPrs(params, {
+          ...ownerDeps,
           read: {
-            target,
+            target: { ...target, source },
             sourceIdentity,
-            assertCurrent: () => {
-              assertSourceCurrent();
-              const current = facts.readCurrent(getRuntimeConfig()).target.entry;
-              if (
-                current.sessionId !== original.sessionId ||
-                current.lifecycleRevision !== original.lifecycleRevision
-              ) {
-                throw new Error("Session pull-request target changed");
-              }
-            },
+            assertCurrent,
           },
-        }),
+        });
+      },
     );
   } finally {
     facts.release();
