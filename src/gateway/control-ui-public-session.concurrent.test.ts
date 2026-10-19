@@ -1,7 +1,6 @@
 import { once } from "node:events";
 import { buildControlUiPublicSessionSharePath } from "@openclaw/session-url-contract/public-share";
 import { expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, withinTest } from "../../test/helpers/promise.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   patchSessionEntryCore,
@@ -10,6 +9,7 @@ import {
 import { replaceTranscriptEvents } from "../config/sessions/session-accessor.sqlite-transcript-write.test-support.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import * as publicAttachments from "./control-ui-public-session-attachments.js";
+import { publicReadBarrier } from "./control-ui-public-session-barrier.test-support.js";
 import { loadPublicSessionShareTokenCodec } from "./control-ui-public-session-token.js";
 import { AUTH_TOKEN, createTestGatewayServer } from "./server-http.test-harness.js";
 import { createGatewayRequestContext } from "./server-request-context.js";
@@ -161,30 +161,21 @@ it("serves public text and images through real publication, isolation, and revoc
       expect(crossPublication.status).toBe(404);
       expect(await crossPublication.text()).toBe(await unknownEntry.text());
 
-      const entered = Promise.withResolvers<void>();
-      const release = Promise.withResolvers<void>();
+      const barrier = publicReadBarrier(signal);
       const readAttachment = publicAttachments.readPublicSessionAttachment;
       const heldRead = vi
         .spyOn(publicAttachments, "readPublicSessionAttachment")
         .mockImplementationOnce(async (...args) => {
           const bytes = await readAttachment(...args);
-          entered.resolve();
-          await withinTest(release.promise, signal);
+          await barrier.hold();
           return bytes;
         });
       const pending = fetch(mediaUrl(token, "held-image"));
       try {
-        await withinTest(
-          awaitGateBeforeSettlement(
-            entered.promise,
-            pending,
-            "Media request settled before reading the attachment",
-          ),
-          signal,
-        );
+        await barrier.wait(pending, "Media request settled before reading the attachment");
         await patchSessionEntryCore(locator, () => ({ publicShare: undefined }));
       } finally {
-        release.resolve();
+        barrier.release();
         heldRead.mockRestore();
       }
       const deniedInFlight = await pending;
