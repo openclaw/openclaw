@@ -427,6 +427,7 @@ async function measureRpc(fixture: object) {
       if (
         measured &&
         event.type === "diagnostic.phase.completed" &&
+        typeof event.durationMs === "number" &&
         (event.name === "sessions.diff" || event.name === "checkout.diff")
       ) {
         phaseSamples.push({
