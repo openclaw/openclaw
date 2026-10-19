@@ -130,7 +130,7 @@ describe("Tool Search metadata provenance", () => {
     });
     const details = result.details as {
       results: Array<{
-        candidates: Array<{ mcp?: Record<string, unknown> }>;
+        candidates: Array<{ instructionsHint?: string; mcp?: Record<string, unknown> }>;
       }>;
     };
 
