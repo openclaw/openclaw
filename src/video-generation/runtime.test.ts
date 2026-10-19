@@ -165,30 +165,29 @@ describe("video-generation runtime", () => {
     expect(requests[0]?.providerOptions).toEqual({ seed: 42, draft: true, camera_fixed: false });
   });
 
-  it("skips candidates that declare a providerOptions schema missing the requested key", async () => {
+  it.each<{
+    name: string;
+    declaration: VideoGenerationProviderCapabilities["providerOptions"];
+    providerOptions: Record<string, unknown>;
+    error: RegExp;
+  }>([
+    {
+      name: "unknown key",
+      declaration: { draft: "boolean" } as const,
+      providerOptions: { seed: 42 },
+      error: /does not accept providerOptions keys: seed \(accepted: draft\)/,
+    },
+    {
+      name: "wrong type",
+      declaration: { seed: "number" } as const,
+      providerOptions: { seed: "forty-two" },
+      error: /expects providerOptions\.seed to be a finite number, got string/,
+    },
+  ])("rejects providerOptions with $name", async ({ declaration, providerOptions, error }) => {
     providers = [
-      rejectingProvider("video-plugin", {
-        capabilities: { providerOptions: { draft: "boolean" } },
-      }),
+      rejectingProvider("video-plugin", { capabilities: { providerOptions: declaration } }),
     ];
-    await expect(
-      runGenerateVideo({
-        providerOptions: { seed: 42 },
-      }),
-    ).rejects.toThrow(/does not accept providerOptions keys: seed \(accepted: draft\)/);
-  });
-
-  it("skips candidates when providerOptions values do not match the declared type", async () => {
-    providers = [
-      rejectingProvider("video-plugin", {
-        capabilities: { providerOptions: { seed: "number" } },
-      }),
-    ];
-    await expect(
-      runGenerateVideo({
-        providerOptions: { seed: "forty-two" },
-      }),
-    ).rejects.toThrow(/expects providerOptions\.seed to be a finite number, got string/);
+    await expect(runGenerateVideo({ providerOptions })).rejects.toThrow(error);
   });
 
   it("overlays selected-model capabilities before option guards and normalization", async () => {
