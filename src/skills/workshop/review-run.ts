@@ -1,3 +1,4 @@
+import { cleanupSessionResources } from "@openclaw/ai/internal/runtime";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { clearAgentRunContext, registerAgentRunContext } from "../../infra/agent-run-registry.js";
@@ -94,5 +95,6 @@ export async function runSkillWorkshopReview(
     unsubscribe();
     params.preparedRunAdmission.close();
     clearAgentRunContext(params.runId);
+    cleanupSessionResources(params.sessionId);
   }
 }

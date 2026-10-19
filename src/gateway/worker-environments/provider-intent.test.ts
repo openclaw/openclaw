@@ -60,7 +60,6 @@ describe("prepared worker intent admission", () => {
     const intent = await f.owner.prepareIntent("development", { emptyWorkspace: true });
     expect(intent.profileSnapshot).not.toHaveProperty("project");
     expect(intent.profileSnapshot).not.toHaveProperty("runtimePreparation");
-    expect(intent.preparationKey).toBeUndefined();
     expect(f.spies.prepareNodeArtifacts).not.toHaveBeenCalled();
   });
 
@@ -69,7 +68,7 @@ describe("prepared worker intent admission", () => {
     const controller = new AbortController();
     const options = { machineClass: "large", os: "linux", signal: controller.signal };
     const intent = await f.prepare(options);
-    expect(intent.preparationKey).toMatch(/^[a-f0-9]{64}$/u);
+    expect(intent.profileSnapshot.project?.preparation?.key).toMatch(/^[a-f0-9]{64}$/u);
     expect(f.spies.target).toHaveBeenCalledWith({ region: "test" }, "large", "linux");
     expect(support.testState.store.list()).toEqual([]);
     expect(f.spies.resumeProvision).not.toHaveBeenCalled();
@@ -127,15 +126,17 @@ describe("prepared worker intent admission", () => {
   it("requires setup authority for reserves while preserving explicit session setup admission", async () => {
     const f = await fixture(true);
     const ordinary = await f.prepare();
-    expect(ordinary.preparationKey).toBeUndefined();
+    expect(ordinary.profileSnapshot.project?.preparation).toBeUndefined();
     const authorized = await f.prepare({ setupAuthorized: true });
     const skipped = await f.prepare({ runSetupScript: false });
-    expect(authorized.preparationKey).toBeDefined();
-    expect(skipped.preparationKey).toBeDefined();
-    expect(skipped.preparationKey).not.toBe(authorized.preparationKey);
+    const authorizedKey = authorized.profileSnapshot.project?.preparation?.key;
+    const skippedKey = skipped.profileSnapshot.project?.preparation?.key;
+    expect(authorizedKey).toBeDefined();
+    expect(skippedKey).toBeDefined();
+    expect(skippedKey).not.toBe(authorizedKey);
     await f.create("session-setup", { runSetupScript: true });
     expect(
       readWorkerProjectPreparation(support.testState.store.list()[0]!.profileSnapshot.project)?.key,
-    ).toBe(authorized.preparationKey);
+    ).toBe(authorizedKey);
   });
 });

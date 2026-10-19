@@ -27,7 +27,6 @@ function createSubscriptionState(
     chatHistoryPagination: { hasMore: false },
     chatLoading: false,
     chatMessages: [],
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatSending: false,
     chatMessage: "",

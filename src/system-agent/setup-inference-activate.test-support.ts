@@ -31,10 +31,7 @@ import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { withPluginRuntimeGenerationScope } from "../plugins/runtime/generation-scope.js";
 import type { ProviderAuthResult, ProviderPlugin } from "../plugins/types.js";
 import { activateSetupInference } from "./setup-inference-activate.js";
-import type {
-  ActivateSetupInferenceDeps,
-  ActivateSetupInferenceParams,
-} from "./setup-inference-core.js";
+import type { ActivateSetupInferenceParams } from "./setup-inference-core.js";
 import { detectSetupInference } from "./setup-inference-detect.js";
 import { createSystemAgentPluginMetadataTestSnapshot } from "./system-agent.test-helpers.js";
 import {
@@ -334,10 +331,10 @@ export async function fixture(
     .spyOn(cliCredentials, "readCodexCliActiveApiKey")
     .mockReturnValue(null);
   vi.spyOn(providerRuntime, "resolvePluginProvidersCore").mockReturnValue([provider]);
-  const deps: ActivateSetupInferenceDeps = {
-    resolveManifestProviderAuthChoice: () => choice,
-    resolveManifestProviderAuthChoices: () => [choice],
-  };
+  const resolveManifestProviderAuthChoice = vi
+    .spyOn(providerChoices, "resolveManifestProviderAuthChoice")
+    .mockReturnValue(choice);
+  vi.spyOn(providerChoices, "resolveManifestProviderAuthChoices").mockReturnValue([choice]);
   vi.spyOn(modelAuth, "resolveApiKeyForProviderCore").mockImplementation(resolveAuth);
   if (options.codex) {
     vi.spyOn(codexRuntimePlugin, "ensureCodexRuntimePluginForModelSelection").mockImplementation(
@@ -388,20 +385,15 @@ export async function fixture(
         activationConfirmed,
         signal: options.signal,
         ...overrides,
-        deps,
       }),
     );
   const detect = () =>
     metadata.run(async () => {
-      const choices = vi
-        .spyOn(providerChoices, "resolveManifestProviderAuthChoices")
-        .mockReturnValue([choice]);
       const backends = vi.spyOn(onboardInference, "detectInferenceBackends").mockResolvedValue([]);
       try {
         return await detectSetupInference();
       } finally {
         backends.mockRestore();
-        choices.mockRestore();
       }
     });
   return {
@@ -421,7 +413,7 @@ export async function fixture(
     readCodexCliActiveApiKey,
     login,
     prompter,
-    deps,
+    resolveManifestProviderAuthChoice,
     pluginRegistry,
     provider,
   };

@@ -192,7 +192,7 @@ it(
           await server.startupSettled;
           const connectOwner = async (label: string) => {
             const identity = loadOrCreateDeviceIdentity({
-              path: state.path(label, "device.sqlite"),
+              path: state.path(label, "client", "credentials.sqlite"),
             });
             const device = { deviceId: identity.deviceId, role: "operator", scopes };
             const pending = await requestDevicePairing({

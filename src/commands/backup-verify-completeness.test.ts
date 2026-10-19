@@ -36,7 +36,11 @@ async function repack(root: string, archiveRoot: string, name: string, omit: str
   return archivePath;
 }
 
-async function writeSmallArchive(sqliteSnapshots: unknown, postgresSnapshots?: unknown) {
+async function writeSmallArchive(
+  sqliteSnapshots: unknown,
+  postgresSnapshots?: unknown,
+  sharedDatabaseSourcePath?: unknown,
+) {
   const root = tempDirs.make("backup-inventory-contract-");
   const archiveRoot = "backup";
   const stateDir = "/synthetic/state";
@@ -50,7 +54,10 @@ async function writeSmallArchive(sqliteSnapshots: unknown, postgresSnapshots?: u
     platform: process.platform,
     runtimeVersion: "test",
     nodeVersion: process.version,
-    paths: { stateDir },
+    paths: {
+      stateDir,
+      ...(sharedDatabaseSourcePath === undefined ? {} : { sharedDatabaseSourcePath }),
+    },
     assets: [{ kind: "state", sourcePath: stateDir, archivePath: payload }],
     sqliteSnapshots,
     ...(postgresSnapshots === undefined ? {} : { postgresSnapshots }),
@@ -274,6 +281,23 @@ describe("standalone backup database completeness", () => {
   ])("rejects $name inventory metadata", async ({ value, error }) => {
     const { archivePath } = await writeSmallArchive(value);
     await expect(verifyBackupArchive(archivePath)).rejects.toThrow(error);
+  });
+
+  it.each([null, 7, "relative.sqlite", "/shared/../state.sqlite", "/shared\0.sqlite"])(
+    "rejects malformed captured shared source identity %j",
+    async (sourcePath) => {
+      const { archivePath } = await writeSmallArchive([], undefined, sourcePath);
+      await expect(verifyBackupArchive(archivePath)).rejects.toThrow("shared database source");
+    },
+  );
+
+  it("does not require the captured shared source path to exist on the restore host", async () => {
+    const { archivePath } = await writeSmallArchive(
+      [],
+      undefined,
+      "/missing/captured/shared.sqlite",
+    );
+    await expect(verifyBackupArchive(archivePath)).resolves.toMatchObject({ ok: true });
   });
 
   it.each([

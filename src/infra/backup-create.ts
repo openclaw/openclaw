@@ -667,6 +667,12 @@ async function createBackupArchiveInScope(
                 ];
                 // Per-entry reports must not overflow the bounded restore manifest.
                 const manifest = buildManifest({ ...result, skipped: plan.skipped }, plan);
+                if (stateSqliteBackup.sharedDatabaseSourcePath !== undefined) {
+                  manifest.paths = {
+                    ...manifest.paths,
+                    sharedDatabaseSourcePath: stateSqliteBackup.sharedDatabaseSourcePath,
+                  };
+                }
                 manifest.externalSymbolicLinks = externalSymbolicLinks;
                 manifest.sqliteSnapshots = snapshotFacts.map((snapshot) =>
                   snapshot.role === "agent"

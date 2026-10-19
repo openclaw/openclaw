@@ -1,5 +1,4 @@
 import type { JSX } from "@solidjs/web";
-import type { NodePermissionRequest } from "../../../packages/gateway-protocol/src/node-permissions.js";
 import type { ControlUiSessionPullRequest } from "../../../src/gateway/control-ui-contract.js";
 import type { ControlUiSurfaceProps } from "../../../src/plugin-sdk/control-ui.js";
 import type { ClawHubRecommendation } from "../../../src/shared/clawhub-recommendations.js";
@@ -39,6 +38,11 @@ declare module "@solidjs/web" {
       messageActions: MessageActionDetails | null | undefined;
     }
     interface IntrinsicElements {
+      "openclaw-chat-sent-comments": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-sources": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-summary-automations": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-details-progress": HTMLAttributes<HTMLElement>;
+      "openclaw-microphone-activity": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-content": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-raw": HTMLAttributes<HTMLElement>;
       "openclaw-chat-tool-outcome": HTMLAttributes<HTMLElement>;
@@ -78,16 +82,11 @@ declare module "@solidjs/web" {
         ) => void;
       };
       "openclaw-github-identity": HTMLAttributes<HTMLElement>;
-      "openclaw-chat-permission-card": HTMLAttributes<HTMLElement> & {
-        "prop:request"?: NodePermissionRequest | null;
-        "prop:onRetry"?: (message: string) => void;
-      };
-      "openclaw-chat-run-failure-notice": LegacyAttributes<
-        HTMLElementTagNameMap["openclaw-chat-run-failure-notice"]
-      > &
-        ElementProperties<
-          Pick<HTMLElementTagNameMap["openclaw-chat-run-failure-notice"], "onRetry">
-        >;
+      "openclaw-chat-permission-card": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-run-failure-notice": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-retry-status": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-child-attention": HTMLAttributes<HTMLElement>;
+      "openclaw-session-diff-menu": HTMLAttributes<HTMLElement>;
       "openclaw-mcp-servers-card": HTMLAttributes<HTMLElement>;
       "openclaw-update-run-view": HTMLAttributes<HTMLElement>;
       "openclaw-plugins-page": HTMLAttributes<HTMLElement>;

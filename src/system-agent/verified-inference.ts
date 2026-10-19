@@ -27,7 +27,7 @@ import type { AgentHarnessAuthBindingFingerprintParams } from "../agents/harness
 import type { ResolvedProviderAuth } from "../agents/model-auth-runtime-shared.js";
 import { resolveApiKeyForProviderCore } from "../agents/model-auth.js";
 import { cloneConfigWithResolutionFacts } from "../config/resolution-facts.js";
-import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import { normalizePluginsConfig } from "../plugins/config-state.js";
 import { passesManifestOwnerBasePolicy } from "../plugins/manifest-owner-policy.js";
 import { loadPluginRegistrySnapshot } from "../plugins/plugin-registry.js";
@@ -589,9 +589,7 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
   configuredRoute: SystemAgentConfiguredRoute;
   executionRoute: SystemAgentConfiguredRoute;
   auth: AgentExecutionAuthBinding;
-  deps?: SystemAgentVerifiedInferenceDeps;
 }): Promise<SystemAgentVerifiedInferenceBinding> {
-  const deps = params.deps ?? {};
   const runConfig = cloneConfigWithResolutionFacts(params.executionRoute.runConfig);
   const configuredExecution = {
     ...params.executionRoute,
@@ -711,7 +709,7 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
       params.configuredRoute.sourceConfig,
       execution,
       ownerPluginIds,
-      deps,
+      {},
     ),
     ownerPluginIds,
     ownerPluginArtifacts,
@@ -738,11 +736,10 @@ export async function createSystemAgentVerifiedInferenceBinding(params: {
 /** Re-hash plugin-owned runtime files only at a persistent side-effect boundary. */
 export async function hasCurrentSystemAgentOwnerPluginArtifacts(
   binding: SystemAgentVerifiedInferenceBinding,
-  deps: SystemAgentVerifiedInferenceDeps = {},
+  capturedSnapshot?: ConfigFileSnapshot,
 ): Promise<boolean> {
-  const readSnapshot =
-    deps.readConfigFileSnapshot ?? (await import("../config/config.js")).readConfigFileSnapshot;
-  const snapshot = await readSnapshot();
+  const snapshot =
+    capturedSnapshot ?? (await (await import("../config/config.js")).readConfigFileSnapshot());
   if (!snapshot.exists || !snapshot.valid) {
     return false;
   }

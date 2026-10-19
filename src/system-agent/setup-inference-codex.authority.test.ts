@@ -45,7 +45,6 @@ function stageContext(
       runtime: createNonExitingRuntime(),
       isCancelled,
     },
-    deps: {},
     effects: { credentialsSaved: false },
     beforePersistentEffect: async () => {},
   };

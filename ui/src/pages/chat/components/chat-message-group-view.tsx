@@ -568,13 +568,6 @@ function SessionActivityGroup(props: {
   );
 }
 
-export function renderSolidMessageGroup(
-  group: MessageGroupData,
-  options: NativeMessageGroupOptions,
-) {
-  return <MessageGroup group={group} options={options} />;
-}
-
 export function MessageGroup(props: {
   group: MessageGroupData;
   options: NativeMessageGroupOptions;

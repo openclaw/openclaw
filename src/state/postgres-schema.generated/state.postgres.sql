@@ -432,15 +432,6 @@ CREATE TABLE "delivery_queue_entries" (
   PRIMARY KEY ("queue_name", "id")
 );
 
-CREATE TABLE "device_auth_tokens" (
-  "device_id" text COLLATE "C" NOT NULL,
-  "role" text COLLATE "C" NOT NULL,
-  "token" text COLLATE "C" NOT NULL,
-  "scopes_json" text COLLATE "C" NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("device_id", "role")
-);
-
 CREATE TABLE "device_bootstrap_tokens" (
   "token_key" text COLLATE "C" NOT NULL,
   "token" text COLLATE "C" NOT NULL,
@@ -454,16 +445,6 @@ CREATE TABLE "device_bootstrap_tokens" (
   "issued_at_ms" bigint NOT NULL,
   "last_used_at_ms" bigint,
   PRIMARY KEY ("token_key")
-);
-
-CREATE TABLE "device_identities" (
-  "identity_key" text COLLATE "C" NOT NULL,
-  "device_id" text COLLATE "C" NOT NULL,
-  "public_key_pem" text COLLATE "C" NOT NULL,
-  "private_key_pem" text COLLATE "C" NOT NULL,
-  "created_at_ms" bigint NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("identity_key")
 );
 
 CREATE TABLE "device_pairing_paired" (
@@ -569,16 +550,6 @@ CREATE TABLE "gateway_boot_lifecycle" (
   "startup_reason" text COLLATE "C",
   "reason" text COLLATE "C",
   PRIMARY KEY ("boot_id")
-);
-
-CREATE TABLE "gateway_origin_device_tokens" (
-  "gateway_scope" text COLLATE "C" NOT NULL,
-  "device_id" text COLLATE "C" NOT NULL,
-  "role" text COLLATE "C" NOT NULL,
-  "token" text COLLATE "C" NOT NULL,
-  "scopes_json" text COLLATE "C" NOT NULL,
-  "updated_at_ms" bigint NOT NULL,
-  PRIMARY KEY ("gateway_scope", "device_id", "role")
 );
 
 CREATE TABLE "gateway_restart_handoff" (
@@ -1436,11 +1407,7 @@ CREATE INDEX "idx_delivery_queue_session" ON "delivery_queue_entries" (("queue_n
 
 CREATE INDEX "idx_delivery_queue_target" ON "delivery_queue_entries" (("queue_name") ASC NULLS FIRST, ("status") ASC NULLS FIRST, ("channel") ASC NULLS FIRST, ("target") ASC NULLS FIRST, ("enqueued_at") ASC NULLS FIRST, ("id") ASC NULLS FIRST) WHERE "channel" IS NOT NULL AND "target" IS NOT NULL;
 
-CREATE INDEX "idx_device_auth_tokens_updated" ON "device_auth_tokens" (("updated_at_ms") DESC NULLS LAST, ("device_id") ASC NULLS FIRST, ("role") ASC NULLS FIRST);
-
 CREATE INDEX "idx_device_bootstrap_tokens_ts" ON "device_bootstrap_tokens" (("ts") ASC NULLS FIRST);
-
-CREATE INDEX "idx_device_identities_device" ON "device_identities" (("device_id") ASC NULLS FIRST, ("updated_at_ms") DESC NULLS LAST);
 
 CREATE INDEX "idx_device_pairing_paired_approved" ON "device_pairing_paired" (("approved_at_ms") DESC NULLS LAST, ("device_id") ASC NULLS FIRST);
 

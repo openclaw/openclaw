@@ -10,22 +10,15 @@ import {
   LEGACY_SESSION_PROVIDER_FIELDS,
 } from "../../../config/sessions/session-entry-state-format.js";
 import {
-  normalizePendingFinalDelivery,
+  normalizeCount,
   normalizeFallbackNotice,
   normalizeMemoryFlush,
+  normalizeOptionalTimestamp,
+  normalizePendingFinalDelivery,
   projectCanonicalSessionEntryShape,
 } from "../../../config/sessions/store-entry-shape.js";
 import type { SessionEntry } from "../../../config/sessions/types.js";
 import { isIncognitoSessionKey, parseAgentSessionKey } from "../../../routing/session-key.js";
-
-function normalizeOptionalTimestamp(value: unknown): number | undefined {
-  return value === undefined ? undefined : (asNonNegativeFiniteNumber(value) ?? 0);
-}
-
-function normalizeCount(value: unknown): number | undefined {
-  const number = asNonNegativeFiniteNumber(value);
-  return number === undefined ? undefined : Math.floor(number);
-}
 
 /** Doctor retires legacy activity while preserving the previous writer's completed yield. */
 export function migrateLegacySessionRunOutcome(

@@ -277,7 +277,6 @@ export class SystemAgentChatEngine {
             planSystemAgentGreetingWithConfiguredModel({
               ...params,
               verifiedInference: this.verifiedInference,
-              deps: this.options.deps,
             }),
           );
     };

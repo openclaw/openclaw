@@ -3,6 +3,7 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { seedMacNodeWorkerProofState } from "../../scripts/lib/mac-node-worker-proof-state.mjs";
+import { beginDoctorMaintenance } from "../commands/doctor-maintenance.js";
 import { readDeviceAuthTokenForTest } from "../infra/device-auth-store.test-support.js";
 import { generateStoredDeviceIdentity } from "../infra/device-identity-store.js";
 import * as identityStore from "../infra/device-identity.js";
@@ -108,7 +109,8 @@ describe("node-host state readiness", () => {
       }
       expect(fixture.prepare).toHaveBeenCalledOnce();
       expect(identity()).toBeNull();
-      expect(approvals(stateDb.openOpenClawStateDatabase({ env }).db)).toBeUndefined();
+      expect(fs.existsSync(databasePath())).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
     },
   );
 
@@ -140,10 +142,9 @@ describe("node-host state readiness", () => {
 
     expect(fs.readFileSync(sourcePath, "utf8")).toBe(raw);
     expectUnprepared();
+    expect(fs.existsSync(databasePath())).toBe(false);
+    expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
     const { db } = stateDb.openOpenClawStateDatabase({ env });
-    for (const table of ["device_identities", "device_auth_tokens"]) {
-      expect(db.prepare(`SELECT count(*) AS count FROM ${table}`).get()).toEqual({ count: 0 });
-    }
     expect(approvals(db)).toBeUndefined();
 
     if (!auth && !device && !approvalsFile) {
@@ -165,7 +166,11 @@ describe("node-host state readiness", () => {
             detected: execMigration.detectLegacyExecApprovals(context),
           });
     expect(await repaired).toMatchObject({ warnings: [] });
-    expect(fs.existsSync(sourcePath)).toBe(false);
+    if (approvalsFile) {
+      expect(fs.existsSync(sourcePath)).toBe(false);
+    } else {
+      expect(fs.readFileSync(sourcePath, "utf8")).toBe(raw);
+    }
     await expectAdmission(start);
     expect(fixture.prepare).toHaveBeenCalledOnce();
     if (auth) {
@@ -181,7 +186,7 @@ describe("node-host state readiness", () => {
     }
   });
 
-  it.each(["managed", "canonical", "native"] as const)(
+  it.each(["managed", "canonical"] as const)(
     "admits %s state without replacing its authority",
     async (mode) => {
       if (mode === "managed") {
@@ -199,34 +204,81 @@ describe("node-host state readiness", () => {
         await expectAdmission();
         expect(fs.readFileSync(sourcePath, "utf8")).toBe(raw);
         expect(identity()).toEqual(canonical);
-      } else {
-        const {
-          deviceId,
-          publicKeyPem: publicKey,
-          privateKeyPem: privateKey,
-          createdAtMs: at,
-        } = makeIdentity();
-        seedMacNodeWorkerProofState(databasePath());
-        const seed = new DatabaseSync(databasePath());
-        seed
-          .prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)")
-          .run("primary", deviceId, publicKey, privateKey, at, at);
-        seed.close();
-        await expectAdmission();
-        expect(identity()?.deviceId).toBe(deviceId);
-        const verified = new DatabaseSync(databasePath(), { readOnly: true });
-        try {
-          expect(verified.prepare("PRAGMA user_version").get()).toEqual({
-            user_version: OPENCLAW_STATE_SCHEMA_VERSION,
-          });
-          expect(JSON.parse(approvals(verified)!.raw_json)).toMatchObject({
-            defaults: { security: "deny" },
-          });
-        } finally {
-          verified.close();
-        }
       }
       expect(fixture.prepare).toHaveBeenCalledOnce();
     },
   );
+
+  it("preserves native identity and policy through required Doctor migration", async () => {
+    const nativeIdentity = makeIdentity();
+    seedMacNodeWorkerProofState(databasePath());
+    const seed = new DatabaseSync(databasePath());
+    let nativePolicy: string;
+    try {
+      seed
+        .prepare("INSERT INTO device_identities VALUES (?, ?, ?, ?, ?, ?)")
+        .run(
+          "primary",
+          nativeIdentity.deviceId,
+          nativeIdentity.publicKeyPem,
+          nativeIdentity.privateKeyPem,
+          nativeIdentity.createdAtMs,
+          nativeIdentity.createdAtMs,
+        );
+      nativePolicy = approvals(seed)!.raw_json;
+    } finally {
+      seed.close();
+    }
+    const nativeBytes = fs.readFileSync(databasePath());
+    await expect(run()).rejects.toThrow(/openclaw doctor --fix/);
+    expectUnprepared();
+    expect(fs.readFileSync(databasePath())).toEqual(nativeBytes);
+    expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
+
+    const maintenance = await beginDoctorMaintenance({
+      root: null,
+      options: { repair: true, nonInteractive: true },
+      runtime: {
+        log() {},
+        error() {},
+        exit(code) {
+          throw new Error(`Unexpected Doctor exit ${code}`);
+        },
+      },
+    });
+    expect(maintenance).toBeDefined();
+    try {
+      const repaired = await maintenance!.run(() =>
+        stateDb.prepareOpenClawStateDatabaseSchema({ env }, "doctor"),
+      );
+      expect(repaired.warnings).toEqual([]);
+    } finally {
+      await maintenance!.release();
+      await stateDb.closeOpenClawStateDatabaseAsync();
+    }
+
+    await expectAdmission();
+    expect(fixture.prepare).toHaveBeenCalledOnce();
+    expect(identity()).toEqual({
+      deviceId: nativeIdentity.deviceId,
+      publicKeyPem: nativeIdentity.publicKeyPem,
+      privateKeyPem: nativeIdentity.privateKeyPem,
+    });
+    const { db } = stateDb.openOpenClawStateDatabase({ env });
+    expect(db.prepare("PRAGMA user_version").get()).toEqual({
+      user_version: OPENCLAW_STATE_SCHEMA_VERSION,
+    });
+    expect(approvals(db)!.raw_json).toBe(nativePolicy);
+  });
+
+  it("refuses unprepared selected Gateway state without opening it", async () => {
+    const selectedPath = path.join(stateDir, "state", "openclaw.sqlite");
+    fs.mkdirSync(path.dirname(selectedPath), { recursive: true });
+    fs.writeFileSync(selectedPath, "synthetic selected Gateway state sentinel");
+    await expect(run()).rejects.toThrow(/openclaw doctor --fix/);
+    expect(fs.readFileSync(selectedPath, "utf8")).toBe("synthetic selected Gateway state sentinel");
+    expect(fixture.configure).not.toHaveBeenCalled();
+    expect(fixture.prepare).not.toHaveBeenCalled();
+    expect(fs.existsSync(path.join(stateDir, "client", "credentials.sqlite"))).toBe(false);
+  });
 });

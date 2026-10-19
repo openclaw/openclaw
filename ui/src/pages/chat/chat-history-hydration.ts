@@ -226,7 +226,6 @@ export async function hydrateChatHistory(
             ? response.inputReceipts
             : undefined,
       });
-      state.chatThinkingLevel = response.sessionInfo.thinkingLevel ?? null;
       state.chatQueueModeOverride = response.sessionInfo.queueMode;
       state.chatEffectiveQueueMode = response.sessionInfo.effectiveQueueMode;
       applyHistoryRun({
@@ -335,7 +334,6 @@ export async function hydrateChatHistory(
     ) {
       state.reconnectResumeSessionId = null;
     }
-    state.chatThinkingLevel = res.sessionInfo?.thinkingLevel ?? res.thinkingLevel ?? null;
     state.chatVerboseLevel = res.verboseLevel ?? null;
     state.chatQueueModeOverride = res.sessionInfo?.queueMode;
     state.chatEffectiveQueueMode = res.sessionInfo?.effectiveQueueMode;
@@ -436,7 +434,6 @@ export async function hydrateChatHistory(
     const missingReadScope = isMissingOperatorReadScopeError(err);
     if (missingReadScope) {
       resetChatHistoryProjection(state, requestAgentId);
-      state.chatThinkingLevel = null;
       state.chatVerboseLevel = null;
     }
     setChatHistoryLoad(state, {

@@ -16,8 +16,8 @@ import { resolveUiSelectedSessionAgentId } from "../../lib/sessions/session-key.
 import type { ChatMessageRecovery } from "./chat-message-recovery.ts";
 import type { ChatPendingInputView, PendingInputRequest } from "./chat-pending-inputs.types.ts";
 import { confirmQueuedMessageCustody, removeQueuedMessage } from "./chat-queue.ts";
+import { chatRunPresentation } from "./chat-run-presentation.ts";
 import type { ChatState } from "./chat-state-contract.ts";
-import { publishChatRunState } from "./chat-state-render.ts";
 import { projectChatSystemNotice } from "./chat-system-notice.ts";
 import { buildMessageItems, messageMatchesSearchQuery } from "./chat-thread-items.ts";
 import {
@@ -286,7 +286,7 @@ export function applyChatPendingInputs(
   ) {
     void requestPendingInputPage(state, view.queueBefore, "discovery");
   }
-  publishChatRunState(state);
+  chatRunPresentation(state).publish();
 }
 
 async function requestPendingInputPage(
@@ -310,7 +310,7 @@ async function requestPendingInputPage(
   view.request = request;
   view.error = undefined;
   if (kind === "navigation") {
-    publishChatRunState(state);
+    chatRunPresentation(state).publish();
   }
   const current = () => ownsPendingInputRequest(state, view, request);
   try {
@@ -364,7 +364,7 @@ async function requestPendingInputPage(
     if (view.request === request) {
       view.request = undefined;
       if (getChatPendingInputs(state) === view) {
-        publishChatRunState(state);
+        chatRunPresentation(state).publish();
       }
     }
   }

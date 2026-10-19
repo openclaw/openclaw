@@ -10,7 +10,7 @@ const LOBSTER = "name: inbox-triage\nsteps:\n  - id: fetch\n  - id: classify\n";
 const MALFORMED = "key: value\n  bad indent: oops\n";
 const path = (address: string) => parseOcPath(`oc://workflow.yaml/${address}`);
 const set = (raw: string, address: string, value: string) =>
-  setOcPath(parseYaml(raw).ast, path(address), value);
+  setOcPath(parseYaml(raw), path(address), value);
 
 describe("YAML numeric source preservation", () => {
   it.each([
@@ -22,13 +22,13 @@ describe("YAML numeric source preservation", () => {
     const before =
       "id: 9007199254740993\nratio: 1.0000000000000001\nname: old\n" +
       "options: {}\nitems: [9007199254740995]\n";
-    const ast = parseYaml(before).ast;
+    const ast = parseYaml(before);
     const result = setOcPath(ast, path(address), value);
 
     expect(result.raw).toContain("id: 9007199254740993\n");
     expect(result.raw).toContain("ratio: 1.0000000000000001\n");
     expect(result.raw).toContain("9007199254740995");
-    expect(typeof parseYaml(result.raw).ast.doc.get("id")).toBe("number");
+    expect(typeof parseYaml(result.raw).doc.get("id")).toBe("number");
     expect(ast.raw).toBe(before);
   });
 
@@ -44,14 +44,14 @@ describe("YAML numeric source preservation", () => {
 
 describe("setYamlOcPath — direct", () => {
   it("reports unresolved for missing path", () => {
-    const { ast } = parseYaml(LOBSTER);
+    const ast = parseYaml(LOBSTER);
     expect(() => setYamlOcPath(ast, path("missing"), "x")).toThrow(
       expect.objectContaining({ reason: "unresolved" }),
     );
   });
 
   it("reports parse-error before editing a malformed document", () => {
-    expect(() => setYamlOcPath(parseYaml(MALFORMED).ast, path("key"), "new-value")).toThrow(
+    expect(() => setYamlOcPath(parseYaml(MALFORMED), path("key"), "new-value")).toThrow(
       expect.objectContaining({ reason: "parse-error" }),
     );
   });
@@ -59,7 +59,7 @@ describe("setYamlOcPath — direct", () => {
   it("reports parse-error before inserting into a malformed document", () => {
     expect(() =>
       insertYamlOcPath(
-        parseYaml(MALFORMED).ast,
+        parseYaml(MALFORMED),
         parseOcPath("oc://workflow.yaml"),
         { kind: "keyed", key: "next" },
         "x",
@@ -75,11 +75,11 @@ describe("setYamlOcPath — positional tokens", () => {
     ["config:\n  a: 1\n  b: 2\n  c: 3\n", "config/$first", 99, "a: 99"],
     ["config:\n  a: 1\n  b: 2\n  c: 3\n", "config/$last", 99, "c: 99"],
   ])("edits %s at %s", (raw, address, value, expected) => {
-    expect(setYamlOcPath(parseYaml(raw).ast, path(address), value).raw).toContain(expected);
+    expect(setYamlOcPath(parseYaml(raw), path(address), value).raw).toContain(expected);
   });
 
   it("reports unresolved for $last against an empty seq", () => {
-    expect(() => setYamlOcPath(parseYaml("items: []\n").ast, path("items/$last"), "x")).toThrow(
+    expect(() => setYamlOcPath(parseYaml("items: []\n"), path("items/$last"), "x")).toThrow(
       expect.objectContaining({ reason: "unresolved" }),
     );
   });
@@ -100,7 +100,7 @@ describe("universal verbs — yaml dispatch", () => {
     { text: "null", key: null },
   ])("edits a YAML map's native $text key", ({ text, key }) => {
     const result = set(`${text}: old\nuntouched: keep\n`, text, "updated");
-    const written = parseYaml(result.raw).ast.doc;
+    const written = parseYaml(result.raw).doc;
     expect(written.get(key)).toBe("updated");
     expect(written.get("untouched")).toBe("keep");
   });
@@ -111,11 +111,11 @@ describe("universal verbs — yaml dispatch", () => {
     ["name: inbox\n", "+owner", { kind: "insertion-point", container: "yaml-map" }],
     ["- a\n", "+", { kind: "insertion-point", container: "yaml-seq" }],
   ])("resolves %s at %s", (raw, address, expected) => {
-    expect(resolveOcPath(parseYaml(raw).ast, path(address))).toMatchObject(expected);
+    expect(resolveOcPath(parseYaml(raw), path(address))).toMatchObject(expected);
   });
 
   it("resolveOcPath rejects insertion under scalar root", () => {
-    expect(resolveOcPath(parseYaml("hello\n").ast, path("+"))).toBeNull();
+    expect(resolveOcPath(parseYaml("hello\n"), path("+"))).toBeNull();
   });
 
   it("setOcPath coerces numeric string to number for number leaf", () => {

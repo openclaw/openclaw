@@ -11,8 +11,8 @@ import { SQLITE_READONLY_CHILD_ARG } from "../infra/runtime-process-entrypoints.
 import { createSqliteReadOnlyWorkerScope } from "../infra/sqlite-readonly-worker.js";
 import { withLegacyMigrationStateLock } from "../infra/state-migrations.lock.js";
 import * as temporaryState from "../infra/tmp-openclaw-dir.js";
-import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-database-generations.js";
 import { captureUpdateDoctorConfigWrites } from "../infra/update-doctor-result.js";
+import { readUpdatePhysicalDatabaseGenerations } from "../infra/update-physical-database-generations.js";
 import {
   createManagedUpdateRequesterAuthority,
   UpdateRequesterRevokedError,
@@ -124,6 +124,8 @@ it.each(["configured-owner", "profile"] as const)(
         };
         assertCurrent();
         await closeOpenClawStateDatabaseAsync();
+        // Keep the initial liveness control outside the maintenance admission budget.
+        authorityWorkerLaunches.clear();
         const maintenance = await beginDoctorMaintenance({
           root: null,
           options: { repair: true, nonInteractive: true },

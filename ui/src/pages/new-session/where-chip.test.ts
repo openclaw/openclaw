@@ -189,13 +189,20 @@ describe("Where chip", () => {
   it("keeps explicit destinations selectable while Auto is enabled", () => {
     const onSelectDevice = vi.fn();
     const onSelectCloudProfile = vi.fn();
+    const onApplyCloudDefaults = vi.fn();
     const onEnvironmentQueryInput = vi.fn();
     const onConnectMachine = vi.fn();
     const container = renderPicker(
       true,
       undefined,
       { autoDevice: true },
-      { onSelectDevice, onSelectCloudProfile, onEnvironmentQueryInput, onConnectMachine },
+      {
+        onSelectDevice,
+        onSelectCloudProfile,
+        onApplyCloudDefaults,
+        onEnvironmentQueryInput,
+        onConnectMachine,
+      },
     );
     const destinations = container.querySelectorAll<HTMLButtonElement>(
       '.new-session-page__environment-list [data-value]:not([data-value="auto-device"])',
@@ -207,7 +214,8 @@ describe("Where chip", () => {
       destination.click();
     }
     expect(onSelectDevice).toHaveBeenCalledTimes(4);
-    expect(onSelectCloudProfile).toHaveBeenCalledExactlyOnceWith("aws", true);
+    expect(onApplyCloudDefaults).toHaveBeenCalledExactlyOnceWith("aws");
+    expect(onSelectCloudProfile).toHaveBeenCalledExactlyOnceWith("aws");
 
     expect(capacityCaption(option(container, "device:runner"))).toBe("1 of 2 session slots in use");
 

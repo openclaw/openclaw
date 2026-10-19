@@ -157,10 +157,22 @@ describe("gateway-hosted exec approvals", () => {
       cleanup.push(() => disconnectGatewayClient(operator));
 
       const originReviewerIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(stateDir, "test-device-identities", "origin-reviewer.sqlite"),
+        path: path.join(
+          stateDir,
+          "test-device-identities",
+          "origin-reviewer",
+          "client",
+          "credentials.sqlite",
+        ),
       });
       const otherReviewerIdentity = loadOrCreateDeviceIdentity({
-        path: path.join(stateDir, "test-device-identities", "other-reviewer.sqlite"),
+        path: path.join(
+          stateDir,
+          "test-device-identities",
+          "other-reviewer",
+          "client",
+          "credentials.sqlite",
+        ),
       });
       const originReviewer = await connectGatewayClient({
         url: `ws://127.0.0.1:${claim.port}`,

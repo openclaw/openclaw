@@ -313,6 +313,8 @@ test.each(["established", "first-created"] as const)(
         "synthetic-late-lease",
         databaseFor(state, env),
       );
+      // Exercise lease publication during preparation, before deletion is admitted.
+      await closeOpenClawAgentDatabasesAsync(state.stateDir);
       const sharedPath = resolveOpenClawStateSqlitePath(databaseOptions.env);
       const admission = stateCache.captureOpenClawStateDatabaseReadAdmission(sharedPath);
       expect(admission.identity.key.startsWith("path:")).toBe(sharedState === "first-created");

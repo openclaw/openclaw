@@ -8,8 +8,8 @@ function entry<S extends string, D extends string>(sourceWorkerName: S, distWork
 export const updateExecutorNativeEntrypoints = {
   gatewayLock: entry("../../infra/gateway-lock", "infra/gateway-lock.js"),
   databaseGenerations: entry(
-    "../../infra/update-database-generations",
-    "infra/update-database-generations.js",
+    "../../infra/update-physical-database-generations",
+    "infra/update-physical-database-generations.js",
   ),
   postUpdate: entry("update-command-post-update", "cli/update-cli/update-command-post-update.js"),
   terminal: entry("update-command-terminal", "cli/update-cli/update-command-terminal.js"),

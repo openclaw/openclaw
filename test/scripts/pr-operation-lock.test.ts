@@ -327,9 +327,22 @@ function installPrCliFixture(repoDir: string, env?: NodeJS.ProcessEnv) {
 function installRequiredPrCommandStubs(binDir: string) {
   for (const command of ["gh", "jq", "pnpm", "rg"]) {
     const stub = join(binDir, command);
-    writeFileSync(stub, "#!/bin/sh\nexit 0\n");
+    writeFileSync(
+      stub,
+      command === "gh"
+        ? '#!/bin/sh\ncase "$*" in "api user --include") printf \'HTTP/2.0 200 OK\\n\\n{"login":"fixture"}\\n\' ;; esac\nexit 0\n'
+        : "#!/bin/sh\nexit 0\n",
+    );
     chmodSync(stub, 0o755);
   }
+}
+
+function commitPrCliFixture(repoDir: string, sources: string[]) {
+  execFileSync("git", ["add", "--", ...sources], { cwd: repoDir });
+  execFileSync("git", ["commit", "-qm", "test: admit fixture wrapper"], { cwd: repoDir });
+  execFileSync("git", ["remote", "add", "origin", repoDir], { cwd: repoDir });
+  execFileSync("git", ["update-ref", "refs/remotes/origin/main", "HEAD"], { cwd: repoDir });
+  linkPrWrapperDependencies(repoDir);
 }
 
 interface SupervisedFixtureOptions {
@@ -947,10 +960,11 @@ describePosix("scripts/pr per-PR operation lock", () => {
   });
   it("does not trust an ambient dedicated-process-group marker", () => {
     const repoDir = createRepo();
-    const { binDir, cli } = installPrCliFixture(repoDir);
+    const { binDir, cli, wrapperSources } = installPrCliFixture(repoDir);
     const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
     writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\nreview_init() { :; }\n`);
     installRequiredPrCommandStubs(binDir);
+    commitPrCliFixture(repoDir, wrapperSources);
     const env: NodeJS.ProcessEnv = {
       ...createIndependentPrFixtureEnv(),
       OPENCLAW_PR_DEDICATED_PROCESS_GROUP: "1",
@@ -984,15 +998,20 @@ describePosix("scripts/pr per-PR operation lock", () => {
     "releases a validation-phase lock when $name",
     ({ overrides, error, unexpectedOutput, unavailableStorage }) => {
       const repoDir = createRepo();
-      const { binDir, cli } = installPrCliFixture(repoDir);
+      const { binDir, cli, wrapperSources } = installPrCliFixture(repoDir);
       const reviewScript = join(repoDir, "scripts/pr-lib/review.sh");
       writeFileSync(reviewScript, `${readFileSync(reviewScript, "utf8")}\n${overrides}\n`);
       installRequiredPrCommandStubs(binDir);
+      commitPrCliFixture(repoDir, wrapperSources);
       if (unavailableStorage) {
         const mktempStub = join(binDir, "mktemp");
+        const mktemp = execFileSync("which", ["mktemp"], { encoding: "utf8" }).trim();
         writeFileSync(
           mktempStub,
-          "#!/bin/sh\necho 'mktemp: No space left on device' >&2\nexit 1\n",
+          `#!/bin/sh
+case "$*" in *'/openclaw-pr.XXXXXX') echo 'mktemp: No space left on device' >&2; exit 1 ;; esac
+exec ${shellQuote(mktemp)} "$@"
+`,
         );
         chmodSync(mktempStub, 0o755);
       }

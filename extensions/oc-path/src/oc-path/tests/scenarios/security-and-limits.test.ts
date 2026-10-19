@@ -59,7 +59,7 @@ it("negative numeric key on object resolves as literal key (openclaw#59934)", ()
   // Telegram supergroup IDs are negative numbers used as map keys.
   const ast = parseJsonc(
     '{"channels":{"telegram":{"groups":{"-5028303500":{"requireMention":false}}}}}',
-  ).ast;
+  );
   const m = resolveOcPath(
     ast,
     parseOcPath("oc://config/channels.telegram.groups.-5028303500.requireMention"),
@@ -124,8 +124,7 @@ it("walker depth cap fires on synthetic deeply-nested AST", () => {
 it("jsonl per-line parser flags malformed deeply-nested values", () => {
   const depth = MAX_TRAVERSAL_DEPTH + 50;
   const nested = '{"a":'.repeat(depth) + '"x"' + "}".repeat(depth);
-  const { diagnostics } = parseJsonl(nested + "\n");
-  expect(diagnostics.some((d) => d.code === "OC_JSONL_LINE_MALFORMED")).toBe(true);
+  expect(parseJsonl(nested + "\n").lines).toEqual([{ kind: "malformed", line: 1, raw: nested }]);
 });
 it("formatOcPath rejects a struct carrying the redaction sentinel", () => {
   expect(() => formatOcPath({ file: "AGENTS.md", section: "__OPENCLAW_REDACTED__" })).toThrow(
@@ -133,25 +132,25 @@ it("formatOcPath rejects a struct carrying the redaction sentinel", () => {
   );
 });
 it("`$last` literal key on an object is shadowed by the positional sentinel", () => {
-  const ast = parseJsonc('{"$last":"literal-value","foo":"bar"}').ast;
+  const ast = parseJsonc('{"$last":"literal-value","foo":"bar"}');
   const m = resolveOcPath(ast, parseOcPath("oc://X/$last"));
   expect(m?.kind === "leaf" && m.valueText).toBe("bar");
 });
 it("number coercion accepts `1.5`, refuses `1,5`", () => {
-  const ast = parseJsonc('{"x":1.0}').ast;
+  const ast = parseJsonc('{"x":1.0}');
   expect(JSON.parse(setOcPath(ast, parseOcPath("oc://X/x"), "1.5").raw)).toEqual({ x: 1.5 });
   expect(() => setOcPath(ast, parseOcPath("oc://X/x"), "1,5")).toThrow(COERCION_ERROR);
 });
 
 it("boolean coercion accepts `true` / `false` only", () => {
-  const ast = parseJsonc('{"x":true}').ast;
+  const ast = parseJsonc('{"x":true}');
   expect(JSON.parse(setOcPath(ast, parseOcPath("oc://X/x"), "false").raw)).toEqual({ x: false });
   for (const value of ["False", "TRUE", "yes"]) {
     expect(() => setOcPath(ast, parseOcPath("oc://X/x"), value)).toThrow(COERCION_ERROR);
   }
 });
 it("regex metacharacters in predicate value match literally, not as regex", () => {
-  const ast = parseJsonc('{"items":[{"name":"a.*"},{"name":"abc"}]}').ast;
+  const ast = parseJsonc('{"items":[{"name":"a.*"},{"name":"abc"}]}');
   const matches = findOcPaths(ast, parseOcPath("oc://X.jsonc/items/[name=a.*]"));
   expect(matches).toHaveLength(1);
 });
@@ -165,7 +164,7 @@ it("rejects empty predicate body and empty key/value", () => {
 it("predicate value containing `/` round-trips and matches literally", () => {
   const p = parseOcPath("oc://X/[id=foo/bar]/cmd");
   expect(p.section).toBe("[id=foo/bar]");
-  const ast = parseJsonc('{"steps":[{"id":"foo/bar","cmd":"x"},{"id":"baz","cmd":"y"}]}').ast;
+  const ast = parseJsonc('{"steps":[{"id":"foo/bar","cmd":"x"},{"id":"baz","cmd":"y"}]}');
   const matches = findOcPaths(ast, parseOcPath("oc://wf/steps/[id=foo/bar]/cmd"));
   expect(matches).toHaveLength(1);
 });

@@ -21,14 +21,12 @@ import {
 } from "./settings-storage.js";
 
 export type {
-  PackageSource,
   Settings,
   SettingsError,
   SettingsScope,
   SettingsStorage,
   ThinkingBudgetsSettings,
   TransportSetting,
-  WarningSettings,
 } from "./settings-storage.js";
 
 /** Deep merge settings: project/overrides take precedence, nested objects merge recursively */

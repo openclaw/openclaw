@@ -25,7 +25,6 @@ export function createSessionEventState(overrides: Partial<ChatPageHost> = {}) {
     ...host,
     currentSessionId: "selected-session",
     chatMessagesBySession: new Map(),
-    chatThinkingLevel: null,
     chatVerboseLevel: null,
     chatStreamStartedAt: null,
     ...overrides,

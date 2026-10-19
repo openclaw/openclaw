@@ -4,7 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, vi } from "vitest";
 import type { CloudWorkerProfileConfig } from "../../config/types.cloud-workers.js";
 import type { OpenClawConfig } from "../../config/types.js";
-import type { WorkerProfile, WorkerProvider } from "../../plugins/types.js";
+import type { WorkerProvider } from "../../plugins/types.js";
 import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
@@ -13,6 +13,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { hashWorkerCredential } from "./credential.js";
 import { createWorkerSessionPlacementStore } from "./placement-store.js";
+import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import { createPreparedWorkerPool } from "./prepared-pool.js";
 import type { RepositoryWorkerProjectSnapshot } from "./repository-project-source.schema.js";
 import type { WorkerEnvironmentService } from "./service.js";
@@ -109,30 +110,30 @@ class PreparedPoolFixture {
     preparationKey = PREPARATION_KEY,
     runSetupScript?: boolean,
     repository?: RepositoryWorkerProjectSnapshot,
-  ): WorkerProfile => ({
-    settings: {},
-    executionMode: "worker-turn",
-    project: {
-      ...(repository ?? {
-        key: projectKey,
-        root: path.join(this.root, projectKey),
-        baseCommit: "d".repeat(40),
-      }),
-      preparation: {
-        key: preparationKey,
-        cacheKey: "9".repeat(64),
-        contractVersion: 1,
-        ...(runSetupScript === false ? { runSetupScript: false } : {}),
-        target: { ...PREPARATION_TARGET },
-        artifacts: createPreparationArtifacts(),
+  ) =>
+    ({
+      settings: {},
+      executionMode: "worker-turn",
+      project: {
+        ...(repository ?? {
+          key: projectKey,
+          root: path.join(this.root, projectKey),
+          baseCommit: "d".repeat(40),
+        }),
+        preparation: {
+          key: preparationKey,
+          cacheKey: "9".repeat(64),
+          contractVersion: 1,
+          ...(runSetupScript === false ? { runSetupScript: false } : {}),
+          target: { ...PREPARATION_TARGET },
+          artifacts: createPreparationArtifacts(),
+        },
       },
-    },
-  });
+    }) satisfies WorkerProviderPreparedIntent["profileSnapshot"];
 
   intent = (projectKey = PROJECT_KEY) => ({
     providerId: this.provider.id,
     profileSnapshot: this.profile(projectKey),
-    preparationKey: PREPARATION_KEY,
   });
 
   seed = (
