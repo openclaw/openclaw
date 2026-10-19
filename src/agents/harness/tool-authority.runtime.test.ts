@@ -110,10 +110,6 @@ function pendingQuestion(
   return question;
 }
 
-function registerHandle(handle: Handle) {
-  setActiveEmbeddedRun(sessionId, handle, sessionKey, attempt.sessionFile);
-}
-
 function fingerprintFor(
   run: { config?: OpenClawConfig; runtimePolicySessionKey?: string } = {},
   toolsAllow?: string[],

@@ -5,7 +5,24 @@ import {
 } from "../auto-reply/reply/queue/state.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/types.js";
 import { applyQueueDropPolicy } from "../utils/queue-helpers.js";
-import { isSameLocalRunScope, type LocalRunState } from "./embedded-local-run.js";
+import {
+  isSameLocalRunScope,
+  type LocalRunState,
+  type QueuedSessionRun,
+} from "./embedded-local-run.js";
+
+export function findQueuedSessionRun(
+  runs: ReadonlyMap<string, LocalRunState>,
+  params: { sessionKey: string; agentId?: string },
+): QueuedSessionRun | undefined {
+  let queuedAfter: QueuedSessionRun | undefined;
+  for (const [runId, run] of runs) {
+    if (isSameLocalRunScope(run, params) && !run.question && run.promise) {
+      queuedAfter = { runId, run, promise: run.promise };
+    }
+  }
+  return queuedAfter;
+}
 
 type LocalPendingMessage = {
   run: LocalRunState;
@@ -32,12 +49,13 @@ export function enqueuePendingLocalMessage(
       });
     }
   }
+  const summaryLines: string[] = [];
   const overflowQueue = {
     items: [...pendingMessages],
     cap: params.settings.cap ?? DEFAULT_QUEUE_CAP,
     dropPolicy: params.settings.dropPolicy ?? DEFAULT_QUEUE_DROP,
     droppedCount: 0,
-    summaryLines: [] as string[],
+    summaryLines,
   };
   const admitted = applyQueueDropPolicy({
     queue: overflowQueue,

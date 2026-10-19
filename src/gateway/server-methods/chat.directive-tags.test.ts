@@ -54,6 +54,7 @@ import {
 } from "../../sessions/session-controller.js";
 import {
   bindSessionControllerTarget,
+  captureSessionControllerSettlement,
   captureSessionTarget,
   getSessionControllerWorkCount,
   runSessionMutation,
@@ -97,6 +98,7 @@ import {
   createChatDirectiveSuiteResources,
   createChatDirectiveUserMessageReader,
   expectManagedAudioBlock,
+  managedAudioBlocks,
   createUnconfirmedTranscriptDelivery,
   expectClaimOnlyTranscriptMedia,
   readChatDirectiveConfig,
@@ -999,10 +1001,6 @@ function createSlashCommandMediaReply(
   return { kind, payload: { mediaUrls, trustedLocalMedia: true, ...payload } };
 }
 
-function managedAudioBlocks(content: Array<Record<string, unknown>>) {
-  return content.filter((block) => block.type === "audio");
-}
-
 function bindTestToolAuthority(operation: ReplyOperation) {
   operation.bindToolAuthoritySnapshot({
     fingerprint: () => TEST_TOOL_AUTHORITY_FINGERPRINT,
@@ -1290,7 +1288,7 @@ describe("chat directive tag stripping for non-streaming final payloads", () => 
     expect(context.addChatRun).toHaveBeenCalledTimes(accepted ? 1 : 0);
     if (accepted) {
       expect(response[1]).toEqual(expect.objectContaining({ status: "started" }));
-      await getSessionWorkAdmissionRelease({
+      await captureSessionControllerSettlement({
         scope: mockState.storePath,
         identities: [requestedSessionId],
       });

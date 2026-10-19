@@ -344,7 +344,7 @@ describe("requester conversation policy admission", () => {
   });
   afterEach(() => restoreActivePluginRegistrySnapshot(registry));
 
-  const toolNames = (capabilityProfile: ReturnType<typeof resolveConversationCapabilityProfile>) =>
+  const toolNames = (capabilityProfile: Profile) =>
     projectConversationToolNames({
       capabilityProfile,
       toolNames: ["read", "write", "exec"],
@@ -352,7 +352,7 @@ describe("requester conversation policy admission", () => {
     });
 
   it("resolves new admission config for the original DM while preserving the source policy", () => {
-    const source = resolveConversationCapabilityProfile({
+    const source = resolveProfile({
       config: {
         agents: { entries: { source: { tools: { allow: ["read"] } } } },
         channels: { telegram: { direct: { "42": { tools: { deny: ["exec"] } } } } },
@@ -365,7 +365,7 @@ describe("requester conversation policy admission", () => {
       conversationId: "42",
       senderId: "alice",
     });
-    const destination = resolveConversationCapabilityProfile({
+    const destination = resolveProfile({
       config: {
         channels: { telegram: { direct: { "42": { tools: { deny: ["write"] } } } } },
       },
@@ -399,12 +399,12 @@ describe("requester conversation policy admission", () => {
       senderId: "alice",
       conversationToolPolicy: { allow: ["read"] },
     };
-    const source = resolveConversationCapabilityProfile(initial);
-    const queued = resolveConversationCapabilityProfile({
+    const source = resolveProfile(initial);
+    const queued = resolveProfile({
       ...initial,
       requesterOrigin: source.requesterOrigin,
     });
-    const delegated = resolveConversationCapabilityProfile({
+    const delegated = resolveProfile({
       config: { channels: { telegram: { direct: { "42": { tools: {} } } } } },
       sessionKey: "agent:destination:main",
       requesterOrigin: source.requesterOrigin,
@@ -416,13 +416,13 @@ describe("requester conversation policy admission", () => {
   });
 
   it("keeps execution-local non-owner authority with preserved owner requester identity", () => {
-    const origin = resolveConversationCapabilityProfile({
+    const origin = resolveProfile({
       sessionKey: "agent:main:main",
       messageProvider: INTERNAL_MESSAGE_CHANNEL,
       operatorProfileId: "operator-alice",
       senderIsOwner: true,
     }).requesterOrigin;
-    const maintenance = resolveConversationCapabilityProfile({
+    const maintenance = resolveProfile({
       requesterOrigin: origin,
       senderIsOwner: false,
       config: { tools: { toolsBySender: { "*": { deny: ["exec"] } } } },

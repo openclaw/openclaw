@@ -128,7 +128,7 @@ describe("handleCompactCommand", () => {
     expect(call.abortSignal).toBe(abortController.signal);
     expect(call.ownerNumbers).toHaveLength(16);
     expect(call.ownerNumbers?.at(-1)).toBe("owner");
-    expect(call.senderIsOwner).toBe(true);
+    expect(call).not.toHaveProperty("senderIsOwner");
     expect(params.command.ownerList).toEqual(ownerIds);
   });
 

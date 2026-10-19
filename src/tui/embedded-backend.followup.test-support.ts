@@ -35,6 +35,49 @@ export function registerEmbeddedFollowupTests({
   updateSessionStoreMock,
   emitAgentEvent,
 }: FollowupTestContext) {
+  it("keeps local sender identity across steering without sharing it with another client", async () => {
+    const first = deferred<EmbeddedAgentResult>();
+    agentCommandFromIngressMock.mockReturnValueOnce(first.promise);
+    getSessionControllerOperationMock.mockReturnValue({ sessionId: "active-session" });
+    steerSessionControllerOperationMock.mockResolvedValue({ status: "accepted" });
+
+    const backend = createBackend();
+    backend.start();
+    await sendMainChat(backend, "first", "run-local-first");
+    const senderId = agentCommandFromIngressMock.mock.calls[0]?.[0]?.runContext?.senderId;
+    expect(senderId).toEqual(expect.any(String));
+
+    const result = await sendMainChat(backend, "steer this turn", "run-local-second");
+
+    expect(result).toEqual({ runId: "run-local-first" });
+    expect(
+      steerSessionControllerOperationMock.mock.calls[0]?.[0]?.options?.toolAuthorityOverlay,
+    ).toMatchObject({
+      originatingChannel: "webchat",
+      messageProvider: "webchat",
+      senderId,
+      senderIsOwner: false,
+      traceAuthorized: false,
+      disableTools: false,
+    });
+    expect(agentCommandFromIngressMock).toHaveBeenCalledTimes(1);
+
+    first.resolve({ payloads: [{ text: "done" }], meta: {} });
+    await flushMicrotasks();
+    await backend.stop();
+    const otherBackend = createBackend();
+    otherBackend.start();
+    try {
+      await sendMainChat(otherBackend, "new client", "run-other-client");
+      const otherSenderId =
+        agentCommandFromIngressMock.mock.calls.at(-1)?.[0]?.runContext?.senderId;
+      expect(otherSenderId).toEqual(expect.any(String));
+      expect(otherSenderId).not.toBe(senderId);
+    } finally {
+      await otherBackend.stop();
+    }
+  });
+
   it.each(["steer", "collect", "interrupt"] as const)(
     "runs explicit followups separately without changing stored %s behavior",
     async (mode) => {

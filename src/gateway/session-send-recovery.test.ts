@@ -204,6 +204,7 @@ afterEach(() => {
 it("recovers a logical agent's saved input from its shared physical store", async () => {
   const sharedDelivery = {
     ...delivery,
+    operatorSource: null,
     target: { ...delivery.target, agentId: "secondary", sessionKey: "agent:secondary:target" },
   };
   const sharedInput = {

@@ -398,10 +398,10 @@ export function registerSteeringReceiptCases({
         signal,
       );
       const backend = expectDefined(
-        getSessionControllerEntryForOperation(active).attachment?.backend.messageInjectionV2,
+        getSessionControllerEntryForOperation(active).attachment?.backend?.messageInjectionV2,
         "The first steer installed its guarded backend",
       );
-      using availability =
+      using _ =
         change === "backend-unavailable"
           ? vi.spyOn(backend, "isAvailable").mockReturnValue(false)
           : undefined;

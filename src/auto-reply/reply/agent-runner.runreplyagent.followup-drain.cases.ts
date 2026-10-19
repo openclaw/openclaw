@@ -119,7 +119,10 @@ export function registerFollowupDrainCases({
       });
       try {
         await withPreparedEmbeddedRunToolAuthority(
-          { admittedRunContext: await admission.admit("embedded", "direct-question-test") },
+          {
+            admittedRunContext: await admission.admit("embedded", "direct-question-test"),
+            sessionPersistence: "detached",
+          },
           {
             ...creator.followupRun.run,
             agentId: "main",

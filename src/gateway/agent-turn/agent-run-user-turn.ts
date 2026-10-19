@@ -535,14 +535,21 @@ export async function prepareAgentRunUserTurn(params: {
       // Retained input must keep its media even if later preparation or cleanup fails.
       params.onUserTurnMediaPersisted();
     }
-    releaseExecApprovalFollowupRuntimeHandoff({
-      handoffId: claimedExecApprovalFollowupHandoffId,
-      claimId: execApprovalFollowupHandoffClaimId,
-    });
+    const stopReason = params.getAbortStopReason?.() ?? "rpc";
+    const outcome = buildAgentRunTerminalOutcome({ status: "error", stopReason });
+    // Pending input must settle before admission can publish an abort. Timeouts
+    // retain retry custody; an explicit stop cancels it even before execution.
+    const failure = await releasePreparedAgentRunUserTurnAfterFailure(
+      { recorder, claimedExecApprovalFollowupHandoffId, execApprovalFollowupHandoffClaimId },
+      error,
+      params.abortSignal?.aborted && stopReason !== "restart" && outcome.reason === "cancelled"
+        ? "cancelled"
+        : "interrupted",
+    );
     if (!mediaRetained) {
       await Promise.allSettled(createdMediaIds.map((id) => deleteMediaBuffer(id, "inbound")));
     }
-    throw error;
+    throw failure;
   }
 }
 
@@ -595,7 +602,13 @@ export async function releaseStoppedAgentRunUserTurn(
 }
 
 export async function releasePreparedAgentRunUserTurn(
-  prepared: PreparedAgentRunUserTurn,
+  prepared: Pick<
+    PreparedAgentRunUserTurn,
+    | "recorder"
+    | "releaseProcessingAbortObserver"
+    | "claimedExecApprovalFollowupHandoffId"
+    | "execApprovalFollowupHandoffClaimId"
+  >,
   disposition: "cancelled" | "interrupted" = "interrupted",
 ): Promise<void> {
   try {
@@ -613,9 +626,19 @@ export async function releasePreparedAgentRunUserTurn(
   }
 }
 
+/** A recorded abort cannot replace a failed custody settlement. */
+export class AgentRunUserTurnCleanupError extends AggregateError {
+  constructor(error: unknown, cleanupError: unknown) {
+    super(
+      [error, cleanupError],
+      `${formatForLog(error)}; pending input cleanup failed: ${formatForLog(cleanupError)}`,
+    );
+  }
+}
+
 /** Settles failed input while preserving both admission and settlement failures. */
 export async function releasePreparedAgentRunUserTurnAfterFailure(
-  prepared: PreparedAgentRunUserTurn,
+  prepared: Parameters<typeof releasePreparedAgentRunUserTurn>[0],
   error: unknown,
   disposition: "cancelled" | "interrupted" = "cancelled",
 ): Promise<unknown> {
@@ -623,9 +646,6 @@ export async function releasePreparedAgentRunUserTurnAfterFailure(
     await releasePreparedAgentRunUserTurn(prepared, disposition);
     return error;
   } catch (cleanupError) {
-    return new AggregateError(
-      [error, cleanupError],
-      `${formatForLog(error)}; pending input cleanup failed: ${formatForLog(cleanupError)}`,
-    );
+    return new AgentRunUserTurnCleanupError(error, cleanupError);
   }
 }

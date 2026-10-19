@@ -369,7 +369,7 @@ describe("followup queue authority", () => {
         );
         expect(source.references()).toBe(0);
       } finally {
-        clearFollowupQueueForTest(key);
+        clearFollowupQueue(key);
       }
     },
   );

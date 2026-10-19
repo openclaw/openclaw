@@ -7,7 +7,6 @@ import {
 } from "../agents/requester-origin.js";
 import { hasInboundAudio } from "../auto-reply/reply/inbound-media.js";
 import {
-  createMessageInjectionAuthority,
   enqueueMessageInjection,
   MessageInjectionAuthorityError,
 } from "../auto-reply/reply/message-injection-authority.js";

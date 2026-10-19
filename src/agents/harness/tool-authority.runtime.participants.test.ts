@@ -134,7 +134,7 @@ describe("host-prepared embedded tool authority", () => {
         alice.retire();
 
         expect(() => first?.assertCurrent()).toThrow(
-          "Personal-tool turn authority is no longer active",
+          "embedded reply authority is no longer active",
         );
         expect(() => second?.assertCurrent()).not.toThrow();
         expect(isActiveEmbeddedRunId(alice.runId)).toBe(false);

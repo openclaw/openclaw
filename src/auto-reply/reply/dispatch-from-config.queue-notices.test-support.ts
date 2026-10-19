@@ -7,12 +7,9 @@ import type { GetReplyOptions } from "../types.js";
 import { QUEUE_CAP_REJECTION_TEXT } from "./dispatch-from-config.payloads.js";
 import { diagnosticMocks, mocks } from "./dispatch-from-config.shared.test-harness.js";
 import { dispatchReplyFromConfig, setNoAbort } from "./dispatch-from-config.test-support.js";
-import {
-  clearFollowupQueueForTest,
-  createQueueSettings,
-  createQueueTestRun,
-} from "./queue.test-helpers.js";
+import { createQueueSettings, createQueueTestRun } from "./queue.test-helpers.js";
 import { enqueueFollowupRun, getFollowupQueueDepth } from "./queue/enqueue.js";
+import { clearFollowupQueue } from "./queue/state.js";
 import { bindReplyOperationQueueDisposition } from "./queue/types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { resolveReplyOperationRunState } from "./reply-operation-run-state.js";
@@ -251,7 +248,7 @@ export function registerQueuedFollowupNoticeCases(): void {
       await dispatch.catch(() => undefined);
       dispatcher.markComplete();
       await dispatcher.waitForIdle();
-      clearFollowupQueueForTest(sessionKey);
+      clearFollowupQueue(sessionKey);
     }
   });
 }

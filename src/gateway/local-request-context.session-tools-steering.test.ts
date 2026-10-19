@@ -16,6 +16,7 @@ import {
   releaseAgentRunDelegatedAuthority,
 } from "../infra/agent-run-registry.js";
 import { getPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
+import { createDeferredCore } from "../shared/deferred.js";
 import {
   REQUESTER,
   TARGET,
@@ -27,6 +28,7 @@ import {
 } from "./local-request-context.session-tools.test-support.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import type { GatewayRequestOptions } from "./server-methods/types.js";
+import * as operatorContinuation from "./server-plugin-in-process-dispatch.js";
 import { roleClient } from "./session-sharing.test-utils.js";
 
 // These synthetic sessions own no browser tabs or browser cleanup resources.
@@ -50,6 +52,19 @@ describe("sessions_send steering custody", () => {
   ] as const)(
     "settles accepted steering custody after %s (backend settlement: %s)",
     async (outcome, reportSettlement) => {
+      const custodyReleased = createDeferredCore();
+      const capture = operatorContinuation.captureOperatorToolGatewayContinuationContext;
+      const observeCapture = vi
+        .spyOn(operatorContinuation, "captureOperatorToolGatewayContinuationContext")
+        .mockImplementation((...args) =>
+          capture(...args)?.then((captured) => ({
+            ...captured,
+            release() {
+              captured.release();
+              custodyReleased.resolve();
+            },
+          })),
+        );
       await withParticipantSessionToolsFixture(async ({ cfg, turn, alice, bob }) => {
         expect(await turn.steer(alice)).toMatchObject({ status: "accepted" });
         await withDelayedSessionToolsSteering(
@@ -74,6 +89,7 @@ describe("sessions_send steering custody", () => {
               });
               expect(receiver.pendingCount()).toBe(0);
             }
+            const existingLeases = new Set(turn.authorityLeases);
             const result = await createSessionsSendTool({
               config: cfg,
               agentSessionKey: REQUESTER,
@@ -94,11 +110,14 @@ describe("sessions_send steering custody", () => {
             expect(receiver.pendingCount()).toBe(1);
             await turn.complete();
             if (!reportSettlement) {
-              await setImmediate();
-              const receiverLeases = turn.authorityLeases.filter(
-                (lease) => lease.profileId === alice.profileId && lease.releases === 0,
+              // The receiving turn also owns policy leases until its prepared callback exits.
+              const custodyLeases = turn.authorityLeases.filter(
+                (lease) =>
+                  !existingLeases.has(lease) &&
+                  lease.profileId === alice.profileId &&
+                  lease.releases === 0,
               );
-              expect(receiverLeases.length).toBeGreaterThan(0);
+              expect(custodyLeases.length).toBeGreaterThan(0);
               if (outcome === "abort") {
                 expect(receiver.abort()).toBe(true);
               } else {
@@ -107,16 +126,10 @@ describe("sessions_send steering custody", () => {
                 }
                 receiver.end();
               }
-              // Join the already-resolved custody continuation, without a timed wait or polling.
-              await setImmediate();
-              for (const lease of receiverLeases) {
+              await custodyReleased.promise;
+              for (const lease of custodyLeases) {
                 expect(lease.releases).toBe(1);
               }
-              expect(
-                turn.authorityLeases.filter(
-                  (lease) => lease.profileId === alice.profileId && lease.releases === 0,
-                ),
-              ).toHaveLength(0);
               return;
             }
             if (outcome === "source revoked") {
@@ -151,11 +164,10 @@ describe("sessions_send steering custody", () => {
           },
           { reportSettlement },
         );
-      });
+      }).finally(() => observeCapture.mockRestore());
     },
   );
 });
-import { setImmediate } from "node:timers/promises";
 
 describe("runtime-only session authority", () => {
   beforeAll(async () => {

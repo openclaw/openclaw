@@ -59,6 +59,10 @@ export function createExpectedAcpUserTurn(params: {
   };
 }
 
+export function managedAudioBlocks(content: Array<Record<string, unknown>>) {
+  return content.filter((block) => block.type === "audio");
+}
+
 export function expectManagedAudioBlock(
   block: Record<string, unknown> | undefined,
   fileName: string,

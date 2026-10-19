@@ -116,7 +116,7 @@ import {
   resolveTerminalChatState,
 } from "./embedded-chat-projection.js";
 import { ensureEmbeddedHistoryRuntimePluginsLoaded } from "./embedded-history-runtime.js";
-import { enqueuePendingLocalMessage } from "./embedded-local-queue.js";
+import { enqueuePendingLocalMessage, findQueuedSessionRun } from "./embedded-local-queue.js";
 import {
   buildLocalQueuedPrompt,
   createLocalRunState,
@@ -125,7 +125,6 @@ import {
   waitForLocalRunShutdown,
   waitForQueuedLocalRun,
   type LocalRunState,
-  type QueuedSessionRun,
 } from "./embedded-local-run.js";
 import { EmbeddedPreparedModelRuntimeHost } from "./embedded-prepared-runtime.js";
 import { embeddedSessionStartupMigrationLog, silentRuntime } from "./embedded-runtime.js";
@@ -159,6 +158,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
   onGap?: (info: { expected: number; received: number }) => void;
 
   private readonly deps = createDefaultDeps();
+  private readonly localSenderId = randomUUID();
   private readonly runs = new Map<string, LocalRunState>();
   private unsubscribe?: () => void;
   private previousRuntimeLog?: typeof defaultRuntime.log;
@@ -312,7 +312,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
     };
     // Readiness awaits follow synchronous run registration, so the same owned
     // promise determines both stop admission and the next turn's queue predecessor.
-    const sessionRun = this.findQueuedSessionRunPromise(runScope);
+    const sessionRun = findQueuedSessionRun(this.runs, runScope);
     const stopCommand =
       !explicitFollowup && sessionRun !== undefined && isAbortRequestText(opts.message);
     const queuedAfter = question || stopCommand || isQueueCommand ? undefined : sessionRun;
@@ -366,6 +366,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           const steer = await steerEmbeddedSessionInput({
             operation: activeOperation,
             text: opts.message,
+            senderId: this.localSenderId,
             sessionEntry: entry,
             debounceMs: queueSettings.debounceMs ?? DEFAULT_QUEUE_DEBOUNCE_MS,
             abortSignal: this.scheduler.signal,
@@ -738,6 +739,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
       messageChannel: INTERNAL_MESSAGE_CHANNEL,
       messageProvider: INTERNAL_MESSAGE_CHANNEL,
       currentChannelId: INTERNAL_MESSAGE_CHANNEL,
+      senderId: this.localSenderId,
     });
     const text = reply?.text?.trim() ?? "";
     if (!text) {
@@ -843,19 +845,6 @@ export class EmbeddedTuiBackend implements TuiBackend {
         storePath,
       }),
     };
-  }
-
-  private findQueuedSessionRunPromise(params: {
-    sessionKey: string;
-    agentId?: string;
-  }): QueuedSessionRun | undefined {
-    let queuedAfter: QueuedSessionRun | undefined;
-    for (const [runId, run] of this.runs) {
-      if (isSameLocalRunScope(run, params) && !run.question && run.promise) {
-        queuedAfter = { runId, run, promise: run.promise };
-      }
-    }
-    return queuedAfter;
   }
 
   private abortSessionRuns(params: { sessionKey: string; agentId?: string }) {
@@ -1231,6 +1220,7 @@ export class EmbeddedTuiBackend implements TuiBackend {
           channel: INTERNAL_MESSAGE_CHANNEL,
           runContext: {
             messageChannel: INTERNAL_MESSAGE_CHANNEL,
+            senderId: this.localSenderId,
           },
           timeout: timeoutSecondsFromMs(opts.timeoutMs),
           runId,

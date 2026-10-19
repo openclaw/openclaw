@@ -118,8 +118,8 @@ it("refuses cross-requester steering by default and admits only an explicit fres
         return result;
       };
       const onSettled = lifecycle.onSettled;
-      lifecycle.onSettled = () => {
-        onSettled?.();
+      lifecycle.onSettled = async () => {
+        await onSettled?.();
         settled.resolve();
       };
     } else {
@@ -149,11 +149,11 @@ it("refuses cross-requester steering by default and admits only an explicit fres
       Promise.race([injectionObserved.promise, rawQueued.promise, dispatched.promise]),
       signal,
     );
+    await withinTest(dispatched.promise, signal);
+    await rpcSourceTesting.get(fixture.params.idempotencyKey)?.input.settlement.promise;
     expect(injected).not.toHaveBeenCalled();
     expect(operation.result).toBeNull();
     expect(isRpcSourceQueued(rpcSourceTesting.get(fixture.params.idempotencyKey))).toBe(false);
-    await withinTest(dispatched.promise, signal);
-    await rpcSourceTesting.get(fixture.params.idempotencyKey)?.input.settlement.promise;
     expect(runtime.execute).not.toHaveBeenCalled();
     expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
     expect(fixture.context.broadcast).toHaveBeenCalledWith(

@@ -61,6 +61,7 @@ import {
   resolveRegisteredSubagentTimeoutSeconds,
 } from "./agent-run-subagent.js";
 import {
+  AgentRunUserTurnCleanupError,
   prepareAgentRunUserTurn,
   recordAgentRunUserTurnParticipant,
   reconcileAgentRunUserTurnCompletion,
@@ -511,7 +512,16 @@ export async function prepareAgentRunDispatch(
       params.onUserTurnMediaPersisted();
     }
   } catch (err) {
-    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, err));
+    const failure = userTurn
+      ? await releasePreparedAgentRunUserTurnAfterFailure(userTurn, err, "interrupted")
+      : err;
+    if (!(failure instanceof AgentRunUserTurnCleanupError)) {
+      const failedAdmission = revalidateAdmission();
+      if (failedAdmission !== true) {
+        return failedAdmission;
+      }
+    }
+    return rejectPreaccept(resolveAgentRunAdmissionError(ErrorCodes.UNAVAILABLE, failure));
   }
   const inputAdmission = revalidateAdmission(userTurn);
   if (inputAdmission !== true) {

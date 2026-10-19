@@ -582,7 +582,8 @@ describe("runPreparedReply media-only handling", () => {
       "retains the actual channel owner ingress through queued execution: %s",
       async (kind) => {
         resetFollowupTurnTestState();
-        const key = `isolated-real-ingress-cron-${mode}-${kind}`;
+        const params = ownerParams();
+        const key = expectDefined(params.sessionKey, "queued execution session key");
         const promoted = kind === "discord-promoted-before-drain";
         const refreshOwner = promoted || kind === "owner-source-replaced";
         const channel = kind === "discord-owner-alias" || promoted ? "discord" : "telegram";
@@ -708,7 +709,6 @@ describe("runPreparedReply media-only handling", () => {
             releaseAgentRunDelegatedAuthority(authority);
           }
         });
-        const params = ownerParams();
         params.command.senderId = "owner-1";
         params.command.senderIsOwner = kind !== "non-owner" && !promoted;
         const input = turn("list all automations", {

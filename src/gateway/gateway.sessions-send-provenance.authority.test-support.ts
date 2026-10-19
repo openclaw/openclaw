@@ -10,6 +10,11 @@ import { createHostChannelIngressRuntime } from "../channels/message-access/runt
 import { getRuntimeConfig } from "../config/config.js";
 import { waitForGatewayActiveWork } from "../infra/gateway-active-work.js";
 import { loadUnfinishedDeliveries } from "../infra/outbound/delivery-queue-storage.js";
+import {
+  getRpcSourceIdentity,
+  isRpcSourceQueued,
+  listRpcSourceEntries,
+} from "../sessions/session-controller.rpc-sources.js";
 import { ensureCanonicalUserProfileForEmail } from "../state/user-profile-writes.js";
 import {
   createScenario,
@@ -189,8 +194,10 @@ export async function verifyLinkedPrincipalDelivery(signal: AbortSignal) {
           }
           await waitForGatewayActiveWork(30_000);
           expect(
-            [...gatewayContext.chatQueuedTurns.values()].some(
-              (entry) => entry.sessionKey === scenario.targetKey,
+            listRpcSourceEntries().some(
+              ([, source]) =>
+                getRpcSourceIdentity(source).sessionKey === scenario.targetKey &&
+                isRpcSourceQueued(source),
             ),
           ).toBe(false);
           expect(

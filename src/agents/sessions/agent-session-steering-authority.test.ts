@@ -20,10 +20,7 @@ import {
 } from "../../config/sessions/session-accessor.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import type {
-  ReplyBackendMessageInjectionV2,
-  ReplyToolAuthorityOverlay,
-} from "../../sessions/session-controller.contracts.js";
+import type { ReplyBackendMessageInjectionV2 } from "../../sessions/session-controller.contracts.js";
 import { beginReplyMessageInjectionTarget } from "../../sessions/session-controller.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
 import { testing } from "../../sessions/session-controller.test-support.js";
