@@ -5,6 +5,8 @@ import type { GatewaySessionRow, SessionBranch } from "../../../api/types.ts";
 import type { ApplicationContext } from "../../../app/context.ts";
 import { resolveControlUiAuthCandidates } from "../../../app/control-ui-auth.ts";
 import { beginNativeWindowDrag } from "../../../app/native-window-drag.ts";
+import { NAV_DRAWER_TOGGLE_REGISTRATION } from "../../../app/navigation-surface.ts";
+import { createRouteElementRef } from "../../../app/route-element-ref.ts";
 import {
   SHELL_NAV_DRAWER_TOGGLE_EVENT,
   type ShellNavDrawerToggleDetail,
@@ -465,31 +467,37 @@ export function ChatPaneHeader(props: ChatPaneHeaderProps) {
         onMouseDown={beginNativeWindowDrag}
       >
         <div class="chat-pane__header-leading">
-          {props.mergedChrome ? (
-            <openclaw-tooltip prop:content={drawerLabel()}>
-              <button
-                class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
-                type="button"
-                aria-label={drawerLabel()}
-                aria-expanded={props.navDrawerOpen ? "true" : "false"}
-                data-connection-status={props.gatewayStatus?.kind ?? undefined}
-                onClick={(event) => {
-                  window.dispatchEvent(
-                    new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
-                      detail: {
-                        trigger: event.currentTarget,
-                      },
-                    }),
-                  );
-                }}
-              >
-                <Icon name="menu" />
-                <Show when={props.gatewayStatus?.kind}>
-                  <span class="gateway-status-dot" aria-hidden="true" />
-                </Show>
-              </button>
-            </openclaw-tooltip>
-          ) : undefined}
+          <Show when={props.mergedChrome}>
+            {(_mergedChrome) => {
+              const drawerRef = createRouteElementRef(NAV_DRAWER_TOGGLE_REGISTRATION);
+              return (
+                <openclaw-tooltip prop:content={drawerLabel()}>
+                  <button
+                    ref={drawerRef}
+                    class="btn btn--ghost btn--icon chat-icon-btn chat-pane__nav-toggle"
+                    type="button"
+                    aria-label={drawerLabel()}
+                    aria-expanded={props.navDrawerOpen ? "true" : "false"}
+                    data-connection-status={props.gatewayStatus?.kind ?? undefined}
+                    onClick={(event) => {
+                      window.dispatchEvent(
+                        new CustomEvent<ShellNavDrawerToggleDetail>(SHELL_NAV_DRAWER_TOGGLE_EVENT, {
+                          detail: {
+                            trigger: event.currentTarget,
+                          },
+                        }),
+                      );
+                    }}
+                  >
+                    <Icon name="menu" />
+                    <Show when={props.gatewayStatus?.kind}>
+                      <span class="gateway-status-dot" aria-hidden="true" />
+                    </Show>
+                  </button>
+                </openclaw-tooltip>
+              );
+            }}
+          </Show>
           <Show when={incognito()}>
             <openclaw-tooltip
               prop:content={t("sessionsView.incognitoDescription")}

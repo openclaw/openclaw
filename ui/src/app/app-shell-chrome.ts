@@ -205,7 +205,7 @@ export class ShellChromeOwner {
         host.closeNavDrawer({ restoreFocus: true });
         return;
       }
-      host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host.element) ?? null;
+      host.navDrawerTrigger = trigger ?? visibleNavDrawerToggle(host) ?? null;
       host.navDrawerOpen = true;
       setToastInNavDrawer(host, true);
       void host.updateComplete.then(() => {
@@ -229,10 +229,7 @@ export class ShellChromeOwner {
     if (nextNavCollapsed) {
       this.dismissSidebarTransientMenus();
     }
-    // The sidebar owns its rail button markup and exposes no focused-button handle.
-    const activeRailView = host.navigationSidebar.querySelector<HTMLElement>(
-      '[data-navigation-view][aria-pressed="true"]',
-    );
+    const activeRailView = host.navigationSidebar.activeNavigationViewElement?.();
     host.closeNavDrawer();
     context.navigation.update({ navCollapsed: nextNavCollapsed });
     if (nextNavCollapsed) {
@@ -342,7 +339,7 @@ export class ShellChromeOwner {
     host.invalidate();
     void host.updateComplete.then(() => {
       if (isMobileNavLayout() && !host.navDrawerOpen && dismissedSidebarMenus) {
-        requestAnimationFrame(() => this.restoreFocusTo(visibleNavDrawerToggle(host.element)));
+        requestAnimationFrame(() => this.restoreFocusTo(visibleNavDrawerToggle(host)));
       }
     });
   };

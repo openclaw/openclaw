@@ -405,8 +405,19 @@ describe("personal navigation rail", () => {
     ] as const) {
       await click(sidebar, `[data-navigation-view="${view}"]`);
       expect(sidebar).toMatchObject({ navigationView: view, navigationCollapsed: collapsed });
+      expect(sidebar.activeNavigationViewElement()).toBe(
+        collapsed ? undefined : sidebar.querySelector(`[data-navigation-view="${view}"]`),
+      );
     }
     expect(toggle).toHaveBeenCalledTimes(4);
+    await update(sidebar, { navigationVisible: false });
+    expect(sidebar.activeNavigationViewElement()).toBeUndefined();
+    await update(sidebar, { navigationVisible: true });
+    expect(sidebar.activeNavigationViewElement()).toBe(
+      sidebar.querySelector('[data-navigation-view="online"]'),
+    );
+    sidebar.hostElement.remove();
+    expect(sidebar.activeNavigationViewElement()).toBeUndefined();
   });
 
   it("preserves a mobile drawer when a stored desktop preference is collapsed", async () => {

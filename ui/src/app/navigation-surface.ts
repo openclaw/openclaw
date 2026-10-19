@@ -10,6 +10,7 @@ import {
 import type { RouteElements } from "./route-elements.ts";
 
 export const NAVIGATION_RAIL_WIDTH = 52;
+export const NAV_DRAWER_TOGGLE_REGISTRATION = "nav-drawer-toggle";
 
 export type ShellNavigationElements = {
   shellElement?: HTMLElement;
@@ -20,7 +21,7 @@ export type ShellNavigationElements = {
 
 export type ShellNavigationSurfaces = {
   readonly navigationSidebar: HTMLElement &
-    Partial<Pick<AppSidebarElement, "dismissTransientMenus">>;
+    Partial<Pick<AppSidebarElement, "dismissTransientMenus" | "activeNavigationViewElement">>;
   readonly queryRenderedElements: RouteElements["renderedElements"];
 };
 
@@ -106,11 +107,15 @@ export function setToastInNavDrawer(host: ShellNavigationElements, inDrawer: boo
   }
 }
 
-export function visibleNavDrawerToggle(host: HTMLElement): HTMLElement | undefined {
-  // Topbar and chat own separate triggers; select whichever surface is currently visible.
-  return [...host.querySelectorAll<HTMLElement>(".topbar-nav-toggle, .chat-pane__nav-toggle")].find(
-    (candidate) => candidate.checkVisibility(),
-  );
+export function visibleNavDrawerToggle(
+  host: Pick<ShellNavigationSurfaces, "queryRenderedElements">,
+): HTMLElement | undefined {
+  return host
+    .queryRenderedElements(NAV_DRAWER_TOGGLE_REGISTRATION)
+    .toSorted((left, right) =>
+      left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+    )
+    .find((candidate) => candidate.checkVisibility());
 }
 
 export function navigationSurfaceIsHidden(params: {

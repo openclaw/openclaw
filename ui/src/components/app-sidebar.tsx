@@ -305,6 +305,7 @@ function AppSidebarContent(
 }
 
 export type AppSidebarMethods = {
+  activeNavigationViewElement(): HTMLElement | undefined;
   dismissTransientMenus(): boolean;
   expandedAgentId(): string;
   findSidebarHovercardRowByKey(
@@ -322,6 +323,7 @@ export const AppSidebar = defineSolidBridge<AppSidebarProps, AppSidebarMethods>(
     connected: (host) => sidebarOwners.get(host)?.attach(),
     disconnected: (host) => sidebarOwners.get(host)?.detach(),
     methods: {
+      activeNavigationViewElement: (host) => sidebarOwners.get(host)?.activeNavigationViewElement(),
       dismissTransientMenus: dismissSidebarTransientMenus,
       expandedAgentId: (host) => sidebarOwners.get(host)?.expandedAgentId() ?? "",
       findSidebarHovercardRowByKey: (host, key) =>
