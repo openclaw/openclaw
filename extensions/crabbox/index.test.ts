@@ -2,10 +2,7 @@ import { fileURLToPath } from "node:url";
 import { Command } from "commander";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type { OpenClawPluginApi, WorkerProvider } from "openclaw/plugin-sdk/plugin-entry";
-import {
-  createPluginStateSyncKeyedStoreForTests,
-  resetPluginStateStoreForTests,
-} from "openclaw/plugin-sdk/plugin-state-test-runtime";
+import { resetPluginStateStoreForTests } from "openclaw/plugin-sdk/plugin-state-test-runtime";
 import {
   createTestPluginApi,
   createTestPluginServiceScheduler,
@@ -17,9 +14,9 @@ import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import * as managedBinary from "./src/crabbox-managed-binary.js";
-import { crabboxState } from "./src/crabbox-state.test-support.js";
+import { crabboxState, openWarmImageStore } from "./src/crabbox-state.test-support.js";
 import { createNodeBootstrapFixture } from "./src/crabbox-worker-node-enrollment.test-support.js";
-import type { WarmProfileRecord } from "./src/crabbox-worker-warm-image-store.js";
+import { commandResult } from "./src/crabbox-worker-provider.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
@@ -30,18 +27,6 @@ const PROFILE = {
   provider: "aws",
   ttl: "24h",
 };
-
-function commandResult(overrides: Partial<SpawnResult> = {}): SpawnResult {
-  return {
-    stdout: "",
-    stderr: "",
-    code: 0,
-    signal: null,
-    killed: false,
-    termination: "exit",
-    ...overrides,
-  };
-}
 
 function inspectResult(leaseId: string): SpawnResult {
   return commandResult({
@@ -59,20 +44,31 @@ function inspectResult(leaseId: string): SpawnResult {
   });
 }
 
+function pluginApi(overrides: Partial<OpenClawPluginApi> = {}) {
+  return createTestPluginApi({
+    runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
+    id: "crabbox",
+    rootDir: fileURLToPath(new URL(".", import.meta.url)),
+    ...overrides,
+  });
+}
+
 function registerCrabboxGeneration() {
   const providers: WorkerProvider[] = [];
   const services: Parameters<OpenClawPluginApi["registerService"]>[0][] = [];
   plugin.register(
-    createTestPluginApi({
-      runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
-      id: "crabbox",
-      rootDir: fileURLToPath(new URL(".", import.meta.url)),
+    pluginApi({
       registerService: (service) => services.push(service),
       registerWorkerProvider: (provider) => providers.push(provider),
     }),
   );
   return { provider: providers[0]!, services };
 }
+
+const commandMock = () => vi.spyOn(processRuntime, "runCommandWithTimeout");
+const leaseId = (argv: string[]) => argv[argv.indexOf("--id") + 1]!;
+const commands = (mock: ReturnType<typeof commandMock>, name: string) =>
+  mock.mock.calls.filter(([argv]) => argv[1] === name);
 
 async function stopGeneration(services: Parameters<OpenClawPluginApi["registerService"]>[0][]) {
   const scheduler = createTestPluginServiceScheduler();
@@ -101,10 +97,7 @@ describe("Crabbox plugin generation lifecycle", () => {
 
   it("lazily exposes warm-image inspection and acknowledged recovery through the plugin CLI", async () => {
     const registrars: Parameters<OpenClawPluginApi["registerCli"]>[0][] = [];
-    const api = createTestPluginApi({
-      runtime: { state: crabboxState } as OpenClawPluginApi["runtime"],
-      id: "crabbox",
-      rootDir: fileURLToPath(new URL(".", import.meta.url)),
+    const api = pluginApi({
       registerCli: (registrar) => registrars.push(registrar),
     });
     plugin.register(api);
@@ -133,23 +126,19 @@ describe("Crabbox plugin generation lifecycle", () => {
   ] as const)(
     "supports a classless $backend profile through $executionMode lifecycle",
     async ({ backend, executionMode }) => {
-      const runCommand = vi
-        .spyOn(processRuntime, "runCommandWithTimeout")
-        .mockImplementation(async (argv) => {
-          if (argv[1] === "config") {
-            return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
-          }
-          if (argv[1] === "providers") {
-            return commandResult({
-              stdout: JSON.stringify([
-                { provider: backend, classCatalog: { disposition: "unmapped" } },
-              ]),
-            });
-          }
-          return argv[1] === "inspect"
-            ? inspectResult(argv[argv.indexOf("--id") + 1]!)
-            : commandResult();
-        });
+      const runCommand = commandMock().mockImplementation(async (argv) => {
+        if (argv[1] === "config") {
+          return commandResult({ stdout: JSON.stringify({ aws: { instanceProfile: "" } }) });
+        }
+        if (argv[1] === "providers") {
+          return commandResult({
+            stdout: JSON.stringify([
+              { provider: backend, classCatalog: { disposition: "unmapped" } },
+            ]),
+          });
+        }
+        return argv[1] === "inspect" ? inspectResult(leaseId(argv)) : commandResult();
+      });
       const generation = registerCrabboxGeneration();
       const profile = {
         binary: PROFILE.binary,
@@ -158,9 +147,7 @@ describe("Crabbox plugin generation lifecycle", () => {
         provider: backend,
       };
       try {
-        // Classless profiles reserve placement-enabled preparation/capture and the
-        // complete diagnostics, Stop and child-settlement cleanup envelope. Native
-        // capture includes eight 2m lifetime calls and 15m of runtime preparation.
+        // Includes placement/capture, diagnostics, Stop and child settlement.
         expect(generation.provider.resolveProvisionTimeoutMs?.(profile)).toBe(
           248 * 60_000 + 25_000,
         );
@@ -223,9 +210,9 @@ describe("Crabbox plugin generation lifecycle", () => {
 
   it("registers cleanup that fences pending heartbeats and late starts", async () => {
     vi.useFakeTimers();
-    const runCommand = vi
-      .spyOn(processRuntime, "runCommandWithTimeout")
-      .mockImplementation(async (argv) => inspectResult(argv[argv.indexOf("--id") + 1]!));
+    const runCommand = commandMock().mockImplementation(async (argv) =>
+      inspectResult(leaseId(argv)),
+    );
     const generation = registerCrabboxGeneration();
     const lease = { leaseId: "cbx_pending", profile: PROFILE };
 
@@ -235,34 +222,31 @@ describe("Crabbox plugin generation lifecycle", () => {
     await generation.provider.inspect(lease);
     await vi.advanceTimersByTimeAsync(15_000);
 
-    expect(runCommand.mock.calls.filter(([argv]) => argv[1] === "heartbeat")).toEqual([]);
+    expect(commands(runCommand, "heartbeat")).toEqual([]);
   });
 
   it("aborts all in-flight heartbeats and fences late completions", async () => {
     vi.useFakeTimers();
     const signals: AbortSignal[] = [];
     const finishHeartbeats: Array<() => void> = [];
-    const runCommand = vi
-      .spyOn(processRuntime, "runCommandWithTimeout")
-      .mockImplementation(async (argv, options) => {
-        const leaseId = argv[argv.indexOf("--id") + 1]!;
-        if (argv[1] !== "heartbeat") {
-          return inspectResult(leaseId);
-        }
-        if (typeof options === "number" || !options.signal) {
-          throw new Error("heartbeat is missing its abort signal");
-        }
-        signals.push(options.signal);
-        return await new Promise<SpawnResult>((resolve) => {
-          finishHeartbeats.push(() => resolve(commandResult()));
-        });
+    const runCommand = commandMock().mockImplementation(async (argv, options) => {
+      if (argv[1] !== "heartbeat") {
+        return inspectResult(leaseId(argv));
+      }
+      if (typeof options === "number" || !options.signal) {
+        throw new Error("heartbeat is missing its abort signal");
+      }
+      signals.push(options.signal);
+      return await new Promise<SpawnResult>((resolve) => {
+        finishHeartbeats.push(() => resolve(commandResult()));
       });
+    });
     const generation = registerCrabboxGeneration();
     let stopping: Promise<void> | undefined;
     let stopped = false;
     try {
-      for (const leaseId of ["cbx_first", "cbx_second"]) {
-        await generation.provider.inspect({ leaseId, profile: PROFILE });
+      for (const id of ["cbx_first", "cbx_second"]) {
+        await generation.provider.inspect({ leaseId: id, profile: PROFILE });
       }
       await vi.advanceTimersByTimeAsync(0);
       expect(signals).toHaveLength(2);
@@ -282,7 +266,7 @@ describe("Crabbox plugin generation lifecycle", () => {
 
       await generation.provider.inspect({ leaseId: "cbx_late", profile: PROFILE });
       await vi.advanceTimersByTimeAsync(15_000);
-      expect(runCommand.mock.calls.filter(([argv]) => argv[1] === "heartbeat")).toHaveLength(2);
+      expect(commands(runCommand, "heartbeat")).toHaveLength(2);
     } finally {
       for (const finish of finishHeartbeats) {
         finish();
@@ -294,11 +278,9 @@ describe("Crabbox plugin generation lifecycle", () => {
 
   it("keeps a replacement provider generation independently usable", async () => {
     vi.useFakeTimers();
-    const runCommand = vi
-      .spyOn(processRuntime, "runCommandWithTimeout")
-      .mockImplementation(async (argv) =>
-        argv[1] === "inspect" ? inspectResult(argv[argv.indexOf("--id") + 1]!) : commandResult(),
-      );
+    const runCommand = commandMock().mockImplementation(async (argv) =>
+      argv[1] === "inspect" ? inspectResult(leaseId(argv)) : commandResult(),
+    );
     const retiring = registerCrabboxGeneration();
     const replacement = registerCrabboxGeneration();
 
@@ -307,9 +289,7 @@ describe("Crabbox plugin generation lifecycle", () => {
     await stopGeneration(retiring.services);
     await vi.advanceTimersByTimeAsync(5_000);
 
-    const heartbeatLeaseIds = runCommand.mock.calls
-      .filter(([argv]) => argv[1] === "heartbeat")
-      .map(([argv]) => argv[argv.indexOf("--id") + 1]);
+    const heartbeatLeaseIds = commands(runCommand, "heartbeat").map(([argv]) => leaseId(argv));
     expect(heartbeatLeaseIds).toEqual(["cbx_replacement", "cbx_replacement"]);
 
     await stopGeneration(replacement.services);
@@ -319,11 +299,7 @@ describe("Crabbox plugin generation lifecycle", () => {
     "holds plugin service stop until aborted %s settles",
     async (stage) => {
       vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-crabbox-maintenance-generation-"));
-      const store = createPluginStateSyncKeyedStoreForTests<WarmProfileRecord>("crabbox", {
-        namespace: "warm-images",
-        maxEntries: 128,
-        overflowPolicy: "reject-new",
-      });
+      const store = openWarmImageStore();
       const old = Date.now() - 14 * 24 * 60 * 60 * 1_000;
       store.register("expired", {
         version: 3,
@@ -341,16 +317,14 @@ describe("Crabbox plugin generation lifecycle", () => {
       });
       const started = createDeferred<AbortSignal>();
       const finish = createDeferred<void>();
-      vi.spyOn(processRuntime, "runCommandWithTimeout").mockImplementation(
-        async (_argv, options) => {
-          if (typeof options === "number" || !options.signal) {
-            throw new Error("maintenance command needs a signal");
-          }
-          started.resolve(options.signal);
-          await finish.promise;
-          return commandResult();
-        },
-      );
+      commandMock().mockImplementation(async (_argv, options) => {
+        if (typeof options === "number" || !options.signal) {
+          throw new Error("maintenance command needs a signal");
+        }
+        started.resolve(options.signal);
+        await finish.promise;
+        return commandResult();
+      });
       if (stage === "binary acquisition") {
         vi.spyOn(managedBinary, "ensureManagedCrabboxBinary").mockImplementation(async (params) => {
           if (!params?.signal) {

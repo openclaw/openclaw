@@ -33,6 +33,16 @@ const image = {
   createdAtMs: 10,
   lastUsedAtMs: 20,
 };
+const migratedImage = {
+  checkpointId: image.checkpointId,
+  kind: image.kind,
+  state: image.state,
+  createdAtMs: image.createdAtMs,
+  lastDemandAtMs: null,
+  preparationKey: null,
+  cacheKey: null,
+  purpose: null,
+};
 let stateDir: string;
 let env: NodeJS.ProcessEnv;
 
@@ -69,54 +79,45 @@ function input(
   return { config: {}, env, stateDir, oauthDir: path.join(stateDir, "credentials"), context };
 }
 
-describe("Crabbox warm-profile Doctor migration", () => {
-  it.each<{ name: string; record: typeof image & { operation?: unknown } }>([
-    {
-      name: "in-flight capture",
-      record: {
-        ...image,
-        operation: {
-          type: "capture",
-          id: "capture-owned",
-          startedAtMs: 30,
-          leaseId: "cbx_owned",
-          provider: "machine0",
-          phase: "creating",
-        },
-      },
-    },
-  ])(
-    "preserves $name across SQLite reopen without fabricating an allocation",
-    async ({ record }) => {
-      await legacyImages().register("profile", record);
-      await expect(openCrabboxWarmImageStore(crabboxState, env).lookup("profile")).rejects.toThrow(
-        "doctor --fix",
-      );
-      const before = await legacyImages().lookup("profile");
-      expect(await migration.detectLegacyState(input())).not.toBeNull();
-      expect(await legacyImages().lookup("profile")).toEqual(before);
+async function migrateAndReopen() {
+  const result = await migration.migrateLegacyState(input());
+  await closeOpenClawStateDatabaseAsync();
+  resetPluginStateStoreForTests();
+  return result;
+}
 
-      const result = await migration.migrateLegacyState(input());
-      expect(result.warnings).toEqual([]);
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      const { operation, lastUsedAtMs: _lastUsedAtMs, ...metadata } = record;
-      expect(await openCrabboxWarmImageStore(crabboxState, env).lookup("profile")).toEqual({
-        version: 3,
-        image: {
-          ...metadata,
-          lastDemandAtMs: null,
-          preparationKey: null,
-          cacheKey: null,
-          purpose: null,
-        },
-        allocations: {},
-        ...(operation ? { operation } : {}),
-      });
-      expect(await migration.detectLegacyState(input())).toBeNull();
-      expect(await migration.migrateLegacyState(input())).toEqual({ changes: [], warnings: [] });
-    },
-  );
+const lookup = (key = "profile") => openCrabboxWarmImageStore(crabboxState, env).lookup(key);
+const migrate = () => migration.migrateLegacyState(input());
+const detect = () => migration.detectLegacyState(input());
+
+describe("Crabbox warm-profile Doctor migration", () => {
+  it("preserves in-flight capture across SQLite reopen without fabricating an allocation", async () => {
+    const operation = {
+      type: "capture",
+      id: "capture-owned",
+      startedAtMs: 30,
+      leaseId: "cbx_owned",
+      provider: "machine0",
+      phase: "creating",
+    };
+    const record = { ...image, operation };
+    await legacyImages().register("profile", record);
+    await expect(lookup()).rejects.toThrow("doctor --fix");
+    const before = await legacyImages().lookup("profile");
+    expect(await detect()).not.toBeNull();
+    expect(await legacyImages().lookup("profile")).toEqual(before);
+
+    const result = await migrateAndReopen();
+    expect(result.warnings).toEqual([]);
+    expect(await lookup()).toEqual({
+      version: 3,
+      image: migratedImage,
+      allocations: {},
+      operation,
+    });
+    expect(await detect()).toBeNull();
+    expect(await migrate()).toEqual({ changes: [], warnings: [] });
+  });
 
   it.each(["capture", "retire"] as const)(
     "migrates v2 with %s custody without changing allocation or runtime identities",
@@ -154,24 +155,11 @@ describe("Crabbox warm-profile Doctor migration", () => {
       };
       await legacyImages().register("profile", record);
 
-      expect((await migration.migrateLegacyState(input())).warnings).toEqual([]);
-      await closeOpenClawStateDatabaseAsync();
-      resetPluginStateStoreForTests();
-      const migrated = await openCrabboxWarmImageStore(crabboxState, env).lookup("profile");
-      expect(migrated).toEqual({
+      expect((await migrateAndReopen()).warnings).toEqual([]);
+      expect(await lookup()).toEqual({
         version: 3,
         projectKey: "project-v2",
-        image: {
-          checkpointId: image.checkpointId,
-          kind: image.kind,
-          state: image.state,
-          createdAtMs: image.createdAtMs,
-          runtimeIdentity,
-          preparationKey: null,
-          cacheKey: null,
-          purpose: null,
-          lastDemandAtMs: null,
-        },
+        image: { ...migratedImage, runtimeIdentity },
         allocations: {
           cbx_v2: {
             ...allocation,
@@ -184,7 +172,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
         },
         operation,
       });
-      expect(await migration.migrateLegacyState(input())).toEqual({ changes: [], warnings: [] });
+      expect(await migrate()).toEqual({ changes: [], warnings: [] });
     },
   );
 
@@ -193,11 +181,9 @@ describe("Crabbox warm-profile Doctor migration", () => {
     await legacyImages().register("reserved", reserved);
     const selector = crabboxLegacyWarmImageCaptureSelector("reserved", reserved);
 
-    await migration.migrateLegacyState(input());
-    await closeOpenClawStateDatabaseAsync();
-    resetPluginStateStoreForTests();
+    await migrateAndReopen();
 
-    expect(await openCrabboxWarmImageStore(crabboxState, env).lookup("reserved")).toEqual({
+    expect(await lookup("reserved")).toEqual({
       version: 3,
       allocations: {},
       operation: {
@@ -219,8 +205,8 @@ describe("Crabbox warm-profile Doctor migration", () => {
     const [lease] = await listCrabboxLegacyWarmLeases(crabboxState, env);
     const command = `openclaw crabbox warm-images --recover ${lease!.selector} --acknowledge-provider-cleanup`;
 
-    expect((await migration.detectLegacyState(input()))?.preview.join("\n")).toContain(command);
-    const result = await migration.migrateLegacyState(input());
+    expect((await detect())?.preview.join("\n")).toContain(command);
+    const result = await migrate();
     expect(result.changes).toEqual([]);
     expect(result.warnings.join("\n")).toContain("1 legacy Crabbox lease row(s)");
     expect(result.warnings.join("\n")).toContain(command);
@@ -239,7 +225,7 @@ describe("Crabbox warm-profile Doctor migration", () => {
       await store.register(String(index), row);
     }
 
-    const result = await migration.migrateLegacyState(input());
+    const result = await migrate();
 
     expect(result.changes).toEqual([]);
     expect(result.warnings).toHaveLength(rows.length);
