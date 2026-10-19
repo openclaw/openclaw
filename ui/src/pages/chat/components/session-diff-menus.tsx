@@ -1,5 +1,5 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
-import { createEffect, createSignal, onCleanup, Show } from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, Show } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { bindOverlayAnchor } from "../../../components/overlay-anchor.ts";
 import { Icon, type IconName } from "../../../components/solid/icon.tsx";
@@ -600,6 +600,7 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
           let releaseAnchor: (() => void) | undefined;
           onCleanup(() => releaseAnchor?.());
           const placement = menu.kind === "scope" ? (menu.placement ?? "top-start") : "bottom-end";
+          const entries = createMemo(() => items(menu));
           const label = () =>
             menu.kind === "file"
               ? t("chat.sessionDiff.fileActions", { path: menu.path })
@@ -632,7 +633,7 @@ export function SessionDiffMenu(props: SessionDiffMenuProps) {
                 panelClass="session-diff-menu__surface"
                 placement={placement}
                 label={label()}
-                items={items(menu)}
+                items={entries()}
                 triggerAttributes={{
                   tabindex: -1,
                   "aria-hidden": "true",
