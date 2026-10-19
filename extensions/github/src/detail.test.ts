@@ -7,6 +7,7 @@ import { parseGitHubTarget } from "./targets.js";
 
 const date = "2026-09-13T12:00:00Z";
 const sha = "abcdef0123456789abcdef0123456789abcdef01";
+const publicRepo = { id: 123, private: false, visibility: "public" };
 let sequence = 0;
 
 function target(kind: "issue" | "pull" | "commit" = "issue", commitSha = sha): GitHubTarget {
@@ -47,11 +48,15 @@ function file(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
-function commit(overrides: Record<string, unknown> = {}) {
+function commit(overrides: Record<string, unknown> = {}, commentCount = 0) {
   return {
     sha,
     author: { login: "octocat" },
-    commit: { message: "Subject\n\nDetails", author: { name: "Octocat", date }, comment_count: 0 },
+    commit: {
+      message: "Subject\n\nDetails",
+      author: { name: "Octocat", date },
+      comment_count: commentCount,
+    },
     stats: { additions: 1, deletions: 1 },
     files: [file()],
     ...overrides,
@@ -68,8 +73,8 @@ function commentItem(overrides: Record<string, unknown> = {}) {
     ...overrides,
   };
 }
-function publicFetch(payload: unknown) {
-  return vi
+function publicFetch(payload: unknown, ...pages: Response[]) {
+  const fetchMock = vi
     .fn<typeof fetch>()
     .mockImplementation(async (url) => {
       const href = requestUrl(url);
@@ -81,8 +86,12 @@ function publicFetch(payload: unknown) {
       }
       throw new Error("Unexpected request " + href);
     })
-    .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
+    .mockResolvedValueOnce(json(publicRepo))
     .mockResolvedValueOnce(json(payload));
+  for (const page of pages) {
+    fetchMock.mockResolvedValueOnce(page);
+  }
+  return fetchMock;
 }
 
 function identity(scope = "selected"): ControlUiGitHubPreviewIdentity {
@@ -97,10 +106,26 @@ function identity(scope = "selected"): ControlUiGitHubPreviewIdentity {
 function requestUrl(input: Parameters<typeof fetch>[0]): string {
   return input instanceof Request ? input.url : input.toString();
 }
+function requestPath(input: Parameters<typeof fetch>[0]): string {
+  return new URL(requestUrl(input)).pathname;
+}
+function fullPull() {
+  return item({ comments: 1, review_comments: 1, changed_files: 1 });
+}
+function fetchResponses(...responses: Response[]) {
+  const fetchMock = vi.fn<typeof fetch>();
+  for (const response of responses) {
+    fetchMock.mockResolvedValueOnce(response);
+  }
+  return fetchMock;
+}
+function expectStatus(pending: Promise<unknown>, statusCode: number) {
+  return expect(pending).rejects.toMatchObject({ statusCode });
+}
 
 function authenticatedFetch(payload: unknown = item()) {
   return vi.fn<typeof fetch>(async (url) => {
-    const path = new URL(requestUrl(url)).pathname;
+    const path = requestPath(url);
     if (path.endsWith("/check-runs")) {
       return json({ total_count: 0, check_runs: [] });
     }
@@ -108,7 +133,7 @@ function authenticatedFetch(payload: unknown = item()) {
       return json({ sha, total_count: 0, state: "pending", statuses: [] });
     }
     if (/^\/repos\/[^/]+\/[^/]+$/u.test(path)) {
-      return json({ id: 123, private: false, visibility: "public" });
+      return json(publicRepo);
     }
     if (path.endsWith("/comments")) {
       return json([commentItem({ diff_hunk: "@@ -1 +1 @@\n-old\n+new" })]);
@@ -130,10 +155,7 @@ describe("GitHub detail selected read identity", () => {
     async (kind) => {
       const selected = identity();
       const input = target(kind);
-      const payload =
-        kind === "commit"
-          ? commit({ commit: { ...commit().commit, comment_count: 1 } })
-          : item({ comments: 1, review_comments: 1, changed_files: 1 });
+      const payload = kind === "commit" ? commit({}, 1) : fullPull();
       const fetchMock = authenticatedFetch(payload);
       const first = await loadGitHubDetail(input, selected, fetchMock);
       expect(first).toMatchObject({
@@ -163,9 +185,7 @@ describe("GitHub detail selected read identity", () => {
       }
       const itemPath = kind === "commit" ? "/commits/" + sha : "/pulls/1";
       expect(
-        fetchMock.mock.calls.filter(([url]) =>
-          new URL(requestUrl(url)).pathname.endsWith(itemPath),
-        ),
+        fetchMock.mock.calls.filter(([url]) => requestPath(url).endsWith(itemPath)),
       ).toHaveLength(2);
       expect(selected.revalidate).toHaveBeenCalled();
     },
@@ -179,9 +199,7 @@ describe("GitHub detail selected read identity", () => {
         ? authorized(url, options)
         : json({}, 403, { "x-ratelimit-remaining": "0", "retry-after": "3600" }),
     );
-    await expect(loadGitHubDetail(input, undefined, fetchMock)).rejects.toMatchObject({
-      statusCode: 429,
-    });
+    await expectStatus(loadGitHubDetail(input, undefined, fetchMock), 429);
     await expect(loadGitHubDetail(input, identity(), fetchMock)).resolves.toMatchObject({
       title: "Read me",
     });
@@ -213,7 +231,7 @@ describe("GitHub detail selected read identity", () => {
         const anonymous = fetchMock.mock.calls.filter(
           ([, options]) => !new Headers(options?.headers).has("Authorization"),
         );
-        expect(anonymous.map(([url]) => new URL(requestUrl(url)).pathname)).toEqual([
+        expect(anonymous.map(([url]) => requestPath(url))).toEqual([
           `/repos/${input.owner}/${input.repo}`,
           `/repos/${input.owner}/${input.repo}/issues/1`,
         ]);
@@ -225,9 +243,7 @@ describe("GitHub detail selected read identity", () => {
 
   it("does not bypass a managed identity after an authentication failure", async () => {
     const fetchMock = vi.fn<typeof fetch>().mockResolvedValue(json({}, 401));
-    await expect(loadGitHubDetail(target(), identity(), fetchMock)).rejects.toMatchObject({
-      statusCode: 401,
-    });
+    await expectStatus(loadGitHubDetail(target(), identity(), fetchMock), 401);
     expect(fetchMock).toHaveBeenCalledTimes(1);
     expect(fetchMock.mock.calls[0]?.[1]?.headers).toHaveProperty("Authorization");
   });
@@ -246,7 +262,7 @@ describe("GitHub detail selected read identity", () => {
         const upstream = authenticatedFetch();
         let changed = false;
         const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
-          const isRepository = /^\/repos\/[^/]+\/[^/]+$/u.test(new URL(requestUrl(url)).pathname);
+          const isRepository = /^\/repos\/[^/]+\/[^/]+$/u.test(requestPath(url));
           if (changed && isRepository) {
             return json(repository);
           }
@@ -260,9 +276,7 @@ describe("GitHub detail selected read identity", () => {
           await loadGitHubDetail(input, selected, fetchMock);
           changed = true;
         }
-        await expect(loadGitHubDetail(input, selected, fetchMock)).rejects.toMatchObject({
-          statusCode: 404,
-        });
+        await expectStatus(loadGitHubDetail(input, selected, fetchMock), 404);
       }
     },
   );
@@ -271,13 +285,11 @@ describe("GitHub detail selected read identity", () => {
     "rejects a redirected %s before sending credentials to a different repository's content",
     async (stage) => {
       const input = target("pull");
-      const upstream = authenticatedFetch(
-        item({ comments: 1, review_comments: 1, changed_files: 1 }),
-      );
+      const upstream = authenticatedFetch(fullPull());
       const suffix =
         "/pulls/1" + (stage === "item" ? "" : stage === "review" ? "/comments" : "/files");
       const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
-        const pathname = new URL(requestUrl(url)).pathname;
+        const pathname = requestPath(url);
         if (pathname === "/repos/octocat/another") {
           return json({ id: 456, private: false, visibility: "public" });
         }
@@ -289,9 +301,7 @@ describe("GitHub detail selected read identity", () => {
         }
         return upstream(url, options);
       });
-      await expect(loadGitHubDetail(input, identity(), fetchMock)).rejects.toMatchObject({
-        statusCode: 404,
-      });
+      await expectStatus(loadGitHubDetail(input, identity(), fetchMock), 404);
       expect(fetchMock.mock.calls.some(([url]) => requestUrl(url).includes("/another/"))).toBe(
         false,
       );
@@ -303,16 +313,14 @@ describe("GitHub detail selected read identity", () => {
     const selected = identity();
     const upstream = authenticatedFetch();
     const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
-      const pathname = new URL(requestUrl(url)).pathname;
+      const pathname = requestPath(url);
       if (pathname === "/repos/octocat/" + input.repo + "/issues/1") {
         return new Response(null, {
           status: 301,
           headers: { Location: "/repositories/123/issues/1" },
         });
       }
-      return pathname === "/repositories/123"
-        ? json({ id: 123, private: false, visibility: "public" })
-        : upstream(url, options);
+      return pathname === "/repositories/123" ? json(publicRepo) : upstream(url, options);
     });
     await expect(loadGitHubDetail(input, selected, fetchMock)).resolves.toMatchObject({
       title: "Read me",
@@ -423,7 +431,7 @@ describe("GitHub detail selected read identity", () => {
       title: "Read me",
     });
     active = false;
-    pending.resolve(json({ id: 123, private: false, visibility: "public" }));
+    pending.resolve(json(publicRepo));
     await expect(first).rejects.toThrow("identity changed");
     await expect(loadGitHubDetail(input, identity(), fetchMock)).resolves.toMatchObject({
       title: "Read me",
@@ -443,12 +451,10 @@ describe("GitHub detail public read boundary", () => {
 
   it("stops private repositories before fetching the object", async () => {
     for (const selected of [undefined, identity()]) {
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockResolvedValueOnce(json({ id: 123, private: true, visibility: "private" }));
-      await expect(loadGitHubDetail(target(), selected, fetchMock)).rejects.toMatchObject({
-        statusCode: 404,
-      });
+      const fetchMock = fetchResponses(
+        json({ ...publicRepo, private: true, visibility: "private" }),
+      );
+      await expectStatus(loadGitHubDetail(target(), selected, fetchMock), 404);
       expect(fetchMock).toHaveBeenCalledTimes(1);
     }
   });
@@ -459,13 +465,8 @@ describe("GitHub detail public read boundary", () => {
     "https://user:password@api.github.com/repos/octocat/repo",
   ])("rejects redirect %s without following it", async (location) => {
     const redirect = new Response("discard", { status: 301, headers: { Location: location } });
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-      .mockResolvedValueOnce(redirect);
-    await expect(loadGitHubDetail(target(), undefined, fetchMock)).rejects.toMatchObject({
-      statusCode: 502,
-    });
+    const fetchMock = fetchResponses(json(publicRepo), redirect);
+    await expectStatus(loadGitHubDetail(target(), undefined, fetchMock), 502);
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(redirect.bodyUsed).toBe(true);
   });
@@ -476,21 +477,15 @@ describe("GitHub detail public read boundary", () => {
       .mockImplementation(
         async () => new Response(null, { status: 301, headers: { Location: "/repositories/123" } }),
       );
-    await expect(loadGitHubDetail(target(), undefined, fetchMock)).rejects.toMatchObject({
-      statusCode: 502,
-    });
+    await expectStatus(loadGitHubDetail(target(), undefined, fetchMock), 502);
     expect(fetchMock).toHaveBeenCalledTimes(4);
   });
 
   it("normalizes a retry-after rate limit and caches repeated opens", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(json({ message: "upstream" }, 403, { "retry-after": "60" }));
+    const fetchMock = fetchResponses(json({ message: "upstream" }, 403, { "retry-after": "60" }));
     const input = target();
     for (let attempt = 0; attempt < 2; attempt++) {
-      await expect(loadGitHubDetail(input, undefined, fetchMock)).rejects.toMatchObject({
-        statusCode: 429,
-      });
+      await expectStatus(loadGitHubDetail(input, undefined, fetchMock), 429);
     }
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
@@ -498,14 +493,8 @@ describe("GitHub detail public read boundary", () => {
   it("expires cached visibility failures rather than making a missing repository permanently unavailable", async () => {
     const now = vi.spyOn(Date, "now").mockReturnValue(1_000);
     const input = target();
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(json({}, 404))
-      .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-      .mockResolvedValueOnce(json(item()));
-    await expect(loadGitHubDetail(input, undefined, fetchMock)).rejects.toMatchObject({
-      statusCode: 404,
-    });
+    const fetchMock = fetchResponses(json({}, 404), json(publicRepo), json(item()));
+    await expectStatus(loadGitHubDetail(input, undefined, fetchMock), 404);
     now.mockReturnValue(32_000);
     await expect(loadGitHubDetail(input, undefined, fetchMock)).resolves.toMatchObject({
       partial: false,
@@ -517,28 +506,18 @@ describe("GitHub detail public read boundary", () => {
     const comment = commentItem({ body: "x".repeat(5000) });
     const fetchMock = publicFetch(
       item({ body: "b".repeat(40_000), comments: 25, review_comments: 25, changed_files: 35 }),
-    )
-      .mockResolvedValueOnce(
-        json(
-          Array.from({ length: 25 }, () => comment),
-          200,
-          { Link: '<https://api.github.com/ignored>; rel="next"' },
+      json(
+        Array.from({ length: 25 }, () => comment),
+        200,
+        { Link: '<https://api.github.com/ignored>; rel="next"' },
+      ),
+      json(
+        Array.from({ length: 25 }, () =>
+          commentItem({ body: comment.body, path: "src/file.ts", diff_hunk: "h".repeat(5000) }),
         ),
-      )
-      .mockResolvedValueOnce(
-        json(
-          Array.from({ length: 25 }, () =>
-            commentItem({
-              body: comment.body,
-              path: "src/file.ts",
-              diff_hunk: "h".repeat(5000),
-            }),
-          ),
-        ),
-      )
-      .mockResolvedValueOnce(
-        json(Array.from({ length: 35 }, () => file({ patch: "p".repeat(20_000) }))),
-      );
+      ),
+      json(Array.from({ length: 35 }, () => file({ patch: "p".repeat(20_000) }))),
+    );
     const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
     expect(detail).toMatchObject({
       bodyTruncated: true,
@@ -583,7 +562,8 @@ describe("GitHub detail public read boundary", () => {
     const patchPrefix = "p".repeat(16 * 1024 - 1);
     const fetchMock = publicFetch(
       item({ body: bodyPrefix + "\u{1F600}tail", changed_files: 1 }),
-    ).mockResolvedValueOnce(json([file({ patch: patchPrefix + "\u{1F600}tail" })]));
+      json([file({ patch: patchPrefix + "\u{1F600}tail" })]),
+    );
     const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
     expect(detail).toMatchObject({
       body: bodyPrefix,
@@ -595,9 +575,11 @@ describe("GitHub detail public read boundary", () => {
 
   it("preserves complete nonempty comments and renamed file patches", async () => {
     const comment = commentItem({ user: null, body: "  Markdown  " });
-    const fetchMock = publicFetch(item({ comments: 1, changed_files: 1 }))
-      .mockResolvedValueOnce(json([comment]))
-      .mockResolvedValueOnce(json([file({ status: "renamed", previous_filename: "old.ts" })]));
+    const fetchMock = publicFetch(
+      item({ comments: 1, changed_files: 1 }),
+      json([comment]),
+      json([file({ status: "renamed", previous_filename: "old.ts" })]),
+    );
     const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
     expect(detail).toMatchObject({
       partial: false,
@@ -630,9 +612,11 @@ describe("GitHub detail public read boundary", () => {
       start_line: 13,
       diff_hunk: diffHunk,
     });
-    const fetchMock = publicFetch(item({ comments: 1, review_comments: 2 }))
-      .mockResolvedValueOnce(json([discussion]))
-      .mockResolvedValueOnce(json([review, reply]));
+    const fetchMock = publicFetch(
+      item({ comments: 1, review_comments: 2 }),
+      json([discussion]),
+      json([review, reply]),
+    );
     const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
     expect(detail).toMatchObject({
       partial: false,
@@ -674,9 +658,7 @@ describe("GitHub detail public read boundary", () => {
       path: null,
       line: null,
     });
-    const fetchMock = publicFetch(
-      commit({ commit: { ...commit().commit, comment_count: 2 } }),
-    ).mockResolvedValueOnce(json([first, second]));
+    const fetchMock = publicFetch(commit({}, 2), json([first, second]));
     const detail = await loadGitHubDetail(
       target("commit", sha.slice(0, 7).toUpperCase()),
       undefined,
@@ -717,7 +699,8 @@ describe("GitHub detail public read boundary", () => {
           comments: section === "comments" ? 1 : 0,
           changed_files: section === "files" ? 1 : 0,
         }),
-      ).mockResolvedValueOnce(json({}, 429));
+        json({}, 429),
+      );
       const detail = await loadGitHubDetail(target("pull"), undefined, fetchMock);
       expect(detail).toMatchObject({
         title: "Read me",
@@ -741,9 +724,7 @@ describe("GitHub detail public read boundary", () => {
   ])(
     "marks incomplete commit comments for $name without losing the commit",
     async ({ response }) => {
-      const fetchMock = publicFetch(
-        commit({ commit: { ...commit().commit, comment_count: 1 } }),
-      ).mockResolvedValueOnce(response());
+      const fetchMock = publicFetch(commit({}, 1), response());
       const detail = await loadGitHubDetail(target("commit"), undefined, fetchMock);
       expect(detail).toMatchObject({
         title: "Subject",
@@ -757,20 +738,18 @@ describe("GitHub detail public read boundary", () => {
   );
 
   it("marks omitted binary patches and commit file pagination rather than claiming complete content", async () => {
-    const fetchMock = vi
-      .fn<typeof fetch>()
-      .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-      .mockResolvedValueOnce(
-        json(
-          commit({
-            author: null,
-            commit: { author: null, message: "", comment_count: 0 },
-            files: [file({ patch: undefined })],
-          }),
-          200,
-          { Link: '<https://api.github.com/ignored>; rel="next"' },
-        ),
-      );
+    const fetchMock = fetchResponses(
+      json(publicRepo),
+      json(
+        commit({
+          author: null,
+          commit: { author: null, message: "", comment_count: 0 },
+          files: [file({ patch: undefined })],
+        }),
+        200,
+        { Link: '<https://api.github.com/ignored>; rel="next"' },
+      ),
+    );
     const detail = await loadGitHubDetail(target("commit"), undefined, fetchMock);
     expect(detail).toMatchObject({
       badge: { label: "Commit", tone: "neutral" },
@@ -790,10 +769,7 @@ describe("GitHub detail public read boundary", () => {
       const response = new Response("x".repeat(1024 * 1024 + 1), {
         headers: declaredLength ? { "Content-Length": String(1024 * 1024 + 1) } : {},
       });
-      const fetchMock = vi
-        .fn<typeof fetch>()
-        .mockResolvedValueOnce(json({ private: false, visibility: "public" }))
-        .mockResolvedValueOnce(response);
+      const fetchMock = fetchResponses(json(publicRepo), response);
       await expect(loadGitHubDetail(target(), undefined, fetchMock)).rejects.toThrow();
       expect(response.bodyUsed).toBe(true);
     },
@@ -807,12 +783,10 @@ describe("progressive GitHub documents", () => {
     const input = target("pull");
     const checks = createDeferred<Response>();
     const checksStarted = createDeferred<void>();
-    const upstream = authenticatedFetch(
-      item({ comments: 1, review_comments: 1, changed_files: 1 }),
-    );
+    const upstream = authenticatedFetch(fullPull());
     let delayChecks = true;
     const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
-      if (delayChecks && new URL(requestUrl(url)).pathname.endsWith("/check-runs")) {
+      if (delayChecks && requestPath(url).endsWith("/check-runs")) {
         delayChecks = false;
         checksStarted.resolve();
         return checks.promise;
@@ -855,7 +829,7 @@ describe("progressive GitHub documents", () => {
       expect(discussion.comments).toHaveLength(2);
       expect(discussion.checks).toBeUndefined();
       expect(discussion.files).toBeUndefined();
-      const paths = fetchMock.mock.calls.map(([url]) => new URL(requestUrl(url)).pathname);
+      const paths = fetchMock.mock.calls.map(([url]) => requestPath(url));
       expect(paths.filter((path) => path.endsWith("/pulls/1"))).toHaveLength(1);
       expect(paths.some((path) => path.endsWith("/files"))).toBe(false);
       const files = await loadGitHubDetail(input, selected, fetchMock, false, "files");
@@ -892,7 +866,7 @@ describe("progressive GitHub documents", () => {
     let currentSha = sha;
     const upstream = authenticatedFetch();
     const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
-      const path = new URL(requestUrl(url)).pathname;
+      const path = requestPath(url);
       if (path.endsWith("/pulls/1")) {
         return json(item({ head: { sha: currentSha } }));
       }
@@ -921,7 +895,7 @@ describe("progressive GitHub documents", () => {
     const upstream = authenticatedFetch(item({ changed_files: 1 }));
     let filesRead = false;
     const fetchMock = vi.fn<typeof fetch>(async (url, options) => {
-      const path = new URL(requestUrl(url)).pathname;
+      const path = requestPath(url);
       if (filesRead && path.endsWith("/pulls/1")) {
         return json(item({ changed_files: 1, head: { sha: "d".repeat(40) } }));
       }
