@@ -14,9 +14,9 @@ import type {
   HumanMentionAccess,
   HumanMentionRead,
 } from "./components/chat-composer-mention-menu.tsx";
+import { ChatMobilePeopleGrid } from "./components/chat-mobile-people-grid.tsx";
 import {
   ChatMobilePeopleBody,
-  ChatMobilePeopleGrid,
   type ChatMobilePeopleBodyProps,
 } from "./components/chat-mobile-people.tsx";
 
