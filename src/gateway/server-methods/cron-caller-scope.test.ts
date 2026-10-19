@@ -183,6 +183,44 @@ describe("cron caller scope ownership", () => {
     revokeCronCreatorAuthorityRunScope(capability);
   });
 
+  it.each([undefined, "webchat"])(
+    "retains the admitted channel origin when the tool transport is %s",
+    (transport) => {
+      const runId = "slack-owner-capture";
+      const capability = createCronCreatorAuthorityRunScope(runId, {
+        kind: "external",
+        channel: "slack",
+      });
+      const grant = mintCronCreatorAuthorityGrant(capability);
+      const client = {
+        internal: {
+          agentRuntimeIdentity: {
+            kind: "agentRuntime",
+            agentId: "main",
+            sessionKey: "agent:main:owner",
+            turnSourceAccountId: "work",
+            turnSourceChannel: transport,
+            operationalRunInstance: { runId },
+            cronToolsAllowCapture: "final-executable-surface",
+            cronCreatorAuthorityGrant: grant,
+          },
+        },
+      };
+      try {
+        expect(readCronCallerScope(client as never)?.toolsAllowProvenance?.callerOrigin).toEqual({
+          kind: "external",
+          channel: "slack",
+        });
+        revokeCronCreatorAuthorityRunScope(capability);
+        expect(readCronCallerScope(client as never)?.toolsAllowProvenance?.callerOrigin).toEqual(
+          transport ? { kind: "external", channel: transport } : { kind: "unknown" },
+        );
+      } finally {
+        revokeCronCreatorAuthorityRunScope(capability);
+      }
+    },
+  );
+
   it("uses a scoped session key before the configured default", () => {
     const job = createScopedJob();
 

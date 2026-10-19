@@ -63,6 +63,7 @@ export function createSlackActions(
   options?: { invoke?: SlackActionInvoke },
 ): ChannelMessageActionAdapter {
   return {
+    writeAuthorityActions: ["edit"],
     providerOwnedReadGates: true,
     readAuthorityActions: [
       "read",

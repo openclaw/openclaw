@@ -29,6 +29,7 @@ import { loadCronStore, saveCronStore } from "../../cron/store.js";
 import { cronStoreKey } from "../../cron/store/key.js";
 import { readCronRunRecords } from "../../cron/store/read-only.js";
 import { recordCronRun } from "../../cron/store/run-history.js";
+import { resolveCronAuthenticatedCallerOrigin } from "../../cron/tools-allow-provenance.js";
 import { resolveCronRunToolsAllow } from "../../cron/tools-allow.js";
 import type { CronJobPatch } from "../../cron/types.js";
 import {
@@ -92,7 +93,7 @@ async function withAgentManagement<T>(
     management: NonNullable<ReturnType<typeof bindCronManagementGrant>>,
     capability: NonNullable<ReturnType<typeof createCronCreatorAuthorityCapability>>,
   ) => Promise<T>,
-  fresh = false,
+  fresh: boolean | "channel" = false,
 ): Promise<T> {
   const runId = "scheduled-policy-management";
   const operationalRunInstance = createOperationalRunInstanceRef(runId);
@@ -102,21 +103,29 @@ async function withAgentManagement<T>(
     kind: "agentRuntime",
     agentId: "main",
     sessionKey,
-    turnSourceChannel: "discord",
+    ...(fresh === "channel" ? {} : { turnSourceChannel: "discord" }),
     turnSourceAccountId: accountId,
     operationalRunInstance,
     delegatedAuthority: { kind: "local", ...authority },
   };
   try {
     const capability = expectDefined(
-      createCronCreatorAuthorityCapability(runId, fresh ? { kind: "local" } : { kind: "unknown" }, {
-        source: "channel-owner",
-        isCurrent: () =>
-          isConfiguredCommandOwner(getRuntimeConfig(), {
-            channel: "discord",
-            senderId: "owner-1",
-          }),
-      }),
+      createCronCreatorAuthorityCapability(
+        runId,
+        fresh
+          ? fresh === "channel"
+            ? { kind: "external", channel: "discord" }
+            : { kind: "local" }
+          : { kind: "unknown" },
+        {
+          source: "channel-owner",
+          isCurrent: () =>
+            isConfiguredCommandOwner(getRuntimeConfig(), {
+              channel: "discord",
+              senderId: "owner-1",
+            }),
+        },
+      ),
       "current management capability",
     );
     return await runWithCronCreatorAuthorityCapability(capability, () =>
@@ -142,6 +151,7 @@ describe("cron.update scheduled policy adoption", () => {
     "known tool",
     "legacy owner",
     "wildcard owner",
+    "channel owner",
     "other session",
     "other account",
     "borrowed capture",
@@ -157,8 +167,10 @@ describe("cron.update scheduled policy adoption", () => {
     const reachedCommit = createDeferred();
     const continueCommit = createDeferred();
     const isOwner =
-      revokesGrant || ["owner", "known tool", "legacy owner", "wildcard owner"].includes(caller);
-    const toolsAllow = caller === "wildcard owner" ? ["*"] : ["calendar_search"];
+      revokesGrant ||
+      ["owner", "known tool", "legacy owner", "wildcard owner", "channel owner"].includes(caller);
+    const toolsAllow =
+      caller === "channel owner" ? null : caller === "wildcard owner" ? ["*"] : ["calendar_search"];
     const storePath = path.join(expectDefined(stateDir, "test state"), "cron", "jobs.json");
     const serviceDeps = {
       scheduler: createTestGatewayScheduler(),
@@ -211,6 +223,11 @@ describe("cron.update scheduled policy adoption", () => {
           ownerAccountId: owner.accountId,
         },
         ...(caller === "legacy owner" ? {} : { captureRuntimeAuthority: () => runtimeAuthority }),
+        toolsAllowProvenance: {
+          version: 1,
+          source: "final-executable-surface",
+          callerOrigin: { kind: "unknown" },
+        },
       },
     );
     if (caller === "legacy owner") {
@@ -264,6 +281,7 @@ describe("cron.update scheduled policy adoption", () => {
       getRuntimeConfig: () => cfg,
       validateAgentRuntimeApprovalAuthority: createAgentRuntimeApprovalAuthorityValidator(),
     });
+    const freshOwner = caller === "channel owner" ? "channel" : true;
     await withAgentManagement(async (identity, management, capability) => {
       const tool = createCronTool(
         {
@@ -355,7 +373,7 @@ describe("cron.update scheduled policy adoption", () => {
       } else {
         await expect(update).resolves.toMatchObject({ details: { id: created.id } });
       }
-    }, true);
+    }, freshOwner);
     const stored = (await loadCronStore(storePath)).jobs;
     if (revokesGrant) {
       expect(stored).toEqual(before);
@@ -380,7 +398,18 @@ describe("cron.update scheduled policy adoption", () => {
         payload: { kind: "agentTurn", message: "Check calendar" },
       });
       expect(stored[0]?.runtimeAuthorityRecoveryRequired).toBeUndefined();
-      expect(resolveCronRunToolsAllow(expectDefined(stored[0], "stored job"))).toEqual(toolsAllow);
+      expect(resolveCronRunToolsAllow(expectDefined(stored[0], "stored job"))).toEqual(
+        toolsAllow ?? ["calendar_search"],
+      );
+      if (caller === "channel owner") {
+        service.stop();
+        cron = new CronService(serviceDeps);
+        const reopened = expectDefined(await cron.readJob(created.id), "reauthorized owner job");
+        expect(resolveCronAuthenticatedCallerOrigin(reopened)).toEqual({
+          kind: "external",
+          channel: "discord",
+        });
+      }
       if (caller === "legacy owner") {
         expect(historyBefore).toHaveLength(1);
         service.stop();
