@@ -15,8 +15,9 @@ import { describeWithLanNodePairingServer } from "./test-helpers.lan-pairing.js"
 
 installGatewayTestHooks({ scope: "suite" });
 
-const configurePairing = (autoApproveCidrs?: string[], sshVerify?: false) =>
-  writeConfigFile({ gateway: { nodes: { pairing: { autoApproveCidrs, sshVerify } } } });
+const configurePairing = async (autoApproveCidrs?: string[], sshVerify?: false) => {
+  await writeConfigFile({ gateway: { nodes: { pairing: { autoApproveCidrs, sshVerify } } } });
+};
 const pendingFor = async (deviceId: string) =>
   (await listDevicePairing()).pending.filter((entry) => entry.deviceId === deviceId);
 

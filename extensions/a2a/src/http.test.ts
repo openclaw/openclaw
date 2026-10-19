@@ -21,7 +21,7 @@ import { A2aTaskStore } from "./task-store.js";
 import type { A2aChannelConfig } from "./types.js";
 
 type HttpReply = { status: number; json(): Promise<unknown>; text(): Promise<string> };
-async function expectReply(reply: HttpReply | Promise<HttpReply>, expected: unknown, status = 200) {
+async function expectReply(reply: HttpReply | Promise<HttpReply>, expected: object, status = 200) {
   const response = await reply;
   expect(response.status).toBe(status);
   await expect(response.json()).resolves.toMatchObject(expected);

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -264,14 +265,16 @@ describe("Matrix QA CLI runtime", () => {
           pids.push(await readPidFile(pidPath));
         },
         async (session) => {
+          const [pid] = pids;
+          assert(pid !== undefined, "expected the ready CLI PID");
           if (late) {
-            await waitForProcessExit(pids[0], signal);
+            await waitForProcessExit(pid, signal);
           }
           await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
           if (late) {
             await expect(session.wait()).rejects.toThrow(marker);
           }
-          expect(isProcessRunning(pids[0])).toBe(false);
+          expect(isProcessRunning(pid)).toBe(false);
         },
       );
     });
@@ -313,9 +316,11 @@ describe("Matrix QA CLI runtime", () => {
         },
         async (session) => {
           await expect(session.wait()).rejects.toThrow(/timed out after 500ms/u);
-          expect(isProcessRunning(pids[0])).toBe(false);
+          const [childPid, grandchildPid] = pids;
+          assert(childPid !== undefined && grandchildPid !== undefined, "expected both ready PIDs");
+          expect(isProcessRunning(childPid)).toBe(false);
           if (process.platform !== "win32") {
-            expect(isProcessRunning(pids[1])).toBe(false);
+            expect(isProcessRunning(grandchildPid)).toBe(false);
           }
         },
       );

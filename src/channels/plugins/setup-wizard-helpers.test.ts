@@ -216,7 +216,7 @@ describe("setup wizard helpers", () => {
     }
   });
   it("can merge parsed values with existing entries", async () => {
-    const next = await promptParsedAllowFromForAccount({
+    const next = await promptParsedAllowFromForAccount<OpenClawConfig>({
       cfg: { channels: { nostr: { allowFrom: ["old"] } } },
       defaultAccountId: DEFAULT_ACCOUNT_ID,
       prompter: createPrompter(["new"]),

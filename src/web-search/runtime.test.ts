@@ -127,8 +127,8 @@ describe("web search runtime", () => {
   });
 
   it("executes searches through the active plugin registry", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createCustomSearchProvider({
+    runtimeProvidersMock.mockReturnValue([
+      customProvider({
         credentialPath: "tools.web.search.custom.apiKey",
         requiresCredential: false,
       }),
@@ -179,8 +179,8 @@ describe("web search runtime", () => {
         sameSignal: context?.signal === controller.signal,
       }),
     );
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createCustomSearchProvider({
+    runtimeProvidersMock.mockReturnValue([
+      customProvider({
         credentialPath: "tools.web.search.custom.apiKey",
         requiresCredential: false,
         createTool: () => ({
@@ -260,8 +260,8 @@ describe("web search runtime", () => {
       controller.abort(abortReason);
       return { ok: true };
     });
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createCustomSearchProvider({
+    runtimeProvidersMock.mockReturnValue([
+      customProvider({
         credentialPath: "tools.web.search.custom.apiKey",
         requiresCredential: false,
         createTool: () => ({
@@ -285,11 +285,11 @@ describe("web search runtime", () => {
   });
 
   it("auto-detects a provider from canonical plugin-owned credentials", async () => {
-    const provider = createCustomSearchProvider();
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
-    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+    const provider = customProvider();
+    runtimeProvidersMock.mockReturnValue([provider]);
+    pluginProvidersMock.mockReturnValue([provider]);
 
-    const config = createCustomSearchConfig("custom-config-key");
+    const config = customConfig("custom-config-key");
 
     await expect(
       runWebSearch({
@@ -303,7 +303,7 @@ describe("web search runtime", () => {
   });
 
   it("auto-detects a provider from a configured credential fallback", async () => {
-    const provider = createCustomSearchProvider({
+    const provider = customProvider({
       getConfiguredCredentialFallback: (config) => {
         const modelProvider = config?.models?.providers?.["custom-search"];
         return modelProvider && typeof modelProvider === "object" && "apiKey" in modelProvider
@@ -314,14 +314,8 @@ describe("web search runtime", () => {
           : undefined;
       },
     });
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      provider,
-      createDuckDuckGoSearchProvider(),
-    ]);
-    resolvePluginWebSearchProvidersMock.mockReturnValue([
-      provider,
-      createDuckDuckGoSearchProvider(),
-    ]);
+    runtimeProvidersMock.mockReturnValue([provider, searchProvider("duckduckgo")]);
+    pluginProvidersMock.mockReturnValue([provider, searchProvider("duckduckgo")]);
 
     await expect(
       runWebSearch({
@@ -359,17 +353,14 @@ describe("web search runtime", () => {
       },
     ]);
 
-    const provider = createCustomSearchProvider({
+    const provider = customProvider({
       pluginId: "xai",
       id: "grok",
       authProviderId: "xai",
       credentialPath: "plugins.entries.xai.config.webSearch.apiKey",
     });
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
-    resolvePluginWebSearchProvidersMock.mockReturnValue([
-      provider,
-      createDuckDuckGoSearchProvider(),
-    ]);
+    runtimeProvidersMock.mockReturnValue([provider]);
+    pluginProvidersMock.mockReturnValue([provider, searchProvider("duckduckgo")]);
 
     await expect(
       runWebSearch({
@@ -442,7 +433,7 @@ describe("web search runtime", () => {
   it("passes the active agentDir into selected provider tools", async () => {
     const activeAgentDir = mkdtempSync(path.join(os.tmpdir(), "openclaw-web-search-tool-agent-"));
     tempDirs.push(activeAgentDir);
-    const provider = createCustomSearchProvider({
+    const provider = customProvider({
       credentialPath: "",
       requiresCredential: false,
       createTool: ({ agentDir }) => ({
@@ -454,8 +445,8 @@ describe("web search runtime", () => {
         }),
       }),
     });
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
-    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+    runtimeProvidersMock.mockReturnValue([provider]);
+    pluginProvidersMock.mockReturnValue([provider]);
 
     await expect(
       runWebSearch({
@@ -478,11 +469,11 @@ describe("web search runtime", () => {
   });
 
   it("treats non-env SecretRefs as configured credentials for provider auto-detect", async () => {
-    const provider = createCustomSearchProvider();
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([provider]);
-    resolvePluginWebSearchProvidersMock.mockReturnValue([provider]);
+    const provider = customProvider();
+    runtimeProvidersMock.mockReturnValue([provider]);
+    pluginProvidersMock.mockReturnValue([provider]);
 
-    const config = createCustomSearchConfig({
+    const config = customConfig({
       source: "file",
       provider: "vault",
       id: "/providers/custom-search/apiKey",
@@ -500,8 +491,8 @@ describe("web search runtime", () => {
   });
 
   it("does not auto-select keyless providers when no provider is configured", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createDuckDuckGoSearchProvider({
+    runtimeProvidersMock.mockReturnValue([
+      searchProvider("duckduckgo", {
         getCredentialValue: () => "duckduckgo-no-key-needed",
       }),
       createWebSearchTestProvider({
@@ -522,7 +513,7 @@ describe("web search runtime", () => {
   });
 
   it("uses a keyless provider when the user explicitly selects it", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([createDuckDuckGoSearchProvider()]);
+    runtimeProvidersMock.mockReturnValue([searchProvider("duckduckgo")]);
 
     await expect(
       runWebSearch({
@@ -544,8 +535,8 @@ describe("web search runtime", () => {
   });
 
   it("falls back to another provider when auto-selected search execution fails", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createGoogleSearchProvider({
+    runtimeProvidersMock.mockReturnValue([
+      searchProvider("google", {
         createTool: () => ({
           description: "google",
           parameters: {},
@@ -601,8 +592,8 @@ describe("web search runtime", () => {
   });
 
   it("does not fall back when an auto-selected provider returns a validation error payload", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createGoogleSearchProvider({
+    runtimeProvidersMock.mockReturnValue([
+      searchProvider("google", {
         createTool: () => ({
           description: "google",
           parameters: {},
@@ -612,7 +603,7 @@ describe("web search runtime", () => {
           }),
         }),
       }),
-      createDuckDuckGoSearchProvider(),
+      searchProvider("duckduckgo"),
     ]);
 
     await expect(
@@ -630,8 +621,8 @@ describe("web search runtime", () => {
   });
 
   it("does not prebuild fallback provider tools before attempting the selected provider", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createGoogleSearchProvider(),
+    runtimeProvidersMock.mockReturnValue([
+      searchProvider("google"),
       createWebSearchTestProvider({
         pluginId: "broken-fallback",
         id: "broken-fallback",
@@ -656,8 +647,8 @@ describe("web search runtime", () => {
   });
 
   it("does not fall back when the provider came from explicit config selection", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createGoogleSearchProvider({
+    runtimeProvidersMock.mockReturnValue([
+      searchProvider("google", {
         createTool: () => ({
           description: "google",
           parameters: {},
@@ -666,7 +657,7 @@ describe("web search runtime", () => {
           },
         }),
       }),
-      createDuckDuckGoSearchProvider(),
+      searchProvider("duckduckgo"),
     ]);
 
     await expect(
@@ -686,10 +677,10 @@ describe("web search runtime", () => {
   });
 
   it("scopes runtime provider loading to the configured bundled web_search provider", async () => {
-    resolveManifestContractOwnerPluginIdMock.mockImplementation(({ value }) =>
+    ownerMock.mockImplementation(({ value }) =>
       value === "duckduckgo" ? "duckduckgo" : undefined,
     );
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([createDuckDuckGoSearchProvider()]);
+    runtimeProvidersMock.mockReturnValue([searchProvider("duckduckgo")]);
 
     const result = await runWebSearch({
       config: {
@@ -705,13 +696,11 @@ describe("web search runtime", () => {
     });
     expect(result.provider).toBe("duckduckgo");
 
-    const ownerCall = mockCallParam(resolveManifestContractOwnerPluginIdMock);
-    expect(ownerCall.contract).toBe("webSearchProviders");
-    expect(ownerCall.value).toBe("duckduckgo");
+    const ownerCall = ownerMock.mock.calls[0]?.[0];
+    expect(ownerCall?.contract).toBe("webSearchProviders");
+    expect(ownerCall?.value).toBe("duckduckgo");
     expect(ownerCall).not.toHaveProperty("origin");
-    expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toEqual([
-      "duckduckgo",
-    ]);
+    expect(runtimeProvidersMock.mock.calls[0]?.[0]?.onlyPluginIds).toEqual(["duckduckgo"]);
   });
 
   it("scopes runtime provider loading through manifest ownership when provider id differs from plugin id", async () => {
@@ -737,10 +726,8 @@ describe("web search runtime", () => {
   });
 
   it("scopes configured global web_search providers when runtime providers are not preferred", async () => {
-    resolveManifestContractOwnerPluginIdMock.mockImplementation(({ value }) =>
-      value === "custom" ? "custom-search" : undefined,
-    );
-    resolvePluginWebSearchProvidersMock.mockReturnValue([createCustomSearchProvider()]);
+    ownerMock.mockImplementation(({ value }) => (value === "custom" ? "custom-search" : undefined));
+    pluginProvidersMock.mockReturnValue([customProvider()]);
 
     await expect(
       runWebSearch({
@@ -752,7 +739,7 @@ describe("web search runtime", () => {
               },
             },
           },
-          ...createCustomSearchConfig("custom-key"),
+          ...customConfig("custom-key"),
         },
         preferRuntimeProviders: false,
         args: { query: "configured-custom" },
@@ -761,7 +748,7 @@ describe("web search runtime", () => {
       provider: "custom",
     });
 
-    expect(resolvePluginWebSearchProvidersMock).toHaveBeenCalledWith(
+    expect(pluginProvidersMock).toHaveBeenCalledWith(
       expect.objectContaining({
         onlyPluginIds: ["custom-search"],
       }),
@@ -769,9 +756,9 @@ describe("web search runtime", () => {
   });
 
   it("keeps runtime provider loading unscoped when configured provider ownership is unknown", async () => {
-    resolveManifestContractOwnerPluginIdMock.mockReturnValue(undefined);
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createCustomSearchProvider({
+    ownerMock.mockReturnValue(undefined);
+    runtimeProvidersMock.mockReturnValue([
+      customProvider({
         id: "external-search",
         pluginId: "external-search",
         requiresCredential: false,
@@ -792,12 +779,12 @@ describe("web search runtime", () => {
     });
     expect(result.provider).toBe("external-search");
 
-    expect(mockCallParam(resolveRuntimeWebSearchProvidersMock).onlyPluginIds).toBeUndefined();
+    expect(runtimeProvidersMock.mock.calls[0]?.[0]?.onlyPluginIds).toBeUndefined();
   });
 
   it("does not fall back when the caller explicitly selects a provider", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createGoogleSearchProvider({
+    runtimeProvidersMock.mockReturnValue([
+      searchProvider("google", {
         createTool: () => ({
           description: "google",
           parameters: {},
@@ -806,7 +793,7 @@ describe("web search runtime", () => {
           },
         }),
       }),
-      createDuckDuckGoSearchProvider(),
+      searchProvider("duckduckgo"),
     ]);
 
     await expect(
@@ -840,13 +827,13 @@ describe("web search runtime", () => {
   });
 
   it("does not fall back when config names an unknown provider id", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createGoogleSearchProvider({
+    runtimeProvidersMock.mockReturnValue([
+      searchProvider("google", {
         createTool: () => {
           throw new Error("google aborted");
         },
       }),
-      createDuckDuckGoSearchProvider(),
+      searchProvider("duckduckgo"),
     ]);
 
     await expect(
