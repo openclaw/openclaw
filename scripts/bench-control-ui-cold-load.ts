@@ -509,9 +509,10 @@ try {
       key: controlUiBundledSettingsStorageKey(server.baseUrl),
       pins: fixture.sidebarEntries,
       mode:
-        values["sidebar-list-churn"] ||
-        values["sidebar-live-churn"] ||
-        values["session-event-churn"]
+        !values["session-event-ancestor-refs"] &&
+        (values["sidebar-list-churn"] ||
+          values["sidebar-live-churn"] ||
+          values["session-event-churn"])
           ? "roster"
           : "chip",
     },
@@ -524,6 +525,13 @@ try {
   async function settle() {
     try {
       await page.locator(".chat-pane__header").first().waitFor();
+      if (values["session-event-ancestor-refs"]) {
+        await page
+          .locator(
+            `.sidebar-recent-session[data-session-key="${fixture.scenario.sessions![2]!.key}"]`,
+          )
+          .waitFor({ state: "visible" });
+      }
       await page
         .locator('.sidebar-rail [data-sidebar-entry^="session:"]')
         .nth(29)
@@ -576,7 +584,9 @@ try {
   try {
     await page.locator("#sidebar-session-owner-title").click();
     await page
-      .locator(`.sidebar-session-owner-filter [role="option"][data-value="involving-me"]`)
+      .locator(
+        `.sidebar-session-owner-filter [role="option"][data-value="${values["session-event-ancestor-refs"] ? "all" : "involving-me"}"]`,
+      )
       .click();
   } catch (error) {
     await writeFile(
@@ -985,18 +995,22 @@ try {
         JSON.stringify({ traceEvents: liveTrace }),
       );
       const after = await readLivePresentation();
+      const ancestorLink = page.locator(
+        `.sidebar-rail [data-sidebar-entry="session:${fixture.selectedSessionKey}"] a`,
+      );
       const ancestorBaseline = values["session-event-ancestor-refs"]
-        ? await page.evaluate((key) => {
-            const row = document.querySelector(`openclaw-app-sidebar [data-session-key="${key}"]`);
-            return {
-              text: row?.textContent?.trim() ?? null,
-              socketCount: Reflect.get(window, "openclawControlUiE2eGateway").socketCount(),
-            };
-          }, fixture.selectedSessionKey)
+        ? {
+            text: await ancestorLink.getAttribute("aria-label"),
+            visible: await ancestorLink.isVisible(),
+            socketCount: await page.evaluate(() =>
+              Reflect.get(window, "openclawControlUiE2eGateway").socketCount(),
+            ),
+          }
         : undefined;
       if (
         ancestorBaseline &&
         (!ancestorBaseline.text?.includes("Synthetic ancestor baseline verified") ||
+          !ancestorBaseline.visible ||
           ancestorBaseline.socketCount !== 1)
       ) {
         throw new Error("Ancestor-reference replay lost its raw baseline or rendered outcome");
