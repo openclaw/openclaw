@@ -4,6 +4,7 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import { createChannelIngressDrain } from "openclaw/plugin-sdk/channel-outbound";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import type * as Plugin from "openclaw/plugin-sdk/plugin-entry";
@@ -89,7 +90,6 @@ describe("MCP Events callback and subscription lifecycle", () => {
   let directory: string;
   let current: McpEventsService | undefined;
   let now: number;
-  let active: boolean;
   let authorizationId: number;
   let authorityUnavailable: boolean;
   let sources: EventSourceSnapshot[];
@@ -107,7 +107,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
 
   beforeAll(async () => {
     server = createServer((req, res) => {
-      void Promise.resolve(callback(req, res));
+      void callback(req, res);
     });
     await new Promise<void>((resolve) => {
       server.listen(0, "127.0.0.1", resolve);
@@ -116,17 +116,12 @@ describe("MCP Events callback and subscription lifecycle", () => {
     assert(address && typeof address !== "string", "Missing fixture address");
     origin = "http://127.0.0.1:" + address.port;
   });
-  afterAll(async () => {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  });
+  afterAll(async () => promisify(server.close.bind(server))());
   beforeEach(async () => {
     callback = createCallbackHandler(() => current);
     directory = await mkdtemp(join(tmpdir(), "openclaw-mcp-events-"));
     vi.stubEnv("OPENCLAW_STATE_DIR", directory);
     now = epoch;
-    active = true;
     authorizationId = 1;
     authorityUnavailable = false;
     secret = "";
@@ -151,7 +146,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
     subscribed = [];
     unsubscribed = [];
     const assertCurrent = () => {
-      if (!active || !sources[0]?.enabled || sources[0].sourceIdentity !== "generation-a") {
+      if (!sources[0]?.enabled || sources[0].sourceIdentity !== "generation-a") {
         throw new Error("Source revoked");
       }
     };
@@ -260,11 +255,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
               return { events: [definition] };
             }
             subscribed.push(params);
-            subscription = {
-              name: params.name,
-              arguments: params.arguments,
-              delivery: { mode: "webhook", url: record(params.delivery)?.url },
-            };
+            subscription = params;
             const delivery = record(params.delivery);
             assert(typeof delivery?.secret === "string" && typeof delivery.url === "string");
             secret = delivery.secret;
@@ -318,12 +309,11 @@ describe("MCP Events callback and subscription lifecycle", () => {
       body,
     });
   }
-  function queue() {
-    return state.createChannelIngressQueueForTests<QueuedEvent>({
+  const queue = () =>
+    state.createChannelIngressQueueForTests<QueuedEvent>({
       channelId: "mcp-events",
       accountId: "configured-account",
     });
-  }
 
   function scheduled(id: string) {
     const job = schedules.get(id);
@@ -349,9 +339,6 @@ describe("MCP Events callback and subscription lifecycle", () => {
   }
   const diagnostics = () => getMcpEventsDiagnostics(current!);
   const pending = () => queue().listPending();
-  function expectIdle() {
-    expect([schedules.has("drain"), schedules.has("reconcile")]).toEqual([false, false]);
-  }
 
   it("registers a ready callback and reacts to Cron replacement/removal through its real hooks", async () => {
     current = undefined;
@@ -391,9 +378,9 @@ describe("MCP Events callback and subscription lifecycle", () => {
     };
     try {
       await registered.start(context);
-      expect(subscribed).toHaveLength(1); // includes an early signed verification through the registered route
+      expect(subscribed).toHaveLength(1);
       await runSchedule("drain");
-      expectIdle();
+      expect([schedules.has("drain"), schedules.has("reconcile")]).toEqual([false, false]);
       const replacementRead = vi.fn(async () => sources);
       cron = { ...cron, readEventSources: replacementRead };
       const reconciled = hooks.mock.calls.find(([name]) => name === "cron_reconciled")?.[1];
@@ -485,7 +472,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
   it("uses no idle polling and keeps busy admission pending without consuming delivery attempts", async () => {
     await current!.start();
     await runSchedule("drain");
-    expectIdle();
+    expect([schedules.has("drain"), schedules.has("reconcile")]).toEqual([false, false]);
     await expectEvent(200);
     await runSchedule("drain");
     expect((await pending())[0]?.attempts).toBe(0);
@@ -637,13 +624,9 @@ describe("MCP Events callback and subscription lifecycle", () => {
   it("rejects authentication, schema, envelope, control, and size failures without queue writes", async () => {
     await current!.start();
     const body = JSON.stringify(event());
+    const wrongSecret = "whsec_" + Buffer.alloc(32, 9).toString("base64");
     const cases: [unknown, number, string?, ReturnType<typeof signed>?][] = [
-      [
-        body,
-        401,
-        "evt-1",
-        signed("whsec_" + Buffer.alloc(32, 9).toString("base64"), body, "evt-1"),
-      ],
+      [body, 401, "evt-1", signed(wrongSecret, body, "evt-1")],
       [body, 401, "evt-1", signed(secret, body, "evt-1", now - 301_000)],
       [body + " ", 401, "evt-1", signed(secret, body, "evt-1")],
       [body, 400, "different-id"],
@@ -691,7 +674,6 @@ describe("MCP Events callback and subscription lifecycle", () => {
     now += 49_000;
     beforeReply = async () => {
       sources = [];
-      active = false;
     };
     await current!.reconcile();
     await current!.reconcile();
@@ -714,8 +696,7 @@ describe("MCP Events callback and subscription lifecycle", () => {
 
 it("discovers events under the active tool owner without accepting an argument-selected agent", async () => {
   const api = pluginTest.createTestPluginApi({ runtime: createPluginRuntimeMock() });
-  const register = vi.fn(api.registerTool);
-  api.registerTool = register;
+  const register = vi.spyOn(api, "registerTool");
   const request = vi
     .spyOn(api.runtime.gateway, "request")
     .mockResolvedValue({ serverName: "reviews", events: [] });
