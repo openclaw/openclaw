@@ -1,5 +1,5 @@
 import { createRequire } from "node:module";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 it.each([Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER])(
   "keeps delayed plugin work alive for an oversized deadline of %s",
@@ -27,3 +27,18 @@ it.each([Number.POSITIVE_INFINITY, Number.MAX_SAFE_INTEGER])(
     }
   },
 );
+
+it.each([2_147_483_647, 1.5])("preserves the supported native deadline %s", async (timeoutMs) => {
+  const { raceWithTimeout }: typeof import("@openclaw/plugin-sdk/time-runtime") = await import(
+    createRequire(import.meta.url).resolve("@openclaw/plugin-sdk/time-runtime")
+  );
+  const scheduled = vi.spyOn(globalThis, "setTimeout");
+  try {
+    await expect(
+      raceWithTimeout(Promise.resolve("done"), timeoutMs, () => "expired"),
+    ).resolves.toBe("done");
+    expect(scheduled).toHaveBeenCalledWith(expect.any(Function), timeoutMs);
+  } finally {
+    scheduled.mockRestore();
+  }
+});
