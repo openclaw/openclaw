@@ -951,6 +951,35 @@ contention acceptance rule is at least a 60% paired RPC p99 reduction with no
 agent Git regression. Inspect command counts and queue waits to distinguish
 scheduling changes from reduced Git work.
 
+### Large-worktree revision validation
+
+Seed separate fixtures with `--boundary rpc --tracked 267000 --untracked 4` to
+exercise production-sized indexes and directory trees. Nonzero `--tracked`
+creates a real linked worktree with that many additional unchanged tracked empty
+files, arranged in directories of 1,000. The three changed tracked files and four
+untracked edge cases remain. Writes are sequential; on Linux, generation checks
+Dirty memory every 1,000 files, pauses at 1 GiB, and stops at 2 GiB. Seed one side
+at a time under the host's preparation CPU allocation. This bounds content bytes,
+but inode metadata still consumes disk space: record actual fixture size and do
+not expand the workload on a production-shared volume without checking capacity.
+
+Measure unchanged summary polls with `--tabs 3 --background 0 --maintenance 0
+--agents 0 --poll-ms 250 --duration-ms 30000`. The report separates warmed samples
+from startup and records `sessions.diff` and `checkout.diff` phase diagnostics by
+cache outcome when those are available. Stage milliseconds are overlapping owner
+observations, not additive: cache validation includes its worker queue and Git
+work. Compare cache-hit and periodic fallback-cache misses separately. Git
+operation counts and queue observations remain available on older revisions.
+
+For a revision-validator change, acceptance is at least a 50% paired cache-hit
+p50 reduction, with no material p95/p99 regression. The explicitly requested
+histogram may land with neutral timing. Run at least two simultaneous A/B pairs
+under the host's exclusive lock, swapping 16-core halves between pairs, separate
+fixtures and loopback ports, matching options and start times. Retain per-pair
+differences and outside CPU load; do not compare unrelated absolute runs. Two
+large synthetic worktrees model file/index size and concurrent polling, not the
+production fleet's full filesystem working set or cold disk behavior.
+
 ## Sandbox measurements
 
 Follow the current host policy. On Team, use only a task-owned

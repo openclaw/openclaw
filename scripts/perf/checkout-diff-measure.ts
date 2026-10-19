@@ -9,7 +9,6 @@ import path from "node:path";
 import { performance } from "node:perf_hooks";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs, promisify } from "node:util";
-import { BASE_GATEWAY_BENCH_CONFIG } from "../lib/gateway-bench-runtime.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
 
 const { values } = parseArgs({
@@ -17,6 +16,7 @@ const { values } = parseArgs({
     "state-dir": { type: "string" },
     seed: { type: "boolean" },
     untracked: { type: "string", default: "100" },
+    tracked: { type: "string", default: "0" },
     boundary: { type: "string", default: "worker" },
     summary: { type: "boolean" },
     port: { type: "string", default: "41473" },
@@ -50,6 +50,8 @@ Use --boundary rpc for real sessions.diff WebSocket requests with --tabs 3,
 --background 8 full-diff readers, --maintenance 2 bounded Git readers, and
 --agents 2 external Git loops. --heavy-files/--heavy-lines size the seeded load
 checkout. The RPC boundary starts an isolated loopback Gateway on --port >=40000.
+Use --tracked 267000 at seed time for an unchanged large tracked inventory. Files
+are empty and written sequentially; Linux Dirty memory is checked every 1,000 files.
 Use --observe-git-queues to collect queue timings through benchmark-only loader
 instrumentation applied identically to both revisions. No production state or model
 is involved.`);
@@ -72,6 +74,8 @@ if (untracked > 100) {
   throw new Error("--untracked must not exceed the 100-file diff response cap");
 }
 const samples = integer(values.samples, "--samples", 1);
+const tracked = integer(values.tracked, "--tracked");
+assert(tracked <= 500_000, "--tracked must not exceed 500000 files");
 const pollMs = integer(values["poll-ms"], "--poll-ms");
 const gitEnv = {
   ...process.env,
@@ -97,13 +101,49 @@ async function seed() {
   for (const directory of [repo, gitEnv.HOME, gitEnv.TMPDIR]) {
     await fs.mkdir(directory);
   }
-  await git("init", "--template=", "--initial-branch=main");
+  if (tracked) {
+    const origin = path.join(root, "worktree-origin");
+    const originGit = (...args: string[]) =>
+      promisify(execFile)("git", ["-C", origin, ...args], { env: gitEnv });
+    await fs.mkdir(origin);
+    await originGit("init", "--template=", "--initial-branch=main");
+    await originGit(
+      "-c",
+      "commit.gpgSign=false",
+      "commit",
+      "--allow-empty",
+      "-m",
+      "test: seed worktree origin",
+    );
+    await originGit("worktree", "add", "--detach", repo, "HEAD");
+  } else {
+    await git("init", "--template=", "--initial-branch=main");
+  }
   await fs.writeFile(path.join(repo, ".gitignore"), "ignored/\n");
   for (const file of ["modified.txt", "staged.txt", "deleted.txt"]) {
     await fs.writeFile(path.join(repo, file), "Synthetic tracked content\n");
   }
+  for (let index = 0; index < tracked; index++) {
+    const bucket = path.join(repo, "inventory", String(Math.floor(index / 1000)));
+    if (index % 1000 === 0) {
+      if (process.platform === "linux") {
+        let dirtyKb: number;
+        do {
+          dirtyKb = Number(
+            /^Dirty:\s+(\d+)/m.exec(await fs.readFile("/proc/meminfo", "utf8"))?.[1],
+          );
+          assert(dirtyKb < 2 * 1024 * 1024, "Fixture stopped: Linux Dirty memory reached 2 GiB");
+          if (dirtyKb >= 1024 * 1024) {
+            await delay(1000);
+          }
+        } while (dirtyKb >= 1024 * 1024);
+      }
+      await fs.mkdir(bucket, { recursive: true });
+    }
+    await fs.writeFile(path.join(bucket, `${index}.txt`), "");
+  }
   await git("add", ".");
-  await git("-c", "commit.gpgSign=false", "commit", "-m", "test: seed synthetic diff");
+  await git("-c", "commit.gpgSign=false", "commit", "--quiet", "-m", "test: seed synthetic diff");
   const head = (await git("rev-parse", "HEAD")).stdout.trim();
   await fs.writeFile(path.join(repo, "modified.txt"), "Synthetic tracked content\nChanged 0\n");
   await fs.writeFile(path.join(repo, "staged.txt"), "Synthetic staged content\n");
@@ -150,6 +190,7 @@ async function seed() {
     head,
     untracked,
     tracked: 3,
+    unchangedTracked: tracked,
   };
   await fs.writeFile(marker, `${JSON.stringify(fixture, null, 2)}\n`);
   console.log(JSON.stringify(fixture));
@@ -319,6 +360,7 @@ function observeGitQueues() {
 }
 
 async function measureRpc(fixture: object) {
+  const { BASE_GATEWAY_BENCH_CONFIG } = await import("../lib/gateway-bench-runtime.ts");
   if (values["observe-git-queues"]) {
     observeGitQueues();
   }
@@ -360,6 +402,7 @@ async function measureRpc(fixture: object) {
     { withContentGitSlot },
     { runGitBuffered },
     { drainGlobalSingletonLifecycleState },
+    { onTrustedInternalDiagnosticEvent, waitForDiagnosticEventsDrained },
   ] = await Promise.all([
     import("../../src/gateway/server.js"),
     import("../../src/gateway/client.js"),
@@ -367,12 +410,34 @@ async function measureRpc(fixture: object) {
     import("../../src/infra/git-content-budget.js"),
     import("../../src/agents/worktrees/git.js"),
     import("../../src/shared/global-singleton.js"),
+    import("../../src/infra/diagnostic-events.js"),
   ]);
   const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
   const peers: InstanceType<typeof GatewayClient>[] = [];
   const operationSamples: Record<string, unknown>[] = [];
   const operationChannel = channel("openclaw.git.operation");
   let measured = false;
+  const phaseSamples: {
+    name: string;
+    durationMs: number;
+    details: import("../../src/infra/diagnostic-events.js").DiagnosticPhaseDetails;
+  }[] = [];
+  const stopPhases = onTrustedInternalDiagnosticEvent(
+    (event) => {
+      if (
+        measured &&
+        event.type === "diagnostic.phase.completed" &&
+        (event.name === "sessions.diff" || event.name === "checkout.diff")
+      ) {
+        phaseSamples.push({
+          name: event.name,
+          durationMs: event.durationMs,
+          details: event.details ?? {},
+        });
+      }
+    },
+    { include: ["diagnostic.phase.completed"] },
+  );
   const observe = (event: unknown) => {
     if (measured && event !== null && typeof event === "object") {
       operationSamples.push({ ...event });
@@ -405,7 +470,9 @@ async function measureRpc(fixture: object) {
       visibility: "shared",
     });
     const params = { sessionKey, scope: "all", summaryOnly: true };
+    const warmupStarted = performance.now();
     await peers[0]!.request("sessions.diff", params);
+    const warmupRpcMs = performance.now() - warmupStarted;
     await Promise.all(
       Array.from({ length: Math.max(1, background) }, () =>
         runGitWorkerOperation({ type: "checkout.diff", input: { cwd: heavyRepo, scope: "all" } }),
@@ -519,6 +586,7 @@ async function measureRpc(fixture: object) {
         }
       })(),
     ]);
+    await waitForDiagnosticEventsDrained();
     measured = false;
     assert(
       rpcSamples.length > 0,
@@ -563,6 +631,7 @@ async function measureRpc(fixture: object) {
       agents,
       maintenance,
       durationMs,
+      warmupRpcMs,
       completedRpc: rpcSamples.length,
       completedRounds: roundMaxMs.size,
       completedHeavy: heavyMs.length,
@@ -581,8 +650,37 @@ async function measureRpc(fixture: object) {
       agentGitMs: agentMs.length ? summarize(agentMs) : null,
       maintenanceGitMs: maintenanceMs.length ? summarize(maintenanceMs) : null,
       byOperation,
+      diffPhases: Object.fromEntries(
+        [...new Set(phaseSamples.map((sample) => `${sample.name}:${sample.details.outcome}`))].map(
+          (key) => {
+            const entries = phaseSamples.filter(
+              (sample) => `${sample.name}:${sample.details.outcome}` === key,
+            );
+            return [
+              key,
+              Object.fromEntries([
+                ["durationMs", summarize(entries.map((sample) => sample.durationMs))],
+                ...[
+                  "admission",
+                  "checkout-resolve",
+                  "cache-validate",
+                  "worker-queue",
+                  "git-wall",
+                  "encode",
+                ].flatMap((stage) => {
+                  const numbers = entries
+                    .map((sample) => sample.details[stage])
+                    .filter((value): value is number => typeof value === "number");
+                  return numbers.length ? [[stage, summarize(numbers)]] : [];
+                }),
+              ]),
+            ];
+          },
+        ),
+      ),
       rpcSamples,
       operationSamples,
+      phaseSamples,
     };
     await fs.writeFile(
       path.resolve(values.output ?? path.join(root, "result.json")),
@@ -593,9 +691,11 @@ async function measureRpc(fixture: object) {
         rpcLatencyMs: report.rpcLatencyMs,
         agentGitMs: report.agentGitMs,
         byOperation,
+        diffPhases: report.diffPhases,
       }),
     );
   } finally {
+    stopPhases();
     operationChannel.unsubscribe(observe);
     for (const peer of peers) {
       peer.stop();
