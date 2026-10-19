@@ -1,4 +1,4 @@
-import { createHash, randomUUID } from "node:crypto";
+import { createHash } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
@@ -6,15 +6,11 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { resolvePluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.js";
-import {
-  exportPostgresBackup,
-  restorePostgresBackup,
-} from "../../snapshot/database-backup-core.worker.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
 import { logbookPortProvider } from "./logbook-port.js";
-import { admitDatabasePortDescriptor, type PortDescriptor } from "./port-descriptor.js";
+import { portBackupFixture } from "./port-backup.test-support.js";
+import type { PortDescriptor } from "./port-descriptor.js";
 import { sqliteDatabasePortProvider } from "./port-provider.js";
-import { inspectDatabasePort, materializeDatabasePort } from "./port.worker.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -45,9 +41,7 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
   let directory: string;
   let sourcePath: string;
   let framePath: string;
-  const namespaces = new Set<string>();
-  const storeId = randomUUID();
-  const assertCurrent = () => {};
+  let fixture: ReturnType<typeof portBackupFixture>;
 
   beforeAll(async () => {
     directory = tempDirs.make("logbook-port-");
@@ -58,6 +52,7 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
     descriptor = await logbookPortProvider.loadDescriptor();
     client = new Client({ connectionString: connection });
     await client.connect();
+    fixture = portBackupFixture(client, directory, descriptor);
     using db = openNodeSqliteDatabase(sourcePath);
     db.exec(descriptor.sqlite);
     db.exec(`PRAGMA user_version = 1;
@@ -88,9 +83,7 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
 
   afterAll(async () => {
     try {
-      for (const namespace of namespaces) {
-        await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
-      }
+      await fixture?.cleanup();
     } finally {
       await client?.end();
     }
@@ -100,31 +93,13 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
     const snapshot = rows(sourcePath, descriptor);
     const sourceHash = await hash(sourcePath);
     const frameBytes = await fs.readFile(framePath);
-    const namespace = `logbook_port_${randomUUID().replaceAll("-", "")}`;
-    namespaces.add(namespace);
-    const postgres = { engine: "postgres" as const, db: client, namespace };
-    const common = { descriptor, storeId, assertCurrent };
-    const query = async (sql: string) => (await client.query(sql)).rows;
-    let forward;
-    {
-      using source = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
-      forward = await materializeDatabasePort({
-        source: { engine: "sqlite", db: source },
-        destination: postgres,
-        ...common,
-      });
-    }
+    const { file, storeId, query } = fixture;
+    const forward = await fixture.forward(sourcePath);
     expect(forward.allocations).toEqual(allocations);
-    const reversePath = path.join(directory, "reversed.sqlite");
+    const reversePath = file("reversed.sqlite");
     {
       using reverse = openNodeSqliteDatabase(reversePath, { readBigInts: true });
-      expect(
-        await materializeDatabasePort({
-          source: postgres,
-          destination: { engine: "sqlite", db: reverse },
-          ...common,
-        }),
-      ).toEqual(forward);
+      expect(await fixture.reverse(reverse)).toEqual(forward);
       expect(reverse.prepare("SELECT name, seq FROM sqlite_sequence ORDER BY name").all()).toEqual([
         { name: "batches", seq: 70n },
         { name: "cards", seq: 170n },
@@ -133,39 +108,14 @@ describe.skipIf(!connection)("Logbook PostgreSQL port and exact backup", () => {
       ]);
     }
     expect(rows(reversePath, descriptor)).toEqual(snapshot);
-    const backupDirectory = path.join(directory, "backup");
-    await fs.mkdir(backupDirectory);
-    {
-      using anchor = openNodeSqliteDatabase(path.join(backupDirectory, "anchor.sqlite"));
-      anchor.exec(
-        "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-      );
-      anchor
-        .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-        .run(storeId, namespace);
-    }
-    const backup = { client, directory: backupDirectory, profile: "exact" as const, ...common };
-    const admitted = await admitDatabasePortDescriptor(postgres, descriptor);
-    const manifest = await exportPostgresBackup({
-      ...backup,
-      descriptor: admitted,
-      anchor: { engine: "postgres", storeId, namespace },
-      sourcePath,
-    });
+    const manifest = await fixture.export(sourcePath);
     expect(manifest.source).toMatchObject({ owner: "logbook", schemaVersion: 1, storeId });
     expect(manifest.verification).toEqual(forward);
-    expect(rows(path.join(backupDirectory, "database.sqlite"), descriptor)).toEqual(snapshot);
-    const anchorPath = path.join(directory, "restored-anchor.sqlite");
-    const restored = await restorePostgresBackup({
-      ...backup,
-      manifest,
-      anchorPath,
-    });
-    namespaces.add(restored.namespace);
-    const { tables, allocations: restoredAllocations } = await inspectDatabasePort(
-      { ...postgres, namespace: restored.namespace },
-      descriptor,
-      storeId,
+    expect(rows(file("backup/database.sqlite"), descriptor)).toEqual(snapshot);
+    const anchorPath = file("restored-anchor.sqlite");
+    const restored = await fixture.restore(manifest, anchorPath);
+    const { tables, allocations: restoredAllocations } = await fixture.inspect(
+      restored.namespace,
       true,
     );
     expect({ tables, allocations: restoredAllocations }).toEqual(forward);

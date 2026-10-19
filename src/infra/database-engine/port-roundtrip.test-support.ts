@@ -1,40 +1,20 @@
 import assert from "node:assert/strict";
 import { randomUUID } from "node:crypto";
-import fs from "node:fs";
 import type { DatabaseSync } from "node:sqlite";
 import { parentPort, workerData } from "node:worker_threads";
 import { Client } from "pg";
 import { deriveMeetingTranscriptSummaryColumns } from "../../transcripts/store-columns.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { admitSqliteSchema, getAdmittedSqliteSchemaFacts } from "../sqlite-schema-facts.js";
 import { readSqliteUserVersion } from "../sqlite-user-version.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
-import { openEngineStore } from "./open.js";
+import { openPortStore, workboardPortFixture } from "./port-backup.test-support.js";
 import {
   materializeDatabasePort,
   type PortDescriptor,
   type PortVerification,
 } from "./port.worker.js";
 import { expectedPostgresCatalog } from "./postgres-catalog.js";
-import metadata from "./workboard-port.generated.json" with { type: "json" };
-
-const ownerSchema = fs.readFileSync(
-  new URL("../../../extensions/workboard/src/workboard-schema.ts", import.meta.url),
-  "utf8",
-);
-const sqlite = ownerSchema.match(/WORKBOARD_SCHEMA_SQL = `([\s\S]*?)`;/)?.[1];
-assert.ok(sqlite, "The workboard owner must provide its canonical SQLite schema");
-const postgres = fs.readFileSync(
-  new URL("../../../extensions/workboard/src/workboard-schema.postgres.sql", import.meta.url),
-  "utf8",
-);
-const descriptor: PortDescriptor = {
-  ...metadata,
-  sqlite,
-  preData: postgres.slice(metadata.preData[0], metadata.preData[1]),
-  postData: postgres.slice(metadata.postData[0], metadata.postData[1]),
-  expectedCatalog: expectedPostgresCatalog(metadata),
-};
+const { postgres, descriptor } = await workboardPortFixture(true);
 
 const identityMetadata = {
   schema: "",
@@ -75,23 +55,14 @@ const identityDescriptor: PortDescriptor = {
 };
 
 function canonical(db: DatabaseSync, schema: PortDescriptor) {
-  return schema.tables.map((table) => {
-    const statement = db.prepare(
-      `SELECT ${table.columns.map(({ name }) => `"${name}"`).join(",")} FROM "${table.name}" ORDER BY ${table.pk.map((name) => `"${name}"`).join(",")}`,
-    );
-    statement.setReadBigInts(true);
-    return [
-      table.name,
-      statement.all().map((row) =>
-        table.columns.map(({ name }) => {
-          const value = row[name];
-          return value instanceof Uint8Array
-            ? ["blob", Buffer.from(value).toString("hex")]
-            : [typeof value, value];
-        }),
-      ),
-    ];
-  });
+  return schema.tables.map((table) => [
+    table.name,
+    db
+      .prepare(
+        `SELECT ${table.columns.map(({ name }) => `"${name}"`).join(",")} FROM "${table.name}" ORDER BY ${table.pk.map((name) => `"${name}"`).join(",")}`,
+      )
+      .all(),
+  ]);
 }
 
 function seedWorkboard(db: DatabaseSync) {
@@ -101,12 +72,9 @@ function seedWorkboard(db: DatabaseSync) {
     INSERT INTO workboard_boards (id, name, created_at, updated_at)
     VALUES ('board-é-🦞', '', -9223372036854775808, 9223372036854775807);
   `);
-  const board = db.prepare(
-    "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES (?, 1, 1)",
+  db.exec(
+    "INSERT INTO workboard_boards (id, created_at, updated_at) VALUES ('e', 1, 1), ('é', 1, 1), ('z', 1, 1)",
   );
-  for (const id of ["e", "é", "z"]) {
-    board.run(id);
-  }
   const card = db.prepare(
     "INSERT INTO workboard_cards (id, board_id, title, notes, status, priority, position, created_at, updated_at, automation_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
   );
@@ -144,6 +112,11 @@ async function run() {
   const open = () => {
     const db = openNodeSqliteDatabase(":memory:", { readBigInts: true });
     databases.push(db);
+    return db;
+  };
+  const identitySource = (sql: string) => {
+    const db = open();
+    db.exec(`${identityDescriptor.sqlite}; ${sql}`);
     return db;
   };
   const stage = () => {
@@ -212,31 +185,16 @@ async function run() {
       .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
       .run(common.storeId, destination.namespace);
     const admitted = withEngineStoreAdmission(() =>
-      openEngineStore({
+      openPortStore(
         anchor,
-        schema: {
+        {
           id: descriptor.id,
           version: descriptor.version,
           sqlite: descriptor.sqlite,
           postgres,
         },
-        input: { connection: workerData.connection as string, schemaPrefix: "port" },
-        prepareAnchor() {},
-        openSqlite() {
-          throw new Error("Ported PostgreSQL store must not open SQLite data");
-        },
-        inspectSqlite() {
-          admitSqliteSchema(anchor);
-          const facts = getAdmittedSqliteSchemaFacts(anchor);
-          assert.ok(facts);
-          return {
-            hasExistingData: [...facts.tables].some(
-              (name) => name !== "openclaw_engine_anchor" && !name.startsWith("sqlite_"),
-            ),
-            hasEngineAnchor: facts.tables.has("openclaw_engine_anchor"),
-          };
-        },
-      }),
+        { connection: workerData.connection as string, schemaPrefix: "port" },
+      ),
     );
     try {
       assert.equal(
@@ -257,19 +215,17 @@ async function run() {
     assert.deepEqual(canonical(source, descriptor), before);
     assert.deepEqual(reverse, forward);
     assert.equal(forward.tables.workboard_cards?.rows, 1001);
-    const cursor = restored.prepare(
-      "SELECT last_event_sequence FROM workboard_notification_subscriptions",
+    assert.equal(
+      cell(restored, "SELECT last_event_sequence FROM workboard_notification_subscriptions")
+        ?.last_event_sequence,
+      9007199254740995n,
     );
-    cursor.setReadBigInts(true);
-    assert.equal(cursor.get()?.last_event_sequence, 9007199254740995n);
 
-    const allocated = open();
-    allocated.exec(identityDescriptor.sqlite);
-    const insert = allocated.prepare("INSERT INTO port_facts VALUES (?, ?, ?)");
-    insert.setReadBigInts(true);
-    insert.run(9007199254740993n, '{"overview":"first","overview":"last"}', "stale");
-    insert.run(9223372036854775807n, "{}", null);
-    allocated.exec("DELETE FROM port_facts WHERE id = 9223372036854775807");
+    const allocated = identitySource(`
+      INSERT INTO port_facts VALUES (9007199254740993, '{"overview":"first","overview":"last"}', 'stale'),
+        (9223372036854775807, '{}', NULL);
+      DELETE FROM port_facts WHERE id = 9223372036854775807;
+    `);
     const identityStage = stage();
     const identityForward = await port(allocated, identityDescriptor, identityStage);
     const identityRestored = open();
@@ -306,11 +262,9 @@ async function run() {
       /reached maximum value/,
     );
 
-    const derivedNul = open();
-    derivedNul.exec(identityDescriptor.sqlite);
-    derivedNul
-      .prepare("INSERT INTO port_facts VALUES (?, ?, ?)")
-      .run(1, '{"overview":"\\u0000"}', "stale");
+    const derivedNul = identitySource(
+      `INSERT INTO port_facts VALUES (1, '{"overview":"\\u0000"}', 'stale')`,
+    );
     await assert.rejects(
       port(derivedNul, identityDescriptor),
       /port_facts.overview.*unrepresentable UTF-8/,

@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { channel } from "node:diagnostics_channel";
 import path from "node:path";
 import { getEnvironmentData } from "node:worker_threads";
@@ -10,11 +11,10 @@ import {
   publishSqliteDatabaseSchemaChange,
   revokeSqliteDatabaseAdmissions,
 } from "../sqlite-database-admission.js";
-import { admitSqliteSchema } from "../sqlite-schema-facts.js";
 import { withEngineStoreAdmission } from "./admission-scope.js";
 import type { StoreSchema } from "./contract.js";
-import { openEngineStore, readEngineAnchor } from "./open.js";
 import { getPostgresPhysicalFacts } from "./physical-facts.js";
+import { openPortStore } from "./port-backup.test-support.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -26,26 +26,7 @@ CREATE FUNCTION bump() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN NEW.value := 
 CREATE TRIGGER bump BEFORE INSERT ON items FOR EACH ROW EXECUTE FUNCTION bump();`;
 const schema: StoreSchema = { id: "fixture", version: 1, sqlite: "", postgres: ddl };
 
-function openPostgres(
-  anchor: Parameters<typeof openEngineStore>[0]["anchor"],
-  selected = schema,
-  existingOnly = false,
-) {
-  return openEngineStore({
-    anchor,
-    schema: selected,
-    input: { connection: connection!, schemaPrefix: "r2" },
-    existingOnly,
-    openSqlite() {
-      throw new Error("Unexpected SQLite bootstrap");
-    },
-    prepareAnchor() {},
-    inspectSqlite() {
-      admitSqliteSchema(anchor);
-      return { hasExistingData: false, hasEngineAnchor: Boolean(readEngineAnchor(anchor)) };
-    },
-  });
-}
+const pgInput = { connection: connection!, schemaPrefix: "r2" };
 
 const row = (db: PostgresSyncConnection, sql: string) => db.prepare(sql).get();
 
@@ -56,47 +37,44 @@ function fixture(
     invalidate: () => void;
   }) => void,
 ) {
-  withEngineStoreAdmission(() => {
-    const anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-schema-"), "anchor.sqlite"));
-    const connections: PostgresSyncConnection[] = [];
-    const open = (selected = schema) => {
-      const db = openPostgres(anchor, selected);
-      if (!(db instanceof PostgresSyncConnection)) {
-        throw new Error("Expected PostgreSQL connection");
-      }
-      connections.push(db);
-      return db;
-    };
-    try {
-      const db = open();
-      test({ open, db, invalidate: () => publishSqliteDatabaseSchemaChange(anchor) });
-    } finally {
+  return () =>
+    withEngineStoreAdmission(() => {
+      using anchor = openNodeSqliteDatabase(path.join(dirs.make("pg-schema-"), "anchor.sqlite"));
+      const connections: PostgresSyncConnection[] = [];
+      const open = (selected = schema) => {
+        const db = openPortStore(anchor, selected, pgInput);
+        assert(db instanceof PostgresSyncConnection);
+        connections.push(db);
+        return db;
+      };
       try {
-        const db = connections[0];
-        if (db) {
-          db.exec(`DROP SCHEMA "${db.schema}" CASCADE`);
-        }
+        const db = open();
+        test({ open, db, invalidate: () => publishSqliteDatabaseSchemaChange(anchor) });
       } finally {
-        connections.forEach((item) => item.close());
-        anchor.close();
+        try {
+          const db = connections[0];
+          if (db) {
+            db.exec(`DROP SCHEMA "${db.schema}" CASCADE`);
+          }
+        } finally {
+          connections.forEach((item) => item.close());
+        }
       }
-    }
-  });
+    });
 }
 
 describe.skipIf(!connection)("PostgreSQL schema admission", () => {
-  it("reads an existing anchor while another handle holds write admission", () => {
+  it(
+    "reads an existing anchor while another handle holds write admission",
     fixture(({ db }) => {
       db.exec("INSERT INTO items (id) VALUES (1)");
       const location = db.anchor.location();
-      if (!location) {
-        throw new Error("Expected a file-backed PostgreSQL anchor");
-      }
+      assert(location, "Expected a file-backed PostgreSQL anchor");
       using reader = openNodeSqliteDatabase(location);
       revokeSqliteDatabaseAdmissions(db.anchor);
       db.anchor.exec("BEGIN IMMEDIATE");
       try {
-        const opened = openPostgres(reader, schema, true);
+        const opened = openPortStore(reader, schema, pgInput, true);
         try {
           expect(opened.prepare("SELECT value FROM items").all()).toEqual([{ value: 1 }]);
         } finally {
@@ -105,8 +83,8 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
       } finally {
         db.anchor.exec("ROLLBACK");
       }
-    });
-  });
+    }),
+  );
 
   it.each([
     ["default value", "ALTER TABLE items ALTER COLUMN value SET DEFAULT 2"],
@@ -127,42 +105,42 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
       db.exec(sql);
       invalidate();
       expect(() => open()).toThrow("schema drift");
-    });
+    })();
   });
 
-  it("admits unchanged stores with one catalog read and rechecks a changed server major", () => {
+  it(
+    "admits unchanged stores with one catalog read and rechecks a changed server major",
     fixture(({ db, open, invalidate }) => {
       invalidate();
-      const queries: { sql: string }[] = [];
+      const queries: string[] = [];
+      const count = (prefix: string) => queries.filter((sql) => sql.startsWith(prefix)).length;
       const listener = (message: unknown) => {
         const event = message as { engine: string; sql: string };
         if (event.engine === "postgres") {
-          queries.push(event);
+          queries.push(event.sql);
         }
       };
       const observations = channel("openclaw.database.statement");
       observations.subscribe(listener);
       try {
         open();
-        const catalog = queries.filter((event) => event.sql.startsWith("WITH captured"));
-        expect(catalog).toHaveLength(1);
-        expect(queries.some((event) => event.sql.startsWith("CREATE SCHEMA"))).toBe(false);
+        expect([count("WITH captured"), count("CREATE SCHEMA")]).toEqual([1, 0]);
         db.exec("UPDATE openclaw_schema_meta SET server_major = 0");
         invalidate();
         queries.length = 0;
         open();
-        expect(queries.filter((event) => event.sql.startsWith("CREATE SCHEMA"))).toHaveLength(1);
+        expect([count("CREATE SCHEMA"), count("DROP SCHEMA")]).toEqual([1, 1]);
         expect(row(db, "SELECT server_major FROM openclaw_schema_meta")?.server_major).toBe(
           getPostgresPhysicalFacts(db)?.capabilities.serverMajor,
         );
-        expect(queries.filter((event) => event.sql.startsWith("DROP SCHEMA"))).toHaveLength(1);
       } finally {
         observations.unsubscribe(listener);
       }
-    });
-  });
+    }),
+  );
 
-  it("verifies unsealed port metadata and drops scratch on refusal", () => {
+  it(
+    "verifies unsealed port metadata and drops scratch on refusal",
     fixture(({ db, open, invalidate }) => {
       db.exec(
         "ALTER TABLE openclaw_schema_meta DROP COLUMN fingerprint, DROP COLUMN ddl_hash, DROP COLUMN server_major",
@@ -188,10 +166,11 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
           db.prepare("SELECT nspname FROM pg_namespace WHERE nspname = ?").get(namespace),
         ).toBeUndefined();
       }
-    });
-  });
+    }),
+  );
 
-  it("re-admits equivalent DDL text after exact catalog comparison", () => {
+  it(
+    "re-admits equivalent DDL text after exact catalog comparison",
     fixture(({ db, open, invalidate }) => {
       db.runTransaction(() => db.exec("INSERT INTO items VALUES (1, 5)"));
       const previous = row(db, "SELECT ddl_hash FROM openclaw_schema_meta")?.ddl_hash;
@@ -201,19 +180,21 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
       expect(row(reopened, "SELECT ddl_hash FROM openclaw_schema_meta")?.ddl_hash).not.toBe(
         previous,
       );
-    });
-  });
+    }),
+  );
 
-  it("rejects a generated DDL change at the same version", () => {
+  it(
+    "rejects a generated DDL change at the same version",
     fixture(({ open, invalidate }) => {
       invalidate();
       expect(() => open({ ...schema, postgres: ddl.replace("DEFAULT 0", "DEFAULT 9") })).toThrow(
         "schema drift detected against generated DDL",
       );
-    });
-  });
+    }),
+  );
 
-  it("migrates two versions atomically and rolls back both steps on failure", () => {
+  it(
+    "migrates two versions atomically and rolls back both steps on failure",
     fixture(({ db, open }) => {
       db.runTransaction(() => db.exec("INSERT INTO items VALUES (1, 5)"));
       const v2 = `${ddl}\nALTER TABLE items ADD COLUMN label TEXT;`;
@@ -274,8 +255,8 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
       ]);
       expect(getPostgresPhysicalFacts(migrated)?.version).toBe(3);
       expect(() => open(schema)).toThrow(/newer.*reverse-port/);
-    });
-  });
+    }),
+  );
 
   it.each([
     [150000, "UTF8", "UTF8"],
@@ -299,7 +280,7 @@ describe.skipIf(!connection)("PostgreSQL schema admission", () => {
         }
         return statement;
       });
-      expect(() => fixture(() => {})).toThrow(/version 16 or newer and UTF8/);
+      expect(fixture(() => {})).toThrow(/version 16 or newer and UTF8/);
     },
   );
 });

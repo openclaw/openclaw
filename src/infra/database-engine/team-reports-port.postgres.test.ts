@@ -1,4 +1,3 @@
-import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -7,14 +6,9 @@ import { Client } from "pg";
 import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as bundledDir from "../../plugins/bundled-dir.js";
-import {
-  exportPostgresBackup,
-  restorePostgresBackup,
-} from "../../snapshot/database-backup-core.worker.js";
 import { openNodeSqliteDatabase } from "../node-sqlite.js";
-import { admitDatabasePortDescriptor } from "./port-descriptor.js";
+import { portBackupFixture } from "./port-backup.test-support.js";
 import { requireDatabasePortProvider, sqliteDatabasePortProvider } from "./port-provider.js";
-import { inspectDatabasePort, materializeDatabasePort } from "./port.worker.js";
 import { teamReportsPortProvider } from "./team-reports-port.js";
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
@@ -23,16 +17,14 @@ const tempDirs = useAutoCleanupTempDirTracker(afterAll);
 
 describe.skipIf(!connection)("Team Reports database port and backup", () => {
   const client = new Client({ connectionString: connection });
-  const namespaces = new Set<string>();
+  let fixture: ReturnType<typeof portBackupFixture>;
   let directory: string;
   beforeAll(async () => {
     directory = tempDirs.make("team-reports-port-");
     await client.connect();
   });
   afterAll(async () => {
-    for (const namespace of namespaces) {
-      await client.query(`DROP SCHEMA IF EXISTS "${namespace}" CASCADE`);
-    }
+    await fixture?.cleanup();
     await client.end();
   });
 
@@ -51,15 +43,9 @@ describe.skipIf(!connection)("Team Reports database port and backup", () => {
     expect(requireDatabasePortProvider("team-reports")).toBe(teamReportsPortProvider);
     const descriptor = await teamReportsPortProvider.loadDescriptor();
     expect(teamReportsPortProvider.minimumPostgresVersion).toBe(descriptor.minimumPostgresVersion);
-    const sourcePath = path.join(directory, "source.sqlite");
-    const destinationPath = path.join(directory, "roundtrip.sqlite");
-    const namespace = `team_reports_port_${randomUUID().replaceAll("-", "")}`;
-    namespaces.add(namespace);
-    const storeId = randomUUID();
-    const common = { descriptor, storeId, assertCurrent() {} };
-    const postgres = { engine: "postgres" as const, db: client, namespace };
-    const inspect = (ns: string) =>
-      inspectDatabasePort({ ...postgres, namespace: ns }, descriptor, storeId);
+    fixture = portBackupFixture(client, directory, descriptor);
+    const { file, inspect } = fixture;
+    const sourcePath = file("source.sqlite");
     {
       using source = openNodeSqliteDatabase(sourcePath);
       source.exec(descriptor.sqlite);
@@ -74,14 +60,7 @@ describe.skipIf(!connection)("Team Reports database port and backup", () => {
           'run', 'manual', 1787184000000, NULL, 'running', '[{"period":"day","key":"2026-08-20"}]', NULL, NULL);
       `);
     }
-    const staged = await (async () => {
-      using source = openNodeSqliteDatabase(sourcePath, { readOnly: true, readBigInts: true });
-      return await materializeDatabasePort({
-        source: { engine: "sqlite", db: source },
-        destination: postgres,
-        ...common,
-      });
-    })();
+    const staged = await fixture.forward(sourcePath);
     expect(
       Object.fromEntries(Object.entries(staged.tables).map(([name, fact]) => [name, fact.rows])),
     ).toEqual({
@@ -90,16 +69,10 @@ describe.skipIf(!connection)("Team Reports database port and backup", () => {
       team_reports_runs: 1,
       team_reports_schema_migrations: 1,
     });
-    expect(await inspect(namespace)).toMatchObject(staged);
+    expect(await inspect()).toMatchObject(staged);
     {
-      using destination = openNodeSqliteDatabase(destinationPath);
-      expect(
-        await materializeDatabasePort({
-          source: postgres,
-          destination: { engine: "sqlite", db: destination },
-          ...common,
-        }),
-      ).toEqual(staged);
+      using destination = openNodeSqliteDatabase(file("roundtrip.sqlite"));
+      expect(await fixture.reverse(destination)).toEqual(staged);
       expect(
         destination.prepare("SELECT markdown, summary_json FROM team_reports_periods").get(),
       ).toMatchObject({
@@ -107,34 +80,10 @@ describe.skipIf(!connection)("Team Reports database port and backup", () => {
         summary_json: null,
       });
     }
-    const backupDirectory = path.join(directory, "backup");
-    fs.mkdirSync(backupDirectory);
-    const anchorPath = path.join(backupDirectory, "anchor.sqlite");
-    {
-      using anchor = openNodeSqliteDatabase(anchorPath);
-      anchor.exec(
-        "CREATE TABLE openclaw_engine_anchor (store_id TEXT NOT NULL, engine TEXT NOT NULL, schema TEXT NOT NULL)",
-      );
-      anchor
-        .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-        .run(storeId, namespace);
-    }
-    const anchor = { engine: "postgres" as const, storeId, namespace };
-    const backup = { client, directory: backupDirectory, profile: "exact" as const, ...common };
-    const manifest = await exportPostgresBackup({
-      ...backup,
-      descriptor: await admitDatabasePortDescriptor(postgres, descriptor),
-      anchor,
-      sourcePath: anchorPath,
-    });
+    const manifest = await fixture.export(file("backup/anchor.sqlite"));
     expect(manifest.source.owner).toBe("team-reports");
     expect(manifest.verification).toEqual(staged);
-    const restored = await restorePostgresBackup({
-      ...backup,
-      manifest,
-      anchorPath: path.join(directory, "restored.sqlite"),
-    });
-    namespaces.add(restored.namespace);
+    const restored = await fixture.restore(manifest, file("restored.sqlite"));
     expect(await inspect(restored.namespace)).toMatchObject(staged);
   });
   it("loads the selected installed plugin when the bundled artifact is absent", async () => {

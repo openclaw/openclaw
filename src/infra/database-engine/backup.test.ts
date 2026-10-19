@@ -48,11 +48,10 @@ import { restoreUpdateDatabaseBackup } from "../update-database-restore.js";
 import { createUpdateRun } from "../update-run-ledger.js";
 import { resolveDatabaseEngineSelection } from "./config.js";
 import { withDatabaseEngineSelection } from "./context.js";
+import { workboardPortFixture, writePortAnchor } from "./port-backup.test-support.js";
 import { loadDatabasePortDescriptor } from "./port-provider-descriptor.js";
-import { materializeDatabasePort, type PortDescriptor } from "./port.worker.js";
-import { expectedPostgresCatalog } from "./postgres-catalog.js";
+import { materializeDatabasePort } from "./port.worker.js";
 import { statePortProvider } from "./state-port.js";
-import metadata from "./workboard-port.generated.json" with { type: "json" };
 
 const configured = getEnvironmentData("openclaw.test.workboard.connection");
 const connection = typeof configured === "string" ? configured : undefined;
@@ -72,15 +71,6 @@ async function expectRestored(client: Client, namespace: string) {
   expect(await rows(`SELECT content FROM "${namespace}".workboard_attachment_blobs`)).toEqual([
     { content: Buffer.from([0, 255, 128, 1]) },
   ]);
-}
-
-function writeAnchor(file: string, storeId: string, namespace: string, checked = false) {
-  using anchor = openNodeSqliteDatabase(file);
-  anchor.exec(`CREATE TABLE openclaw_engine_anchor (
-    store_id TEXT NOT NULL, engine TEXT NOT NULL ${checked ? "CHECK (engine = 'postgres')" : ""}, schema TEXT NOT NULL)`);
-  anchor
-    .prepare("INSERT INTO openclaw_engine_anchor VALUES (?, 'postgres', ?)")
-    .run(storeId, namespace);
 }
 
 it.skipIf(!connection)(
@@ -105,6 +95,11 @@ it.skipIf(!connection)(
           profile: "user-backup",
           assertCurrent() {},
         });
+      const verifyRestored = async (restored: { namespace: string }) => {
+        namespaces.add(restored.namespace);
+        expect(restored.namespace).not.toBe(namespace);
+        await expectRestored(client, restored.namespace);
+      };
       const row = (file: string, sql: string) => {
         using db = openNodeSqliteDatabase(file, { readOnly: true });
         return db.prepare(sql).get();
@@ -113,19 +108,7 @@ it.skipIf(!connection)(
       await fs.mkdir(path.dirname(anchorPath), { recursive: true });
       await client.connect();
       try {
-        const postgres = await fs.readFile(
-          new URL(
-            "../../../extensions/workboard/src/workboard-schema.postgres.sql",
-            import.meta.url,
-          ),
-          "utf8",
-        );
-        const descriptor: PortDescriptor = {
-          ...metadata,
-          preData: postgres.slice(metadata.preData[0], metadata.preData[1]),
-          postData: postgres.slice(metadata.postData[0], metadata.postData[1]),
-          expectedCatalog: expectedPostgresCatalog(metadata),
-        };
+        const { descriptor } = await workboardPortFixture();
         {
           using source = openNodeSqliteDatabase(":memory:", { readBigInts: true });
           source.exec(descriptor.sqlite);
@@ -150,7 +133,7 @@ it.skipIf(!connection)(
             assertCurrent() {},
           });
         }
-        writeAnchor(anchorPath, storeId, namespace, true);
+        writePortAnchor(anchorPath, storeId, namespace, true);
         openOpenClawStateDatabase({ env: state.env });
         await closeOpenClawStateDatabaseAsync();
         const credentialsPath = resolveClientCredentialStorePath(state.env);
@@ -158,13 +141,9 @@ it.skipIf(!connection)(
         {
           using credentials = openNodeSqliteDatabase(credentialsPath);
           credentials.exec(CLIENT_CREDENTIAL_SCHEMA_SQL);
-          credentials.exec("PRAGMA user_version = 1");
-          credentials
-            .prepare("INSERT INTO device_auth_tokens VALUES (?, ?, ?, ?, ?)")
-            .run("synthetic-device", "operator", "synthetic-token", "[]", 1);
-          credentials
-            .prepare("INSERT INTO native_exec_socket_credentials VALUES (?, ?, ?, ?)")
-            .run("current", "/synthetic/native.sock", "synthetic-socket-token", 1);
+          credentials.exec(`PRAGMA user_version = 1;
+            INSERT INTO device_auth_tokens VALUES ('synthetic-device', 'operator', 'synthetic-token', '[]', 1);
+            INSERT INTO native_exec_socket_credentials VALUES ('current', '/synthetic/native.sock', 'synthetic-socket-token', 1);`);
         }
         const inventory = resolveActivatedPluginBackupInventory({
           config,
@@ -242,14 +221,12 @@ it.skipIf(!connection)(
           );
           const restoredAnchor = state.path("restored.sqlite");
           const restored = await restore(directory, restoredAnchor);
-          namespaces.add(restored.namespace);
-          expect(restored.namespace).not.toBe(namespace);
+          await verifyRestored(restored);
           expect(readBackupEngine(restoredAnchor)).toEqual({
             engine: "postgres",
             namespace: restored.namespace,
             storeId,
           });
-          await expectRestored(client, restored.namespace);
           await expectRestored(client, namespace);
           {
             using wrong = openNodeSqliteDatabase(path.join(directory, "anchor.sqlite"));
@@ -259,17 +236,16 @@ it.skipIf(!connection)(
         }
         {
           const capturedSelection = await resolveDatabaseEngineSelection(config);
+          const unavailableConnection = {
+            source: "env" as const,
+            provider: "default",
+            id: `OPENCLAW_UNAVAILABLE_BACKUP_${randomUUID().replaceAll("-", "").toUpperCase()}`,
+          };
           const unavailableConfig: OpenClawConfig = {
             ...config,
             database: {
               ...config.database,
-              postgres: {
-                connection: {
-                  source: "env",
-                  provider: "default",
-                  id: `OPENCLAW_UNAVAILABLE_BACKUP_${randomUUID().replaceAll("-", "").toUpperCase()}`,
-                },
-              },
+              postgres: { connection: unavailableConnection },
             },
           };
           await expect(resolveDatabaseEngineSelection(unavailableConfig)).rejects.toThrow(
@@ -300,9 +276,7 @@ it.skipIf(!connection)(
               state.path("captured-selection-restored.sqlite"),
               unavailableConfig,
             );
-            namespaces.add(restored.namespace);
-            expect(restored.namespace).not.toBe(namespace);
-            await expectRestored(client, restored.namespace);
+            await verifyRestored(restored);
           });
         }
         {
@@ -322,10 +296,8 @@ it.skipIf(!connection)(
           });
           const gitAnchor = readBackupEngine(gitTarget);
           assert(gitAnchor.engine === "postgres");
-          namespaces.add(gitAnchor.namespace);
+          await verifyRestored(gitAnchor);
           expect(gitAnchor.storeId).toBe(storeId);
-          expect(gitAnchor.namespace).not.toBe(namespace);
-          await expectRestored(client, gitAnchor.namespace);
         }
         {
           // The later exact-update recovery exercises the homogeneous PostgreSQL selection.
@@ -353,14 +325,13 @@ it.skipIf(!connection)(
             const before = capture();
             expect(before[1]?.size).toBeGreaterThan(0n);
             expect(before[2]).not.toBeNull();
+            const root = fileURLToPath(
+              new URL("../../../extensions/team-reports", import.meta.url),
+            );
             await withPluginCache(createPluginCache(), () =>
               loadDatabasePortDescriptor("team-reports", {
                 plugins: {
-                  load: {
-                    paths: [
-                      fileURLToPath(new URL("../../../extensions/team-reports", import.meta.url)),
-                    ],
-                  },
+                  load: { paths: [root] },
                   entries: { "team-reports": { enabled: true } },
                 },
               }),
@@ -385,7 +356,7 @@ it.skipIf(!connection)(
             });
           }
           await fs.rename(sharedPath, state.path("source-state.sqlite"));
-          writeAnchor(sharedPath, sharedStoreId, sharedNamespace);
+          writePortAnchor(sharedPath, sharedStoreId, sharedNamespace);
           // Reverse the mixture: state is PostgreSQL while the plugin remains SQLite.
           const retainedAnchor = state.path("workboard-pg.sqlite");
           await fs.rename(anchorPath, retainedAnchor);
@@ -494,10 +465,8 @@ it.skipIf(!connection)(
           namespaces.add(restoredShared.namespace);
           const restored = readBackupEngine(anchorPath);
           assert(restored.engine === "postgres");
-          namespaces.add(restored.namespace);
-          expect(restored.namespace).not.toBe(namespace);
+          await verifyRestored(restored);
           expect(restored.storeId).toBe(storeId);
-          await expectRestored(client, restored.namespace);
           expect(
             (await client.query(`SELECT title FROM "${namespace}".workboard_cards`)).rows,
           ).toEqual([{ title: "Migrated" }]);
