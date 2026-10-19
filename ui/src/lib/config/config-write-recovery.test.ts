@@ -11,8 +11,8 @@ import { setAvatarGatewayOrigin } from "../identity-avatar-context.ts";
 import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createConfigServerMock,
+  createConfigCapabilityHarness,
 } from "./config-test-harness.ts";
-import { makeHarness } from "./config-write.test-support.ts";
 import { createRuntimeConfigCapability } from "./runtime-config-capability.ts";
 
 beforeEach(() => {
@@ -21,8 +21,8 @@ beforeEach(() => {
 
 const cleanups: Array<() => void | Promise<void>> = [];
 
-function createHarness(request: Parameters<typeof makeHarness>[0]) {
-  const harness = makeHarness(request);
+function createHarness(request: Parameters<typeof createConfigCapabilityHarness>[0]) {
+  const harness = createConfigCapabilityHarness(request);
   cleanups.push(() => {
     harness.runtimeConfig.setWritesSuspended(true);
     harness.runtimeConfig.dispose();

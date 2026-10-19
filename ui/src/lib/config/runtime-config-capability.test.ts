@@ -7,10 +7,10 @@ import {
   CONFIG_FORM_AUTO_SAVE_DEBOUNCE_MS,
   createGatewayHarness,
   createConfigServerMock,
+  createConfigCapabilityHarness,
 } from "./config-test-harness.ts";
 import {
   loadHarness,
-  makeHarness,
   makeSnapshot,
   mockRequest,
   pendingAutoSave,
@@ -177,7 +177,7 @@ describe("runtime config capability", () => {
   it("rechecks operator access after the original-config parser settles", async () => {
     vi.useFakeTimers();
     const server = createConfigServerMock();
-    const { client, publish, runtimeConfig, state } = makeHarness(server.request);
+    const { client, publish, runtimeConfig, state } = createConfigCapabilityHarness(server.request);
     const originalParse = deferred();
 
     await runtimeConfig.ensureLoaded();
@@ -245,7 +245,7 @@ describe("runtime config capability", () => {
         "config.set": () => ({ config: { count: 2 }, hash: "hash-2" }),
         "config.patch": () => patchGate.promise,
       });
-      const { runtimeConfig, state } = makeHarness(request);
+      const { runtimeConfig, state } = createConfigCapabilityHarness(request);
       const initialLoad = runtimeConfig.ensureLoaded();
       if (operation === "save") {
         expect(state.configLoading).toBe(true);
@@ -586,7 +586,7 @@ describe("runtime config capability", () => {
 
   it("rechecks operator access after parsing before config.apply dispatch", async () => {
     const server = createConfigServerMock();
-    const { client, publish, runtimeConfig, state } = makeHarness(server.request);
+    const { client, publish, runtimeConfig, state } = createConfigCapabilityHarness(server.request);
     const originalParse = deferred();
 
     await runtimeConfig.ensureLoaded();
@@ -664,7 +664,7 @@ describe("runtime config load subscriptions", () => {
   it("clears a settled load when an observer throws so an explicit retry can read again", async () => {
     const request = vi.fn().mockRejectedValueOnce(new Error("temporarily unavailable"));
     request.mockResolvedValue({ config: {}, hash: "ready", valid: true, issues: [] });
-    const { runtimeConfig, state } = makeHarness(request);
+    const { runtimeConfig, state } = createConfigCapabilityHarness(request);
     const unsubscribe = runtimeConfig.subscribe((observedState) => {
       if (!observedState.configLoading && !observedState.configSnapshot) {
         throw new Error("observer failed");
@@ -729,7 +729,7 @@ describe("runtime config load subscriptions", () => {
       uiHints: {},
       version: "ready",
     });
-    const { runtimeConfig, state } = makeHarness(request);
+    const { runtimeConfig, state } = createConfigCapabilityHarness(request);
     const ensure = () => runtimeConfig.ensureSchemaLoaded();
     const loading = () => state.configSchemaLoading;
     const loaded = () => state.configSchema;
@@ -774,7 +774,7 @@ describe("runtime config schema access", () => {
           ? schema
           : {},
     );
-    const { client, publish, runtimeConfig, state } = makeHarness(request);
+    const { client, publish, runtimeConfig, state } = createConfigCapabilityHarness(request);
     publish(true, client, {
       type: "hello-ok",
       protocol: 1,
@@ -789,7 +789,7 @@ describe("runtime config schema access", () => {
 
   it("skips the schema load when advertised scopes exclude operator.read", async () => {
     const request = vi.fn(async () => ({}));
-    const { client, publish, runtimeConfig } = makeHarness(request);
+    const { client, publish, runtimeConfig } = createConfigCapabilityHarness(request);
     publish(true, client, {
       type: "hello-ok",
       protocol: 1,
