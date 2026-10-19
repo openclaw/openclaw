@@ -1,30 +1,21 @@
 import type { Locator, Page } from "playwright";
 
-export async function openChatLayoutMenu(scope: Page | Locator): Promise<Locator> {
-  const pane = nativePane(scope);
-  const mobile = pane.locator(".agent-chat__header--mobile");
-  if (await mobile.isVisible()) {
-    await openSessionActions(pane);
-    await pane.getByRole("menuitem", { name: "View", exact: true }).click();
-    const menu = pane.locator("openclaw-chat-header-session-menu");
-    await menu.locator(".oc-menu:visible").last().waitFor();
-    return menu;
+export async function openChatDashboardMenu(scope: Page | Locator): Promise<Locator> {
+  const menu = nativePane(scope).locator(".chat-dashboard-menu").filter({ visible: true });
+  const trigger = menu.getByRole("button", { name: "Dashboard options", exact: true });
+  if ((await trigger.getAttribute("aria-expanded")) !== "true") {
+    await trigger.click();
   }
-  const trigger = pane.getByRole("button", { name: "Panel position", exact: true });
-  await trigger.click();
-  const menu = pane.locator(".side-panel-position-menu");
-  await menu.waitFor();
+  await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor();
   return menu;
 }
 
-export async function closeChatLayoutMenu(scope: Page | Locator): Promise<void> {
-  const pane = nativePane(scope);
-  const mobile = pane.locator(".agent-chat__header--mobile");
-  const trigger = (await mobile.isVisible())
-    ? mobile.locator(".chat-header-session-menu__trigger")
-    : pane.getByRole("button", { name: "Panel position", exact: true });
-  await trigger.click();
-  await pane.locator(".oc-menu:visible").last().waitFor({ state: "hidden" });
+export async function closeChatDashboardMenu(scope: Page | Locator): Promise<void> {
+  const menu = nativePane(scope).locator(".chat-dashboard-menu").filter({ visible: true });
+  await menu.getByRole("button", { name: "Dashboard options", exact: true }).click();
+  await menu.getByRole("menu", { name: "Dashboard options", exact: true }).waitFor({
+    state: "hidden",
+  });
 }
 
 export async function selectChatLayoutAction(
@@ -195,15 +186,21 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
     await selectMenuItem(dashboard, name);
     return;
   }
-  if (
-    matches("Focus") ||
-    matches("Swap Chat and Dashboard") ||
-    (name instanceof RegExp && name.test("Swap "))
-  ) {
+  if (matches("Focus")) {
+    const dashboard = pane.locator(".chat-dashboard-menu").filter({ visible: true });
+    if (!mobile && (await dashboard.isVisible())) {
+      await selectMenuItem(await openChatDashboardMenu(pane), "Expand Dashboard");
+    } else {
+      await (mobile ? host.locator(".chat-mobile-host__header") : side)
+        .getByRole("button", { name: "Expand Side panel", exact: true })
+        .click();
+    }
+    return;
+  }
+  if (matches("Swap Chat and Dashboard") || (name instanceof RegExp && name.test("Swap "))) {
     const dashboard = pane.locator(".chat-dashboard-menu").filter({ visible: true });
     if (await dashboard.isVisible()) {
-      await dashboard.getByRole("button", { name: "Dashboard options", exact: true }).click();
-      await selectMenuItem(dashboard, matches("Focus") ? "Expand Dashboard" : /^Swap /);
+      await selectMenuItem(await openChatDashboardMenu(pane), /^Swap /);
     } else {
       await side.getByRole("button", { name: "Panel position", exact: true }).click();
       await pane.getByRole("menuitem", { name, exact: true }).click();
@@ -211,8 +208,18 @@ async function selectNativeLayoutAction(pane: Locator, name: string | RegExp): P
     }
     return;
   }
+  if (matches("Use current view as default")) {
+    await selectMenuItem(await openChatDashboardMenu(pane), name);
+    return;
+  }
   const menu = await openSessionActions(pane);
   if (matches("Close pane")) {
+    if (mobile) {
+      await menu.getByRole("menuitem", { name: "Advanced", exact: true }).click();
+      await host.getByRole("button", { name: "Close pane", exact: true }).click();
+      await host.waitFor({ state: "hidden" });
+      return;
+    }
     await menu.getByRole("menuitem", { name: "View", exact: true }).click();
   }
   await selectMenuItem(menu, name);

@@ -230,7 +230,8 @@ export function ChatDashboardMenu(
   const actions = createMemo((): ChatQuickAction[] => {
     const layout = props.sidebarLayout;
     const result: ChatQuickAction[] = [];
-    if (layout && props.onLayoutChange) {
+    // The shared mobile host owns expansion without changing the retained desktop layout.
+    if (!props.mobile && layout && props.onLayoutChange) {
       const main = sidebarMainPanel(layout);
       const dashboard = layout.columns
         .flatMap((column) => column.panels)
@@ -311,9 +312,11 @@ export function ChatDashboardMenu(
             },
             entry.kind === "content"
               ? {
-                  ...entry,
-                  content: (
-                    <div class="chat-dashboard-menu__default-status">
+                  id: `${entry.id}-status`,
+                  label: actions().find((action) => action.id === entry.id)!.label,
+                  disabled: true,
+                  render: (attributes) => (
+                    <div {...attributes} class="chat-dashboard-menu__default-status">
                       {entry.content}
                       <Icon name="check" />
                     </div>
