@@ -60,7 +60,7 @@ export async function raceWithTimeout<T, F>(
           reject(error);
         }
       };
-      timer = setTimeout(() => settle(onTimeout), timeoutMs);
+      timer = setTimeout(() => settle(onTimeout), resolveRetryDelayMs(timeoutMs));
       if (options.ref === false) {
         timer.unref?.();
       }
