@@ -2,32 +2,38 @@ import { spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { getFileLockProcessStartTime } from "../shared/pid-alive.js";
-import { isGatewayStateOwnerDefinitelyStale } from "./gateway-state-owner-record.js";
 
-const namespaceState = vi.hoisted(() => ({
-  value: null as Record<string, unknown> | null,
+const classification = vi.hoisted(() => ({
+  verdict: "same" as "same" | "dead" | "unknown",
+  windowsSameHost: false,
 }));
 
-// The classification owner is mocked so a Windows boot-identity disagreement and a
-// Linux previous-boot verdict can both be exercised unchanged on any test host.
+// The predicate consumes these two classification owners; the decision table below is
+// what this change adds, while the classifier itself is covered by its own tests.
 vi.mock("./gateway-lock-payload.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./gateway-lock-payload.js")>()),
-  readGatewayLockProcessNamespace: () => namespaceState.value,
+  classifyGatewayLockProcessNamespace: () => classification.verdict,
+  gatewayLockOwnerIsSameHostWindowsNamespace: () => classification.windowsSameHost,
 }));
+
+import { isGatewayStateOwnerDefinitelyStale } from "./gateway-state-owner-record.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 
-const WINDOWS_BOOT = "2026-10-18T00:00:00.0000000Z";
-const OTHER_WINDOWS_BOOT = "2026-10-18T00:00:00.0000001Z";
-const LINUX_BOOT = "8f14e45f-ceea-467a-9c1f-0f5e0e6a3f31";
-const OTHER_LINUX_BOOT = "8f14e45f-ceea-467a-9c1f-0f5e0e6a3f32";
-
-function windowsNamespace(overrides: Record<string, unknown> = {}) {
-  return { platform: "win32", host: "test-host", identity: WINDOWS_BOOT, ...overrides };
-}
+const WINDOWS_BOOT = {
+  platform: "win32" as const,
+  host: "test-host",
+  identity: "2026-10-18T00:00:00.0000000Z",
+};
+const LINUX_BOOT = {
+  platform: "linux" as const,
+  host: "test-host",
+  identity: "8f14e45f-ceea-467a-9c1f-0f5e0e6a3f31",
+  pidNsInode: "1",
+};
 
 function writeLock(directory: string, ageMs = 0): string {
   const pathname = path.join(directory, "state.lock");
@@ -44,6 +50,7 @@ function payload(overrides: Record<string, unknown> = {}) {
     pid: process.pid,
     startTime: getFileLockProcessStartTime(process.pid),
     role: "gateway",
+    processNamespace: WINDOWS_BOOT,
     ...overrides,
   };
 }
@@ -58,74 +65,85 @@ async function exitedPid(): Promise<number> {
   return pid;
 }
 
-beforeEach(() => {
-  namespaceState.value = windowsNamespace();
+afterEach(() => {
+  classification.verdict = "same";
+  classification.windowsSameHost = false;
 });
 
 it("keeps a live Windows owner whose recorded boot identity disagrees", () => {
+  classification.verdict = "dead";
+  classification.windowsSameHost = true;
   const pathname = writeLock(tempDirs.make("state-owner-win-live-"));
-  const value = payload({
-    processNamespace: windowsNamespace({ identity: OTHER_WINDOWS_BOOT }),
-  });
 
-  expect(isGatewayStateOwnerDefinitelyStale(value, pathname)).toBe(false);
+  expect(isGatewayStateOwnerDefinitelyStale(payload(), pathname)).toBe(false);
 });
 
 it("keeps reclaiming a previous Linux boot with a live local pid", () => {
-  namespaceState.value = {
-    platform: "linux",
-    host: "test-host",
-    identity: LINUX_BOOT,
-    pidNsInode: "1",
-  };
+  classification.verdict = "dead";
+  classification.windowsSameHost = false;
   const pathname = writeLock(tempDirs.make("state-owner-linux-boot-"));
-  const value = payload({
-    processNamespace: { ...namespaceState.value, identity: OTHER_LINUX_BOOT },
-  });
 
-  expect(isGatewayStateOwnerDefinitelyStale(value, pathname)).toBe(true);
+  expect(
+    isGatewayStateOwnerDefinitelyStale(
+      payload({
+        processNamespace: {
+          ...LINUX_BOOT,
+          identity: "8f14e45f-ceea-467a-9c1f-0f5e0e6a3f32",
+        },
+      }),
+      pathname,
+    ),
+  ).toBe(true);
 });
 
 it("keeps reclaiming a Windows record without a recorded start identity", () => {
+  classification.verdict = "dead";
+  classification.windowsSameHost = true;
   const pathname = writeLock(tempDirs.make("state-owner-win-no-start-"));
-  const value = payload({
-    startTime: undefined,
-    processNamespace: windowsNamespace({ identity: OTHER_WINDOWS_BOOT }),
-  });
 
-  expect(isGatewayStateOwnerDefinitelyStale(value, pathname)).toBe(true);
+  expect(isGatewayStateOwnerDefinitelyStale(payload({ startTime: undefined }), pathname)).toBe(
+    true,
+  );
 });
 
 it("reclaims a Windows owner whose recorded process exited", async () => {
+  classification.verdict = "dead";
+  classification.windowsSameHost = true;
   const pathname = writeLock(tempDirs.make("state-owner-win-exited-"));
-  const value = {
-    pid: await exitedPid(),
-    startTime: undefined,
-    role: "gateway",
-    processNamespace: windowsNamespace({ identity: OTHER_WINDOWS_BOOT }),
-  };
 
-  expect(isGatewayStateOwnerDefinitelyStale(value, pathname)).toBe(true);
+  expect(
+    isGatewayStateOwnerDefinitelyStale(
+      payload({ pid: await exitedPid(), startTime: undefined }),
+      pathname,
+    ),
+  ).toBe(true);
 });
 
 it("reclaims a Windows pid whose recorded start identity changed", () => {
+  classification.verdict = "dead";
+  classification.windowsSameHost = true;
   const pathname = writeLock(tempDirs.make("state-owner-win-pid-reuse-"));
-  const value = payload({
-    startTime: (getFileLockProcessStartTime(process.pid) ?? 0) + 12_345,
-    processNamespace: windowsNamespace({ identity: OTHER_WINDOWS_BOOT }),
-  });
 
-  expect(isGatewayStateOwnerDefinitelyStale(value, pathname)).toBe(true);
+  expect(
+    isGatewayStateOwnerDefinitelyStale(
+      payload({ startTime: (getFileLockProcessStartTime(process.pid) ?? 0) + 12_345 }),
+      pathname,
+    ),
+  ).toBe(true);
 });
 
-it("reclaims an expired foreign-namespace owner while a local pid is alive", () => {
-  const pathname = writeLock(tempDirs.make("state-owner-foreign-"), 5 * 60_000);
-  const value = payload({
-    processNamespace: windowsNamespace({
-      host: "other-host.invalid",
-      identity: OTHER_WINDOWS_BOOT,
-    }),
-  });
+it("keeps a live owner when the classification is not dead", () => {
+  classification.verdict = "same";
+  const pathname = writeLock(tempDirs.make("state-owner-not-dead-"));
 
-  expect(isGatewayStateOwnerDefinitelyStale(value, pathname)).toBe(true);
+  expect(isGatewayStateOwnerDefinitelyStale(payload(), pathname)).toBe(false);
+});
+
+it("refuses to decide when the namespace cannot be classified", () => {
+  classification.verdict = "unknown";
+  const pathname = writeLock(tempDirs.make("state-owner-unknown-"));
+
+  expect(() => isGatewayStateOwnerDefinitelyStale(payload(), pathname)).toThrow(
+    /cannot verify Gateway ownership/,
+  );
 });

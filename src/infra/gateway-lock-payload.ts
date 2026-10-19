@@ -150,9 +150,11 @@ export function classifyGatewayOwnerProcessNamespace(
  * there is not proof of a previous boot; Linux boot and PID-namespace identities
  * stay authoritative.
  */
-export function gatewayLockOwnerIsSameHostWindowsNamespace(value: unknown): boolean {
+export function gatewayLockOwnerIsSameHostWindowsNamespace(
+  value: unknown,
+  current: ProcessNamespace | null = readGatewayLockProcessNamespace(),
+): boolean {
   const owner = GatewayProcessNamespaceSchema.safeParse(value).data;
-  const current = readGatewayLockProcessNamespace();
   return (
     owner !== undefined &&
     current !== null &&
