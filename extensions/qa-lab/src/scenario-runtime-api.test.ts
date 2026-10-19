@@ -1,8 +1,8 @@
-// Qa Lab tests cover scenario runtime api plugin behavior.
 import { describe, expect, it, vi } from "vitest";
 import { createQaBusState } from "./bus-state.js";
 import { createQaTransportAdapter } from "./qa-transport-registry.js";
 import type { QaTransportAdapter } from "./qa-transport.js";
+import { createQaTransportStateMethods, sendQaTransportNativeCommand } from "./qa-transport.js";
 import { createQaScenarioRuntimeApi } from "./scenario-runtime-api.js";
 
 type CreateQaScenarioRuntimeApiParams = Parameters<typeof createQaScenarioRuntimeApi>[0];
@@ -12,6 +12,19 @@ const constants: QaScenarioRuntimeConstants = {
   imageUnderstandingPngBase64: "png-small",
   imageUnderstandingLargePngBase64: "png-large",
   imageUnderstandingValidPngBase64: "png-valid",
+};
+const scenario = {
+  id: "generic-flow",
+  title: "Generic Flow",
+  surface: "test",
+  objective: "test",
+  successCriteria: ["works"],
+  sourcePath: "qa/scenarios/generic-flow.yaml",
+  execution: {
+    kind: "flow" as const,
+    config: { expected: "value" },
+    flow: { steps: [{ name: "noop", actions: [{ assert: "true" }] }] },
+  },
 };
 
 describe("createQaScenarioRuntimeApi", () => {
@@ -30,50 +43,14 @@ describe("createQaScenarioRuntimeApi", () => {
       }
       return value;
     };
+    const methods = createQaTransportStateMethods({ state, accountId: "qa-channel" });
     const env = {
       lab: { baseUrl: "http://127.0.0.1:1234" },
       transport: {
-        state,
-        reset: async () => {
-          state.reset();
-        },
-        sendInbound: async (input: Parameters<typeof state.addInboundMessage>[0]) =>
-          state.addInboundMessage(input),
-        sendNativeCommand: async (
-          input: Omit<Parameters<typeof state.addInboundMessage>[0], "nativeCommand" | "text"> & {
-            command: string;
-          },
-        ) => {
-          const { command, ...message } = input;
-          state.addInboundMessage({
-            ...message,
-            text: `/${command}`,
-            nativeCommand: { name: command },
-          });
-        },
-        waitForNoOutbound: vi.fn(async () => undefined),
-        waitForOutbound: vi.fn(async () => {
-          throw new Error("not used");
-        }),
-        waitForOutboundSequence: vi.fn(async () => {
-          throw new Error("not used");
-        }),
+        ...methods,
+        sendNativeCommand: (input: Parameters<QaTransportAdapter["sendNativeCommand"]>[0]) =>
+          sendQaTransportNativeCommand(methods, input),
         waitForCondition,
-      },
-    };
-    const scenario = {
-      id: "generic-flow",
-      title: "Generic Flow",
-      surface: "test",
-      objective: "test",
-      successCriteria: ["works"],
-      sourcePath: "qa/scenarios/generic-flow.yaml",
-      execution: {
-        kind: "flow" as const,
-        config: { expected: "value" },
-        flow: {
-          steps: [{ name: "noop", actions: [{ assert: "true" }] }],
-        },
       },
     };
     const deps = {
@@ -168,15 +145,7 @@ describe("createQaScenarioRuntimeApi", () => {
     );
     const api = createQaScenarioRuntimeApi({
       env: { lab: { baseUrl: "http://127.0.0.1:1234" }, transport: created.adapter },
-      scenario: {
-        id: "factory-inbound",
-        title: "Factory inbound",
-        surface: "channel",
-        objective: "test provider delivery",
-        successCriteria: ["provider receives inbound"],
-        sourcePath: "qa/scenarios/factory-inbound.yaml",
-        execution: { kind: "flow", flow: { steps: [] } },
-      },
+      scenario: { ...scenario, execution: { kind: "flow", flow: { steps: [] } } },
       deps: {
         waitForTransportReady: vi.fn(),
       },

@@ -1,4 +1,3 @@
-// Qa Lab tests cover self check plugin behavior.
 import { readFile } from "node:fs/promises";
 import path from "node:path";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
@@ -13,42 +12,23 @@ import { isQaSelfCheckSuccessful, runQaSelfCheckAgainstState } from "./self-chec
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => vi.restoreAllMocks());
 
-function makeSelfCheckResult(params: {
-  scenarioStatus: "pass" | "fail";
-  checkStatuses: Array<"pass" | "fail">;
-}): QaSelfCheckResult {
+function makeSelfCheckResult(
+  scenarioStatus: "pass" | "fail",
+  checkStatuses: Array<"pass" | "fail">,
+): QaSelfCheckResult {
   return {
     outputPath: "/tmp/qa-self-check.md",
     report: "",
-    checks: params.checkStatuses.map((status, index) => ({
-      name: `check ${String(index + 1)}`,
-      status,
-    })),
-    scenarioResult: {
-      name: "QA self-check scenario",
-      status: params.scenarioStatus,
-      steps: [],
-    },
+    checks: checkStatuses.map((status, index) => ({ name: `check ${index + 1}`, status })),
+    scenarioResult: { name: "QA self-check scenario", status: scenarioStatus, steps: [] },
   };
 }
 
 describe("isQaSelfCheckSuccessful", () => {
   it("requires the scenario and every check to pass", () => {
-    expect(
-      isQaSelfCheckSuccessful(
-        makeSelfCheckResult({ scenarioStatus: "pass", checkStatuses: ["pass"] }),
-      ),
-    ).toBe(true);
-    expect(
-      isQaSelfCheckSuccessful(
-        makeSelfCheckResult({ scenarioStatus: "fail", checkStatuses: ["pass"] }),
-      ),
-    ).toBe(false);
-    expect(
-      isQaSelfCheckSuccessful(
-        makeSelfCheckResult({ scenarioStatus: "pass", checkStatuses: ["pass", "fail"] }),
-      ),
-    ).toBe(false);
+    expect(isQaSelfCheckSuccessful(makeSelfCheckResult("pass", ["pass"]))).toBe(true);
+    expect(isQaSelfCheckSuccessful(makeSelfCheckResult("fail", ["pass"]))).toBe(false);
+    expect(isQaSelfCheckSuccessful(makeSelfCheckResult("pass", ["pass", "fail"]))).toBe(false);
   });
 });
 
@@ -92,19 +72,14 @@ describe("self-check scenario execution", () => {
       ...state,
       addInboundMessage: (input: Parameters<typeof state.addInboundMessage>[0]) => {
         const inbound = state.addInboundMessage(input);
-        if (input.text === "hello from qa") {
+        const direct = input.text === "hello from qa";
+        if (direct || input.text === "inside thread") {
           state.addOutboundMessage({
-            accountId: delivery?.directAccountId,
-            to: delivery?.directTarget ?? "dm:alice",
-            text: "qa-echo: hello from qa",
-          });
-        }
-        if (input.text === "inside thread") {
-          state.addOutboundMessage({
-            to:
-              delivery?.threadedTarget ??
-              `thread:${input.conversation.id}/${String(input.threadId)}`,
-            text: "qa-echo: inside thread",
+            accountId: direct ? delivery?.directAccountId : undefined,
+            to: direct
+              ? (delivery?.directTarget ?? "dm:alice")
+              : (delivery?.threadedTarget ?? `thread:${input.conversation.id}/${input.threadId}`),
+            text: `qa-echo: ${input.text}`,
           });
         }
         return inbound;
@@ -129,20 +104,21 @@ describe("self-check scenario execution", () => {
         throw new Error("qa-channel message is not in the selected conversation");
       }
       targets.push(args.to);
+      const messageId = String(args.messageId);
       if (action === "react") {
         return state.reactToMessage({
-          messageId: String(args.messageId),
+          messageId,
           emoji: String(args.emoji),
         });
       }
       if (action === "edit") {
         return state.editMessage({
-          messageId: String(args.messageId),
+          messageId,
           text: String(args.text),
         });
       }
       if (action === "delete") {
-        return state.deleteMessage({ messageId: String(args.messageId) });
+        return state.deleteMessage({ messageId });
       }
       throw new Error(`unexpected action: ${action}`);
     };

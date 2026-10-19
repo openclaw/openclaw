@@ -19,15 +19,15 @@ import { readQaScenarioById } from "./scenario-catalog.js";
 import { runScenarioFlow } from "./scenario-flow-runner.js";
 import { runQaSuiteScenarioSteps } from "./suite-runtime-flow.js";
 
-async function startRetainedFinalScenario(
-  params: {
-    previewOnly?: boolean;
-    failFinal?: boolean;
-    duplicateFinal?: boolean;
-    typedError?: boolean;
-    finalRoute?: Partial<QaBusOutboundMessageInput>;
-  } = {},
-) {
+type FinalOptions = {
+  previewOnly?: boolean;
+  failFinal?: boolean;
+  duplicateFinal?: boolean;
+  typedError?: boolean;
+  finalRoute?: Partial<QaBusOutboundMessageInput>;
+};
+
+async function startRetainedFinalScenario(params: FinalOptions = {}) {
   const scenario = readQaScenarioById("qa-channel-failed-tool-terminal-finalization");
   if (!scenario.execution.flow) {
     throw new Error("expected retained-final scenario flow");
@@ -48,8 +48,7 @@ async function startRetainedFinalScenario(
   let deadlineExpired = false;
   let outboundRequests = 0;
 
-  // Keep the real HTTP bus mutation, but expose the deletion/response gap and
-  // the subsequent unsent final as independent, deterministic boundaries.
+  // Hold the real bus deletion/response gap independently from the final send.
   const proxy = createServer((req, res) => {
     dispatchQaHttpRequest(res, async () => {
       const chunks: Buffer[] = [];
@@ -100,8 +99,7 @@ async function startRetainedFinalScenario(
   const runtime = createPluginRuntimeMock({
     channel: { inbound: { buildContext: buildChannelInboundEventContext } },
   });
-  // Only model execution and session recording are injected. The real reply
-  // dispatcher drains the real preview owner before the real poller can ack.
+  // The real dispatcher drains the preview before the real poller can ack.
   vi.mocked(runtime.channel.reply.dispatchReplyWithBufferedBlockDispatcher).mockImplementation(
     async ({ ctx, dispatcherOptions, replyOptions }) => {
       if (ctx.CommandTurn?.kind === "native") {
@@ -165,8 +163,7 @@ async function startRetainedFinalScenario(
       timeoutMs,
       intervalMs,
     );
-  // These request/transcript facts isolate the delivery race. The actual QA
-  // suite separately proves the real failed read, model requests and transcript.
+  // Synthetic model/transcript facts isolate the real transport's delivery race.
   const requests = [
     {
       allInputText: config.promptSnippet,
@@ -284,10 +281,21 @@ async function startRetainedFinalScenario(
   };
 }
 
+async function withRetainedFinal(
+  options: FinalOptions,
+  run: (harness: Awaited<ReturnType<typeof startRetainedFinalScenario>>) => Promise<void>,
+) {
+  const harness = await startRetainedFinalScenario(options);
+  try {
+    await run(harness);
+  } finally {
+    await harness.stop();
+  }
+}
+
 describe("failed-tool scenario retained final", () => {
   it("waits through preview deletion and final send until the exact inbound is acknowledged", async () => {
-    const harness = await startRetainedFinalScenario();
-    try {
+    await withRetainedFinal({}, async (harness) => {
       await harness.previewSent;
       await harness.waitObserved;
       harness.startFinal();
@@ -311,60 +319,31 @@ describe("failed-tool scenario retained final", () => {
       expect(harness.vars.reply).toMatchObject({
         text: "The requested file could not be read: ENOENT. QA-FAILED-TOOL-FINALIZED-OK",
       });
-    } finally {
-      await harness.stop();
-    }
+    });
   });
 
-  it.each([
-    {
-      name: "preview-only with processing ack",
-      previewOnly: true,
-      error: "expected exactly one failure-honest reply, got []",
-    },
-    {
-      name: "deleted preview without final",
-      failFinal: true,
-      error: "expected exactly one failure-honest reply, got []",
-    },
-    {
-      name: "duplicate retained final",
-      duplicateFinal: true,
-      error: "expected exactly one failure-honest reply",
-    },
-    {
-      name: "typed error with matching text",
-      typedError: true,
-      error: "The requested file could not be read: ENOENT",
-    },
-    {
-      name: "wrong account",
-      finalRoute: { accountId: "foreign" },
-      error: "retained reply has the wrong route",
-    },
-    {
-      name: "wrong conversation",
-      finalRoute: { to: "group:foreign" },
-      error: "retained reply has the wrong route",
-    },
-    {
-      name: "wrong conversation kind",
-      finalRoute: { to: "channel:qa-failed-terminal" },
-      error: "retained reply has the wrong route",
-    },
-    {
-      name: "wrong thread",
-      finalRoute: { threadId: "foreign" },
-      error: "retained reply has the wrong route",
-    },
-    {
-      name: "wrong reply target",
-      finalRoute: { replyToId: "foreign" },
-      error: "retained reply has the wrong route",
-    },
-  ])("rejects $name", async (fault) => {
-    const harness = await startRetainedFinalScenario(fault);
-    try {
+  const missingReply = "expected exactly one failure-honest reply, got []";
+  const wrongRoute = "retained reply has the wrong route";
+  it.each<[string, FinalOptions, string]>([
+    ["preview-only with processing ack", { previewOnly: true }, missingReply],
+    ["deleted preview without final", { failFinal: true }, missingReply],
+    [
+      "duplicate retained final",
+      { duplicateFinal: true },
+      "expected exactly one failure-honest reply",
+    ],
+    [
+      "typed error with matching text",
+      { typedError: true },
+      "The requested file could not be read: ENOENT",
+    ],
+    ["wrong account", { finalRoute: { accountId: "foreign" } }, wrongRoute],
+    ["wrong conversation", { finalRoute: { to: "group:foreign" } }, wrongRoute],
+    ["wrong conversation kind", { finalRoute: { to: "channel:qa-failed-terminal" } }, wrongRoute],
+    ["wrong thread", { finalRoute: { threadId: "foreign" } }, wrongRoute],
+    ["wrong reply target", { finalRoute: { replyToId: "foreign" } }, wrongRoute],
+  ])("rejects %s", async (_name, fault, error) => {
+    await withRetainedFinal(fault, async (harness) => {
       await harness.previewSent;
       await harness.waitObserved;
       harness.releaseDelete();
@@ -372,7 +351,7 @@ describe("failed-tool scenario retained final", () => {
       harness.startFinal();
       expect(await harness.result).toMatchObject({
         status: "fail",
-        details: expect.stringContaining(fault.error),
+        details: expect.stringContaining(error),
       });
       if (!fault.typedError) {
         expect(harness.state.getAcknowledgedPollCursor("default")).toBeGreaterThanOrEqual(
@@ -386,14 +365,11 @@ describe("failed-tool scenario retained final", () => {
             .messages.filter((message) => message.direction === "outbound"),
         ).toMatchObject([{ deleted: true }]);
       }
-    } finally {
-      await harness.stop();
-    }
+    });
   });
 
   it("does not accept a later native control as the pending inbound's processing ack", async () => {
-    const harness = await startRetainedFinalScenario();
-    try {
+    await withRetainedFinal({}, async (harness) => {
       await harness.previewSent;
       harness.startFinal();
       await harness.deleteStarted;
@@ -405,8 +381,6 @@ describe("failed-tool scenario retained final", () => {
         status: "fail",
         details: "injected processing acknowledgment deadline",
       });
-    } finally {
-      await harness.stop();
-    }
+    });
   });
 });
