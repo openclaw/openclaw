@@ -1,6 +1,6 @@
 import { createEffect, createSignal, onCleanup } from "solid-js";
 import { MarkdownDomReconciler, type MarkdownDomMedia } from "../lib/markdown-dom-reconciler.ts";
-import { registerSessionTitleTarget } from "./session-progress-hovercard-registration.ts";
+import { registerSessionTitleTarget } from "./session-title-target-registration.ts";
 
 export type MarkdownContentValue =
   | string

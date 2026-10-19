@@ -5,6 +5,7 @@ import {
 } from "./lazy-hovercard-registration.ts";
 import { sessionProgressHoverTargetFromEvent } from "./session-progress-hovercard-target.ts";
 import type { SessionProgressHovercardProvider } from "./session-progress-hovercard.runtime.tsx";
+import { installSessionTitleRegistrar } from "./session-title-target-registration.ts";
 
 const HOVERCARD_TAG = "openclaw-session-progress-hovercard-provider";
 
@@ -16,7 +17,7 @@ const bootstrap = new LazyHovercardBootstrap<SessionProgressHovercardProvider>({
   },
 });
 
-export function registerSessionTitleTarget(target: HTMLElement, label: HTMLElement): () => void {
+installSessionTitleRegistrar((target, label) => {
   let active = true;
   let release: (() => void) | undefined;
   // Markdown fragments can register while their caller is still mounting them.
@@ -35,7 +36,7 @@ export function registerSessionTitleTarget(target: HTMLElement, label: HTMLEleme
     active = false;
     release?.();
   };
-}
+});
 
 async function activateHovercard(event: Event, trigger: HovercardBootstrapTrigger): Promise<void> {
   if (
