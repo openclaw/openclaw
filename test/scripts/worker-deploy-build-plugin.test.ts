@@ -523,6 +523,7 @@ export const marker = "relocated";`,
                 "--eval",
                 `
 import assert from "node:assert/strict";
+import { writeSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 const entry = process.argv[1];
 process.argv = [process.execPath, entry, "--internal-worker-prewarm"];
@@ -541,11 +542,36 @@ const watcher = new Worker(new URL("./worker-chunk-fs-safe-watch-io.mjs", pathTo
   execArgv: [],
   workerData: { native: getFsSafeNativeConfig(), diagnostics: false },
 });
+// Record startup and exit without changing worker references or timers.
+const events = [];
+let metricsPending = true;
+const report = (reason) => {
+  writeSync(2, "watcher-lifecycle " + JSON.stringify({
+    reason, metricsPending, events, platform: process.platform,
+    node: process.versions.node, nativeMode: getFsSafeNativeConfig().mode,
+  }) + "\\n");
+};
+watcher.once("online", () => events.push({ event: "online" }));
+watcher.once("error", error => events.push({ event: "error", name: error.name, message: error.message.slice(0, 500) }));
+watcher.once("exit", code => {
+  events.push({ event: "exit", code });
+  if (metricsPending) report("worker-exit-before-reply");
+});
+const beforeExit = code => {
+  events.push({ event: "beforeExit", code });
+  if (metricsPending) report("parent-before-exit");
+};
+process.once("beforeExit", beforeExit);
 try {
   const reply = once(watcher, "message");
   watcher.postMessage({ id: 1, method: "metrics", args: [] });
   assert.deepEqual((await reply)[0], { id: 1, value: {}, cleanupErrors: [] });
+  metricsPending = false;
+} catch (error) {
+  report("metrics-failure");
+  throw error;
 } finally {
+  process.removeListener("beforeExit", beforeExit);
   await watcher.terminate();
 }
 assert.equal(getFsSafeNativeConfig().mode, process.platform === "darwin" ? "require" : "off");
@@ -617,6 +643,54 @@ console.log("relocated worker facade activation follows the shared config snapsh
               },
             ),
           );
+          if (result.error || result.status !== 0) {
+            // Capture emitted topology before fixture cleanup, only on failure.
+            const modules: { file: string; bytes: number; sha256: string; markers: string[] }[] =
+              [];
+            const pending = new Set(["worker-chunk-fs-safe-watch-io.mjs"]);
+            let truncated = false;
+            try {
+              const { createHash } = await import("node:crypto");
+              const { collectPackageDistImports } =
+                await import("../../scripts/lib/package-dist-imports.mjs");
+              for (const file of pending) {
+                if (modules.length >= 32 || JSON.stringify(modules).length >= 10_000) {
+                  truncated = true;
+                  break;
+                }
+                const source = fs.readFileSync(path.join(relocated, file), "utf8");
+                const markers = Array.from(
+                  source.matchAll(/(?:\/\/#region [^\n]+|function init_\w+\()/gu),
+                  (match) => match[0].slice(0, 96),
+                );
+                truncated ||= markers.length > 12;
+                modules.push({
+                  file,
+                  bytes: Buffer.byteLength(source),
+                  sha256: createHash("sha256").update(source).digest("hex"),
+                  markers: markers.slice(0, 12),
+                });
+                for (const { importedPath } of collectPackageDistImports({
+                  files: [file],
+                  readText: () => source,
+                })) {
+                  if (
+                    path.basename(importedPath) === importedPath &&
+                    importedPath.endsWith(".mjs")
+                  ) {
+                    pending.add(importedPath);
+                  }
+                }
+              }
+            } catch (error) {
+              truncated = true;
+              console.error("watcher-import-closure-error", String(error).slice(0, 500));
+            }
+            console.error(
+              "watcher-import-closure",
+              JSON.stringify({ modules, discovered: pending.size, truncated }),
+            );
+          }
           expect(result.error, `${root}\n${result.stderr}`).toBeUndefined();
           expect(result.status, result.stderr).toBe(0);
           expect(result.stdout.trim()).toBe(
