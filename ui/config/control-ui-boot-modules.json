@@ -714,6 +714,7 @@
   "ui/src/components/sidebar-online-order.ts",
   "ui/src/components/sidebar-owner-session-counts.ts",
   "ui/src/components/sidebar-people.ts",
+  "ui/src/components/sidebar-projection-cache.ts",
   "ui/src/components/sidebar-projection-memo.ts",
   "ui/src/components/sidebar-reorder.tsx",
   "ui/src/components/sidebar-snapshot-capture.ts",
