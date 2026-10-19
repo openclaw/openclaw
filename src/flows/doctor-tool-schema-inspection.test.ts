@@ -3,6 +3,7 @@ import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import * as mcpConfig from "../agents/agent-bundle-mcp-runtime-config.js";
 import { createMcpProofPluginRegistry } from "../agents/mcp-connection-resolver.test-fixtures.js";
+import { configFor, modelDefinition } from "../agents/model-auth.fixtures.test-support.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import * as discovery from "../plugins/discovery.js";
 import * as manifests from "../plugins/manifest-registry.js";
@@ -144,25 +145,16 @@ module.exports = { id, register(api) {
               excluded: { workspace: state.path("excluded"), tools: { deny: ["group:plugins"] } },
             },
           },
-          models: {
-            providers: {
-              fixture: {
-                api: "openai-completions",
-                baseUrl: "http://127.0.0.1:1/v1",
-                models: [
-                  {
-                    id: "local",
-                    name: "Local fixture",
-                    reasoning: false,
-                    input: ["text"],
-                    cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                    contextWindow: 128000,
-                    maxTokens: 8192,
-                  },
-                ],
-              },
-            },
-          },
+          ...configFor("fixture", "http://127.0.0.1:1/v1", {
+            api: "openai-completions",
+            models: [
+              modelDefinition("local", {
+                name: "Local fixture",
+                reasoning: false,
+                contextWindow: 128000,
+              }),
+            ],
+          }),
           plugins: { allow: ids, load: { paths }, slots: { memory: "none" } },
           mcp: {
             servers: {
