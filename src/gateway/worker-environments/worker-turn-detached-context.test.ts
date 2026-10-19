@@ -28,7 +28,6 @@ import { createWorkerSessionPlacementGate } from "./placement-worker-gate.js";
 import { createWorkerTranscriptCommitStore } from "./transcript-commit-ledger.js";
 import { createWorkerTranscriptCommitter } from "./transcript-commit.js";
 import { createTranscriptCommitIdentity } from "./transcript-commit.test-support.js";
-import { WorkerRunnerUnavailableError } from "./tunnel-contract.js";
 import type { WorkerTurnTunnelHandle } from "./tunnel-contract.js";
 import { releaseClaimIfOwned } from "./worker-turn-admission.js";
 import {
@@ -111,7 +110,7 @@ async function launchProbe(
   if (!waitForInitialPlacement && (await placements.getAsync(SESSION_ID))?.state !== "active") {
     await seedActivePlacement();
   }
-  const deliberateStop = new WorkerRunnerUnavailableError();
+  const deliberateStop = new Error("synthetic worker launch complete");
   let credentialCalls = 0;
   let tunnelCalls = 0;
   let launch: { baseLeafId: string | null; history: ReturnType<typeof visible> } | undefined;
@@ -458,10 +457,15 @@ describe("worker detached model-context branch parity", () => {
       const inputRecorder = recorder();
       expect(inputRecorder.hasPersisted()).toBe(false);
       const pending = state === "in-flight" ? inputRecorder.persistApproved() : undefined;
-      const result = await launchProbe("recorder-admission", {
-        userTurnTranscriptRecorder: inputRecorder,
-      });
+      const { result, calls } = await withAsyncReadHook(
+        async () => {},
+        () =>
+          launchProbe("recorder-admission", {
+            userTurnTranscriptRecorder: inputRecorder,
+          }),
+      );
       await pending;
+      expect(calls).toBe(1);
       expect(inputRecorder.getAdmissionReceipt()).toBeDefined();
       expect(result.launch).toEqual({
         baseLeafId: inputRecorder.getAdmissionReceipt()?.entryId,

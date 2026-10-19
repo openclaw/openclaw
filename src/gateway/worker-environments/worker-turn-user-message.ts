@@ -190,7 +190,8 @@ export async function readWorkerTurnInputContext(params: WorkerTurnInputParams) 
     : await SessionManager.openAsync(transcriptTarget, undefined, undefined, turn.abortSignal);
   assertCurrent();
   let baseLeafId = admission?.entryId ?? manager.getLeafId();
-  if (admission) {
+  // Reuse the fenced read's source watermark. Later writes still face the commit fence.
+  if (admission && manager.getTranscriptSnapshotVersion()?.rawSeq !== admission.rawSeq) {
     const current = await withoutSessionTranscriptReadFence(() =>
       SessionManager.openModelContextAsync(transcriptTarget, { signal: turn.abortSignal }),
     );
