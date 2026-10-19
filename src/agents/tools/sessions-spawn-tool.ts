@@ -219,7 +219,7 @@ function buildSessionsSpawnToolSchema(params: {
     ),
     completionTarget: optionalStringEnum(["parent"] as const, {
       description:
-        "parent: return substantive results in a private requester turn; no automatic channel delivery. After sessions_yield, the parent must receive the internal result even when no external reply is needed. For external replies only, exactly NO_REPLY as the entire final answer stays silent; a literal leading NO_REPLY newline suppresses that line only. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
+        "parent: return substantive results in a private requester turn when requester continuation is supported; no automatic channel delivery. Isolated automation must use collect=true for in-turn results. After sessions_yield, the parent must receive the internal result even when no external reply is needed. For external replies only, exactly NO_REPLY as the entire final answer stays silent; a literal leading NO_REPLY newline suppresses that line only. NO_REPLY discards anything written this turn that was not sent, so send confirmations before ending silently. Native hidden run only; unavailable with ACP, collect, visible, thread, session mode, or expectsCompletionMessage=false.",
     }),
     sandbox: optionalStringEnum(SESSIONS_SPAWN_SANDBOX_MODES, {
       description: '"inherit" parent sandbox policy; "require" fails unless child is sandboxed.',
@@ -237,7 +237,7 @@ function buildSessionsSpawnToolSchema(params: {
           collect: Type.Optional(
             Type.Boolean({
               description:
-                "Swarm collector child for large parallel fan-out, not one or a few children; no completion notification.",
+                "Swarm collector child for large parallel fan-out or required in-turn result collection; collect with agents_wait, no completion notification.",
             }),
           ),
           outputSchema: Type.Optional(
