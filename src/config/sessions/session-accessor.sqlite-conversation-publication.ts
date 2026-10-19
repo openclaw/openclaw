@@ -60,6 +60,7 @@ export type ConversationFactChange =
 
 const listeners = resolveGlobalSingleton(Symbol.for("openclaw.conversationPublication"), () => ({
   installingFacts: 0,
+  pending: new Map<object, Extract<ConversationFactChange, { operation: object }>>(),
   facts: new Set<(receipt: ConversationFactChange) => void>(),
   observers: new Set<(receipt: ConversationPublication) => void>(),
 }));
@@ -70,6 +71,11 @@ const staged = resolveGlobalSingleton(
 );
 
 function installFacts(receipt: ConversationFactChange) {
+  if ("kind" in receipt && receipt.kind === "pending") {
+    listeners.pending.set(receipt.operation, receipt);
+  } else if ("kind" in receipt && receipt.kind === "settled") {
+    listeners.pending.delete(receipt.operation);
+  }
   const failures: unknown[] = [];
   listeners.installingFacts++;
   try {
@@ -102,7 +108,17 @@ export const conversationPublication = {
   stageRows: stageConversationRows,
   /** Install/invalidate prepared facts only; storage mutations belong in postcommit observers. */
   subscribeFacts(listener: (receipt: ConversationFactChange) => void) {
-    return registerListener(listeners.facts, listener);
+    const unsubscribe = registerListener(listeners.facts, listener);
+    try {
+      // A reader can acquire its snapshot while an earlier writer awaits settlement.
+      for (const pending of listeners.pending.values()) {
+        listener(pending);
+      }
+      return unsubscribe;
+    } catch (error) {
+      unsubscribe();
+      throw error;
+    }
   },
   subscribe(listener: (receipt: ConversationPublication) => void) {
     return registerListener(listeners.observers, listener);
@@ -340,8 +356,11 @@ export function retainConversationWorkerPublication(databaseIdentity: string) {
         });
       };
       if (unavailable) {
-        invalidate();
-        finish();
+        try {
+          invalidate();
+        } finally {
+          finish();
+        }
       } else {
         publishSqliteCommittedState([
           ...receipts.map(publicationState),
@@ -370,6 +389,7 @@ export function withConversationPublication(
       installFacts({ kind: "pending", operation, databaseIdentity: source.identity });
       owner = factory(operation);
     } catch (error) {
+      listeners.pending.delete(operation);
       notifyListeners(listeners.facts, {
         kind: "settled",
         operation,
@@ -403,6 +423,7 @@ export function withConversationPublication(
       if (!finished) {
         finished = true;
         unsubscribe();
+        listeners.pending.delete(operation);
         notifyListeners(listeners.facts, {
           kind: "settled",
           operation,
