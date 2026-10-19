@@ -291,6 +291,7 @@ src/agents/model-selection-shared.ts
 src/agents/openai-model-routes.ts
 src/agents/openai-routing.ts
 src/agents/owner-display.ts
+src/agents/requester-origin.ts
 src/agents/plugin-model-catalog-repair.ts
 src/agents/plugin-model-catalog.kernel.ts
 src/agents/provider-auth-aliases.ts
@@ -980,6 +981,7 @@ src/infra/gateway-owner-lease.worker.ts
 src/infra/gateway-owner-lease.ts
 src/infra/gateway-lock-payload.ts
 src/infra/gateway-state-owner-directory.ts
+src/infra/gateway-state-owner-errors.ts
 src/infra/gateway-state-owner-heartbeat.runtime.ts
 src/infra/gateway-state-owner-heartbeat.ts
 src/infra/gateway-state-owner-heartbeat.worker.ts
@@ -1110,6 +1112,7 @@ src/infra/sqlite-backup.ts
 src/infra/sqlite-busy-timeout.ts
 src/infra/sqlite-clean-close-seal.ts
 src/infra/sqlite-commit-receipt.ts
+src/infra/sqlite-database-admission-context.ts
 src/infra/sqlite-database-admission-key.ts
 src/infra/sqlite-database-admission-read.ts
 src/infra/sqlite-database-admission-record.ts
@@ -1138,6 +1141,7 @@ src/infra/sqlite-maintenance-cache.ts
 src/infra/sqlite-maintenance-integrity.ts
 src/infra/sqlite-native-admission.ts
 src/infra/sqlite-native-observer.ts
+src/infra/sqlite-native-runtime.ts
 src/infra/sqlite-number.ts
 src/infra/sqlite-page-cache-residency.ts
 src/infra/sqlite-page-cache.worker.ts
@@ -1398,6 +1402,7 @@ src/plugins/compat/assistant-text-phase-terminal-hint-record.ts
 src/plugins/compat/async-sqlite-preparation-records.ts
 src/plugins/compat/auth-async-record.ts
 src/plugins/compat/channel-pairing-record.ts
+src/plugins/compat/channel-prepared-tool-policy-record.ts
 src/plugins/compat/cron-store-path-record.ts
 src/plugins/compat/deprecation-marking.ts
 src/plugins/compat/media-legacy-projection.ts
@@ -1928,6 +1933,7 @@ src/state/openclaw-database-preflight.ts
 src/state/openclaw-database-seal-schema.ts
 src/state/openclaw-quarantine-error.ts
 src/state/openclaw-quarantine-store.ts
+src/state/openclaw-schema-versions.ts
 src/state/openclaw-state-db-additive-columns.ts
 src/state/openclaw-state-db-admission.ts
 src/state/openclaw-state-db-async-lifecycle.ts

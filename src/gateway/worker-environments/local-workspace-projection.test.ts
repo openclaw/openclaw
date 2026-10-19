@@ -454,6 +454,25 @@ it("keeps eligible nested project content and accepted empty directories across 
   await expectMissing(canonical, ".openclaw/sandbox-skills");
 });
 
+it("retains an accepted directory after deleting its last file across turns", async () => {
+  const projection = await prepare();
+  await fs.mkdir(path.join(projection, "retained/nested"), { recursive: true });
+  await writeText(projection, "retained/nested/old.txt", "old content\n");
+  await synchronize();
+
+  await fs.unlink(path.join(projection, "retained/nested/old.txt"));
+  await synchronize();
+  expect((await fs.stat(path.join(canonical, "retained/nested"))).isDirectory()).toBe(true);
+  await expectMissing(canonical, "retained/nested/old.txt");
+
+  await writeText(projection, "retained/nested/new.txt", "new content\n");
+  await synchronize();
+  await prepare();
+  await expectText(canonical, "retained/nested/new.txt", "new content\n");
+  await expectText(projection, "retained/nested/new.txt", "new content\n");
+  expect((await readProjection())?.pending_ref).toBeNull();
+});
+
 it("retains both sides and a durable pending result when edits conflict", async () => {
   const projection = await prepare();
   await writeText(projection, "source.txt", "guest conflict\n");

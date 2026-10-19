@@ -18,7 +18,7 @@ import { projectAgentIdentity, projectAgents } from "../../lib/reactive/domain-c
 import { i18nRevision, t } from "../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../lib/solid-bridge.ts";
 import { personActivityLink, type PersonActivityRouting } from "../person-activity-link.ts";
-import { IdentityAvatarImage, identityAvatarState } from "./identity-avatar-image.tsx";
+import { IdentityAvatarImage, createIdentityAvatarPresentation } from "./identity-avatar-image.tsx";
 import { useIdentityAvatarView } from "./identity-avatar-view.ts";
 import { AgentIdentityAvatar } from "./identity-avatar.tsx";
 import "../tooltip.ts";
@@ -47,11 +47,16 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
     username: props.user?.email,
     profileAvatarUrl: props.user?.avatarUrl,
   }));
+  const presentation = createIdentityAvatarPresentation(view);
   return (
     <Show when={props.user}>
       <span
-        ref={identityAvatarState(view)}
-        class={["viewer-avatar", `viewer-avatar--${props.variant ?? "session"}`]}
+        data-avatar-state={presentation.state()}
+        class={[
+          "viewer-avatar",
+          `viewer-avatar--${props.variant ?? "session"}`,
+          presentation.classes(),
+        ]}
         data-viewer-id={props.markAsViewer !== false ? props.user?.id : undefined}
         aria-label={
           props.variant === "profile"
@@ -60,7 +65,7 @@ export function ViewerAvatarContent(props: ViewerAvatarProps) {
         }
       >
         <Show when={Boolean(view().imageUrl)}>
-          <IdentityAvatarImage view={view()} fallbackSelector=".viewer-avatar" />
+          <IdentityAvatarImage view={view()} onStateChange={presentation.onStateChange} />
         </Show>
         <span
           class={view().imageUrl ? "viewer-avatar__fallback" : undefined}

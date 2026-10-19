@@ -2,11 +2,13 @@ import type { SessionPermissionMode } from "../../packages/gateway-protocol/src/
 import type { OperationalRunInstanceRef } from "../agents/admitted-run-context.js";
 import type { MessagingToolSend } from "../agents/embedded-agent-messaging.types.js";
 import type { ReplyCompletion, ReplyExpectation } from "../agents/reply-completion.js";
+import type { RequesterOrigin } from "../agents/requester-origin.js";
 import type {
   SourceReplyDeliveryMode,
   TaskSuggestionDeliveryMode,
 } from "../auto-reply/get-reply-options.types.js";
 import type { resolveAgentTurnExecutionStatus } from "../auto-reply/reply/agent-runner-execution-status.js";
+import type { FollowupQueueDisposition } from "../auto-reply/reply/queue-policy.js";
 import type { FollowupRunPayload } from "../auto-reply/reply/queue/followup-run-payload.types.js";
 import type { QueueSettings } from "../auto-reply/reply/queue/queue-settings.types.js";
 import type { ReplyDispatchDeliveryOutcome } from "../auto-reply/reply/reply-dispatch-outcome.types.js";
@@ -17,6 +19,7 @@ import type { SessionActor } from "../config/sessions/session-actor-contract.js"
 import type { SessionAdmissionDatabaseClaim } from "../config/sessions/session-admission-claim.types.js";
 import type { SessionAdmissionTransition } from "../config/sessions/session-admission-transition.types.js";
 import type { SessionEntryCohortReader } from "../config/sessions/session-entry-read-runtime.types.js";
+import type { InternalSessionEntry } from "../config/sessions/types.js";
 import type { AgentRunDelegatedAuthority } from "../infra/agent-run-authority.types.js";
 import type { DiagnosticEmbeddedRunOwner } from "../infra/diagnostic-model-request-provenance.js";
 import type { Deferred, createDeferredCore } from "../shared/deferred.js";
@@ -33,6 +36,7 @@ import type {
   ReplyBackendQueueMessageOptions,
   ReplyToolAuthorityRoute,
   ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRequester,
   ReplyToolAuthoritySnapshot,
   ReplyTurnParticipants,
   ReplyBackendQueueMessageResult,
@@ -55,6 +59,7 @@ export type {
   ReplyMessageInjectionOptions,
   ReplyToolAuthorityRoute,
   ReplyToolAuthorityOverlay,
+  ReplyToolAuthorityRequester,
   ReplyToolAuthoritySnapshot,
   ReplyTurnParticipant,
   ReplyTurnParticipants,
@@ -87,6 +92,8 @@ export type ReplyMessageInjectionResolution =
 /** An adapter over one existing execution owner; it never acquires another run slot. */
 type ReplyMessageInjectionOwner = {
   readonly backendIdentity: object;
+  readonly toolAuthorityFingerprint?: string;
+  readonly requesterPrincipalKey?: string;
   /** One concrete attachment lifetime; reusing a backend handle cannot revive its receipts. */
   readonly admissionIdentity: object;
   acceptParticipant?(participant: ReplyTurnParticipantInput): void;
@@ -94,7 +101,14 @@ type ReplyMessageInjectionOwner = {
   projectToolAuthorityFingerprintAsync(
     overlay: ReplyToolAuthorityOverlay,
   ): Promise<string | undefined>;
+  projectRequesterToolAuthorityFingerprint(
+    requester: ReplyToolAuthorityRequester,
+  ): string | undefined;
+  projectRequesterToolAuthorityFingerprintAsync(
+    requester: ReplyToolAuthorityRequester,
+  ): Promise<string | undefined>;
   resolve(params: {
+    requesterToolAuthority?: ReplyToolAuthorityRequester;
     preparation?: ReplyToolAuthorityPreparation;
     options?: ReplyBackendQueueMessageOptions;
     personalToolParticipant?: ReplyTurnParticipantInput;
@@ -129,7 +143,9 @@ export type ReplyMessageInjectionRejectionReason =
   | "stale_run"
   | "injection_unavailable"
   | "guarded_injection_unsupported"
+  | "requester_origin_mismatch"
   | "audio_input_unsupported"
+  | "collaborative_steering_disabled"
   | ReplyBackendQueueMessageMismatch
   | "runtime_rejected";
 
@@ -189,6 +205,7 @@ export type ReplyOperation = {
   readonly sourceReplyDelivered: boolean;
   /** Immutable tool authority accepted by the active backend for steered user turns. */
   readonly toolAuthorityFingerprint?: string;
+  readonly requesterPrincipalKey?: string;
   /** Initial selected model; a concrete attempt must not replace user intent. */
   readonly requestedToolAuthorityRoute?: ReplyToolAuthorityRoute;
   /** Current candidate proven automatic by the fallback owner; identity marks its attempt. */
@@ -243,6 +260,14 @@ export type ReplyOperation = {
   projectToolAuthorityFingerprintAsync(
     this: void,
     overlay: ReplyToolAuthorityOverlay,
+  ): Promise<string | undefined>;
+  /** Legacy snapshots without fresh-requester projection cannot admit delegated steering. */
+  projectRequesterToolAuthorityFingerprint?(
+    requester: ReplyToolAuthorityRequester,
+  ): string | undefined;
+  projectRequesterToolAuthorityFingerprintAsync?(
+    this: void,
+    requester: ReplyToolAuthorityRequester,
   ): Promise<string | undefined>;
   /** Prepare fingerprint and projection together for the final concrete attempt route. */
   /** @deprecated Use bindToolAuthorityRouteAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
@@ -372,14 +397,20 @@ export type ReplyOperationAdmission = {
   resolveSessionTarget?: () => SessionEntryTargetPatchScope | undefined;
   sessionActor?: SessionActor;
   acquireSessionActor?: () => Promise<SessionActor | undefined>;
+  /** Accepted input keeps its durable claim while capacity admission adopts the writer. */
+  adoptInput?: (writer?: {
+    runId: string;
+    assertCurrent?: () => void;
+  }) => Promise<InternalSessionEntry>;
   afterTransition?: (transition: SessionAdmissionTransition) => Promise<void>;
 };
 
-/** The exact backend facts owned by one reply operation. Embedded attempts extend
+/** The exact run facts owned by one reply operation. Embedded attempts extend
  * this object in place and the runner's run-id index points back to that record. */
 type SessionControllerRunAttachment = {
   readonly operation: ReplyOperation;
-  backend?: ReplyBackendHandle;
+  /** Each attach call owns a fresh identity, even when it reuses a backend handle. */
+  backend?: { readonly handle: ReplyBackendHandle };
   projectSessionActive?: boolean;
 };
 
@@ -458,7 +489,6 @@ export type Mutation = {
   operations: Set<ReplyOperation>;
   ready: Deferred;
 };
-type Closure = { reason: Error };
 export type OwnerContext = {
   /** Exact raw producer context, including cleanup before a turn has been claimed. */
   sourceInput?: SessionControllerInput;
@@ -472,7 +502,7 @@ export type SessionControllerLifecycle = {
   operations: Set<ReplyOperation>;
   effects: Set<Effect>;
   mutations: Mutation[];
-  closures: Set<Closure>;
+  closures: Set<{ reason: Error }>;
   changed: Deferred;
   readonly blocksTurnAdmission: boolean;
 };
@@ -648,7 +678,11 @@ export type FollowupRun = FollowupRunPayload & {
 
 type ReplyOperationAdmissionSnapshot =
   | { status: "owned" }
-  | { status: "accepted"; mode: "steer" | "followup" }
+  | {
+      status: "accepted";
+      mode: "steer" | "followup";
+      reason?: "requester-mismatch" | "steering-unavailable" | "explicit-followup";
+    }
   | {
       status: "skipped";
       reason:
@@ -656,6 +690,7 @@ type ReplyOperationAdmissionSnapshot =
         | "aborted"
         | "lifecycle-invalidated"
         | "queue-cap"
+        | "collaborative-steering-disabled"
         | "question-response-indeterminate"
         | "question-response-refused"
         | "question-response-rejected";
@@ -685,6 +720,8 @@ export type ReplyOperationRunState = {
     }>;
   };
   admission?: ReplyOperationAdmissionSnapshot;
+  /** Latest queue-owned disposition; original acceptance still records custody. */
+  followupQueueDisposition?: FollowupQueueDisposition;
   /** The Gateway accepted this question answer or rejected its values before commitment. */
   questionInputHandled?: true;
   messageInjectionAborted?: true;
@@ -780,9 +817,15 @@ export type EmbeddedRunToolAuthorityBinding = (registration: {
   detached?: true;
   operation?: ReplyOperation;
   sourceTurnId?: string;
+  readonly requesterPrincipalKey?: string;
+  acceptsRequesterOrigin: (origin: RequesterOrigin) => boolean;
   watchdogAttempt?: SessionControllerWatchdogAttempt;
   project: (overlay: ReplyToolAuthorityOverlay) => string | undefined;
   projectAsync: (overlay: ReplyToolAuthorityOverlay) => Promise<string | undefined>;
+  projectRequester?: (requester: ReplyToolAuthorityRequester) => string | undefined;
+  projectRequesterAsync?: (requester: ReplyToolAuthorityRequester) => Promise<string | undefined>;
+  /** Registration may precede reply-backend attachment; use requires the attached owner. */
+  assertRegistrationActive: () => void;
   assertActive: () => void;
   personalToolParticipants?: ReplyTurnParticipants;
 };
@@ -810,10 +853,7 @@ export type EmbeddedRunRegistration = {
 };
 
 /** The controller's exact attachment for one scoped embedded attempt. */
-export type EmbeddedRunAttachment = EmbeddedRunRegistration & {
-  operation: ReplyOperation;
-  backend?: ReplyBackendHandle;
-};
+export type EmbeddedRunAttachment = EmbeddedRunRegistration & SessionControllerRunAttachment;
 
 /** Unhosted or explicitly detached attempts have no controller operation. */
 export type DetachedEmbeddedRunAttachment = EmbeddedRunRegistration & {

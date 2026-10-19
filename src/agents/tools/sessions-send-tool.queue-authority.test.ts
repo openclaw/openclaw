@@ -39,10 +39,11 @@ import type {
   EmbeddedAgentQueueHandle,
   EmbeddedAgentQueueMessageOptions,
 } from "../embedded-agent-runner/runs.js";
+import { clearTestEmbeddedRun as clearActiveEmbeddedRun } from "../embedded-agent-runner/runs.test-support.js";
 import {
-  clearTestEmbeddedRun as clearActiveEmbeddedRun,
-  registerTestEmbeddedRun as setActiveEmbeddedRun,
-} from "../embedded-agent-runner/runs.test-support.js";
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "../openclaw-tools.sessions-steering.test-support.js";
 import { guardSessionManager } from "../session-tool-result-guard-wrapper.js";
 import {
   createAssistant,
@@ -176,7 +177,7 @@ describe("sessions_send direct queue source authority", () => {
                 },
               }),
         };
-        setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, targetAgentId);
+        await setSessionsSendTestActiveRun(sessionId, handle, sessionKey, requesterSessionKey, cfg);
         const instance = createOperationalRunInstanceRef("queue-source-run");
         const authority = claimAgentRunDelegatedAuthority(instance);
         // Resolution is read-only; the real queue and SQLite transcript perform every effect.
@@ -309,20 +310,20 @@ describe("sessions_send direct queue source authority", () => {
           tool = available;
         }
         const send = () => tool.execute("source-send", { sessionKey, message, timeoutSeconds: 0 });
-        const pending =
-          source === "unscoped" || crossAgent
-            ? send()
-            : withGatewayToolCallerIdentity(
-                {
-                  agentId: "main",
-                  sessionKey: requesterSessionKey,
+        const pending = withGatewayToolCallerIdentity(
+          {
+            ...createSessionsSendTestCaller(requesterSessionKey),
+            ...(source === "unscoped" || crossAgent
+              ? {}
+              : {
                   gatewayContextResolver: () => context,
                   operationalRunInstance: instance,
                   approvalAuthority: authority,
                   receiptAuthority: () => validateAgentRunDelegatedAuthority(authority),
-                },
-                send,
-              );
+                }),
+          },
+          send,
+        );
         try {
           if (asks) {
             const questionId = await Promise.race([

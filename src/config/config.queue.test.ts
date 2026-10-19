@@ -9,8 +9,16 @@ describe("queue configuration", () => {
     { byChannel: { x: "invalid" } },
     { debounceMsByChannel: { x: -1 } },
     { debounceMsByChannel: { x: 1.5 } },
+    { allowCollaborativeSteering: "false" },
+    { allowCollaborativeSteering: null },
   ])("rejects invalid plugin-channel queue values: %j", (queue) => {
     expect(validateConfigObject({ messages: { queue } }).ok).toBe(false);
+  });
+
+  it.each([false, true])("preserves explicit collaborative steering %s", (value) => {
+    const queue = { allowCollaborativeSteering: value };
+    const result = validateConfigObject({ messages: { queue } });
+    expect(result).toMatchObject({ ok: true, config: { messages: { queue } } });
   });
 
   it("validates queue channel keys against plugin metadata without rejecting unknown keys", () => {
@@ -73,5 +81,7 @@ describe("queue configuration", () => {
     });
     const debounce = lookupConfigSchema(schema, "messages.queue.debounceMsByChannel.x");
     expect(debounce?.schema).toMatchObject({ type: "integer", minimum: 0 });
+    const steering = lookupConfigSchema(schema, "messages.queue.allowCollaborativeSteering");
+    expect(steering?.schema).toMatchObject({ type: "boolean" });
   });
 });

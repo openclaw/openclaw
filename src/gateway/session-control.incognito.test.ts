@@ -19,7 +19,10 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../state/openclaw-agent-db.paths.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
-import { createTestGatewayScheduler } from "../test-utils/gateway-scheduler-clock.js";
+import {
+  createGatewaySchedulerClock,
+  createTestGatewayScheduler,
+} from "../test-utils/gateway-scheduler-clock.js";
 import * as chatSend from "./server-methods/chat-send-handler.js";
 import { flushPendingSessionsChangedEvents } from "./server-methods/session-change-event.js";
 import { withSessionMutationCommitGuard } from "./server-methods/session-mutation-guards.js";
@@ -277,13 +280,12 @@ it("retains an unbound memory Side chat source for durable writes and refuses a 
     },
   );
   const companion = createSessionCompanion({
-    scheduler: createTestGatewayScheduler(),
+    scheduler: createTestGatewayScheduler(createGatewaySchedulerClock(10).clock),
     getConfig: () => cfg,
     contextReader: defaultSessionCompanionContextReader,
     sessionObserver: { getCompanionSnapshotAsync: async () => ({ agentId: "main", notes: [] }) },
     resolveUtilityModelRef: () => "test/model",
     run,
-    now: () => 10,
   });
   context.sessionCompanion = companion;
   try {

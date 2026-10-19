@@ -103,7 +103,6 @@ export function createAgentsPageState(
   let active = true;
   let publish = () => {};
   const [skillsFilter, setSkillsFilter] = createSignal("");
-  const applicationConfig = projectOwner(context.config, (config) => config);
   const identities = projectOwner(context.agentIdentity, (identity) => identity.entries());
   const channels = projectOwner(context.channels, (source) => source.state);
   const navigation = projectOwner(context.navigation, (source) => source.snapshot);
@@ -223,7 +222,13 @@ export function createAgentsPageState(
         stopCatalog?.();
         catalogClient = state.client;
         stopCatalog = catalogClient
-          ? subscribeModelCatalogCache(catalogClient, () => publish())
+          ? subscribeModelCatalogCache(
+              catalogClient,
+              () => publish(),
+              () => ({
+                agentId: state.agentsSelectedId ?? undefined,
+              }),
+            )
           : undefined;
       }
       syncGitHubIdentity(state.agentsSelectedId);
@@ -980,7 +985,6 @@ export function createAgentsPageState(
         identities.read().map((entry) => [entry.agentId, entry]),
       ),
       overview: {
-        applicationConfig: applicationConfig.read(),
         identityDraft: state.identityDraft,
         identityScope: state.requestGeneration,
         identitySaving: state.identitySaving,

@@ -39,6 +39,7 @@ export function createCronViewProps(overrides: Partial<CronProps> = {}): CronPro
     hasLoaded: true,
     listError: null,
     canManage: true,
+    connected: true,
     jobsLoadingMore: false,
     status: {
       enabled: true,

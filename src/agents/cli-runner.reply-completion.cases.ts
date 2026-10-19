@@ -268,13 +268,6 @@ export function registerCliReplyCompletionTests({
       sessionId: sessionTarget.sessionId,
       agentId: "main",
       runId: context.params.runId,
-      getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-      resolveCommandSecretRefsViaGateway: async ({ config: resolvedConfig }) => ({
-        resolvedConfig,
-        diagnostics: [],
-        targetStatesByPath: {},
-        hadUnresolvedTargets: false,
-      }),
     });
     const text = "Checking…";
     supervisorSpawnMock.mockImplementationOnce(async (input) => {

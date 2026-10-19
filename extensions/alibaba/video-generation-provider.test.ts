@@ -20,15 +20,21 @@ import {
 } from "openclaw/plugin-sdk/provider-test-contracts";
 import { closeOpenClawAgentDatabasesAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
+import type { VideoGenerationProvider } from "openclaw/plugin-sdk/video-generation";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 
 const { resolveApiKeyForProviderMock, postJsonRequestMock, fetchWithTimeoutMock } =
   getProviderHttpMocks();
 
-let alibabaVideoGenerationProvider: typeof import("./video-generation-provider.js").alibabaVideoGenerationProvider;
+let alibabaVideoGenerationProvider: VideoGenerationProvider;
 
 beforeAll(async () => {
-  ({ alibabaVideoGenerationProvider } = await import("./video-generation-provider.js"));
+  const { default: plugin } = await import("./index.js");
+  const provider = capturePluginRegistration(plugin).videoGenerationProviders[0];
+  if (!provider) {
+    throw new Error("expected Alibaba video generation provider");
+  }
+  alibabaVideoGenerationProvider = provider;
 });
 
 installProviderHttpMockCleanup();

@@ -1,4 +1,8 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../agents/embedded-agent-runner/run/attempt-queue-message.js";
 import { abortEmbeddedAgentRun } from "../agents/embedded-agent-runner/runs.js";
 import {
@@ -6,13 +10,18 @@ import {
   createEmbeddedRunHandle,
   registerTestEmbeddedRun,
 } from "../agents/embedded-agent-runner/runs.test-support.js";
+import { withPreparedEmbeddedRunToolAuthority } from "../agents/harness/tool-authority.runtime.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { persistAgentSessionMessage } from "../agents/sessions/agent-session-transcript.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session-types.js";
 import { registerQueuedUserMessageRetirement } from "../agents/sessions/queued-user-message-retirement.js";
 import { SessionManager } from "../agents/sessions/session-manager.js";
 import { setSteeringMessageIdentity } from "../agents/sessions/steering-message-identity.js";
-import { withoutGatewayToolCallerIdentity } from "../agents/tools/gateway-caller-context.js";
+import {
+  getGatewayToolCallerIdentity,
+  withGatewayToolCallerIdentity,
+  withoutGatewayToolCallerIdentity,
+} from "../agents/tools/gateway-caller-context.js";
 import { withPersonalToolTurn } from "../auto-reply/reply/personal-tool-turn.test-support.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -70,10 +79,14 @@ export async function seedSessionToolsFixtureSession({
   return { sessionKey, sessionId };
 }
 
-export function withSessionToolsFixture(run: (cfg: OpenClawConfig) => Promise<void>) {
+export function withSessionToolsFixture(
+  run: (cfg: OpenClawConfig) => Promise<void>,
+  options?: { audit?: boolean },
+) {
   return (fixtureRun = withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     const cfg: OpenClawConfig = {
       ...rolePolicyConfig(),
+      ...(options?.audit ? { logging: { audit: { enabled: true, executionIdentity: true } } } : {}),
       agents: {
         ownership: "explicit",
         defaults: { systemAgent: { agentId: "main" } },
@@ -119,6 +132,7 @@ export function withParticipantSessionToolsFixture(
     alice: Parameters<typeof withPersonalToolTurn>[0]["owner"];
     bob: Parameters<typeof withPersonalToolTurn>[0]["owner"];
   }) => Promise<void>,
+  options?: { audit?: boolean },
 ) {
   return withSessionToolsFixture(async (cfg) => {
     const person = (name: string) => {
@@ -149,7 +163,13 @@ export function withParticipantSessionToolsFixture(
       );
     }
     await withPersonalToolTurn(
-      { owner: alice, sessionKey: REQUESTER, sessionId: "session-tools-requester-id" },
+      {
+        owner: alice,
+        config: cfg,
+        sessionKey: REQUESTER,
+        sessionId: "session-tools-requester-id",
+        allowCollaborativeSteering: true,
+      },
       async (turn) => {
         const runId = turn.runtimeIdentity.operationalRunInstance.runId;
         registerAgentRunContext(runId, {
@@ -164,7 +184,7 @@ export function withParticipantSessionToolsFixture(
         }
       },
     );
-  });
+  }, options);
 }
 
 export async function drainSessionToolsFixture() {
@@ -259,11 +279,6 @@ export async function withDelayedSessionToolsSteering(
         },
       ),
   };
-  const activate = (next: typeof handle, agentId?: string) =>
-    withoutGatewayToolCallerIdentity(() =>
-      registerTestEmbeddedRun(target.sessionId, next, target.sessionKey, undefined, agentId),
-    );
-  activate(handle, target.agentId);
   const cancel = async () => {
     if (listeners.size === 0) {
       return;
@@ -273,46 +288,88 @@ export async function withDelayedSessionToolsSteering(
   };
   const settleReceiver = () => emit({ type: "agent_settled" });
   let replacement: ReturnType<typeof createEmbeddedRunHandle> | undefined;
+  const source = getGatewayToolCallerIdentity();
+  if (!source?.requesterOrigin || !source.operatorAuthority) {
+    throw new Error("Expected the admitted personal-tool requester");
+  }
+  const runId = "participant-steering-target";
+  const sessionFile = "/tmp/participant-shared.jsonl";
+  const admission = prepareAgentRunAdmission({
+    cfg,
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    operatorAuthority: source.operatorAuthority,
+    facts: {
+      agentId: target.agentId,
+      runId,
+      ingress: { kind: "system", state: "present", boundary: "session-tools-steering-test" },
+    },
+  });
   try {
-    await run({
-      pendingCount: () => queued.length,
-      cancel,
-      end: () => {
-        settleReceiver();
-        clearTestEmbeddedRun(target.sessionId, handle, target.sessionKey);
+    await withPreparedEmbeddedRunToolAuthority(
+      { admittedRunContext: await admission.admit("embedded", "session-tools-steering-test") },
+      {
+        ...target,
+        runId,
+        sessionFile,
+        workspaceDir: "/tmp/session-tools-steering-test",
+        config: cfg,
+        provider: "openai",
+        modelId: "gpt-test",
+        requesterOrigin: source.requesterOrigin,
       },
-      abort: () => {
-        const aborted = abortEmbeddedAgentRun(target.sessionId);
-        settleReceiver();
-        if (aborted) {
-          clearTestEmbeddedRun(target.sessionId, handle, target.sessionKey);
-        }
-        return aborted;
+      undefined,
+      async (prepared) => {
+        handle.toolAuthorityFingerprint = prepared.toolAuthorityFingerprint;
+        registerTestEmbeddedRun(
+          target.sessionId,
+          handle,
+          target.sessionKey,
+          sessionFile,
+          target.agentId,
+        );
+        await withGatewayToolCallerIdentity(source, () =>
+          run({
+            pendingCount: () => queued.length,
+            cancel,
+            end: () => {
+              settleReceiver();
+              clearTestEmbeddedRun(target.sessionId, handle, target.sessionKey);
+            },
+            abort: () => {
+              const aborted = abortEmbeddedAgentRun(target.sessionId);
+              settleReceiver();
+              if (aborted) {
+                clearTestEmbeddedRun(target.sessionId, handle, target.sessionKey);
+              }
+              return aborted;
+            },
+            replace: () => {
+              const next = createEmbeddedRunHandle({ runId: "participant-steering-replacement" });
+              replacement = next;
+              withoutGatewayToolCallerIdentity(() =>
+                registerTestEmbeddedRun(target.sessionId, next, target.sessionKey),
+              );
+            },
+            commit: async () => {
+              const entry = expectDefined(queued[0], "Expected an accepted steering message");
+              await persistAgentSessionMessage(manager, entry.message, {
+                invalidateSerializedPrefixCache: true,
+              });
+              await entry.recorder.waitForRuntimePersistence();
+              queued.shift();
+              emit({ type: "message_end", message: entry.message });
+              await settled.promise;
+            },
+          }),
+        );
       },
-      replace: () => {
-        const next = createEmbeddedRunHandle({ runId: "participant-steering-replacement" });
-        replacement = next;
-        activate(next);
-      },
-      commit: async () => {
-        const entry = queued[0];
-        if (!entry) {
-          throw new Error("Expected an accepted steering message");
-        }
-        await persistAgentSessionMessage(manager, entry.message, {
-          invalidateSerializedPrefixCache: true,
-        });
-        await entry.recorder.waitForRuntimePersistence();
-        queued.shift();
-        emit({ type: "message_end", message: entry.message });
-        await settled.promise;
-      },
-    });
+    );
   } finally {
     await cancel();
     clearTestEmbeddedRun(target.sessionId, handle, target.sessionKey);
     if (replacement) {
       clearTestEmbeddedRun(target.sessionId, replacement, target.sessionKey);
     }
+    admission.close();
   }
 }

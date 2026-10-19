@@ -730,6 +730,7 @@ export const en: TranslationMap & {
       "Could not load this dashboard: {error}. Check the Gateway connection and try again.",
   },
   sessionsView: {
+    pullRequestCount: "{count} pull requests",
     advanced: "Advanced",
     copyDetails: "Copy details",
     copyLink: "Copy link",

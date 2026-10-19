@@ -2,6 +2,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
 import * as snapshots from "../infra/sqlite-snapshot-source.js";
 import { withAgentDatabaseStartupAdmission } from "./agent-database-startup.js";
 import {
@@ -27,6 +28,63 @@ const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 afterEach(() => {
   vi.restoreAllMocks();
   closeDatabases();
+});
+
+it.each([
+  {
+    name: "retryable snapshot contention",
+    error: new SqliteReadOnlyInspectionContentionError("snapshot did not stabilize"),
+    guidance: "Wait a moment for write activity to settle, then retry the inspection.",
+    restore: false,
+  },
+  {
+    name: "database corruption",
+    error: new Error("database disk image is malformed"),
+    guidance: "Stop OpenClaw processes, then restore the affected database from a verified backup.",
+    restore: true,
+  },
+])(
+  "keeps Doctor's refusal and gives the next step for $name",
+  async ({ error, guidance, restore }) => {
+    const fixture = databaseFixture(tempDirs.make("doctor-readiness-guidance-"));
+    fixture.state();
+    closeDatabases();
+    vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockRejectedValueOnce(error);
+
+    const failure = await fixture.doctor().catch((cause: unknown) => cause);
+    expect(failure).toBeInstanceOf(Error);
+    expect(failure).toMatchObject({
+      message: expect.stringContaining("Doctor could not complete repair"),
+    });
+    expect(failure).toMatchObject({ message: expect.stringContaining(error.message) });
+    expect(failure).toMatchObject({ message: expect.stringContaining(guidance) });
+    if (!restore) {
+      expect(failure).toMatchObject({ message: expect.not.stringContaining("restore") });
+    }
+  },
+);
+
+it("keeps retry and restore guidance with their affected agent databases", async () => {
+  const fixture = databaseFixture(tempDirs.make("doctor-mixed-readiness-"));
+  const busy = fixture.agent("busy");
+  const corrupt = fixture.agent("corrupt");
+  closeDatabases();
+  const prepare = snapshots.prepareSqliteReadOnlyLocation;
+  vi.spyOn(snapshots, "prepareSqliteReadOnlyLocation").mockImplementation((source, options) => {
+    if (source === busy.path) {
+      throw new SqliteReadOnlyInspectionContentionError("snapshot did not stabilize");
+    }
+    if (source === corrupt.path) {
+      throw new Error("database disk image is malformed");
+    }
+    return prepare(source, options);
+  });
+
+  await expect(
+    withArtifactPreservingStateReads(() => fixture.doctor(), { agentDatabases: true }),
+  ).rejects.toThrow(
+    `Doctor could not complete repair because persisted database readiness could not be verified:\nagent ${busy.path}: snapshot did not stabilize Wait a moment for write activity to settle, then retry the inspection.\nagent ${corrupt.path}: database disk image is malformed Stop OpenClaw processes, then restore the affected database from a verified backup.`,
+  );
 });
 
 it("upgrades the subagent authority format without rewriting rows and refuses schema-24 targets", async () => {

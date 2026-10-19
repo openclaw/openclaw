@@ -1,4 +1,3 @@
-// Respawns the CLI with adjusted process flags when startup requires it.
 import { spawn } from "node:child_process";
 import path from "node:path";
 import { readNonBlankString } from "@openclaw/normalization-core/string-coerce";

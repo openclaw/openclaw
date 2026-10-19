@@ -20,7 +20,7 @@ import {
   type McpAppFileOpenEventDetail,
   type McpAppMessageEventDetail,
 } from "./mcp-app-security.ts";
-import type { McpAppViewElement } from "./mcp-app-view-owner.ts";
+import type { McpAppViewElement } from "./mcp-app-view-types.ts";
 import { McpAppView } from "./mcp-app-view.tsx";
 
 const transportMocks = vi.hoisted(() => ({ next: undefined as (() => unknown) | undefined }));

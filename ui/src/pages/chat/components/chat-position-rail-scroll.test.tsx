@@ -41,10 +41,20 @@ it("updates rail and end position without pane renders until the virtual range c
   let renderedAt: number;
   const recordViewport = vi.spyOn(TranscriptEndAnchor.prototype, "recordViewport");
   const transcript = host.transcript;
+  const messageElements = transcript.renderSession(
+    "agent:main:rail-notification",
+    (session) => session.messageElements,
+  );
   const rows: TestContentRow[] = Array.from({ length: 40 }, (_, index) => ({
     kind: "content",
     key: `row-${index}`,
-    content: <div class="chat-bubble" data-entry-id={`row-${index}`} />,
+    content: (
+      <div
+        ref={messageElements.forKey(`row-${index}`)}
+        class="chat-bubble"
+        data-entry-id={`row-${index}`}
+      />
+    ),
   }));
   const ids = rows.map((row) => row.key);
   const identityMap = () => new Map(ids.map((id) => [id, id]));
@@ -146,7 +156,7 @@ it("updates rail and end position without pane renders until the virtual range c
     };
     // A stream commit can dirty the transcript without changing any markers.
     rows[0]!.content = (
-      <div class="chat-bubble" data-entry-id="row-0">
+      <div ref={messageElements.forKey("row-0")} class="chat-bubble" data-entry-id="row-0">
         Updated content
       </div>
     );

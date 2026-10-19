@@ -1,6 +1,5 @@
 import { getPostgresPhysicalFacts } from "../infra/database-engine/physical-facts.js";
 import { executeWithCachedStatement } from "../infra/kysely-sync-cache-state.js";
-// Provides shared SQLite schema probes and additive column migration helpers.
 import type { EngineConnection } from "../infra/sql-connection.js";
 import { isPostgresSqlConnection } from "../infra/sql-connection.js";
 import { sqlitePrimaryResultCode } from "../infra/sqlite-error-diagnostics.js";

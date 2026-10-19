@@ -57,6 +57,25 @@ function regionRef<T extends HTMLElement>(
 }
 
 export function SidebarRegionView(props: SidebarRegionViewProps) {
+  let shell!: HTMLDivElement;
+  let header!: HTMLDivElement;
+  let primary!: HTMLDivElement;
+  let outlet!: HTMLDivElement;
+  // The lazy native region mounts after this caller's refs have attached.
+  const elements: NonNullable<RegionProps["elements"]> = {
+    get shell() {
+      return shell;
+    },
+    get header() {
+      return header;
+    },
+    get primary() {
+      return primary;
+    },
+    get outlet() {
+      return outlet;
+    },
+  };
   const column = () => props.layout.columns[0];
   const chatMain = () =>
     !sidebarMainPanel(props.layout) || sidebarMainPanel(props.layout)?.slot === "conversation";
@@ -65,7 +84,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
     (props.availableWidth > 0 && props.availableWidth < SIDEBAR_NARROW_BREAKPOINT_PX);
   return (
     <div
-      ref={[regionRef(props.onRegionElementRef)]}
+      ref={[(element) => (shell = element), regionRef(props.onRegionElementRef)]}
       class={[
         "sidebar-region",
         `sidebar-region--${sidebarDock(props.layout)}`,
@@ -95,7 +114,9 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
           {props.background}
         </div>
       </Show>
-      <div class="sidebar-region__header">{props.header}</div>
+      <div class="sidebar-region__header" ref={(element) => (header = element)}>
+        {props.header}
+      </div>
       <Show
         when={props.regionError === undefined}
         fallback={
@@ -127,6 +148,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       >
         <openclaw-chat-sidebar-region
           ref={[regionRef(props.onRegionViewRef)]}
+          prop:elements={elements}
           prop:panelIdPrefix={props.panelIdPrefix}
           prop:conversationTab={props.conversationTab}
           prop:layout={props.layout}
@@ -143,6 +165,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       <div
         id={`${props.panelIdPrefix}-conversation`}
         class="sidebar-region__primary"
+        ref={(element) => (primary = element)}
         role="region"
         aria-label={t("chat.sidePanel.conversation")}
         data-region={chatMain() ? "main" : "side"}
@@ -152,9 +175,11 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       </div>
       <Show
         when={props.regionError != null}
-        fallback={<div class="sidebar-region__right-runtime" />}
+        fallback={
+          <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)} />
+        }
       >
-        <div class="sidebar-region__right-runtime">
+        <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)}>
           <LazyViewError {...props.regionError!} />
         </div>
       </Show>

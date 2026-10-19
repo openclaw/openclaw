@@ -1,5 +1,5 @@
 import { spread } from "@solidjs/web";
-import { createMemo, createSignal, onSettled, Show, useContext } from "solid-js";
+import { createMemo, createSignal, omit, onSettled, Show, useContext } from "solid-js";
 import type { OpenClawCanvasWidgetView } from "../../../components/canvas-widget-view.tsx";
 import { ContentPresentation } from "../../../lib/solid/presentation.ts";
 
@@ -14,6 +14,9 @@ type WidgetProperties = Pick<
   | "allowScripts"
   | "connectionGeneration"
 >;
+type CanvasWidgetMountProps = WidgetProperties & {
+  onElement?: (element: OpenClawCanvasWidgetView | undefined) => void;
+};
 type ParkedWidget = {
   element: OpenClawCanvasWidgetView;
   container: HTMLDivElement;
@@ -33,11 +36,16 @@ function releaseParking(key: string, parked: ParkedWidget): void {
   }
 }
 
-function CanvasWidgetHost(props: { properties: WidgetProperties; widgetKey: string }) {
+function CanvasWidgetHost(props: {
+  properties: WidgetProperties;
+  widgetKey: string;
+  onElement: CanvasWidgetMountProps["onElement"];
+}) {
   const presented = useContext(ContentPresentation);
   let container!: HTMLSpanElement;
   const [element, setElement] = createSignal<OpenClawCanvasWidgetView>();
   onSettled(() => {
+    const onElement = props.onElement;
     const retained =
       container.isConnected && typeof container.moveBefore === "function"
         ? parkedWidgets.get(props.widgetKey)
@@ -55,7 +63,9 @@ function CanvasWidgetHost(props: { properties: WidgetProperties; widgetKey: stri
       container.append(view);
     }
     setElement(view);
+    onElement?.(view);
     return () => {
+      onElement?.(undefined);
       if (typeof Element.prototype.moveBefore !== "function" || !view.isConnected) {
         return;
       }
@@ -119,11 +129,18 @@ function CanvasWidgetHost(props: { properties: WidgetProperties; widgetKey: stri
   );
 }
 
-export function CanvasWidgetMount(props: WidgetProperties) {
+export function CanvasWidgetMount(props: CanvasWidgetMountProps) {
+  const properties = omit(props, "onElement");
   const key = createMemo(() => `${props.sessionKey}\0${props.docId}`);
   return (
     <Show when={key()} keyed>
-      {(widgetKey) => <CanvasWidgetHost properties={props} widgetKey={widgetKey} />}
+      {(widgetKey) => (
+        <CanvasWidgetHost
+          properties={properties}
+          widgetKey={widgetKey}
+          onElement={props.onElement}
+        />
+      )}
     </Show>
   );
 }

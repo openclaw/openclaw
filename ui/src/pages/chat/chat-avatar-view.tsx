@@ -10,7 +10,7 @@ import {
 import { ChannelAvatar } from "../../components/solid/channel-avatar.tsx";
 import {
   IdentityAvatarImage,
-  identityAvatarState,
+  createIdentityAvatarPresentation,
 } from "../../components/solid/identity-avatar-image.tsx";
 import { useAvatarGatewayContext } from "../../components/solid/identity-avatar-view.ts";
 import {
@@ -215,6 +215,7 @@ function AgentAvatar(props: {
     const imageUrl = resolveAvatarImageUrl(url(), url());
     return { imageUrl, pending: imageUrl !== null && typeof imageUrl !== "string" };
   });
+  const presentation = createIdentityAvatarPresentation(view);
   return (
     <Show
       when={
@@ -228,11 +229,14 @@ function AgentAvatar(props: {
         />
       }
     >
-      <span ref={identityAvatarState(view)} class="chat-avatar-slot">
+      <span
+        data-avatar-state={presentation.state()}
+        class={["chat-avatar-slot", presentation.classes()]}
+      >
         <Show when={Boolean(view().imageUrl)}>
           <IdentityAvatarImage
             view={view()}
-            fallbackSelector=".chat-avatar-slot"
+            onStateChange={presentation.onStateChange}
             class="chat-avatar assistant"
             alt={props.name}
           />

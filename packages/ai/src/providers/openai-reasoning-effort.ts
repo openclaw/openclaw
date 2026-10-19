@@ -59,6 +59,23 @@ export function isOpenAIGpt56Model(model: OpenAIReasoningModel): boolean {
   return /^gpt-5\.6(?:-|$)/u.test(id) || /^gpt-5\.6(?:\s|\(|-|$)/u.test(name);
 }
 
+/** Apply the native Chat Completions tool contract after callers qualify the endpoint and model ID. */
+export function applyOpenAICompletionsToolReasoning(
+  payload: Record<string, unknown>,
+  model: { id: string; name?: string },
+): void {
+  if (!Array.isArray(payload.tools) || payload.tools.length === 0) {
+    return;
+  }
+  // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,
+  // and rejects the effort field entirely for GPT-5.4 Mini and GPT-5.5 tools.
+  if (isOpenAIGpt56Model(model)) {
+    payload.reasoning_effort = "none";
+  } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
+    delete payload.reasoning_effort;
+  }
+}
+
 /** Return whether a model has a known GPT-6 reasoning and sampling contract. */
 export function isOpenAIGpt6Model(model: OpenAIReasoningModel): boolean {
   const id = normalizeModelId(typeof model.id === "string" ? model.id : undefined);

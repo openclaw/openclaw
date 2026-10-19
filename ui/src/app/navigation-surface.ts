@@ -1,4 +1,6 @@
 import { isCommandPaletteShortcut } from "../components/command-palette-contract.ts";
+import { activeElement, tabbableElements } from "../components/focus-navigation.ts";
+import { containsComposed } from "../components/overlay-registry.ts";
 import { isTerminalPanelShortcut } from "../components/panel-toggle-contract.ts";
 import {
   KEYBOARD_SHORTCUT_COMBOS,
@@ -14,17 +16,11 @@ export type ShellNavigationElements = {
   toastElement?: HTMLElement;
 };
 
-const NAV_DRAWER_FOCUSABLE_SELECTOR =
-  "a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex='-1'])";
-
 type AppSidebarElement = HTMLElement & { dismissTransientMenus(): boolean };
 type SidebarAttentionElement = HTMLElement & { dismissPanel(): boolean };
 
 export function navDrawerFocusableElements(drawer: HTMLElement): HTMLElement[] {
-  // Sidebar and route owners can replace descendants; tab trapping needs their live focus order.
-  return [...drawer.querySelectorAll<HTMLElement>(NAV_DRAWER_FOCUSABLE_SELECTOR)].filter(
-    (candidate) => candidate.checkVisibility(),
-  );
+  return [...tabbableElements(drawer.children)];
 }
 
 export function dismissNavigationTransientSurfaces(host: HTMLElement): boolean {
@@ -57,12 +53,14 @@ function trapNavDrawerFocus(drawer: HTMLElement | undefined, event: KeyboardEven
     return;
   }
   const focusable = navDrawerFocusableElements(drawer);
+  const active = activeElement(drawer);
   const target = event.shiftKey ? focusable.at(-1) : focusable[0];
   const boundary = event.shiftKey ? focusable[0] : focusable.at(-1);
   if (
-    !drawer.contains(document.activeElement) ||
-    document.activeElement === boundary ||
-    (event.shiftKey && document.activeElement === drawer)
+    !active ||
+    !containsComposed(drawer, active) ||
+    active === boundary ||
+    (event.shiftKey && active === drawer)
   ) {
     event.preventDefault();
     (target ?? drawer).focus({ preventScroll: true });

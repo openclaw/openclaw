@@ -8,6 +8,7 @@ import type { ApplicationContext } from "../app/context.ts";
 import { resolveProfileAppearancePrefs } from "../app/server-prefs-profile.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
 import { listen } from "../lib/reactive/listener.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../styles/session-background.css";
 import { backgroundPaletteKey, readBackgroundOpacityLimit } from "./session-background-contrast.ts";
@@ -125,26 +126,31 @@ export const SessionBackground = defineSolidBridge<Props>(
         releaseImage();
       }
     };
-    createEffect(
-      () => context(),
-      (application) => {
-        const changed = () => {
-          retireChangedImage();
+    const contextProjection = createMemo(() =>
+      projectSource(context(), {
+        read: (application) => application,
+        equality: "revision",
+        subscribe: (application, publish) => {
+          const changed = () => {
+            retireChangedImage();
+            publish();
+          };
+          const cleanups = [
+            application?.theme.subscribe(changed),
+            application?.gateway.subscribe(changed),
+          ];
+          return () => cleanups.forEach((cleanup) => cleanup?.());
+        },
+      }),
+    );
+    onSettled(() =>
+      subscribeBrowserAuthRestored(() => {
+        if (!request?.url) {
+          failedIdentity = null;
+          releaseImage();
           notify();
-        };
-        const cleanups = [
-          application?.theme.subscribe(changed),
-          application?.gateway.subscribe(changed),
-          subscribeBrowserAuthRestored(() => {
-            if (!request?.url) {
-              failedIdentity = null;
-              releaseImage();
-              notify();
-            }
-          }),
-        ];
-        return () => cleanups.forEach((cleanup) => cleanup?.());
-      },
+        }
+      }),
     );
     const observer = new MutationObserver(notify);
     observer.observe(host.ownerDocument.documentElement, {
@@ -174,6 +180,7 @@ export const SessionBackground = defineSolidBridge<Props>(
     });
     const view = createMemo(() => {
       revision();
+      contextProjection().revision();
       const source = currentSource();
       const fullBleed = preference()?.presentation === "full-bleed";
       const visible = props.presented && !accessibility?.matches;

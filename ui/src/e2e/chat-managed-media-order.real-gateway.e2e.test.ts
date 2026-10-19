@@ -15,6 +15,8 @@ import {
   type OpenClawTestInstance,
 } from "../../../test/helpers/openclaw-test-instance.ts";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.ts";
+import type { ChatPaneElement } from "../pages/chat/chat-pane.tsx";
+import type { ChatState } from "../pages/chat/chat-state-contract.ts";
 import { pairControlUiPage } from "../test-helpers/control-ui-browser-pairing.ts";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { waitForControlUiGatewayReady } from "../test-helpers/control-ui-e2e-readiness.ts";
@@ -271,6 +273,17 @@ async function renderedOrder(bubble: Locator) {
     );
 }
 
+async function assertRenderedOrder(bubble: Locator) {
+  let order: string[] = [];
+  await expect
+    .poll(async () => {
+      order = await renderedOrder(bubble);
+      return order;
+    })
+    .toEqual(expectedOrder);
+  return order;
+}
+
 async function recordImageDecodeFailure(bubble: Locator) {
   const images = await bubble.locator("img.chat-message-image").evaluateAll(async (elements) =>
     Promise.all(
@@ -395,7 +408,28 @@ suite.define(() => {
                 .getByRole("button", { name: "Stop generating", exact: true })
                 .waitFor({ state: "detached" });
               await bubble.getByText(closing, { exact: true }).waitFor();
+              // Stream retirement can precede the durable history receipt. Local MEDIA
+              // previews are replaced at that handoff; capture the managed images, not
+              // decoded nodes whose custody is still waiting to transfer.
+              await expect
+                .poll(() =>
+                  bubble.locator(".chat-image-frame--managed img.chat-message-image").count(),
+                )
+                .toBe(2);
               const assertDecoded = async () => {
+                // Run retirement starts a final history read that can replace live image nodes.
+                await page.waitForFunction((expectedSessionKey) => {
+                  const state = document.querySelector<HTMLElement & { state?: ChatState }>(
+                    'openclaw-chat-pane[aria-hidden="false"]',
+                  )?.state;
+                  return (
+                    state?.sessionKey === expectedSessionKey &&
+                    state.chatRunId === null &&
+                    state.chatStream === null &&
+                    !state.chatLoading &&
+                    !state.chatError
+                  );
+                }, sessionKey);
                 await expect.poll(() => bubble.count()).toBe(1);
                 await expect
                   .poll(() => page.locator(".chat-group.assistant img.chat-message-image").count())
@@ -438,18 +472,67 @@ suite.define(() => {
                   .toEqual([true, true]);
               };
               await assertDecoded();
-              const liveNodes = await bubble.evaluateHandle((element) => ({
-                bubble: element,
-                row: element.closest("[data-chat-row-key]"),
-                images: Array.from(element.querySelectorAll("img.chat-message-image")),
-              }));
+              const liveNodes = await bubble.evaluateHandle((element) => {
+                const pane = element.closest<ChatPaneElement>("openclaw-chat-pane");
+                const readPresentation = (target: ChatPaneElement | null) => ({
+                  presented: target?.presented ?? null,
+                  visuallyPresented: target?.visuallyPresented ?? null,
+                  conversationPresented: target?.conversationPresented ?? null,
+                });
+                const events = {
+                  presentation: 0,
+                  lifecycle: 0,
+                  conversationPresentedFalse: 0,
+                  shellRootLifecycleAggregate: 0,
+                };
+                const abort = new AbortController();
+                const observe = (kind: "presentation" | "lifecycle") => {
+                  events[kind] += 1;
+                  if (pane?.conversationPresented === false) {
+                    events.conversationPresentedFalse += 1;
+                  }
+                };
+                pane?.addEventListener(
+                  "openclaw:presentation-changed",
+                  () => observe("presentation"),
+                  { signal: abort.signal },
+                );
+                pane?.addEventListener(
+                  "openclaw-chat-pane-lifecycle-changed",
+                  () => observe("lifecycle"),
+                  { signal: abort.signal },
+                );
+                const shellRoot = pane?.closest("openclaw-app-shell");
+                shellRoot?.addEventListener(
+                  "openclaw-chat-pane-lifecycle-changed",
+                  () => {
+                    events.shellRootLifecycleAggregate += 1;
+                  },
+                  { signal: abort.signal },
+                );
+                const galleries = Array.from(element.querySelectorAll(".chat-message-images"));
+                return {
+                  bubble: element,
+                  row: element.closest("[data-chat-row-key]"),
+                  text: element.querySelector(".chat-text"),
+                  galleries,
+                  galleryParents: galleries.map((gallery) => gallery.parentElement),
+                  frames: Array.from(element.querySelectorAll(".chat-image-frame")),
+                  images: Array.from(element.querySelectorAll("img.chat-message-image")),
+                  pane,
+                  presentation: readPresentation(pane),
+                  readPresentation,
+                  events,
+                  stop: () => abort.abort(),
+                };
+              });
               let liveOrder: string[];
               try {
                 // Capture before the order assertion so an unfixed run retains the actual flattening.
                 // Running this unchanged scenario on the repaired build yields the comparable After.
                 await capture(page, bubble, "01-live");
-                liveOrder = await renderedOrder(bubble);
-                expect(liveOrder).toEqual(expectedOrder);
+                // History reconciliation can replace decoded images across the screenshot await.
+                liveOrder = await assertRenderedOrder(bubble);
               } catch (error) {
                 try {
                   const diagnostic = await liveNodes.evaluate((before, expectedIntro) => {
@@ -457,6 +540,11 @@ suite.define(() => {
                       document.querySelectorAll(".chat-group.assistant .chat-bubble"),
                     ).filter((element) => element.textContent?.includes(expectedIntro));
                     const current = matches.length === 1 ? matches[0] : undefined;
+                    const pane = current?.closest<ChatPaneElement>("openclaw-chat-pane") ?? null;
+                    const galleries = Array.from(
+                      current?.querySelectorAll(".chat-message-images") ?? [],
+                    );
+                    const frames = Array.from(current?.querySelectorAll(".chat-image-frame") ?? []);
                     const count = (selector: string) =>
                       current?.querySelectorAll(selector).length ?? 0;
                     const slots = Array.from(
@@ -477,6 +565,27 @@ suite.define(() => {
                       sameRow: before.row
                         ? current?.closest("[data-chat-row-key]") === before.row
                         : null,
+                      originalTextConnected: before.text?.isConnected ?? null,
+                      sameText: before.text
+                        ? current?.querySelector(".chat-text") === before.text
+                        : null,
+                      originalGalleries: before.galleries.map((gallery, index) => ({
+                        connected: gallery.isConnected,
+                        sameGallery: galleries[index] === gallery,
+                        originalParentConnected: before.galleryParents[index]?.isConnected ?? null,
+                        sameParent:
+                          galleries[index]?.parentElement === before.galleryParents[index],
+                      })),
+                      originalFrames: before.frames.map((frame, index) => ({
+                        connected: frame.isConnected,
+                        sameFrame: frames[index] === frame,
+                      })),
+                      samePane: pane === before.pane,
+                      presentation: {
+                        before: before.presentation,
+                        after: before.readPresentation(pane),
+                        events: before.events,
+                      },
                       originalImages: before.images.map((image) => ({
                         connected: image.isConnected,
                         inOriginalBubble: before.bubble.contains(image),
@@ -510,7 +619,12 @@ suite.define(() => {
                 }
                 throw error;
               } finally {
-                await liveNodes.dispose();
+                try {
+                  // A closed page must not let diagnostic cleanup mask the capture failure.
+                  await liveNodes.evaluate((before) => before.stop()).catch(() => undefined);
+                } finally {
+                  await liveNodes.dispose();
+                }
               }
               expect(await bubble.textContent()).not.toContain("MEDIA:");
               expect(sends).toEqual([prompt]);
@@ -572,8 +686,7 @@ suite.define(() => {
               await bubble.getByText(closing, { exact: true }).waitFor();
               await assertDecoded();
               await capture(page, bubble, "02-reloaded");
-              const reloadedOrder = await renderedOrder(bubble);
-              expect(reloadedOrder).toEqual(expectedOrder);
+              const reloadedOrder = await assertRenderedOrder(bubble);
               expect(await page.locator(".chat-group.assistant .chat-bubble").count()).toBe(1);
               expect(sends).toEqual([prompt]);
               expect(provider.requests.filter((model) => model === "echo")).toHaveLength(1);

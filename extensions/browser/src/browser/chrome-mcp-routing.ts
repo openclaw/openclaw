@@ -131,9 +131,8 @@ function validateChromeMcpSnapshotRefs(root: ChromeMcpSnapshotNode) {
   for (let current = pending.pop(); current; current = pending.pop()) {
     const role = current.node.role?.trim().toLowerCase();
     const document = role === "rootwebarea" ? current.node : current.document;
-    const documentUid =
-      role === "rootwebarea" ? normalizeOptionalString(current.node.id) : current.documentUid;
     const uid = normalizeOptionalString(current.node.id);
+    const documentUid = role === "rootwebarea" ? uid : current.documentUid;
     if (uid) {
       const previous = documents.get(uid);
       if (previous && previous.document !== document) {

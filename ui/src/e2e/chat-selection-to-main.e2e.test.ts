@@ -110,6 +110,10 @@ async function addComment(page: Page, comment: string, passage = selectedText) {
   await commentEditor(page).getByRole("textbox").press("Enter");
 }
 async function selectText(text: Locator) {
+  // The selection toolbar dismisses on scroll, so settle before opening it.
+  await waitForChatScrollIdle(text.page());
+  await text.scrollIntoViewIfNeeded();
+  await waitForChatScrollIdle(text.page());
   await text.evaluate((element) => {
     const range = document.createRange();
     range.selectNodeContents(element);
@@ -469,8 +473,6 @@ suite.define(() => {
           await page.locator(".chat-thread").hover();
           await page.mouse.wheel(0, -32);
           await waitForChatScrollIdle(page);
-          await text.scrollIntoViewIfNeeded();
-          await waitForChatScrollIdle(page);
           await addComment(page, "Keep this pin on its original passage.", passage);
           const pin = button(page, "Edit comment 1");
           const aligned = async () => {
@@ -552,6 +554,8 @@ suite.define(() => {
             await addComment(page, "Review before deployment.");
             await pin.waitFor({ state: "visible" });
           };
+          await selectedSource(page).waitFor({ state: "visible" });
+          await waitForChatScrollIdle(page);
           await saveComment();
           await pin.click();
           await submitComment(comment, "Check rollback first.", "Save");

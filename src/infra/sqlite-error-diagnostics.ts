@@ -17,6 +17,9 @@ export type GatewayStorageFailure = (typeof STORAGE_ERRORS)[number][0];
 export function classifyGatewayStorageFailure(error: unknown): GatewayStorageFailure | undefined {
   const fields = typeof error === "string" ? { message: error } : isRecord(error) ? error : {};
   const code = fields.errorCode ?? fields.code;
+  if (code === "ENOSPC") {
+    return "SQLITE_FULL";
+  }
   const nativeCode = fields.errcode;
   const primaryCode =
     typeof nativeCode === "number" && Number.isInteger(nativeCode) && nativeCode >= 0

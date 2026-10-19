@@ -3,7 +3,12 @@ import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 import { afterEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
-import { withOpenClawStateDatabaseReadSnapshot } from "../state/openclaw-state-db-readonly.js";
+import { migrateLegacyConfigHealth } from "../infra/state-migrations.runtime-state.js";
+import {
+  withArtifactPreservingStateReads,
+  withOpenClawStateDatabaseReadSnapshot,
+} from "../state/openclaw-state-db-readonly.js";
+import * as stateReads from "../state/openclaw-state-db-readonly.js";
 import {
   closeOpenClawStateDatabaseAsync,
   runOpenClawStateWriteTransaction,
@@ -42,6 +47,74 @@ function fixture() {
   });
   return { deps, configPath };
 }
+
+it("shares boot health observations until a committed owner write changes them", async () => {
+  const { deps, configPath } = fixture();
+  await closeOpenClawStateDatabaseAsync();
+  const reads = vi.spyOn(stateReads, "executeExistingOpenClawStateRead");
+  const observe = () =>
+    withArtifactPreservingStateReads(() => captureConfigHealthStateStore(deps, configPath).read());
+  const before = await observe();
+  expect(await observe()).toEqual(before);
+  expect(reads).toHaveBeenCalledTimes(1);
+
+  patchConfigHealthEntryToStore(deps, configPath, {
+    lastObservedSuspiciousSignature: "sync commit",
+  });
+  const after = await observe();
+  expect(after.state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe("sync commit");
+  expect(await observe()).toEqual(after);
+  expect(reads).toHaveBeenCalledTimes(2);
+
+  const owner = captureConfigHealthStateStore(deps, configPath);
+  await owner.update({ lastObservedSuspiciousSignature: "worker commit" }, after);
+  expect((await observe()).state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
+    "worker commit",
+  );
+  await owner.update({ lastObservedSuspiciousSignature: "stale" }, before);
+  expect((await observe()).state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
+    "worker commit",
+  );
+  expect(reads).toHaveBeenCalledTimes(3);
+});
+
+it("keeps a pinned snapshot separate from the published live health fact", async () => {
+  const { deps, configPath } = fixture();
+  const owner = captureConfigHealthStateStore(deps, configPath);
+  await owner.read();
+  await withOpenClawStateDatabaseReadSnapshot(
+    async () => {
+      patchConfigHealthEntryToStore(deps, configPath, {
+        lastObservedSuspiciousSignature: "live commit",
+      });
+      expect(
+        (await owner.read()).state.entries?.[configPath]?.lastObservedSuspiciousSignature,
+      ).toBe("before");
+    },
+    { env: deps.env },
+  );
+  expect((await owner.read()).state.entries?.[configPath]?.lastObservedSuspiciousSignature).toBe(
+    "live commit",
+  );
+});
+
+it("publishes imported health rows to an already-read owner", async () => {
+  const { deps, configPath } = fixture();
+  const owner = captureConfigHealthStateStore(deps, configPath);
+  expect((await owner.read()).state.entries?.[configPath]?.lastPromotedGood).toBeUndefined();
+  const sourcePath = path.join(deps.env.HOME, "config-health.json");
+  fs.writeFileSync(
+    sourcePath,
+    JSON.stringify({ entries: { [configPath]: { lastPromotedGood: { hash: "imported" } } } }),
+  );
+  expect(
+    migrateLegacyConfigHealth({
+      detected: { sourcePath, hasLegacy: true },
+      stateDir: deps.env.HOME,
+    }).warnings,
+  ).toEqual([]);
+  expect((await owner.read()).state.entries?.[configPath]?.lastPromotedGood?.hash).toBe("imported");
+});
 
 it("reads recovery health from the admitted snapshot without overwriting a foreign commit", async () => {
   const { deps, configPath } = fixture();

@@ -141,6 +141,40 @@ describe("openclaw-modal-dialog", () => {
     }
   });
 
+  it.each([false, true])(
+    "publishes a reentrant close once, including its veto correction (veto=%s)",
+    async (veto) => {
+      const modal = document.createElement("openclaw-modal-dialog");
+      modal.open = false;
+      const changes: boolean[] = [];
+      let closeOnOpen = true;
+      modal.onOpenChange = (open) => {
+        changes.push(open);
+        if (open && closeOnOpen) {
+          closeOnOpen = false;
+          modal.open = false;
+        }
+      };
+      const refuseClose = (event: Event) => event.preventDefault();
+      if (veto) {
+        modal.addEventListener("overlay-hide", refuseClose);
+      }
+      container.append(modal);
+      await commitRender(modal);
+
+      modal.show();
+      expect(modal.open).toBe(veto);
+      expect(changes).toEqual(veto ? [true, true] : [true, false]);
+      if (veto) {
+        modal.removeEventListener("overlay-hide", refuseClose);
+        modal.open = false;
+        expect(changes).toEqual([true, true, false]);
+      }
+      await afterModalHidden(modal);
+      expect(modal.querySelector<HTMLDialogElement>("dialog")!.open).toBe(false);
+    },
+  );
+
   it("focuses slotted input once the opening update commits, without waiting for a frame", async () => {
     vi.spyOn(window, "requestAnimationFrame").mockImplementation(() => 1);
     mountSolid(
@@ -225,7 +259,8 @@ describe("openclaw-modal-dialog", () => {
       try {
         const { modal } = await renderModal();
 
-        showToast({ message: "Saved" });
+        // Keep the toast active through a cold lazy import; this test covers layer handoff.
+        showToast({ message: "Saved", durationMs: 60_000 });
         await commitRender(appHost);
         await vi.dynamicImportSettled();
         flush();

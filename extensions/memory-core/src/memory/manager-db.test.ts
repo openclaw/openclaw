@@ -24,6 +24,7 @@ import {
   openMemoryDatabaseAtPath,
   resetMemoryDatabase,
 } from "./manager-db.js";
+import { observePublishedSql } from "./manager-publication-observer.test-support.js";
 import { bindSqliteWorkerBackend } from "./manager-publication.worker.js";
 import { waitForMemoryReindexLock } from "./manager-reindex-lock.js";
 
@@ -161,7 +162,7 @@ describe("memory manager database publication", () => {
     }
   });
 
-  it("lazily adds recall metadata storage before publishing to an existing database", async () => {
+  it("admits legacy recall metadata before publishing in one transaction", async () => {
     const targetPath = path.join(fixtureRoot, "target.sqlite");
     const sourcePath = path.join(fixtureRoot, "source.sqlite");
     const targetDb = new DatabaseSync(targetPath);
@@ -185,6 +186,7 @@ describe("memory manager database publication", () => {
         ) STRICT;
         INSERT INTO memory_index_state (id, revision) VALUES (1, 0);
       `);
+      ensureTestMemorySchema(targetDb, false);
       ensureTestMemorySchema(sourceDb, false);
       sourceDb
         .prepare(
@@ -212,13 +214,19 @@ describe("memory manager database publication", () => {
         .run("new", 9, "when flying");
       sourceDb.close();
 
-      await publishPreparedMemoryDatabase({
-        targetDb,
-        sourcePath,
-        sourceHasVectors: false,
-        metaKey: "meta",
-        expectedRevision: 0,
-      });
+      const observed = observePublishedSql(targetDb);
+      try {
+        await publishPreparedMemoryDatabase({
+          targetDb,
+          sourcePath,
+          sourceHasVectors: false,
+          metaKey: "meta",
+          expectedRevision: 0,
+        });
+        expect(observed.calls().filter(({ sql }) => /^BEGIN\b/i.test(sql))).toHaveLength(1);
+      } finally {
+        observed.restore();
+      }
 
       expect(
         targetDb

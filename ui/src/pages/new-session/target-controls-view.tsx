@@ -1,4 +1,5 @@
 import { createMemo } from "solid-js";
+import type { AgentSelectElement } from "../../components/agent-select.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
 import { normalizeAgentTargetLabel } from "../../lib/agents/display.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
@@ -30,10 +31,14 @@ registerNewSessionSetupEnglish();
 export function AgentSelect(props: {
   params: AgentSelectOptions;
   ref?: (node: HTMLSpanElement) => void;
+  focusTargetsRef?: AgentSelectElement["focusTargetsRef"];
 }) {
   return (
     <span class="new-session-page__select new-session-page__select--agent" ref={props.ref}>
       <openclaw-agent-select
+        ref={(element) => {
+          element.focusTargetsRef = props.focusTargetsRef;
+        }}
         prop:variant={props.params.variant ?? "compact"}
         prop:options={props.params.agents.map((agent) => ({
           value: normalizeAgentId(agent.id),
@@ -58,7 +63,10 @@ export function AgentSelect(props: {
   );
 }
 
-export function RequiredSessionPlacement(props: { gateway: DraftGatewayState }) {
+export function RequiredSessionPlacement(props: {
+  gateway: DraftGatewayState;
+  retryRef?: (button: HTMLButtonElement) => void;
+}) {
   const profile = () =>
     props.gateway.cloudProfiles.find((candidate) => candidate.id === props.gateway.requiredProfile);
   return (
@@ -77,6 +85,7 @@ export function RequiredSessionPlacement(props: { gateway: DraftGatewayState }) 
         <button
           type="button"
           class="btn btn--sm"
+          ref={props.retryRef}
           onClick={() => void props.gateway.retryRequiredPlacement()}
         >
           {t("common.retry")}

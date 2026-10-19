@@ -13,6 +13,7 @@ import {
 import { sessionMenu } from "../test-helpers/app-sidebar-cases/multi-select-support.ts";
 import {
   mountRoster,
+  owners,
   selectFilter,
   sessionKeys,
 } from "../test-helpers/app-sidebar-cases/roster.test-support.ts";
@@ -39,6 +40,30 @@ import "./app-sidebar.tsx";
 
 const hint = "No active sessions match this filter";
 const pagination = ".sidebar-session-pagination--roster button";
+type Roster = Awaited<ReturnType<typeof mountRoster>>;
+
+async function selectStatus(sidebar: Roster["sidebar"], status: string) {
+  await selectFilter(sidebar, `status:${status}`);
+  const input = sidebar.querySelector<HTMLInputElement>(
+    `#sidebar-sessions-status input[value="${status}"]`,
+  );
+  expect(input?.checked).toBe(true);
+  expect(sidebar.textContent).not.toContain(hint);
+}
+
+async function emptyCatalogFixture() {
+  const fixture = await mountRoster(undefined, []);
+  await selectFilter(fixture.sidebar, "owner:profile-ada");
+  await vi.waitFor(() => expect(fixture.sidebar.textContent).toContain(hint));
+  const enableCatalog = () =>
+    fixture.gatewayHarness.publish({
+      hello: {
+        ...fixture.gatewayHarness.gateway.snapshot.hello!,
+        features: { methods: ["sessions.catalog.list"] },
+      },
+    });
+  return { ...fixture, enableCatalog };
+}
 
 function matchingCatalog(): SessionsCatalogListResult {
   const page = catalogPage([{ threadId: "fixture-thread", name: "Catalog conversation" }]);
@@ -55,8 +80,8 @@ function matchingCatalog(): SessionsCatalogListResult {
 // Roster mode renders the owner filter from the roster's own list. Let that first
 // load settle so the Filter & sort owner picker is not replaced while in use.
 async function useSidebarMode(
-  sidebar: Awaited<ReturnType<typeof mountRoster>>["sidebar"],
-  context: Awaited<ReturnType<typeof mountRoster>>["context"],
+  sidebar: Roster["sidebar"],
+  context: Roster["context"],
   mode: "chip" | "roster",
 ) {
   sidebar.sidebarAgentsMode = mode;
@@ -111,10 +136,7 @@ describe("sidebar session feedback", () => {
               );
           return {
             ...sessionsResult(selected, 1),
-            owners: [
-              { type: "human", id: viewer, label: "Ada" },
-              { type: "human", id: "profile-sam", label: "Sam" },
-            ],
+            owners,
             hasMore: false,
             nextOffset: null,
           };
@@ -303,20 +325,13 @@ describe("sidebar session feedback", () => {
   });
 
   it("waits for catalog hydration, refresh, and hidden pages before explaining an empty list", async () => {
-    const { sidebar, gatewayHarness, request } = await mountRoster(undefined, []);
-    await selectFilter(sidebar, "owner:profile-ada");
-    await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
+    const { sidebar, request, enableCatalog } = await emptyCatalogFixture();
     let pending = createDeferred<SessionsCatalogListResult>();
     const original = request.getMockImplementation()!;
     request.mockImplementation((method, ...args) =>
       method === "sessions.catalog.list" ? pending.promise : original(method, ...args),
     );
-    gatewayHarness.publish({
-      hello: {
-        ...gatewayHarness.gateway.snapshot.hello!,
-        features: { methods: ["sessions.catalog.list"] },
-      },
-    });
+    enableCatalog();
     await vi.waitFor(() =>
       expect(request).toHaveBeenCalledWith("sessions.catalog.list", expect.anything()),
     );
@@ -352,36 +367,23 @@ describe("sidebar session feedback", () => {
   });
 
   it("waits for a pending catalog host to publish its matching result", async () => {
-    const { sidebar, gatewayHarness, request } = await mountRoster(undefined, []);
-    await selectFilter(sidebar, "owner:profile-ada");
-    await vi.waitFor(() => expect(sidebar.textContent).toContain(hint));
-    const catalog: SessionsCatalogListResult["catalogs"][number] = {
-      id: "fixture",
-      label: "Fixture catalog",
-      capabilities: { continueSession: true, archive: false },
-      hosts: [
-        {
-          hostId: "node:fixture",
-          label: "Fixture host",
-          kind: "node",
-          connected: true,
-          pending: true,
-          sessions: [],
-        },
-      ],
-    };
+    const { sidebar, gatewayHarness, request, enableCatalog } = await emptyCatalogFixture();
+    const catalog = catalogPage([]).catalogs[0]!;
+    catalog.capabilities.archive = false;
+    Object.assign(catalog, { id: "fixture", label: "Fixture catalog" });
+    Object.assign(catalog.hosts[0]!, {
+      hostId: "node:fixture",
+      label: "Fixture host",
+      kind: "node",
+      pending: true,
+    });
     const original = request.getMockImplementation()!;
     request.mockImplementation((method, ...args) =>
       method === "sessions.catalog.list"
         ? Promise.resolve({ catalogs: [catalog] })
         : original(method, ...args),
     );
-    gatewayHarness.publish({
-      hello: {
-        ...gatewayHarness.gateway.snapshot.hello!,
-        features: { methods: ["sessions.catalog.list"] },
-      },
-    });
+    enableCatalog();
     await sidebar.sessionData.refreshSessionCatalogs();
     await settleLitElement(sidebar);
     const params = request.mock.calls.findLast(
@@ -424,13 +426,7 @@ describe("sidebar session feedback", () => {
       await useSidebarMode(sidebar, context, mode);
       if (!failure) {
         for (const status of ["active", "archived", "all"]) {
-          await selectFilter(sidebar, "status:" + status);
-          expect(
-            sidebar.querySelector<HTMLInputElement>(
-              `#sidebar-sessions-status input[value="${status}"]`,
-            )?.checked,
-          ).toBe(true);
-          expect(sidebar.textContent).not.toContain(hint);
+          await selectStatus(sidebar, status);
         }
         await selectFilter(sidebar, "status:active");
       }
@@ -452,13 +448,7 @@ describe("sidebar session feedback", () => {
           expect(sidebar.querySelectorAll("[data-session-section]")).toHaveLength(0);
         }
         for (const status of ["archived", "all"] as const) {
-          await selectFilter(sidebar, "status:" + status);
-          expect(
-            sidebar.querySelector<HTMLInputElement>(
-              `#sidebar-sessions-status input[value="${status}"]`,
-            )?.checked,
-          ).toBe(true);
-          expect(sidebar.textContent).not.toContain(hint);
+          await selectStatus(sidebar, status);
         }
         await selectFilter(sidebar, "status:active");
         await settleLitElement(sidebar);

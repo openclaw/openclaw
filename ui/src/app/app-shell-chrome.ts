@@ -128,6 +128,8 @@ export class ShellChromeOwner {
 
   connect(): void {
     this.disconnect();
+    // A replacement shell can be constructed before the old context retires its intent.
+    this.pendingLazyAction = readLazyShellAction();
     const host = this.host;
     host.setNativeHistoryState(readNativeHistoryState());
     this.listeners = [
@@ -393,8 +395,7 @@ export class ShellChromeOwner {
       shouldCloseDebugOverlay(
         event,
         this.pendingDebugOverlayMode,
-        // Pending debug content owns this frame while its custom element loads.
-        host.element.querySelector(".debug-overlay"),
+        host.elements.pendingDebugOverlayFrame ?? null,
       )
     ) {
       event.preventDefault();

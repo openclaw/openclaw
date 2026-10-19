@@ -168,6 +168,18 @@ async function assembleWithCapturedHookCtx(
 }
 
 describe("prompt-build hook context input provenance", () => {
+  it("bounds plugin system context using the resolved attempt budget before assembly", async () => {
+    const { setSystemPrompt } = await assembleWithCapturedHookCtx(
+      "bounded-plugin-system-context",
+      { contextTokenBudget: 32_000 },
+      { hookResult: { prependSystemContext: "x".repeat(824_170) } },
+    );
+    const finalPrompt = setSystemPrompt.mock.calls.at(-1)?.[0] ?? "";
+    expect(finalPrompt).toContain("[Plugin system context truncated to fit the model budget.]");
+    expect(finalPrompt).toContain("Base system prompt");
+    expect(finalPrompt.length).toBeLessThan(33_000);
+  });
+
   it("prepares the restricted prompt once before composing the original hook additions", async () => {
     const observeDecision = vi.spyOn(decisionDiagnostics, "logDecisionToolPrefilter");
     const order: string[] = [];

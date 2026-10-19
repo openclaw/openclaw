@@ -66,6 +66,7 @@ import {
   listConfigReloadRefinementPrefixes,
   resolveConfigReloadMetadata,
 } from "./config-reload-plan.js";
+import { registerInvalidConfigReloadTests } from "./config-reload.invalid-config.test-support.js";
 import type {
   GatewayConfigReloadTransactionOwnership,
   GatewayReloadPlan,
@@ -2868,36 +2869,7 @@ describe("startGatewayConfigReloader", () => {
     expect(harness.onRestart.mock.calls[0]?.[3]).toEqual(sourceConfig);
   });
 
-  it.each(["external", "accepted write"] as const)(
-    "rejects invalid snapshots observed after %s even when the root hash matches",
-    async (state) => {
-      let snapshot = makeZeroDebounceHookSnapshot("same-root-hash");
-      const readSnapshot = vi.fn(async () => snapshot);
-      const onConfigCandidateObserved = vi.fn();
-      const harness = createReloaderHarness(readSnapshot, {
-        initialConfig: state === "accepted write" ? snapshot.config : undefined,
-        onConfigCandidateObserved,
-      });
-      await harness.reloader.ready;
-      if (state !== "external") {
-        harness.emitWrite(makeZeroDebounceHookWrite("same-root-hash"));
-      }
-      if (state === "accepted write") {
-        await flushReload(harness.reloader);
-        expect(harness.onConfigAccepted).toHaveBeenCalledOnce();
-        harness.onConfigAccepted.mockClear();
-      }
-      snapshot = { ...snapshot, valid: false };
-      onConfigCandidateObserved.mockClear();
-      harness.watcher.emit("change");
-      expect(onConfigCandidateObserved).toHaveBeenCalledOnce();
-      expect(readSnapshot).not.toHaveBeenCalled();
-      await flushReload(harness.reloader);
-      expect(harness.onConfigAccepted).not.toHaveBeenCalled();
-      expect(harness.onRestart).not.toHaveBeenCalled();
-      expect(harness.onHotReload).not.toHaveBeenCalled();
-    },
-  );
+  registerInvalidConfigReloadTests(tempDirs);
 
   it("preserves watcher echo restart intent while coalescing a newer write", async () => {
     const { promise: pluginReadStarted, resolve: recordPluginReadStarted } = createDeferred();

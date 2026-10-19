@@ -75,15 +75,18 @@ close and seal reuse do not advance that timestamp. On Linux, where Node can
 substitute change time for unavailable birthtime, the existing physical-file
 identity policy uses a stable unknown birthtime value.
 
-Schema identity covers the application version, the database family's canonical
-SQL definitions, and the admission policy revision. Admitted facts identify agent
+Schema identity covers the loaded SQLite version, source ID and compile options,
+the Node/Bun runtime versions, the database family's schema version and canonical
+SQL definitions, and the admission policy revision. Unknown SQLite identity disables
+seal reuse. Admitted facts identify agent
 and shared-state databases, including databases at custom paths. A shared-state
 schema change does not invalidate an unchanged agent database's seal, or vice versa.
 Unclassified or mixed admission facts conservatively depend on both schemas.
-Commit and build
-IDs do not invalidate seals for otherwise compatible builds. Maintainers must advance
-the policy revision for migrations or schema-version changes not reflected in canonical
-SQL, and for changes to validation rules or serialized admission facts.
+Application versions, commit IDs, and build IDs do not invalidate seals for otherwise
+compatible storage stacks. Maintainers must advance the policy revision for code-only
+migrations, validation rules, or serialized admission fact changes. SQLite identity
+comes from the existing native library probe, including shared or custom libraries;
+it is not inferred from the application's version or Node's advertised SQLite version.
 Same-version session columns are admission prerequisites, not optional reader
 projections. Declare them in `STARTUP_ADDITIVE_AGENT_COLUMN_DEFINITIONS`: the
 same declarations drive installation, pending-repair detection, and saved-catalog
@@ -103,7 +106,7 @@ same-version installer is represented in admission facts. A complete prior-build
 catalog retains seal reuse without validation SQL; adding requirements alone does
 not invalidate seals whose catalogs already satisfy them.
 
-Updating from an older seal-identity format requires one full validation;
+Updating from an older application-version-bound seal requires one full validation;
 subsequent compatible builds reuse the new seal. Managed drain followed by an
 interrupt uses ordinary close and can publish a seal once its writers settle.
 Forced termination before successful close cannot certify the database.
@@ -603,6 +606,17 @@ agent restoration owner revalidates the selected configured paths before
 releasing their holds; normal migrations then prepare them for Gateway startup.
 Repeating Doctor after successful restoration does not restore or back up these stores again.
 
+Reserved system agents (`openclaw` and `crestodian`) cannot be deleted, so journal
+reconstruction no longer creates deletion-recovery holds for them. `doctor --fix`
+reconciles existing reserved holds, including the quarantine receipts left by
+2026.10.5, only when the canonical store's path and internal agent identity match,
+its integrity is healthy, and no deletion row remains. It first preserves verified
+full backups of the agent store and shared recovery records, releases only that
+hold, and lets normal migrations advance the store. Other holds retain their
+existing restoration rules. Until repair succeeds, startup degrades an unmigrated
+held store with a warning naming `openclaw doctor --fix` instead of failing the
+whole Gateway.
+
 This policy accepts the small risk of resurrecting data from a lost pending
 deletion when the entire journal disappeared. A missing-table observation is
 not proof that no journal ever existed. Present-but-incomplete journals,
@@ -705,6 +719,11 @@ and deletion status remain checked before publication. A failed inspection or
 preparation leaves the agent degraded with the recorded reason; it does not stop
 healthy agents. Shared-state database failures retain their existing startup
 checks.
+
+Operator `send` requests check admission before delivery even when they specify
+only an `agentId` and omit `sessionKey`. Pending preparation returns a retryable
+startup refusal. Failed inspection keeps refusing delivery with the recorded
+repair guidance after startup work settles.
 
 Startup deletion-journal checks use at most eight concurrent reads, so releasing
 more than 128 agents from preparation readiness does not exhaust the shared
@@ -1133,19 +1152,25 @@ repair automatically.
 FTS5-only `malformed inverted index` findings on canonical agent search tables
 are also repairable. A Node upgrade or downgrade can change SQLite's `unicode61`
 tokenization (for example, U+FFFE in SQLite 3.54), leaving intact content with an
-incompatible derived index. Stop the Gateway and run `openclaw doctor --fix` with
-the Node version that will run the Gateway, then restart it. Doctor preserves a
-backup and rebuilds only the affected, schema-validated FTS tables in one
+incompatible derived index. Doctor preserves a backup and rebuilds only the
+affected, schema-validated FTS tables in one
 transaction. It verifies integrity and foreign keys before clearing quarantine;
 session recovery uses this same repair instead of moving the database aside.
 Unknown or changed FTS definitions and findings mixed with structural damage
 are not eligible for this repair.
 
-Startup does not rebuild FTS indexes automatically: the offline maintenance
-owner supplies the exclusive custody needed for backup and quarantine recovery.
-The admission error gives the `openclaw doctor --fix` command. Switching SQLite
-versions again may require another rebuild, without changing stored content or
-the database schema.
+Gateway startup makes one automatic repair attempt per database per process when
+every finding names a canonical, schema-validated FTS table. Under exclusive
+writer custody, it uses the same pre-repair backup and transactional rebuild as
+Doctor, then requires clean integrity and foreign-key checks before admission.
+One warning names the agent, affected tables and row counts, SQLite version, and
+backup. Status and Doctor retain this startup outcome. A failed backup or rebuild,
+live foreign writer, unknown FTS definition, or mixed damage keeps the database
+quarantined with the precise Doctor command. Ordinary runtime opens do not attempt
+this repair. If startup cannot repair the indexes, stop the Gateway and run
+`openclaw doctor --fix` with the Node version that will run the Gateway, then
+restart it. Switching SQLite versions again may require another rebuild,
+without changing stored content or the database schema.
 
 <a id="downgrades-are-unsupported" />
 

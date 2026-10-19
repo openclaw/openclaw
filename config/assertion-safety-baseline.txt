@@ -152,7 +152,6 @@ extensions/codex/src/session-catalog.ts	2
 extensions/codex/src/session-cli.ts	1
 extensions/codex/src/session-upstream-activity.ts	1
 extensions/codex/src/web-search-provider.runtime.ts	1
-extensions/cohere/stream.ts	2
 extensions/comfy/workflow-runtime.ts	2
 extensions/copilot-proxy/index.ts	1
 extensions/copilot/harness.ts	8
@@ -995,7 +994,7 @@ packages/ai/src/transports/openai-responses-client.ts	8
 packages/ai/src/transports/openai-responses-compact-request.ts	2
 packages/ai/src/transports/openai-responses-continuation.ts	2
 packages/ai/src/transports/openai-responses-contracts.ts	1
-packages/ai/src/transports/openai-responses-debug.ts	9
+packages/ai/src/transports/openai-responses-debug.ts	8
 packages/ai/src/transports/openai-responses-params-internal.ts	2
 packages/ai/src/transports/openai-responses-payload-policy.ts	3
 packages/ai/src/transports/openai-responses-prompt-observer-internal.ts	2
@@ -1088,7 +1087,6 @@ src/agents/agent-bundle-lsp-runtime.ts	3
 src/agents/agent-bundle-mcp-combined.ts	1
 src/agents/agent-bundle-mcp-materialize.ts	3
 src/agents/agent-bundle-mcp-runtime-shared.ts	2
-src/agents/agent-bundle-mcp-runtime.ts	1
 src/agents/agent-command.ts	1
 src/agents/agent-hooks/compaction-safeguard.ts	9
 src/agents/agent-project-settings-snapshot.ts	4
@@ -1477,7 +1475,6 @@ src/channels/direct-dm.ts	1
 src/channels/draft-stream-loop.ts	1
 src/channels/draft-streaming-chunking.ts	1
 src/channels/feedback-reflection.ts	1
-src/channels/ids.ts	1
 src/channels/inbound-event/context.ts	5
 src/channels/location.ts	1
 src/channels/message-access/admission-evidence.ts	1
@@ -1579,7 +1576,6 @@ src/cli/ports.ts	6
 src/cli/program/action-reparse.ts	1
 src/cli/program/command-tree.ts	1
 src/cli/program/json-mode.ts	2
-src/cli/program/message/helpers.ts	1
 src/cli/program/preaction.ts	1
 src/cli/program/program-context.ts	2
 src/cli/program/register.agent-turn.ts	1
@@ -1825,7 +1821,7 @@ src/gateway/chat-display-projection.sanitize.ts	5
 src/gateway/chat-sanitize.ts	3
 src/gateway/cli-session-history.claude.ts	5
 src/gateway/control-ui-plugin-auth-cookie.ts	1
-src/gateway/control-ui-session-pr-subscriptions.ts	2
+src/gateway/control-ui-session-pr-subscriptions.ts	1
 src/gateway/conversation-turn.ts	1
 src/gateway/desktop/host-guidance.ts	1
 src/gateway/desktop/managed-linux.ts	1
@@ -1837,7 +1833,6 @@ src/gateway/hooks-mapping.ts	2
 src/gateway/hooks.ts	1
 src/gateway/live-agent-probes.ts	1
 src/gateway/local-request-context.ts	2
-src/gateway/managed-image-attachments.ts	1
 src/gateway/mcp-http.handlers.ts	4
 src/gateway/mcp-http.schema.ts	2
 src/gateway/node-browser-proxy-policy.ts	1
@@ -2016,7 +2011,6 @@ src/infra/net/ssrf.ts	7
 src/infra/net/undici-dispatcher-options.ts	3
 src/infra/net/undici-global-dispatcher.ts	2
 src/infra/node-commands.ts	1
-src/infra/node-sqlite.ts	3
 src/infra/npm-managed-root.ts	6
 src/infra/oauth-loopback-callback.ts	1
 src/infra/openclaw-cli-shim.ts	1
@@ -2128,7 +2122,6 @@ src/mcp/plugin-tools-handlers.ts	1
 src/media-generation/provider-registry.ts	1
 src/media-understanding/entry-capabilities.ts	1
 src/media-understanding/image-model-runtime.ts	3
-src/media-understanding/runner.entries.ts	1
 src/media-understanding/shared.ts	1
 src/media/audio-transcode.ts	1
 src/media/bounded-read-file.ts	2
@@ -2384,7 +2377,6 @@ src/shared/deferred.ts	1
 src/shared/frontmatter.ts	1
 src/shared/global-singleton.ts	4
 src/shared/json-schema-defaults.ts	17
-src/shared/message-content-blocks.ts	2
 src/shared/node-list-parse.ts	3
 src/shared/node-presence.ts	1
 src/shared/node-resolve.ts	1
@@ -2443,7 +2435,7 @@ src/tts/tts-settings.ts	2
 src/tts/tts-telephony.ts	1
 src/tts/voice-models.ts	3
 src/tui/components/chat-log.ts	1
-src/tui/embedded-backend.ts	2
+src/tui/embedded-backend.ts	1
 src/tui/gateway-chat.ts	2
 src/tui/tui-autocomplete.ts	1
 src/tui/tui-command-handlers.ts	5
@@ -2556,7 +2548,6 @@ ui/src/pages/chat/chat-state-events.ts	6
 ui/src/pages/chat/chat-state-page.ts	2
 ui/src/pages/chat/chat-thread-items.ts	1
 ui/src/pages/chat/components/chat-message-attachment-availability.ts	1
-ui/src/pages/chat/components/chat-selection-popup.ts	1
 ui/src/pages/chat/components/chat-session-workspace.ts	1
 ui/src/pages/chat/components/chat-thread-interactions.ts	1
 ui/src/pages/chat/components/widget-export.ts	1

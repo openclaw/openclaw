@@ -22,8 +22,10 @@ tomorrow, without a new user message. Shutdown uses the same interruption and
 recovery marking as a managed restart, with the existing drain deadlines.
 Explicit session Stop/cancel remains terminal. The crash-loop breaker, recovery
 retry budgets, current-authority checks, and archived/reset exclusions still apply.
-In-flight cron occurrences keep their existing restart treatment; this does not
-add automatic continuation of an interrupted occurrence.
+In-flight cron occurrences keep their existing restart treatment. Main-session
+recovery does not replay a started cron occurrence, including when the conversation
+retains an earlier operator source. Cron records the interruption; a fresh
+authenticated turn or a future scheduled occurrence can continue the work.
 
 Inter-session steering updates remain context for the executing turn. When that
 turn retains a Control UI, channel, or authenticated operator source claim,
@@ -32,7 +34,17 @@ delegated request. This includes authenticated non-browser clients whose ingress
 is labeled internal. Before execution, the Gateway restores the exact operator
 source under current identity and access policy; a revoked source cannot resume.
 The existing source-authorization and delivery checks still apply; a transcript
-message alone cannot restore missing sender authority.
+message alone cannot restore missing sender authority. Accepted `sessions_send`
+follow-ups into main chat sessions also retain their admitted operator source,
+so they resume after a restart without another user message. They remain
+internal inputs: recovery does not inherit a sender's channel delivery rights,
+and a follow-up without an authenticated operator source cannot reconstruct
+authority from its transcript.
+
+An accepted child continuation keeps the restored operator's current identity and
+permission checks independently of the parent's recovery claim. Completing the
+parent does not cancel that child. Revoking the operator, replacing the source
+session, or stopping the Gateway still invalidates the child's authority.
 
 This includes automation turns running in dashboard main sessions. If a restart
 exhausts its drain budget, cancellation preserves restart recovery even when the
@@ -416,9 +428,13 @@ database available until accepted effects have recorded their outcomes.
 Worker-environment shutdown also names its computer, inference, transfer, tunnel,
 and accepted-operation joins. For an attached worker, shutdown stops the exact
 remote environment before draining its workspace queue: a foreground command
-can hold that queue until the stop cancels it. Remote stop and drain acknowledgments
-share at most ten seconds of the remaining process cleanup budget. An unreachable
-worker keeps its durable attachment for cleanup on reconnect; it is not reported
+can hold that queue until the stop cancels it. Remote stop, drain, and active-turn
+cancellation acknowledgments share at most five seconds after shutdown begins,
+capped by the remaining process cleanup budget, including cancellation already
+started before shutdown. Tunnel cleanup separately times initialization, active
+launches, workspace operations, and transfers, so a slow reconciliation join names
+the work it is waiting for. An unreachable worker keeps its durable attachment
+for cleanup on reconnect; it is not reported
 as physically stopped. Local writes and transfer cleanup still settle before
 database retirement.
 
@@ -930,8 +946,14 @@ Recovery reads the interrupted turn's source before starting another run, even
 when a final reply is already pending. If the transcript cannot be read, the
 saved reply and any admitted completion claim remain available for a later
 attempt. Delegated requests and unverified internal inputs cannot resume
-automatically without surviving authority. Missing or invalid provenance does not
-establish a human sender for an internal claim. Legacy channel and Control UI
+automatically without surviving authority. When no pending final, harness
+completion, or independent recovery run remains owed, the interrupted input is
+retired atomically with one local transcript notice. Its source/run IDs remain
+terminal; no delivery success or sender authority is invented. The conversation
+keeps its identity and context and admits a fresh authenticated turn. Remaining
+custody retains the existing recovery block, and exhausted automatic attempts
+still require explicit recovery. Missing or invalid provenance does not establish
+a human sender for an internal claim. Legacy channel and Control UI
 turns retain their existing recovery checks. Child-completion follow-ups still use
 their existing recovery and delivery ownership checks. If their agent database is
 still undergoing startup inspection or preparation, a child result changes while
@@ -1355,3 +1377,24 @@ Use the session transcript and recorded delivery outcome to verify completion.
 - Standalone embedded turns cannot take over a main session with pending
   restart recovery because they do not share the gateway's lifecycle owner.
   Run the turn through the gateway or reset it there with `/new` or `/reset`.
+
+## Automatic peer results
+
+Automatic results returned by `sessions_send` use the same communication owner
+and pending-input recovery as peer requests. An accepted request also authorizes
+its requested result: returning that result does not require new reverse-direction
+send or receive permission. New unsolicited sends still follow current access and
+communication policy. Result admission checks the exact original source and
+destination session incarnations and the accepted request's live authority; a
+cancelled or replaced request cannot authorize a result.
+
+A saved result retains its intake instructions and optional reply expectation:
+processing it after restart does not require an acknowledgment or send another
+reply back to the peer. These saved facts do not recreate sender authority;
+recovery uses the retained request owner, and cancelled inputs are not replayed.
+Task-owned `subagent_announce` completions retain their separate existing recovery owner. Concurrent history reads during startup retain
+the same interrupted disposition, so opening a chat cannot hide a saved update
+from the recovery pass. If a restored background event temporarily owns an
+interrupted session, startup recovery waits for that owner to release and
+rechecks the session. It does not take over live work or replay work that
+completed, was stopped, or was replaced in the meantime.

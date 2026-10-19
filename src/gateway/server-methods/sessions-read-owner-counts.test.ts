@@ -123,6 +123,7 @@ it("counts caller-visible conversations once through direct and delegated work b
       ].toSorted((a, b) => a.profileId.localeCompare(b.profileId));
     try {
       await listSessions({ client, context, request });
+      const projection = getSessionRowProjection(context)!;
       const prepares = vi.spyOn(DatabaseSync.prototype, "prepare");
       for (const offset of [0, 3, 100]) {
         const result = await listSessions({ client, context, request: { ...request, offset } });
@@ -244,9 +245,17 @@ it("counts caller-visible conversations once through direct and delegated work b
       });
       subagentRuns.set(completedGrandchild.runId, completedGrandchild);
       subagentRuns.commitOwnership(completedGrandchild);
+      const selections = vi.spyOn(projection, "selectEntries");
       expect(await listSessions({ client, context, request })).toMatchObject({
         ownerSessionCounts: expected(8, 0),
       });
+      // Retained terminal history is not a candidate for the live running-count facet.
+      expect(
+        selections.mock.calls.filter(
+          ([query]) => query?.sessionIdOrKey === idle || query?.sessionIdOrKey === child,
+        ),
+      ).toEqual([]);
+      selections.mockRestore();
       // A later child turn has a new execution ID but retains the original parent lineage.
       registerAgentRunContext(runIds[0], {
         sessionKey: grandchild,
@@ -262,7 +271,6 @@ it("counts caller-visible conversations once through direct and delegated work b
       });
 
       // A sharing/ownership change during readiness must affect the whole facet.
-      const projection = getSessionRowProjection(context)!;
       const ensure = projection.prepareSelection;
       vi.spyOn(projection, "prepareSelection").mockImplementationOnce(async () => {
         assignSessionOwner(

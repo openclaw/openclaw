@@ -1,7 +1,7 @@
 import "../../styles/approval.css";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import type { JSX } from "@solidjs/web";
-import { createEffect, onCleanup, Show, For } from "solid-js";
+import { onCleanup, Show, For } from "solid-js";
 import {
   validateApprovalGetResult,
   validateApprovalResolveResult,
@@ -127,10 +127,11 @@ function approvalTitle(approval: ApprovalSnapshot, origin: ResolutionOrigin): st
 
 type ApprovalPageProps = { approvalId: string };
 
+const approvalIdHandlers = new WeakMap<HTMLElement, () => void>();
+
 /** Approval admission stays synchronous; rendering observes the request owner's facts. */
 function createApprovalPage(
   context: ApplicationContext,
-  props: ApprovalPageProps,
   host: SolidBridgeElement<ApprovalPageProps>,
 ) {
   // The bridge owns this live value; callbacks must see changes before the next render.
@@ -178,7 +179,8 @@ function createApprovalPage(
     current.approvalGrantAccess &&
     readGatewayOperatorAccess(context.gateway.snapshot).canGrantApprovals;
 
-  function bindApprovalId(force = false, id = approvalId()) {
+  function bindApprovalId(force = false) {
+    const id = approvalId();
     try {
       if (!force && boundApprovalId === id) {
         return;
@@ -192,7 +194,13 @@ function createApprovalPage(
       state.requestError = id ? null : "unavailable";
       state.resolutionOrigin = "observed";
       if (id && state.connected && clientOwner && hasApprovalAccess()) {
-        void loadApproval({ id });
+        const generation = operationGeneration;
+        // Retire decisions immediately, but coalesce native ID writes before the lookup.
+        queueMicrotask(() => {
+          if (operationGeneration === generation) {
+            void loadApproval({ id });
+          }
+        });
       }
     } finally {
       notify();
@@ -447,18 +455,15 @@ function createApprovalPage(
   // Gateway receipts retire decisions and polls and redact approvals synchronously when access changes.
   const stopGateway = context.gateway.subscribe(applyGatewaySnapshot);
   applyGatewaySnapshot(context.gateway.snapshot);
+  approvalIdHandlers.set(host, () => bindApprovalId());
   onCleanup(() => {
+    approvalIdHandlers.delete(host);
     stopVisibility();
     stopGateway();
     operationGeneration += 1;
     clearPollTimer();
     clientOwner = null;
   });
-  // Gateway requests and the browser title follow the currently bound approval ID.
-  createEffect(
-    () => props.approvalId,
-    (id) => bindApprovalId(false, id),
-  );
   createDocumentTitle(() => {
     const current = view.read();
     const pageTitle =
@@ -488,9 +493,9 @@ function createApprovalPage(
 
 defineSolidBridge<ApprovalPageProps>(
   "openclaw-approval-page",
-  (props, host) => {
+  (_props, host) => {
     const context = useApplication();
-    const page = createApprovalPage(context, props, host);
+    const page = createApprovalPage(context, host);
     const read = page.read;
     const missingScope = () => read().connected && !read().approvalsAccess;
     const disconnected = () => read().requestError === "connection" && !read().approval;
@@ -603,7 +608,10 @@ defineSolidBridge<ApprovalPageProps>(
       </main>
     );
   },
-  { properties: { approvalId: { default: "", attribute: "approval-id" } } },
+  {
+    properties: { approvalId: { default: "", attribute: "approval-id" } },
+    propertyChanged: (host) => approvalIdHandlers.get(host)?.(),
+  },
 );
 
 function ApprovalContent(props: {

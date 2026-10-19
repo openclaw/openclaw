@@ -73,6 +73,7 @@ type CodexSandboxContext = Awaited<ReturnType<typeof resolveSandboxContext>>;
  */
 export async function startCodexAttemptThread(params: {
   assertCurrent?: () => void;
+  assertCurrentAsync?: () => Promise<void>;
   authority?: CodexBindingAuthority;
   attemptClientFactory: CodexAppServerClientFactory;
   bindingStore: CodexAppServerBindingStore;
@@ -439,6 +440,7 @@ export async function startCodexAttemptThread(params: {
                 reserveResumeThread,
                 bindingStore: params.bindingStore,
                 assertCurrent: params.assertCurrent,
+                assertCurrentAsync: params.assertCurrentAsync,
                 authority: params.authority,
                 params: params.buildAttemptParams(),
                 runtimeModelId: params.runtimeModelId,

@@ -1,6 +1,15 @@
 import { setImmediate as nextTurn } from "node:timers/promises";
 import { expect, it, vi } from "vitest";
 import { createDeferred, withinTest } from "../../test/helpers/promise.js";
+import {
+  addSession,
+  appendOutput,
+  deleteSession,
+  markBackgrounded,
+  markExited,
+} from "../agents/bash-process-registry.js";
+import { createProcessSessionFixture } from "../agents/bash-process-registry.test-helpers.js";
+import { resetProcessRegistryForTests } from "../agents/bash-process-registry.test-support.js";
 import { setAppliedRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import {
   loadSessionEntryReadOnly,
@@ -32,6 +41,51 @@ vi.mock("../audit/audit-recorder.js", () => ({
     stop: vi.fn(async () => {}),
   }),
 }));
+
+it("coalesces background process changes without invalidating session rows and stops on disposal", async () => {
+  vi.useFakeTimers();
+  const params = createSubscriptionTestFixture().createParams();
+  const unsubs = startGatewayEventSubscriptions(params);
+  try {
+    const process = createProcessSessionFixture({ id: "build" });
+    process.scopeKey = "agent:main:process-owner";
+    process.agentId = "main";
+    addSession(process);
+    appendOutput(process, "stdout", "Starting");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(params.broadcast).not.toHaveBeenCalled();
+    markBackgrounded(process);
+    for (let index = 0; index < 20; index++) {
+      appendOutput(process, "stdout", "More output");
+    }
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(params.broadcast).toHaveBeenCalledExactlyOnceWith(
+      "sessions.processes.changed",
+      { sessionKey: process.scopeKey, agentId: "main" },
+      { sessionKeys: [process.scopeKey], agentId: "main", dropIfSlow: true },
+    );
+    markExited(process, 0, null, "completed");
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(params.broadcast).toHaveBeenCalledTimes(2);
+    deleteSession(process.id);
+    await vi.advanceTimersByTimeAsync(5_000);
+    expect(params.broadcast).toHaveBeenCalledTimes(3);
+    const later = createProcessSessionFixture({ id: "later-build", backgrounded: true });
+    later.scopeKey = process.scopeKey;
+    later.agentId = "main";
+    addSession(later);
+    unsubs.lifecycleUnsub();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(params.broadcast).toHaveBeenCalledTimes(3);
+  } finally {
+    vi.useRealTimers();
+    await unsubs.agentUnsub();
+    unsubs.heartbeatUnsub();
+    unsubs.transcriptUnsub();
+    unsubs.lifecycleUnsub();
+    resetProcessRegistryForTests();
+  }
+});
 
 it.for([
   { phase: "before startup", completion: "physical" },

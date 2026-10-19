@@ -296,7 +296,7 @@ describe("AppSidebar session source lifecycle", () => {
     expect(sidebar.sessionData.sessionsAgentId).toBe("main");
   });
 
-  it("keeps pinned session views while the Gateway client is replaced", async () => {
+  it("retires protected session views on client replacement without removing personal pins", async () => {
     const key = "agent:main:pinned";
     const initial = createSessionState("main", [key]);
     const pinned = initial.result?.sessions[0];
@@ -310,7 +310,6 @@ describe("AppSidebar session source lifecycle", () => {
     const { sidebar } = await mountSidebar(gateway.gateway, sessions);
     sidebar.sidebarEntries = [`session:${key}`];
     await sidebar.updateComplete;
-    const cachedResult = sidebar.sessionData.sessionsResult;
     const pinnedEntry = () =>
       sidebar.querySelector(`.sidebar-rail [data-sidebar-entry="session:${key}"] a`);
 
@@ -322,16 +321,17 @@ describe("AppSidebar session source lifecycle", () => {
     });
     await sidebar.updateComplete;
 
-    expect(sidebar.sessionData.sessionsResult).toBe(cachedResult);
-    expect(sidebar.sessionData.sessionsAgentId).toBe("main");
-    expect(sidebar.sessionData.sessionResultsByAgent.main).toBe(cachedResult);
-    expect(pinnedEntry()).not.toBeNull();
+    expect(sidebar.sessionData.sessionsResult).toBeNull();
+    expect(sidebar.sessionData.sessionsAgentId).toBeNull();
+    expect(sidebar.sessionData.sessionResultsByAgent).toEqual({});
+    expect(pinnedEntry()).toBeNull();
+    expect(sidebar.sidebarEntries).toEqual([`session:${key}`]);
 
     gateway.publish({ phase: "connected" });
     const unpinned = createSessionState("main", [key]);
     sessions.reconcile(unpinned.result?.sessions[0]);
     await sidebar.updateComplete;
-    expect(pinnedEntry()).not.toBeNull();
+    expect(pinnedEntry()).toBeNull();
 
     if (!unpinned.result) {
       throw new Error("Expected unpinned roster");

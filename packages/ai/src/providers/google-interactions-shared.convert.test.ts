@@ -120,6 +120,7 @@ describe("buildGoogleInteractionsParams", () => {
     expect(
       resolveGoogleApiClientHeaders({
         baseUrl: "https://generativelanguage.googleapis.com",
+        model,
       })["x-goog-api-client"],
     ).toMatch(/^openclaw\//u);
   });

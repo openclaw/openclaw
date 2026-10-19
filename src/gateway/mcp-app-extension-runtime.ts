@@ -110,7 +110,6 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
       | undefined;
     const prepareSession = () => {
       preparing ??= (async () => {
-        current();
         const isolation = resolveSandboxRuntimeStatus({
           cfg,
           agentId,
@@ -382,7 +381,6 @@ export async function prepareMcpAppExtensionRuntime(options: GatewayRequestHandl
         ...retained,
         prepareToolCall: prepareViewToolCall,
         assertCurrent: () => {
-          retained.assertCurrent();
           if (
             current(retained.assertCurrent).entry.permissionMode !== target.entry.permissionMode
           ) {
