@@ -183,7 +183,10 @@ export { loadActivatedBundledPluginPublicSurfaceModuleSync, listImportedBundledP
 export { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 export { getFsSafeNativeConfig } from "@openclaw/fs-safe/config";
 export { getNativeFallbackDiagnostic } from ${JSON.stringify(pathToFileURL(fs.realpathSync(path.resolve("node_modules/@openclaw/fs-safe/dist/native.js"))).href)};
-export { readOwnerAndDaclBatch } from "@openclaw/fs-safe/permissions";`;
+import { readOwnerAndDaclBatch as readBatch } from "@openclaw/fs-safe/permissions";
+export function readOwnerAndDaclBatch(paths: readonly string[]) {
+  return readBatch(paths);
+}`;
               }
               if (id === highlightSource) {
                 return `globalThis[Symbol.for("worker-highlight-initializations")] = (globalThis[Symbol.for("worker-highlight-initializations")] ?? 0) + 1;\n${code}`;
