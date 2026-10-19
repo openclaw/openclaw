@@ -46,13 +46,12 @@ function commentaryHarness() {
   host.chatRunId = RUN_ID;
   let seq = 0;
   let messageSeq = 0;
+  const envelope = () => ({ sessionKey: "main", runId: RUN_ID, seq: ++seq });
   const agent = (stream: "item" | "tool", data: Record<string, unknown>) =>
     handleAgentEvent(host, {
-      runId: RUN_ID,
-      seq: ++seq,
+      ...envelope(),
       stream,
       ts: TOOL_STREAM_TEST_NOW + seq,
-      sessionKey: "main",
       data,
     });
   const deliver = () => {
@@ -60,9 +59,7 @@ function commentaryHarness() {
     const delta = gateway.takeBufferDelta(RUN_ID, projected.text);
     if (delta) {
       handleChatGatewayEvent(host, {
-        sessionKey: "main",
-        runId: RUN_ID,
-        seq: ++seq,
+        ...envelope(),
         state: "delta",
         ...delta,
         message: assistant(projected.text),
@@ -176,15 +173,20 @@ describe("keyed commentary after an unphased live stream", () => {
     h.expectParts([COMMENTARY, "sig-1"], ["Found a match, now let me read the file", undefined]);
   });
 
-  it("does not let a late item update consume a later identical occurrence", () => {
+  it.each([false, true])("does not reacquire a later occurrence (cleared=%s)", (cleared) => {
     const h = commentaryHarness();
     h.stream("source-a", `${COMMENTARY}\n\n`);
     h.preamble("item-a", COMMENTARY, "source-a");
-    h.stream("source-b", `${COMMENTARY}\n\n`);
+    if (cleared) {
+      h.preamble("item-a", "");
+    }
+    h.stream("source-b", cleared ? COMMENTARY : `${COMMENTARY}\n\n`);
     h.preamble("item-a", COMMENTARY);
     h.expectParts([COMMENTARY, "item-a"], [COMMENTARY, undefined]);
-    h.preamble("item-b", COMMENTARY, "source-b");
-    h.expectParts([COMMENTARY, "item-a"], [COMMENTARY, "item-b"]);
+    if (!cleared) {
+      h.preamble("item-b", COMMENTARY, "source-b");
+      h.expectParts([COMMENTARY, "item-a"], [COMMENTARY, "item-b"]);
+    }
   });
 
   it("retires a saved owner's first occurrence only, including delayed updates", () => {
@@ -197,16 +199,6 @@ describe("keyed commentary after an unphased live stream", () => {
     h.stream("source-b", COMMENTARY);
     h.preamble("item-a", COMMENTARY);
     h.expectParts([COMMENTARY, undefined]);
-  });
-
-  it("does not reacquire an occurrence after an item is cleared", () => {
-    const h = commentaryHarness();
-    h.stream("source-a", `${COMMENTARY}\n\n`);
-    h.preamble("item-a", COMMENTARY, "source-a");
-    h.preamble("item-a", "");
-    h.stream("source-b", COMMENTARY);
-    h.preamble("item-a", COMMENTARY);
-    h.expectParts([COMMENTARY, "item-a"], [COMMENTARY, undefined]);
   });
 
   it("keeps earlier different cumulative text visible when a later occurrence becomes keyed", () => {

@@ -67,77 +67,59 @@ describe("app-tool-stream run usage", () => {
     ]);
   });
 
-  it("replaces a pending targetless Guardian review with its terminal decision", () => {
-    const { host, send } = usageHarness({ chatRunId: "client-run" });
-    const review = {
-      reviewId: "network-review",
-      targetItemId: null,
-      command: "https://api.example.test:443",
-    };
-
-    send(1, "codex_app_server.guardian", { ...review, phase: "started", status: "inProgress" });
-    expect(host.guardianNotices).toMatchObject([
-      { kind: "reviewing", command: "https://api.example.test:443" },
-    ]);
-
-    send(2, "codex_app_server.guardian", { ...review, phase: "completed", status: "denied" });
-    expect(host.guardianNotices).toMatchObject([
-      { kind: "denied", command: "https://api.example.test:443" },
-    ]);
-  });
-
-  it("shows a targeted strict-review requirement only until its decision arrives", () => {
-    const { host, send } = usageHarness({ chatRunId: "client-run" });
-    const review = {
-      reviewId: "strict-review",
-      targetItemId: "command-1",
-      command: "printf hello",
-    };
-
-    send(1, "codex_app_server.guardian", { ...review, phase: "strict_review_required" });
-    expect(host.guardianNotices).toMatchObject([
-      { kind: "strict-review-required", command: "printf hello" },
-    ]);
-
-    send(2, "codex_app_server.guardian", { ...review, phase: "completed", status: "approved" });
-    expect(host.guardianNotices).toEqual([]);
-  });
-
-  it("rejects a sessionless system notice from a foreign run", () => {
-    const { host, send } = usageHarness({ chatRunId: "client-run" });
-
-    expect(
-      send(
-        1,
-        "notice",
-        { phase: "warning", message: "Foreign system warning" },
-        "foreign-run",
-        null,
-      ),
-    ).toBe(true);
-    expect(host.guardianNotices).toEqual([]);
-  });
-
-  it("rejects a same-session Guardian notice from a foreign run", () => {
-    const { host, send } = usageHarness({ chatRunId: "client-run" });
-
-    expect(
-      send(
-        1,
-        "codex_app_server.guardian",
+  it.each([false, true])(
+    "replaces pending Guardian reviews with decisions (strict=%s)",
+    (strict) => {
+      const { host, send } = usageHarness({ chatRunId: "client-run" });
+      const review = {
+        reviewId: "review",
+        targetItemId: strict ? "command-1" : null,
+        command: strict ? "printf hello" : "https://api.example.test:443",
+      };
+      const started = strict
+        ? { phase: "strict_review_required" }
+        : { phase: "started", status: "inProgress" };
+      send(1, "codex_app_server.guardian", { ...review, ...started });
+      expect(host.guardianNotices).toMatchObject([
         {
-          reviewId: "foreign-review",
-          phase: "started",
-          status: "inProgress",
-          command: "foreign command",
-          rationale: "foreign rationale",
+          kind: strict ? "strict-review-required" : "reviewing",
+          command: review.command,
         },
-        "foreign-run",
-        "main",
-      ),
-    ).toBe(true);
-    expect(host.guardianNotices).toEqual([]);
-  });
+      ]);
+      send(2, "codex_app_server.guardian", {
+        ...review,
+        phase: "completed",
+        status: strict ? "approved" : "denied",
+      });
+      if (strict) {
+        expect(host.guardianNotices).toEqual([]);
+      } else {
+        expect(host.guardianNotices).toMatchObject([{ kind: "denied", command: review.command }]);
+      }
+    },
+  );
+
+  it.each([
+    ["notice", { phase: "warning", message: "Foreign system warning" }, null],
+    [
+      "codex_app_server.guardian",
+      {
+        reviewId: "foreign-review",
+        phase: "started",
+        status: "inProgress",
+        command: "foreign command",
+        rationale: "foreign rationale",
+      },
+      "main",
+    ],
+  ] satisfies Array<[AgentEvent["stream"], AgentEvent["data"], string | null]>)(
+    "rejects foreign-run %s notices",
+    (stream, data, sessionKey) => {
+      const { host, send } = usageHarness({ chatRunId: "client-run" });
+      expect(send(1, stream, data, "foreign-run", sessionKey)).toBe(true);
+      expect(host.guardianNotices).toEqual([]);
+    },
+  );
 
   it("requires the local run id when an event has no session identity", () => {
     const { host, send } = usageHarness({ chatRunId: "client-run" });
