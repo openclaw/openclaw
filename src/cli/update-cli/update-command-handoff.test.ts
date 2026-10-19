@@ -49,6 +49,7 @@ it
     const managerPath = path.join(root, "manager-calls");
     const control = await fs.realpath(await tempDirs.make("openclaw-cli-handoff-control-"));
     const leasePath = path.join(control, "managed-update-handoffs.sqlite");
+    const readTrace = () => fs.readFile(tracePath, "utf8");
     await fs.mkdir(path.join(root, "dist"));
     await fs.writeFile(
       path.join(root, "package.json"),
@@ -108,14 +109,8 @@ process.stdin.once('end',()=>{if(child.exitCode===null&&child.signalCode===null)
       gateway.once("close", () => resolve());
     });
     const readLease = () => {
-      const db = new DatabaseSync(leasePath, { readOnly: true });
-      try {
-        return db
-          .prepare("SELECT owner FROM managed_update_handoffs WHERE install_root=?")
-          .get(root);
-      } finally {
-        db.close();
-      }
+      using db = new DatabaseSync(leasePath, { readOnly: true });
+      return db.prepare("SELECT owner FROM managed_update_handoffs WHERE install_root=?").get(root);
     };
     try {
       // Transfer releases the CLI before its detached helper finishes owning the lease.
@@ -123,7 +118,7 @@ process.stdin.once('end',()=>{if(child.exitCode===null&&child.signalCode===null)
         .poll(
           async () => {
             await fs.readFile(resultPath, "utf8");
-            return fs.readFile(tracePath, "utf8");
+            return readTrace();
           },
           { timeout: 20_000 },
         )
@@ -134,7 +129,7 @@ process.stdin.once('end',()=>{if(child.exitCode===null&&child.signalCode===null)
       expect(result.code, result.stderr).toBe(
         mode === "transfer" ? UPDATE_HANDOFF_IN_PROGRESS_EXIT_CODE : 23,
       );
-      const trace = (await fs.readFile(tracePath, "utf8"))
+      const trace = (await readTrace())
         .trim()
         .split("\n")
         .map((line) => JSON.parse(line));

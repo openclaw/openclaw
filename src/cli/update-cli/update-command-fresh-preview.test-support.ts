@@ -29,12 +29,8 @@ import * as commandTriage from "./update-command-triage.js";
 import { updateCommand } from "./update-command.js";
 
 function withDatabase<T>(filename: string, readOnly: boolean, use: (db: DatabaseSync) => T): T {
-  const db = new DatabaseSync(filename, { readOnly });
-  try {
-    return use(db);
-  } finally {
-    db.close();
-  }
+  using db = new DatabaseSync(filename, { readOnly });
+  return use(db);
 }
 
 export function createSelectedTargetStateDatabase(databasePath: string) {
@@ -189,6 +185,14 @@ export function registerOriginalCaptureTests({
         .mockImplementation(async () => {
           throw new Error("Original capture must precede target initialization");
         });
+      const capture = (runId: string, manifestPath: string) =>
+        expectOriginalCapture({
+          runId,
+          manifestPath,
+          installRoot: captureRoot,
+          databasePath: fixture.databasePath,
+          previousRunId,
+        });
       const execute = vi
         .spyOn(execution, "executeMutableUpdate")
         .mockImplementation(async (params) => {
@@ -202,13 +206,7 @@ export function registerOriginalCaptureTests({
           expect(getUpdateRun(run.runId, { env: run.env })?.status).toBe("running");
           const ref = run.originalRecoveryCapture;
           assert(ref);
-          expectOriginalCapture({
-            runId: run.runId,
-            manifestPath: ref.manifestPath,
-            installRoot: captureRoot,
-            databasePath: fixture.databasePath,
-            previousRunId,
-          });
+          capture(run.runId, ref.manifestPath);
           finishUpdateRun(
             run.runId,
             { status: "skipped", reason: "fixture-before-forward-migration" },
@@ -265,17 +263,11 @@ export function registerOriginalCaptureTests({
         await updateStatusCommand({ json: true });
         const output = vi.mocked(defaultRuntime.writeJson).mock.calls.at(-1)?.[0];
         assert(isRecord(output) && Array.isArray(output.recoverySets));
-        const capture = output.recoverySets.find(
+        const recovery = output.recoverySets.find(
           (set) => isRecord(set) && set.runId === result.runId,
         );
-        assert(isRecord(capture) && typeof capture.manifestPath === "string");
-        expectOriginalCapture({
-          runId: result.runId,
-          manifestPath: capture.manifestPath,
-          installRoot: captureRoot,
-          databasePath: fixture.databasePath,
-          previousRunId,
-        });
+        assert(isRecord(recovery) && typeof recovery.manifestPath === "string");
+        capture(result.runId, recovery.manifestPath);
         expect(execute).not.toHaveBeenCalled();
         expect(packageUpdate.stagePackageInstallUpdate).not.toHaveBeenCalled();
         expect(shared.resolveTargetVersion).not.toHaveBeenCalled();

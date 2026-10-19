@@ -20,6 +20,7 @@ import { isReportableUpdateRun } from "../../shared/update-outcome.js";
 import { openOpenClawStateDatabase } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqlitePath } from "../../state/openclaw-state-db.paths.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
+import { createCommandResult } from "../../test-utils/npm-spec-install-test-helpers.js";
 import * as shared from "./shared.js";
 import { updateStatusCommand } from "./status.js";
 import * as finalization from "./update-command-finalize.js";
@@ -57,14 +58,10 @@ beforeEach(async () => {
     ) {
       throw new Error(`Unexpected command for untouched installation: ${argv.join(" ")}`);
     }
-    return {
-      stdout: "",
+    return createCommandResult({
       stderr: "not a global install or Git checkout",
       code: 1,
-      signal: null,
-      killed: false,
-      termination: "exit",
-    };
+    });
   });
   output = [];
   lines = [];
@@ -102,6 +99,11 @@ function expectUnclassifiedInstall(reason: string) {
   expect(output[0]).not.toHaveProperty("recovery");
   expect(triage).not.toHaveBeenCalled();
 }
+
+const expectNoDatabase = () =>
+  expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
+    code: "ENOENT",
+  });
 
 it.each([
   { containerized: true, reason: "container-image-install", action: "Pull or build" },
@@ -160,9 +162,7 @@ it("reports an untouched fresh container profile", async () => {
   await expect(
     prepareUpdateFailureReport({ attemptId: "untouched-install", result }),
   ).rejects.toThrow("Only a final failed update");
-  await expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
-    code: "ENOENT",
-  });
+  await expectNoDatabase();
 });
 
 it("renders the container non-outcome in terminal output", async () => {
@@ -227,9 +227,7 @@ it.each(["missing", "invalid"])(
     expect(metadata).not.toHaveBeenCalled();
     expect(channel).not.toHaveBeenCalled();
     expect(triage).not.toHaveBeenCalled();
-    await expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
-      code: "ENOENT",
-    });
+    await expectNoDatabase();
     if (manifest === "missing") {
       expect(await fs.readdir(root)).toEqual([]);
     } else {
@@ -249,13 +247,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
     vi.stubEnv("HOMEBREW_PREFIX", prefix);
     const brewRoot = path.join(
       prefix,
-      "Cellar",
-      "openclaw-cli",
-      "2026.9.4",
-      "libexec",
-      "lib",
-      "node_modules",
-      "openclaw",
+      "Cellar/openclaw-cli/2026.9.4/libexec/lib/node_modules/openclaw",
     );
     await fs.mkdir(path.join(brewRoot, "dist"), { recursive: true });
     await fs.writeFile(
@@ -301,9 +293,7 @@ it.skipIf(process.platform === "win32").each([false, true])(
       expect(JSON.stringify(output)).not.toContain(windowsUserSid);
     } else {
       expect(output[0]).not.toHaveProperty("runId");
-      await expect(fs.stat(resolveOpenClawStateSqlitePath(process.env))).rejects.toMatchObject({
-        code: "ENOENT",
-      });
+      await expectNoDatabase();
     }
 
     lines = [];

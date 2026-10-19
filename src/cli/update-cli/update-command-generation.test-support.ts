@@ -15,6 +15,7 @@ import { VERSION } from "../../version.js";
 import { runDaemonRestart } from "../daemon-cli/lifecycle.js";
 import { readUpdateConfigSnapshot } from "./update-command-config-snapshot.js";
 import { createUpdateCommandExecutionGuards } from "./update-command-execution-guards.js";
+import { verificationFixture } from "./update-command-fixtures.test-support.js";
 import { finishUpdate } from "./update-command-post-update.js";
 import { UpdateCommandFailure } from "./update-command-result.js";
 import { withOwnedManagedUpdateEnv } from "./update-command-service-env.js";
@@ -29,7 +30,6 @@ export function registerGenerationRecoveryTests(
       child: Mock<typeof import("../../process/exec.js").runCommandWithTimeout>;
       health: Mock<typeof import("../daemon-cli/restart-health.js").waitForGatewayHealthyRestart>;
       running: boolean;
-      events: string[];
       stopAllowances: Array<string | undefined>;
       writeJson: Mock;
     };
@@ -56,19 +56,7 @@ export function registerGenerationRecoveryTests(
         config: configSnapshot.config,
         env,
       });
-      recordUpdateRunVerification(
-        run.runId,
-        {
-          serviceRunning: true,
-          runningVersion: VERSION,
-          versionMatch: true,
-          settled: true,
-          readyz: true,
-          channelsReady: true,
-          pluginErrors: [],
-        },
-        { env },
-      );
+      recordUpdateRunVerification(run.runId, verificationFixture(VERSION), { env });
       const before = await maybeStopManagedServiceBeforeMutableUpdate({
         root,
         updateInstallKind: "package",
