@@ -8,6 +8,11 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { loadSessionEntry, replaceSessionEntry } from "../config/sessions/session-accessor.js";
 import { resolveSqliteTargetFromSessionStorePath } from "../config/sessions/session-sqlite-target.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import {
+  createAgentDatabaseInspectionRefusal,
+  preparePendingAgentDatabase,
+  recordAgentDatabaseAdmissions,
+} from "../state/agent-database-admission.js";
 import { reconstructAgentDeletionJournal } from "../state/agent-deletion-journal-recovery.js";
 import { completeAgentDeletionJournalInDatabase } from "../state/agent-deletion-journal.js";
 import {
@@ -111,6 +116,53 @@ describe("runSessionRegistryMaintenance", () => {
       expect(loadSessionEntry(scope)).toBeDefined();
     }),
   );
+
+  it("maintains healthy stores while another agent waits for database admission, then resumes it", async () => {
+    await withMaintenanceState(async (state) => {
+      const config: OpenClawConfig = {
+        agents: { ownership: "explicit", entries: { slow: {}, healthy: {} } },
+      };
+      await state.writeConfig(config);
+      setRuntimeConfigSnapshot(config);
+      const slowStorePath = path.join(state.sessionsDir("slow"), "sessions.json");
+      const healthyStorePath = path.join(state.sessionsDir("healthy"), "sessions.json");
+      const slowKey = await writeStaleCronSession(slowStorePath, "slow");
+      const healthyKey = await writeStaleCronSession(healthyStorePath, "healthy");
+      const refusal = createAgentDatabaseInspectionRefusal({
+        agentId: "slow",
+        paths: [resolveSqliteTargetFromSessionStorePath(slowStorePath).path],
+        pending: true,
+        reason: "Database integrity check is running",
+      });
+      recordAgentDatabaseAdmissions([refusal]);
+      const params = { apply: true, cronStorePath: state.statePath("cron/jobs.json") };
+
+      const waiting = await runSessionRegistryMaintenance(params);
+
+      expect(waiting).toMatchObject({
+        pruned: 1,
+        skippedStores: 1,
+        stores: expect.arrayContaining([
+          {
+            agentId: "slow",
+            storePath: refusal.paths[0],
+            skippedReason: "agent-database-inspection-pending",
+          },
+        ]),
+      });
+      expect(
+        loadSessionEntry({ sessionKey: healthyKey, storePath: healthyStorePath }),
+      ).toBeUndefined();
+      await preparePendingAgentDatabase(refusal, { assertCurrent() {} }, async () => {
+        expect(loadSessionEntry({ sessionKey: slowKey, storePath: slowStorePath })).toBeDefined();
+      });
+
+      const resumed = await runSessionRegistryMaintenance(params);
+
+      expect(resumed).toMatchObject({ pruned: 1, skippedStores: 0 });
+      expect(loadSessionEntry({ sessionKey: slowKey, storePath: slowStorePath })).toBeUndefined();
+    });
+  });
 
   it.each(["per-agent", "fixed selector", "exact database"])(
     "prunes every configured agent's stale cron rows with a %s store",

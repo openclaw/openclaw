@@ -1,6 +1,10 @@
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from "vitest";
-import { awaitGateBeforeSettlement, createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../../test/helpers/promise.js";
 import { applySessionEntryExactReplacements } from "../../../config/sessions/session-accessor.sqlite-replacement-projection.js";
 import { callGateway } from "../../../gateway/call.js";
 import type { GatewayInstanceAgentDispatchOptions } from "../../../gateway/server-instance-runtime.types.js";
@@ -8,6 +12,7 @@ import { sessionSharingTestContext } from "../../../gateway/server-methods/sessi
 import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
 import { getAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
+import { withAgentDatabasePreparationContext } from "../../../state/agent-database-preparation-context.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import * as stateWorker from "../../../state/openclaw-state-worker-store.js";
 import { observeMainThreadSql } from "../../../test-utils/main-thread-sql-spies.test-support.js";
@@ -173,6 +178,94 @@ function createRestorer(
     ...options,
   });
 }
+
+it.for([
+  { preparing: true, closeGateway: false },
+  { preparing: false, closeGateway: false },
+  { preparing: true, closeGateway: true },
+])(
+  "recovers a healthy agent during a database open (preparing: $preparing, close: $closeGateway)",
+  async ({ preparing, closeGateway }, { signal }) => {
+    const { manager } = createRegistrationFixture();
+    for (const agentId of ["slow", "healthy"]) {
+      await manager.registerSubagentRun({
+        runId: `${agentId}-child`,
+        childSessionKey: `agent:${agentId}:subagent:child`,
+        childAgentId: agentId,
+        sessionEntry: fixture,
+        requesterSessionKey: `agent:${agentId}:main`,
+        requesterAgentId: agentId,
+        requesterDisplayKey: agentId,
+        task: "Restore independently after database integrity admission",
+        cleanup: "keep",
+      });
+    }
+    subagentRuns.clear();
+    const databaseReady = createDeferred();
+    const healthyRecovered = createDeferred();
+    const slowRead = createDeferred();
+    let gatewayOpen = true;
+    let databaseOpen = false;
+    const gateway = sessionSharingTestContext(vi.fn());
+    const resolver = () => (gatewayOpen ? gateway : undefined);
+    const resumeRun = vi.fn();
+    const recovered: string[] = [];
+    const restorer = createRestorer({
+      getGatewayContextResolver: () => resolver,
+      resumeRun,
+      recoverInterruptedRuns: async (entries = [...subagentRuns.values()]) => {
+        recovered.push(...entries.map((entry) => entry.runId));
+        if (recovered.includes("healthy-child")) {
+          healthyRecovered.resolve();
+        }
+      },
+    });
+    await restorer.restoreOnce();
+    await vi.mocked(loadSubagentSessionEntry).withImplementation(
+      async ({ childAgentId }) => {
+        if (childAgentId === "slow") {
+          slowRead.resolve();
+          await databaseReady.promise;
+        }
+        return { ...fixture, updatedAt: 1 };
+      },
+      async () => {
+        const activation = withAgentDatabasePreparationContext(
+          () => ({
+            waitForAgentPreparation: (agentId) =>
+              preparing && agentId === "slow" && !databaseOpen ? databaseReady.promise : undefined,
+          }),
+          () => restorer.activate(),
+        );
+        try {
+          await withinTest(
+            preparing
+              ? Promise.race([healthyRecovered.promise, slowRead.promise])
+              : healthyRecovered.promise,
+            signal,
+          );
+          expect(resumeRun).toHaveBeenCalledExactlyOnceWith("healthy-child");
+          gatewayOpen = !closeGateway;
+        } finally {
+          databaseOpen = true;
+          databaseReady.resolve();
+          if (closeGateway) {
+            await expect(activation).rejects.toThrow("lost its Gateway owner");
+          } else {
+            await activation;
+          }
+          restorer.reset();
+        }
+      },
+    );
+    expect(recovered).toEqual(closeGateway ? ["healthy-child"] : ["healthy-child", "slow-child"]);
+    if (closeGateway) {
+      expect(resumeRun).toHaveBeenCalledExactlyOnceWith("healthy-child");
+    } else {
+      expect(resumeRun.mock.calls).toEqual([["healthy-child"], ["slow-child"]]);
+    }
+  },
+);
 
 it.each(["restartRecovery", "killIntent", "killReconciliation"] as const)(
   "activates healthy siblings without reading a child owned by %s",

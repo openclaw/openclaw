@@ -26,7 +26,7 @@ import {
   bindSubagentRunGatewayOwners,
   retryDeferredSubagentCompletionSource,
 } from "../registry/subagent-registry-gateway-owner.js";
-import { subagentRuns } from "../registry/subagent-registry-memory.js";
+import { getSubagentActivationRuns, subagentRuns } from "../registry/subagent-registry-memory.js";
 import {
   assertSubagentRegistryWriteOutcomeKnown,
   mutateSubagentRuns,
@@ -151,6 +151,7 @@ describe("native subagent completion worker admission", () => {
         const resolver = () => gateway;
         await bindSubagentRunGatewayOwners({
           runs: subagentRuns,
+          entries: [...getSubagentActivationRuns(subagentRuns)],
           resumedRuns: new Set(),
           getGatewayContextResolver: () => resolver,
           onRecovered: () => {},

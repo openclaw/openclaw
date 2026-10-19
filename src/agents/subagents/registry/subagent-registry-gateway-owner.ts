@@ -16,11 +16,7 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { readRestartRecoveryRequesterSource } from "../../requester-run-recovery-source.js";
-import {
-  getCurrentSubagentRunOwner,
-  getSubagentActivationRuns,
-  subagentRuns,
-} from "./subagent-registry-memory.js";
+import { getCurrentSubagentRunOwner, subagentRuns } from "./subagent-registry-memory.js";
 import {
   mutateSubagentRuns,
   assertSubagentRegistryWriteSourceCurrent,
@@ -409,6 +405,7 @@ async function recoverSubagentRunGatewayOwner(
 /** Activate unfinished obligations; the registry owns later retention of cold rows. */
 export async function bindSubagentRunGatewayOwners(params: {
   runs: Map<string, SubagentRunRecord>;
+  entries: readonly SubagentRunRecord[];
   resumedRuns: Set<object>;
   getGatewayContextResolver: () => GatewayContextResolver | undefined;
   onRecovered: (entry: SubagentRunRecord) => void;
@@ -421,7 +418,7 @@ export async function bindSubagentRunGatewayOwners(params: {
   }
   const isCurrent = () => params.getGatewayContextResolver() === resolver && resolver() === gateway;
   bindGatewayContextResolver(params.runs, resolver);
-  const capturedRuns = [...getSubagentActivationRuns(params.runs)];
+  const capturedRuns = params.entries;
   const metrics: ActivationMetrics = {
     authorityRestoreMs: 0,
     publishMs: 0,

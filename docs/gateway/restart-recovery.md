@@ -1312,8 +1312,12 @@ existing restart delivery and continuation behavior.
   `openclaw_session_recovery_age_seconds`.
 - **Startup timing:** the `sidecars.subagent-recovery` completion line includes
   `readersMs`, `deliveryMs`, `execMs`, `registryLoadMs`, and `registryActivationMs`
-  at the normal info level. These elapsed times include dependency loading and
-  waits for workers or database admission. Within `deliveryMs`,
+  at the normal info level. Recovery no longer prewarms every agent's readers
+  before starting; `readersMs` remains zero. Delivery, exec notification, and
+  subagent recovery run independently, and subagent activation preserves ordering
+  within each requester while other agents continue through a slow database open.
+  Their tails remain tracked through shutdown. These elapsed times overlap and
+  include dependency loading and waits for workers or database admission. Within `deliveryMs`,
   `deliveryNoticesMs` measures blocked-notice selection and persistence, and
   `retryWaitMs` measures retry backoff; these nested totals are not additional
   phase time. Registry activation includes `registryActivationBindMs`,

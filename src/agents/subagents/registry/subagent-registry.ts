@@ -447,14 +447,18 @@ function resumeFinalizedSubagentRun(runId: string, entry: SubagentRunRecord) {
 const subagentRestorer = createSubagentRegistryRestorer({
   runs: subagentRuns,
   getGatewayContextResolver: () => activeGatewayContextResolver,
-  bindGatewayOwners: async (startupTrace) => {
+  bindGatewayOwners: async (entries, startupTrace, onRecovered) => {
     if (
       !(await bindSubagentRunGatewayOwners({
         runs: subagentRuns,
+        entries,
         startupTrace,
         resumedRuns,
         getGatewayContextResolver: () => activeGatewayContextResolver,
-        onRecovered: subagentLifecycleController.markRequesterSettleWakeRestored,
+        onRecovered: (entry) => {
+          onRecovered(entry);
+          subagentLifecycleController.markRequesterSettleWakeRestored(entry);
+        },
       }))
     ) {
       return false;
@@ -467,7 +471,7 @@ const subagentRestorer = createSubagentRegistryRestorer({
   ensureListener: () => subagentListener.ensure(),
   startSweeper: () => subagentSweeper.start(),
   scheduleSweep: scheduleSubagentRegistrySweep,
-  recoverInterruptedRuns: () => subagentSweeper.recoverInterruptedRuns(),
+  recoverInterruptedRuns: (entries) => subagentSweeper.recoverInterruptedRuns(entries),
   resumeRun: (runId) => resumeSubagentRun(runId, "restore"),
   listSwarmRunsForGroup: (groupId, requesterSessionKey, requesterAgentId) =>
     listSwarmRunsForGroup(groupId, requesterSessionKey, requesterAgentId),

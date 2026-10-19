@@ -752,8 +752,13 @@ model publications unless the ID also belongs to the configured agent roster.
 Pending preparation does not produce a startup migration warning. Status and
 Doctor derive failed inspection and preparation warnings from current agent
 admission decisions, with the reason and repair guidance. Successful preparation
-clears the agent's pending refusal without requiring a restart. Genuine migration
-warnings remain recorded for the boot. This changes no stored state or update
+clears the agent's pending refusal without requiring a restart. Recovery discovery
+and cron session maintenance exclude pending stores before acquiring their readers,
+so healthy agents continue. Cron retries after the admission owner publishes the
+agent's availability; it does not log an admission failure while inspection is pending.
+Session requests retain the typed, retryable inspection-pending response until
+preparation completes. No ordinary reads or writes bypass the integrity gate.
+Genuine migration warnings remain recorded for the boot. This changes no stored state or update
 migration behavior.
 
 Every 60 seconds while recovery is pending, `agent database startup preparation
