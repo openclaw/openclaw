@@ -1,5 +1,3 @@
-// Subagent delivery-context tests protect route metadata inheritance for child
-// agent sessions and outbound delivery through channel plugins.
 import { randomUUID } from "node:crypto";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, test } from "vitest";
@@ -7,7 +5,6 @@ import { createDeferred, withinTest } from "../../test/helpers/promise.js";
 import { killSubagentRunAdmin } from "../agents/subagents/registry/subagent-control.js";
 import type { SubagentAdminKillResult } from "../agents/subagents/registry/subagent-control.types.js";
 import { registerSubagentRun } from "../agents/subagents/registry/subagent-registry.js";
-import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { getRuntimeConfig } from "../config/config.js";
 import { loadSessionEntry } from "../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../config/sessions/types.js";
@@ -33,31 +30,20 @@ installGatewayTestHooks({ scope: "suite" });
 
 const gatewaySuite = installConnectedSessionStoreGatewaySuite("openclaw-gw-subagent-delivery-ctx-");
 
-const createStubChannelPlugin = (params: {
-  id: ChannelPlugin["id"];
-  label: string;
-}): ChannelPlugin => ({
-  ...createChannelTestPluginBase({
-    id: params.id,
-    label: params.label,
-  }),
-  outbound: createDirectOutboundTestAdapter({
-    channel: params.id,
-    resolveTarget: ({ to }) => {
-      const trimmed = to?.trim() ?? "";
-      if (trimmed) {
-        return { ok: true, to: trimmed };
-      }
-      return { ok: false, error: new Error(`missing target for ${params.id}`) };
-    },
-  }),
-});
-
 const defaultRegistry = createRegistry([
   {
     pluginId: "slack",
     source: "test",
-    plugin: createStubChannelPlugin({ id: "slack", label: "Slack" }),
+    plugin: {
+      ...createChannelTestPluginBase({ id: "slack", label: "Slack" }),
+      outbound: createDirectOutboundTestAdapter({
+        channel: "slack",
+        resolveTarget: ({ to }) =>
+          to?.trim()
+            ? { ok: true, to: to.trim() }
+            : { ok: false, error: new Error("missing target for slack") },
+      }),
+    },
   },
 ]);
 
@@ -71,13 +57,6 @@ async function prepareSessionStore(entries: StoreEntries = {}): Promise<void> {
   await writeSessionStore({ entries });
 }
 
-function readDeliveryContext(entry: StoredEntry): NonNullable<StoredEntry["deliveryContext"]> {
-  if (!entry.deliveryContext) {
-    throw new Error("expected stored deliveryContext");
-  }
-  return entry.deliveryContext;
-}
-
 async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
   const entry = loadSessionEntry({ sessionKey: key, storePath: gatewaySuite.sessionStorePath }) as
     | StoredEntry
@@ -88,56 +67,45 @@ async function readStoredSessionEntry(key: string): Promise<StoredEntry> {
   return { ...entry, ...projectSessionDeliveryFields(entry.delivery) };
 }
 
+const finalResponse = (id: string) =>
+  onceMessage(
+    gatewaySuite.ws,
+    (frame) => frame.type === "res" && frame.id === id && frame.payload?.status !== "accepted",
+  );
+
 async function sendAgentRequest(params: Record<string, unknown>): Promise<void> {
   await prepareGatewayReplyRuntimeForTest();
   const id = randomUUID();
   // Acceptance precedes execution; the next fixture must not delete a session with an active run.
-  const finalResponse = onceMessage(
-    gatewaySuite.ws,
-    (message) =>
-      message.type === "res" && message.id === id && message.payload?.status !== "accepted",
-  );
+  const final = finalResponse(id);
   gatewaySuite.ws.send(
     JSON.stringify({ type: "req", id, method: "agent", params: { deliver: false, ...params } }),
   );
-  const res = await finalResponse;
-  expect(res.ok).toBe(true);
-  expect(res.payload?.status).toBe("ok");
-}
-
-function expectDeliveryContextFields(entry: StoredEntry, expected: Record<string, unknown>): void {
-  const deliveryContext = readDeliveryContext(entry);
-  for (const [key, value] of Object.entries(expected)) {
-    expect(deliveryContext[key as keyof typeof deliveryContext]).toBe(value);
-  }
+  const res = await final;
+  expect(res).toMatchObject({ ok: true, payload: { status: "ok" } });
 }
 
 describe("subagent session deliveryContext from spawn request params", () => {
   test("existing session route metadata survives agent request delivery normalization", async () => {
+    const key = "agent:main:subagent:existing-route-metadata";
+    const deliveryContext = {
+      channel: "slack",
+      to: "channel:C0AF8TW48UQ",
+      accountId: "default",
+      threadId: "1771242986.529939",
+    };
+    const route = {
+      channel: "slack",
+      accountId: "default",
+      target: { to: "channel:C0AF8TW48UQ", rawTo: "slack://C0AF8TW48UQ", chatType: "channel" },
+      thread: { id: "1771242986.529939", kind: "thread", source: "target" },
+    } satisfies NonNullable<StoredEntry["route"]>;
     await prepareSessionStore({
-      "agent:main:subagent:existing-route-metadata": {
+      [key]: {
         sessionId: "sess-existing-route",
         updatedAt: Date.now(),
-        route: {
-          channel: "slack",
-          accountId: "default",
-          target: {
-            to: "channel:C0AF8TW48UQ",
-            rawTo: "slack://C0AF8TW48UQ",
-            chatType: "channel",
-          },
-          thread: {
-            id: "1771242986.529939",
-            kind: "thread",
-            source: "target",
-          },
-        },
-        deliveryContext: {
-          channel: "slack",
-          to: "channel:C0AF8TW48UQ",
-          accountId: "default",
-          threadId: "1771242986.529939",
-        },
+        route: structuredClone(route),
+        deliveryContext,
         lastChannel: "slack",
         lastTo: "channel:C0AF8TW48UQ",
         lastAccountId: "default",
@@ -147,38 +115,18 @@ describe("subagent session deliveryContext from spawn request params", () => {
 
     await sendAgentRequest({
       message: "follow-up",
-      sessionKey: "agent:main:subagent:existing-route-metadata",
-      channel: "slack",
-      to: "channel:C0AF8TW48UQ",
-      accountId: "default",
-      threadId: "1771242986.529939",
+      sessionKey: key,
+      ...deliveryContext,
       idempotencyKey: "idem-subagent-delivery-route-metadata",
     });
 
-    const entry = await readStoredSessionEntry("agent:main:subagent:existing-route-metadata");
-    expect(entry.route).toEqual({
-      channel: "slack",
-      accountId: "default",
-      target: {
-        to: "channel:C0AF8TW48UQ",
-        rawTo: "slack://C0AF8TW48UQ",
-        chatType: "channel",
-      },
-      thread: {
-        id: "1771242986.529939",
-        kind: "thread",
-        source: "target",
-      },
-    });
+    expect((await readStoredSessionEntry(key)).route).toEqual(route);
   });
 
   test.for(["completed", "self-stopped"] as const)(
     "pre-created subagent session inherits deliveryContext from agent request (%s)",
     async (ending, { signal }) => {
-      // Simulates the real subagent spawn flow: the trusted session accessor persists lineage
-      // before callSubagentGateway({method: "agent"}) seeds the delivery context.
-      // The direct lineage write creates a partial entry without deliveryContext.
-      // The agent handler must seed deliveryContext from the request params.
+      // Spawn persists lineage first; the agent request must fill the missing delivery context.
       await prepareSessionStore({
         "agent:main:subagent:pre-patched": {
           sessionId: "sess-pre-patched",
@@ -238,19 +186,12 @@ describe("subagent session deliveryContext from spawn request params", () => {
         await prepareGatewayReplyRuntimeForTest();
         try {
           const accepted = await rpcReq(gatewaySuite.ws, "agent", { deliver: false, ...request });
-          expect(accepted.ok).toBe(true);
-          expect(accepted.payload).toMatchObject({ status: "accepted", runId });
+          expect(accepted).toMatchObject({ ok: true, payload: { status: "accepted", runId } });
           expect(await withinTest(stopped.promise, signal)).toMatchObject({
             found: true,
             killed: true,
           });
-          const final = onceMessage(
-            gatewaySuite.ws,
-            (frame) =>
-              frame.type === "res" &&
-              frame.id === accepted.id &&
-              frame.payload?.status !== "accepted",
-          );
+          const final = finalResponse(accepted.id);
           releaseCommand.resolve();
           expect(await final).toMatchObject({ ok: true, payload: { status: "timeout" } });
         } finally {
@@ -261,7 +202,7 @@ describe("subagent session deliveryContext from spawn request params", () => {
       }
 
       const entry = await readStoredSessionEntry("agent:main:subagent:pre-patched");
-      expectDeliveryContextFields(entry, {
+      expect(entry.deliveryContext).toMatchObject({
         channel: "slack",
         to: "user:U07FDR83W6N",
         threadId: "1775577152.364109",

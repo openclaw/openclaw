@@ -13,6 +13,12 @@ import { createOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.js";
 import { disconnectGatewayClient, startGatewayWithClient } from "./test-helpers.e2e.js";
 
+const transcriptMessage = (eventId: string, parentId: string | null, role = "assistant") => ({
+  eventId,
+  parentId,
+  message: { role, content: eventId },
+});
+
 it("serves authorized incognito descriptions, events, and active-branch history", async () => {
   const state = await createOpenClawTestState({
     label: "incognito-reconcile-gateway",
@@ -65,8 +71,7 @@ it("serves authorized incognito descriptions, events, and active-branch history"
         entry: { incognito?: true };
         runStarted: boolean;
       }>("sessions.create", { agentId: "main", incognito: true });
-      expect(created.entry.incognito).toBe(true);
-      expect(created.runStarted).toBe(false);
+      expect(created).toMatchObject({ entry: { incognito: true }, runStarted: false });
       const described = await gateway.client.request<{ session: unknown }>("sessions.describe", {
         agentId: "main",
         key: created.key,
@@ -76,31 +81,18 @@ it("serves authorized incognito descriptions, events, and active-branch history"
         sessionId: created.sessionId,
         incognito: true,
       });
-      const options = {
-        agentId: "main",
-        path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-      };
       // Incognito state belongs to this process. Seed the branch through its
       // canonical writer, then exercise the authenticated public history route.
-      await persistSessionTranscriptTurn(
-        { agentId: "main", sessionKey: created.key, sessionId: created.sessionId },
-        {
-          expectedSessionId: created.sessionId,
-          messages: [
-            { eventId: "root", parentId: null, message: { role: "user", content: "root" } },
-            {
-              eventId: "abandoned",
-              parentId: "root",
-              message: { role: "assistant", content: "abandoned" },
-            },
-            {
-              eventId: "active",
-              parentId: "root",
-              message: { role: "assistant", content: "active" },
-            },
-          ],
-        },
-      );
+      const append = (messages: Parameters<typeof persistSessionTranscriptTurn>[1]["messages"]) =>
+        persistSessionTranscriptTurn(
+          { agentId: "main", sessionKey: created.key, sessionId: created.sessionId },
+          { expectedSessionId: created.sessionId, messages },
+        );
+      await append([
+        transcriptMessage("root", null, "user"),
+        transcriptMessage("abandoned", "root"),
+        transcriptMessage("active", "root"),
+      ]);
       const history = await gateway.client.request<{
         sessionId: string;
         sessionInfo?: {
@@ -112,38 +104,24 @@ it("serves authorized incognito descriptions, events, and active-branch history"
         };
         messages: Array<{ role: string; content: unknown }>;
       }>("chat.history", { agentId: "main", sessionKey: created.key, limit: 10 });
-      await persistSessionTranscriptTurn(
-        { agentId: "main", sessionKey: created.key, sessionId: created.sessionId },
-        {
-          expectedSessionId: created.sessionId,
-          messages: [
-            {
-              eventId: "published",
-              parentId: "active",
-              message: { role: "assistant", content: "published" },
-            },
-          ],
-        },
-      );
+      await append([transcriptMessage("published", "active")]);
       await expect
         .poll(() => events)
         .toEqual(
-          expect.arrayContaining([
-            expect.objectContaining({
-              event: "sessions.changed",
-              payload: expect.objectContaining({
-                sessionKey: created.key,
-                session: expect.objectContaining({ sessionId: created.sessionId, incognito: true }),
+          expect.arrayContaining(
+            ["sessions.changed", "session.message"].map((event) =>
+              expect.objectContaining({
+                event,
+                payload: expect.objectContaining({
+                  sessionKey: created.key,
+                  session: expect.objectContaining({
+                    sessionId: created.sessionId,
+                    incognito: true,
+                  }),
+                }),
               }),
-            }),
-            expect.objectContaining({
-              event: "session.message",
-              payload: expect.objectContaining({
-                sessionKey: created.key,
-                session: expect.objectContaining({ sessionId: created.sessionId, incognito: true }),
-              }),
-            }),
-          ]),
+            ),
+          ),
         );
       const roster = await gateway.client.request<{ sessions: Array<{ key: string }> }>(
         "sessions.list",
@@ -162,7 +140,9 @@ it("serves authorized incognito descriptions, events, and active-branch history"
         { role: "user", content: "root" },
         { role: "assistant", content: "active" },
       ]);
-      expect(fs.existsSync(options.path)).toBe(false);
+      expect(fs.existsSync(resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }))).toBe(
+        false,
+      );
       const durable = withOpenClawAgentDatabaseReadOnly(
         ({ db }) => ({
           events: db

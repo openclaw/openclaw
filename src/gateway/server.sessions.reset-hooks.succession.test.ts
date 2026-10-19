@@ -1,4 +1,3 @@
-// Session creation disposition and deferred runtime cleanup.
 import { expect, test, vi } from "vitest";
 import { withSessionTurn } from "../sessions/session-controller.admission.js";
 import { captureSessionTarget } from "../sessions/session-controller.lifecycle.js";
@@ -95,49 +94,34 @@ test("sessions.create keeps the parent active for an explicit parallel child", a
   );
 });
 
-test("sessions.create rejects an explicit successor fork", async () => {
-  await seedParent("sess-fork");
-
-  const result = await directSessionReq("sessions.create", {
-    key: "forked-child",
-    parentSessionKey: "main",
-    emitCommandHooks: true,
-    fork: true,
-    succeedsParent: true,
+test.each([
+  {
+    message: /fork/i,
+    parent: true,
+    params: { parentSessionKey: "main", emitCommandHooks: true, fork: true, succeedsParent: true },
+  },
+  {
+    message: /parentSessionKey/i,
+    parent: false,
+    params: { emitCommandHooks: true, succeedsParent: false },
+  },
+  {
+    message: /emitCommandHooks/i,
+    parent: true,
+    params: { parentSessionKey: "main", succeedsParent: false },
+  },
+])("sessions.create rejects invalid disposition: $message", async ({ message, parent, params }) => {
+  if (parent) {
+    await seedParent("sess-invalid-disposition");
+  } else {
+    await createSessionStoreDir();
+  }
+  const result = await directSessionReq("sessions.create", { key: "child", ...params });
+  expect(result).toMatchObject({
+    ok: false,
+    error: { code: "INVALID_REQUEST", message: expect.stringMatching(message) },
   });
-
-  expect(result.ok).toBe(false);
-  expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
-  expect(result.error?.message).toMatch(/fork/i);
   expect(sessionLifecycleHookMocks.runSessionEnd).not.toHaveBeenCalled();
-});
-
-test("sessions.create requires a parent for either explicit disposition", async () => {
-  await createSessionStoreDir();
-
-  const result = await directSessionReq("sessions.create", {
-    key: "parallel-child",
-    emitCommandHooks: true,
-    succeedsParent: false,
-  });
-
-  expect(result.ok).toBe(false);
-  expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
-  expect(result.error?.message).toMatch(/parentSessionKey/i);
-});
-
-test("sessions.create requires command hooks for either explicit disposition", async () => {
-  await seedParent("sess-no-hooks");
-
-  const result = await directSessionReq("sessions.create", {
-    key: "parallel-child",
-    parentSessionKey: "main",
-    succeedsParent: false,
-  });
-
-  expect(result.ok).toBe(false);
-  expect(result.error).toMatchObject({ code: "INVALID_REQUEST" });
-  expect(result.error?.message).toMatch(/emitCommandHooks/i);
 });
 
 test("sessions.reset waits for captured turn settlement before same-id cleanup", async () => {
