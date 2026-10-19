@@ -10,6 +10,7 @@ import { createSubagentRunParams } from "../../subagent-test-fixtures.test-helpe
 import { createSessionsYieldTool } from "../../tools/sessions-yield-tool.js";
 import * as completionStore from "../completion/subagent-completion-admission.store.js";
 import { createSubagentRegistryCompletionRuntime } from "./subagent-registry-completion-runtime.js";
+import { subagentRegistryLog } from "./subagent-registry-lifecycle-log.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
 import { mutateSubagentRuns } from "./subagent-registry-persistence.js";
 import { loadSubagentRegistryFromSqlite } from "./subagent-registry-state.fixture.test-support.js";
@@ -169,6 +170,7 @@ async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
     throw new Error("Synthetic terminal completion refusal");
   });
   const resume = vi.fn();
+  using _ = vi.spyOn(subagentRegistryLog, "warn").mockImplementation(() => {});
   const recovery = createSubagentRegistryCompletionRuntime({
     runs: subagentRuns,
     resumed: new Set([getSubagentRunRuntimeKey(entry)]),
@@ -176,7 +178,6 @@ async function driftCompletionCleanup(entry: SubagentRunRecord): Promise<void> {
     completeSubagentRun: failed,
     scheduleSweep: vi.fn(),
     resumeRun: resume,
-    warn: vi.fn(),
   });
   await recovery.completeSubagentRunWithRecovery(
     {

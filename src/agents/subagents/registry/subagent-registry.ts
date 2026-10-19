@@ -112,7 +112,6 @@ const resumeReader = createSubagentResumeReader({
   getGatewayContextResolver: () => activeGatewayContextResolver,
   resume: resumeCheckedSubagentRun,
   retryAfterDrain: (...args) => subagentLifecycleController.resumeAfterDrain(...args),
-  warn,
 });
 
 const completionRuntime = createSubagentRegistryCompletionRuntime({
@@ -122,7 +121,6 @@ const completionRuntime = createSubagentRegistryCompletionRuntime({
   completeSubagentRun: (params) => completeSubagentRun(params),
   scheduleSweep: scheduleSubagentRegistrySweep,
   resumeRun: (runId) => resumeSubagentRun(runId),
-  warn,
 });
 const pendingLifecycle = completionRuntime.pendingLifecycle;
 const clearPendingLifecycleError = pendingLifecycle.clearError;
@@ -131,7 +129,6 @@ const clearPendingLifecycleTimeout = pendingLifecycle.clearTimeout;
 const contextCleanup = createSubagentRegistryContextCleanup({
   isEndedHookOwnerCurrent: (entry): boolean =>
     subagentLifecycleController.isEndedHookOwnerCurrent(entry),
-  warn,
 });
 
 const subagentLifecycleController = new SubagentLifecycleController({
