@@ -1,6 +1,5 @@
 import { onSettled, Show } from "solid-js";
 import { selectApplicationSession } from "../../app/agent-selection.ts";
-import { i18n } from "../../i18n/lib/translate.ts";
 import { createGatewayConnectionLifecycle } from "../../lib/gateway-connection-lifecycle.ts";
 import { createPresenceActivityLifecycle } from "../../lib/presence-activity-lifecycle.ts";
 import {
@@ -11,7 +10,7 @@ import {
 import { profileAvatarUrl, profileDirectory } from "../../lib/profile-directory.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
-import { projectI18n, t } from "../../lib/reactive/i18n.ts";
+import { t } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
 import {
   prepareSessionNavigationHandoff,
@@ -50,7 +49,6 @@ let nextCardId = 0;
 /** Explicit transcript selections only. The directory remains Gateway-owned, not a UI name index. */
 function PersonReferenceContent(props: PersonReferenceProps) {
   const context = useOptionalApplication();
-  const translations = projectI18n(i18n);
   const profileId = () => props.profileId ?? "";
   const label = () => props.label ?? "";
   const connection = createGatewayConnectionLifecycle({ client: null, phase: "stopped" });
@@ -141,7 +139,6 @@ function PersonReferenceContent(props: PersonReferenceProps) {
       listen(document, "pointerdown", outside, true),
       listen(document, "focusin", outside, true),
       listen(document, "keydown", escape, true),
-      translations.subscribe(renderCard),
     ];
     stopRoute = context?.router.subscribe(close);
     if (context) {
@@ -191,10 +188,6 @@ function PersonReferenceContent(props: PersonReferenceProps) {
     if (!card) {
       return;
     }
-    card.setAttribute(
-      "aria-label",
-      t("presence.card.ariaLabel", { name: person?.name ?? label() }),
-    );
     const data = activity?.data;
     const presence = projectPresencePayload(data?.presencePayload).users.find((user) =>
       presenceMatchesProfile(user, person?.identity),
@@ -218,6 +211,7 @@ function PersonReferenceContent(props: PersonReferenceProps) {
         user && context
           ? {
               user,
+              ariaName: person?.name ?? label(),
               sessionData: data,
               watchAgentId: resolveUiDefaultAgentId(defaults),
               mainKey: resolveUiConfiguredMainKey(defaults),
@@ -251,9 +245,11 @@ function PersonReferenceContent(props: PersonReferenceProps) {
                 });
               },
             }
-          : person === undefined
-            ? t("common.loading")
-            : t("chat.mentions.unavailable"),
+          : {
+              status: person === undefined ? "loading" : "unavailable",
+              name: person?.name ?? label(),
+            },
+        () => portal.position(),
       ),
     );
     portal.position();
