@@ -20,6 +20,7 @@ import { MOONSHOT_BASE_URL } from "./provider-catalog.js";
 const MP4_A = "data:video/mp4;base64,YWFhYWFhYWFhYWFhYWFhYQ==";
 const MP4_B = "data:video/mp4;base64,YmJiYmJiYmJiYmJiYmJiYg==";
 const WEBM = "data:video/webm;base64,d2VibQ==";
+const route = { provider: "moonshot", modelId: "kimi-k3" };
 
 function model(): Model {
   return {
@@ -48,7 +49,7 @@ function genericPayload(videoUrls = [MP4_A]) {
 
 async function dispatchPayload(
   payload: ReturnType<typeof genericPayload>,
-  options: NonNullable<Parameters<StreamFn>[2]> = {},
+  onPayload?: NonNullable<Parameters<StreamFn>[2]>["onPayload"],
   ceiling?: number,
 ) {
   let dispatched: unknown;
@@ -57,25 +58,19 @@ async function dispatchPayload(
     dispatched = replacement === undefined ? payload : replacement;
     return createAssistantMessageEventStream();
   };
-  const wrapped = wrapMoonshotStream(
-    { provider: "moonshot", modelId: "kimi-k3", streamFn } as never,
-    false,
-    ceiling,
-  );
-  await wrapped(model(), { messages: [] } as Context, options);
+  const wrapped = wrapMoonshotStream({ ...route, streamFn } as never, false, ceiling);
+  await wrapped(model(), { messages: [] } as Context, { onPayload });
   return dispatched;
 }
 
 it("allows valid hook clones and injections while omitting non-MP4 video", async () => {
   const payload = genericPayload([MP4_A, WEBM]);
-  const dispatched = await dispatchPayload(payload, {
-    onPayload(value) {
-      const content = (value as typeof payload).messages[0]!.content;
-      const valid = content[2]! as Record<string, unknown>;
-      content.push(structuredClone(valid) as never);
-      content.push({ type: "video_url", video_url: { url: MP4_B } } as never);
-      content.push({ type: "image_url", image_url: { url: WEBM } } as never);
-    },
+  const dispatched = await dispatchPayload(payload, (value) => {
+    const content = (value as typeof payload).messages[0]!.content;
+    const valid = content[2]! as Record<string, unknown>;
+    content.push(structuredClone(valid) as never);
+    content.push({ type: "video_url", video_url: { url: MP4_B } } as never);
+    content.push({ type: "image_url", image_url: { url: WEBM } } as never);
   });
 
   const body = JSON.stringify(dispatched);
@@ -94,7 +89,7 @@ it("evicts later admitted videos in place to satisfy the exclusive final size", 
   } as never);
   Object.assign(projectedWithSecondOmitted, { reasoning_effort: "max" });
   const ceiling = Buffer.byteLength(JSON.stringify(projectedWithSecondOmitted), "utf8") + 1;
-  const dispatched = await dispatchPayload(payload, {}, ceiling);
+  const dispatched = await dispatchPayload(payload, undefined, ceiling);
 
   const content = (dispatched as typeof payload).messages[0]!.content;
   expect(content[2]).toEqual({ type: "video_url", video_url: { url: MP4_A } });
@@ -106,9 +101,7 @@ it("measures caller replacements and rejects an oversized non-video body", async
   await expect(
     dispatchPayload(
       genericPayload(),
-      {
-        onPayload: () => ({ model: "kimi-k3", messages: [], padding: "x".repeat(300) }),
-      },
+      () => ({ model: "kimi-k3", messages: [], padding: "x".repeat(300) }),
       200,
     ),
   ).rejects.toThrow("Moonshot request body must be smaller than 200 bytes");
@@ -131,32 +124,22 @@ it("sends ordered video_url content through the real Chat Completions transport"
       throw new Error("missing loopback address");
     }
     const provider = await registerSingleProviderPlugin(plugin);
-    const normalized = provider.normalizeResolvedModel?.({
-      provider: "moonshot",
-      modelId: "kimi-k3",
-      model: model(),
-    } as never) as Model | undefined;
+    const normalized = provider.normalizeResolvedModel?.({ ...route, model: model() } as never) as
+      | Model
+      | undefined;
     expect(normalized?.input).toContain("video");
     const transport = createOpenAICompletionsTransportStreamFn();
+    const baseUrl = `http://127.0.0.1:${address.port}/v1`;
     const streamFn: StreamFn = (runtimeModel, context, options) =>
       transport(
         attachModelProviderRequestTransport(
-          {
-            ...runtimeModel,
-            provider: "custom",
-            baseUrl: `http://127.0.0.1:${address.port}/v1`,
-          },
+          { ...runtimeModel, provider: "custom", baseUrl },
           { allowPrivateNetwork: true },
         ),
         context,
         options,
       );
-    const wrapped = provider.wrapStreamFn?.({
-      provider: "moonshot",
-      modelId: "kimi-k3",
-      thinkingLevel: "off",
-      streamFn,
-    } as never);
+    const wrapped = provider.wrapStreamFn?.({ ...route, thinkingLevel: "off", streamFn } as never);
     if (!wrapped || !normalized) {
       throw new Error("Moonshot registered transport unavailable");
     }
@@ -176,19 +159,13 @@ it("sends ordered video_url content through the real Chat Completions transport"
       apiKey: "test-key",
       onPayload: caller,
     });
-    let streamError: unknown;
-    for await (const event of stream) {
-      if (event.type === "error") {
-        streamError = event.error;
-      }
-    }
+    const streamResult = JSON.stringify(await stream.result());
 
-    expect(caller, JSON.stringify(streamError)).toHaveBeenCalledOnce();
+    expect(caller, streamResult).toHaveBeenCalledOnce();
     const body = JSON.stringify(callerPayload);
-    expect(body).not.toContain("__openclaw");
-    expect(body).not.toContain("/private/");
+    expect(body).not.toMatch(/__openclaw|\/private\//u);
     expect(body).toContain("data:video/mp4;base64,dmlkZW8=");
-    expect(requestBody, JSON.stringify(streamError)).toBeDefined();
+    expect(requestBody, streamResult).toBeDefined();
     const messages = requestBody?.messages as Array<{ content?: Array<Record<string, unknown>> }>;
     expect(messages[0]?.content).toEqual([
       { type: "text", text: "before" },
