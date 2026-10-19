@@ -132,7 +132,9 @@ describe("delivery-queue MEDIA-directive durability (end-to-end)", () => {
 
   it("fails a required send closed for sensitive directive media (no row, no spool)", async () => {
     installMediaAdapter(async () => {
-      throw new PlatformMessageNotDispatchedError("forced not-dispatched (test)");
+      throw new PlatformMessageNotDispatchedError("forced not-dispatched (test)", {
+        cause: new Error("test"),
+      });
     });
     await expect(send([{ text: `MEDIA:${source}`, sensitiveMedia: true }])).rejects.toThrow(
       /cannot be persisted|unsupported/i,

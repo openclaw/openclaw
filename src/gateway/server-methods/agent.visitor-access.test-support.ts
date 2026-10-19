@@ -180,8 +180,9 @@ export async function startVisitorGateway(options: {
   let services: PluginServicesHandle | undefined;
   const stop = async () => {
     try {
-      if (services) {
-        expect((await services.stop({ strict: true })).errors).toEqual([]);
+      const stopped = await services?.stop({ strict: true });
+      if (stopped) {
+        expect(stopped.errors).toEqual([]);
       }
     } finally {
       catalog.release();

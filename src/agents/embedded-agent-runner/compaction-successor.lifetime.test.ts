@@ -120,7 +120,8 @@ afterEach(() => {
 it("preserves the accepted successor and both hook lifetimes when an identity observer cancels the caller", async () => {
   const caller = new AsyncWorkScope();
   const failure = new Error("Compaction caller cancelled after commit");
-  const gatedHooks = [edge.end, edge.start].map((hook) => ({ hook, gate: createDeferred() }));
+  const endGate = createDeferred();
+  const startGate = createDeferred();
   const facts: AcceptedCompactionSuccessor[] = [];
   const observed: { fact?: AcceptedCompactionSuccessor; signal?: AbortSignal } = {};
   let row: InternalSessionEntry = {
@@ -132,7 +133,7 @@ it("preserves the accepted successor and both hook lifetimes when an identity ob
   edge.load.mockImplementation(async () => structuredClone(row));
   edge.patch.mockImplementation(async (scope, update, options = {}) => {
     expect(scope).toEqual(target);
-    const previousSessionId = row.sessionId;
+    const previous = structuredClone(row);
     const patch = await update(structuredClone(row), { existingEntry: structuredClone(row) });
     if (!patch) {
       throw new Error("Expected a successor identity patch");
@@ -147,7 +148,7 @@ it("preserves the accepted successor and both hook lifetimes when an identity ob
         agentId: target.agentId,
         databaseIdentity,
         kind: "replace",
-        previous: { sessionId: previousSessionId, sessionKeys: [target.sessionKey] },
+        previous: { sessionId: previous.sessionId, sessionKeys: [target.sessionKey] },
         current: { sessionId: row.sessionId, sessionKeys: [target.sessionKey] },
       });
     }
@@ -162,24 +163,30 @@ it("preserves the accepted successor and both hook lifetimes when an identity ob
     caller.beginClose(failure);
   });
   const hookSignals: Array<AbortSignal | undefined> = [];
-  for (const { hook, gate } of gatedHooks) {
-    hook.mockImplementation(async () => {
-      hookSignals.push(getAsyncWorkSignal());
-      await gate.promise;
-    });
-  }
+  edge.end.mockImplementation(async () => {
+    hookSignals.push(getAsyncWorkSignal());
+    await endGate.promise;
+  });
+  edge.start.mockImplementation(async () => {
+    hookSignals.push(getAsyncWorkSignal());
+    await startGate.promise;
+  });
   noteActiveSessionForShutdown({ ...target, cfg: {} });
   try {
     const accepted = await caller.track(() =>
       acceptCompactionSuccessor({
         currentTarget: target,
-        expectedEntry: row,
+        expectedEntry: {
+          sessionId: row.sessionId,
+          lifecycleRevision: row.lifecycleRevision,
+          activeWriterRunId: row.activeWriterRunId,
+        },
         assertActive: () => caller.signal.throwIfAborted(),
         config: {},
         result: {
           ok: true,
           compacted: true,
-          result: { tokensBefore: 4_097, sessionId: successorId },
+          result: { tokensBefore: 4_097, tokensAfter: 3_000, sessionId: successorId },
         },
         onCommitted: (fact) => facts.push(fact),
       }),
@@ -191,9 +198,21 @@ it("preserves the accepted successor and both hook lifetimes when an identity ob
     expect(accepted.previousSessionId).toBe(predecessorId);
     expect(row.sessionId).toBe(successorId);
     expect(edge.patch).toHaveBeenCalledOnce();
-    // Payloads are covered by compaction-successor.test.ts; this case owns their lifetimes.
-    expect(edge.end).toHaveBeenCalledOnce();
-    expect(edge.start).toHaveBeenCalledOnce();
+    // Acceptance keeps its existing fire-and-forget hook completion convention.
+    expect(edge.end).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        sessionId: predecessorId,
+        sessionKey: target.sessionKey,
+        reason: "compaction",
+        nextSessionId: successorId,
+        sessionFile: `sqlite:main:${predecessorId}:${target.storePath}`,
+      }),
+      { sessionId: predecessorId, sessionKey: target.sessionKey, agentId: "main" },
+    );
+    expect(edge.start).toHaveBeenCalledExactlyOnceWith(
+      { sessionId: successorId, sessionKey: target.sessionKey, resumedFrom: predecessorId },
+      { sessionId: successorId, sessionKey: target.sessionKey, agentId: "main" },
+    );
     expect(
       listActiveSessionsForShutdown().filter((entry) => entry.sessionKey === target.sessionKey),
     ).toEqual([expect.objectContaining({ sessionId: successorId })]);
@@ -205,13 +224,14 @@ it("preserves the accepted successor and both hook lifetimes when an identity ob
       expect(signal?.aborted).toBe(false);
     }
     expect(getActiveGatewayRootWorkCount()).toBe(2);
-    for (const [index, { gate }] of gatedHooks.entries()) {
-      gate.resolve();
-      await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1 - index));
-    }
+    endGate.resolve();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(1));
+    startGate.resolve();
+    await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   } finally {
     unsubscribe();
-    gatedHooks.forEach(({ gate }) => gate.resolve());
+    endGate.resolve();
+    startGate.resolve();
     await caller.drain();
     await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
   }

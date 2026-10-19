@@ -326,7 +326,7 @@ it.each([
     [thoughtOutput("first", signature1), thoughtOutput("second", signature1)],
     true,
   ],
-] satisfies SignatureCase[])("preserves %s", async (_name, chunks, content, roundTrip) => {
+] satisfies SignatureCase[])("preserves %s", async (_name, chunks, content, roundTrip = false) => {
   const { output, events } = await runFixture(
     chunks.map((parts, index) =>
       candidate(parts, index === chunks.length - 1 ? FinishReason.STOP : undefined),

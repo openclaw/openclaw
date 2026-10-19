@@ -1,3 +1,6 @@
+/**
+ * Gateway startup plugin bootstrap tests.
+ */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
@@ -23,18 +26,6 @@ import { createChannelTestPluginBase } from "../test-utils/channel-plugins.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import type { GatewayRequestHandler } from "./server-methods/types.js";
 
-type PluginLoadParams = Parameters<
-  typeof import("./server-plugin-bootstrap.js").prepareGatewayPluginLoad
->[0];
-const makeLoadedRuntime = vi.hoisted(
-  () =>
-    (cfg: OpenClawConfig, pluginRegistry = createEmptyPluginRegistry()) => ({
-      pluginRegistry,
-      gatewayMethods: ["ping"],
-      resolvedConfig: cfg,
-      retireGatewayRuntimeBindings: vi.fn(),
-    }),
-);
 const applyPluginAutoEnable = vi.hoisted(() =>
   vi.fn((params: { config: unknown }) => ({
     config: params.config,
@@ -48,7 +39,12 @@ const resolveProviderPolicySurfaceForOwner = vi.hoisted(() =>
   vi.fn<(owner: PluginManifestRecord) => ProviderPolicySurface | null>(() => null),
 );
 const prepareGatewayPluginLoad = vi.hoisted(() =>
-  vi.fn((params: PluginLoadParams) => makeLoadedRuntime(params.cfg)),
+  vi.fn((params: { cfg: OpenClawConfig }) => ({
+    pluginRegistry: createEmptyPluginRegistry(),
+    gatewayMethods: ["ping"],
+    resolvedConfig: params.cfg,
+    retireGatewayRuntimeBindings: vi.fn(),
+  })),
 );
 const pluginManifestRegistry = vi.hoisted((): PluginManifestRegistry => ({
   plugins: [
@@ -67,39 +63,78 @@ const pluginManifestRegistry = vi.hoisted((): PluginManifestRegistry => ({
   ],
   diagnostics: [],
 }));
-const pluginMetadataSnapshot = await vi.hoisted(async (): Promise<PluginMetadataSnapshot> => {
-  const { createEmptyPluginMetadataSnapshot } =
-    await import("../plugins/plugin-metadata-empty.test-support.js");
-  const snapshot = createEmptyPluginMetadataSnapshot();
-  Object.assign(snapshot.index, { policyHash: "policy", generatedAtMs: 0 });
-  return {
-    ...snapshot,
+const pluginMetadataSnapshot = vi.hoisted((): PluginMetadataSnapshot => {
+  const index: PluginMetadataSnapshot["index"] = {
+    version: 1,
+    hostContractVersion: "test",
+    compatRegistryVersion: "test",
+    migrationVersion: 1,
     policyHash: "policy",
+    generatedAtMs: 0,
+    installRecords: {},
+    plugins: [],
+    diagnostics: [],
+  };
+  return {
+    policyHash: "policy",
+    index,
+    registryIndex: index,
+    registryDiagnostics: [],
     manifestRegistry: pluginManifestRegistry,
     bundledManifestRegistry: pluginManifestRegistry,
+    plugins: [],
+    diagnostics: [],
+    byPluginId: new Map(),
+    normalizePluginId: (pluginId) => pluginId,
+    declaredProviderOwners: new Map(),
+    owners: {
+      channels: new Map(),
+      channelConfigs: new Map(),
+      providers: new Map(),
+      modelCatalogProviders: new Map(),
+      cliBackends: new Map(),
+      setupProviders: new Map(),
+      commandAliases: new Map(),
+      contracts: new Map(),
+      providerAuthContributions: [],
+      modelIdNormalizationPolicies: new Map(),
+    },
+    metrics: {
+      registrySnapshotMs: 0,
+      manifestRegistryMs: 0,
+      ownerMapsMs: 0,
+      totalMs: 0,
+      indexPluginCount: 0,
+      manifestPluginCount: 0,
+    },
   };
 });
 const pluginLookUpTableMetrics = vi.hoisted(() => ({
-  ...pluginMetadataSnapshot.metrics,
+  registrySnapshotMs: 0,
+  manifestRegistryMs: 0,
   startupPlanMs: 0,
+  ownerMapsMs: 0,
+  totalMs: 0,
+  indexPluginCount: 0,
+  manifestPluginCount: 0,
   startupPluginCount: 1,
 }));
-const makePluginLookup = vi.hoisted(
-  () =>
-    (pluginIds = ["telegram"], manifestRegistry = pluginManifestRegistry) => ({
-      ...pluginMetadataSnapshot,
-      manifestRegistry,
-      startup: { pluginIds, channelPluginIds: [...pluginIds] },
-      metrics: pluginLookUpTableMetrics,
-    }),
+const loadPluginLookUpTable = vi.hoisted(() =>
+  vi.fn((_params: unknown) => ({
+    ...pluginMetadataSnapshot,
+    startup: {
+      pluginIds: ["telegram"] as string[],
+      channelPluginIds: ["telegram"] as string[],
+    },
+    metrics: pluginLookUpTableMetrics,
+  })),
 );
-const loadPluginLookUpTable = vi.hoisted(() => vi.fn((_params: unknown) => makePluginLookup()));
 const resolveOpenClawPackageRootSync = vi.hoisted(() => vi.fn((_params: unknown) => "/package"));
 const runChannelPluginStartupMaintenance = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => undefined),
 );
 const listAmbientOnlyConfiguredChannelIds = vi.hoisted(() =>
-  vi.fn((_params: { manifestRecords?: readonly PluginManifestRecord[] }) => [] as string[]),
+  vi.fn((_params: unknown) => [] as string[]),
 );
 const runGatewaySessionStartupMaintenance = vi.hoisted(() =>
   vi.fn(async (_params: unknown) => undefined),
@@ -113,16 +148,39 @@ vi.mock("../agents/agent-scope.js", () => ({
   tryResolveSystemAgentWorkspaceDir: () => "/workspace",
 }));
 
-vi.mock("../agents/workspace-state-dirs.js", () => ({ assertConfiguredWorkspaceStateReady() {} }));
-vi.mock("../channels/plugins/lifecycle-startup.js", () => ({ runChannelPluginStartupMaintenance }));
-vi.mock("../config/plugin-auto-enable.js", () => ({ applyPluginAutoEnable }));
-vi.mock("../infra/openclaw-root.js", () => ({ resolveOpenClawPackageRootSync }));
+vi.mock("../agents/workspace-state-dirs.js", () => ({
+  assertConfiguredWorkspaceStateReady: () => {},
+}));
+
+vi.mock("../channels/plugins/lifecycle-startup.js", () => ({
+  runChannelPluginStartupMaintenance: (params: unknown) =>
+    runChannelPluginStartupMaintenance(params),
+}));
+
+vi.mock("../config/plugin-auto-enable.js", () => ({
+  applyPluginAutoEnable: (params: { config: unknown }) => applyPluginAutoEnable(params),
+}));
+
+vi.mock("../infra/openclaw-root.js", () => ({
+  resolveOpenClawPackageRootSync: (params: unknown) => resolveOpenClawPackageRootSync(params),
+}));
+
 vi.mock("../infra/device-pairing-node-desktop-migration.js", () => ({
   migrateLegacyDesktopStreamOptOuts: async () => 0,
 }));
-vi.mock("../infra/pairing-files.js", () => ({ listLegacyPairingStoreFiles }));
-vi.mock("../plugins/channel-presence-policy.js", () => ({ listAmbientOnlyConfiguredChannelIds }));
-vi.mock("../plugins/plugin-lookup-table.js", () => ({ loadPluginLookUpTable }));
+
+vi.mock("../infra/pairing-files.js", () => ({
+  listLegacyPairingStoreFiles: () => listLegacyPairingStoreFiles(),
+}));
+
+vi.mock("../plugins/channel-presence-policy.js", () => ({
+  listAmbientOnlyConfiguredChannelIds: (params: unknown) =>
+    listAmbientOnlyConfiguredChannelIds(params),
+}));
+
+vi.mock("../plugins/plugin-lookup-table.js", () => ({
+  loadPluginLookUpTable: (params: unknown) => loadPluginLookUpTable(params),
+}));
 
 vi.mock("../plugins/registry.js", () => import("../plugins/registry-empty.js"));
 
@@ -141,34 +199,43 @@ vi.mock("../plugins/runtime.js", async (importOriginal) => ({
   setActivePluginRegistry,
 }));
 
-vi.mock("./server-methods-list.js", () => ({ listGatewayMethods: () => ["ping"] }));
-vi.mock("./server-plugin-bootstrap.js", () => ({ prepareGatewayPluginLoad }));
+vi.mock("./server-methods-list.js", () => ({
+  listGatewayMethods: () => ["ping"],
+}));
+
+vi.mock("./server-plugin-bootstrap.js", () => ({
+  prepareGatewayPluginLoad,
+}));
 
 // mock-isolation: Maintenance composition uses a controlled session repair lifetime.
-vi.mock("./server-startup-session-migration.js", () => ({ runGatewaySessionStartupMaintenance }));
+vi.mock("./server-startup-session-migration.js", () => ({
+  runGatewaySessionStartupMaintenance: (params: unknown) =>
+    runGatewaySessionStartupMaintenance(params),
+}));
 
 function createLog() {
-  return { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  return {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  };
+}
+
+function firstCallArg<T>(mock: { mock: { calls: unknown[][] } }, _type?: (value: T) => T): T {
+  const call = mock.mock.calls.at(0);
+  if (!call) {
+    throw new Error("Expected first mock call");
+  }
+  return call[0] as T;
 }
 
 function slackConfig(): OpenClawConfig {
-  return { channels: { slack: { enabled: true, token: "token" } } } as OpenClawConfig;
-}
-
-function maintenanceParams(
-  log: ReturnType<typeof createLog>,
-  signal = new AbortController().signal,
-  cfg: OpenClawConfig = {},
-  derived = false,
-) {
   return {
-    getConfig: () => cfg,
-    getPluginRegistry: createEmptyPluginRegistry,
-    pluginMetadataSnapshot: derived ? { registrySource: "derived" as const } : undefined,
-    databases: [],
-    signal,
-    log,
-  };
+    channels: {
+      slack: { enabled: true, token: "token" },
+    },
+  } as OpenClawConfig;
 }
 
 async function prepareBootstrapWithRuntimeConfig(
@@ -177,7 +244,6 @@ async function prepareBootstrapWithRuntimeConfig(
     minimalTestGateway?: boolean;
     pluginMetadataSnapshot?: PluginMetadataSnapshot;
     workerProviderIds?: readonly string[];
-    ambientEnvTriggers?: "suppress";
   } = {},
 ) {
   const log = createLog();
@@ -211,9 +277,14 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
       });
       const log = createLog();
       let settled = false;
-      const maintenance = runGatewayPostReadyStartupMaintenance(
-        maintenanceParams(log, controller.signal, {}, true),
-      ).finally(() => {
+      const maintenance = runGatewayPostReadyStartupMaintenance({
+        getConfig: () => ({}),
+        getPluginRegistry: createEmptyPluginRegistry,
+        pluginMetadataSnapshot: { registrySource: "derived" },
+        databases: [],
+        signal: controller.signal,
+        log,
+      }).finally(() => {
         settled = true;
       });
       try {
@@ -244,7 +315,13 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
       }),
     );
     listLegacyPairingStoreFiles.mockResolvedValueOnce(["synthetic-pairing.json"]);
-    await runGatewayPostReadyStartupMaintenance(maintenanceParams(log, undefined, cfg));
+    await runGatewayPostReadyStartupMaintenance({
+      getConfig: () => cfg,
+      getPluginRegistry: createEmptyPluginRegistry,
+      databases: [],
+      signal: new AbortController().signal,
+      log,
+    });
     expect(runChannelPluginStartupMaintenance).toHaveBeenCalledWith({ cfg, env: process.env, log });
     expect(log.warn).toHaveBeenCalledWith(
       "Gateway post-ready sessions maintenance failed: synthetic repair failure | synthetic storage failure | SQLITE_BUSY",
@@ -257,9 +334,14 @@ describe("runGatewayPostReadyStartupMaintenance", () => {
     const controller = new AbortController();
     controller.abort();
     const log = createLog();
-    await runGatewayPostReadyStartupMaintenance(
-      maintenanceParams(log, controller.signal, {}, true),
-    );
+    await runGatewayPostReadyStartupMaintenance({
+      getConfig: () => ({}),
+      getPluginRegistry: createEmptyPluginRegistry,
+      pluginMetadataSnapshot: { registrySource: "derived" },
+      databases: [],
+      signal: controller.signal,
+      log,
+    });
     expect(runChannelPluginStartupMaintenance).not.toHaveBeenCalled();
     expect(runGatewaySessionStartupMaintenance).not.toHaveBeenCalled();
     expect(listLegacyPairingStoreFiles).not.toHaveBeenCalled();
@@ -275,7 +357,15 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     applyPluginAutoEnable.mockClear();
     prepareGatewayPluginLoad.mockClear();
     listAmbientOnlyConfiguredChannelIds.mockClear().mockReturnValue([]);
-    loadPluginLookUpTable.mockClear().mockReturnValue(makePluginLookup());
+    loadPluginLookUpTable.mockClear().mockReturnValue({
+      ...pluginMetadataSnapshot,
+      manifestRegistry: pluginManifestRegistry,
+      startup: {
+        pluginIds: ["telegram"] as string[],
+        channelPluginIds: ["telegram"] as string[],
+      },
+      metrics: pluginLookUpTableMetrics,
+    });
     resolveOpenClawPackageRootSync.mockClear().mockReturnValue("/package");
     runChannelPluginStartupMaintenance.mockClear();
     runGatewaySessionStartupMaintenance.mockClear();
@@ -390,7 +480,6 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
     { minimalTestGateway: true, pluginsEnabled: undefined, reuseAmbientRegistry: true },
     { minimalTestGateway: true, pluginsEnabled: true, reuseAmbientRegistry: true },
     { minimalTestGateway: true, pluginsEnabled: false, reuseAmbientRegistry: false },
-    { minimalTestGateway: false, pluginsEnabled: false, reuseAmbientRegistry: false },
   ])(
     "keeps the pre-bind registry local without runtime loading (minimal=$minimalTestGateway, enabled=$pluginsEnabled)",
     async ({ minimalTestGateway, pluginsEnabled, reuseAmbientRegistry }) => {
@@ -402,21 +491,10 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       const ambientEpoch = capturePluginRegistryLifecycleEpoch(ambientRegistry);
       getActivePluginRegistry.mockReturnValue(ambientRegistry);
 
-      const disabled = !minimalTestGateway && pluginsEnabled === false;
-      const cfg: OpenClawConfig = disabled
-        ? {
-            channels: { telegram: { botToken: "token" } },
-            plugins: {
-              enabled: false,
-              allow: ["telegram"],
-              entries: { telegram: { enabled: true } },
-            },
-          }
-        : { ...slackConfig(), plugins: { enabled: pluginsEnabled } };
-      const result = await prepareBootstrapWithRuntimeConfig(cfg, {
-        minimalTestGateway,
-        ...(disabled ? { pluginMetadataSnapshot, workerProviderIds: ["static-ssh"] } : {}),
-      });
+      const result = await prepareBootstrapWithRuntimeConfig(
+        { ...slackConfig(), plugins: { enabled: pluginsEnabled } },
+        { minimalTestGateway },
+      );
 
       if (reuseAmbientRegistry) {
         expect(result.pluginRegistry).toBe(ambientRegistry);
@@ -428,12 +506,6 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
       expect(setActivePluginRegistry).not.toHaveBeenCalled();
       expect(getActivePluginRegistry()).toBe(ambientRegistry);
       expect(prepareGatewayPluginLoad).not.toHaveBeenCalled();
-      if (disabled) {
-        expect(result).toMatchObject({ startupPluginIds: [], baseGatewayMethods: ["ping"] });
-        expect(result.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
-        expect(result.pluginLookUpTable).toBeUndefined();
-        expect(loadPluginLookUpTable).not.toHaveBeenCalled();
-      }
     },
   );
 
@@ -451,28 +523,71 @@ describe("prepareGatewayPluginBootstrap startup plugins", () => {
   it("preserves an explicitly empty manifest snapshot for ambient channel planning", async () => {
     const emptyManifestRegistry: PluginManifestRegistry = { plugins: [], diagnostics: [] };
     loadPluginLookUpTable.mockReturnValueOnce({
-      ...makePluginLookup([], emptyManifestRegistry),
+      ...pluginMetadataSnapshot,
+      manifestRegistry: emptyManifestRegistry,
       bundledManifestRegistry: emptyManifestRegistry,
+      startup: {
+        pluginIds: [],
+        channelPluginIds: [],
+      },
+      metrics: pluginLookUpTableMetrics,
     });
 
-    const result = await prepareBootstrapWithRuntimeConfig(
-      { channels: {} },
-      { ambientEnvTriggers: "suppress" },
-    );
+    const log = createLog();
+    const { prepareGatewayPluginBootstrap } = await import("./server-startup-plugins.js");
+    const result = await prepareGatewayPluginBootstrap({
+      cfgAtStart: { channels: {} },
+      minimalTestGateway: false,
+      ambientEnvTriggers: "suppress",
+      log,
+    });
 
     expect(result.pluginManifestRecords).toBe(emptyManifestRegistry.plugins);
-    expect(listAmbientOnlyConfiguredChannelIds.mock.calls[0]?.[0].manifestRecords).toBe(
-      emptyManifestRegistry.plugins,
+    const ambientInput = firstCallArg<{ manifestRecords?: readonly unknown[] }>(
+      listAmbientOnlyConfiguredChannelIds,
     );
+    expect(ambientInput.manifestRecords).toBe(emptyManifestRegistry.plugins);
+  });
+
+  it("bypasses plugin lookup when plugins are globally disabled", async () => {
+    const cfg = {
+      channels: {
+        telegram: {
+          botToken: "token",
+        },
+      },
+      plugins: {
+        enabled: false,
+        allow: ["telegram"],
+        entries: {
+          telegram: { enabled: true },
+        },
+      },
+    } as OpenClawConfig;
+
+    const result = await prepareBootstrapWithRuntimeConfig(cfg, {
+      pluginMetadataSnapshot,
+      workerProviderIds: ["static-ssh"],
+    });
+    expect(result.startupPluginIds).toEqual([]);
+    expect(result.pluginMetadataSnapshot).toBe(pluginMetadataSnapshot);
+    expect(result.pluginLookUpTable).toBeUndefined();
+    expect(result.baseGatewayMethods).toEqual(["ping"]);
+
+    expect(loadPluginLookUpTable).not.toHaveBeenCalled();
+    expect(prepareGatewayPluginLoad).not.toHaveBeenCalled();
   });
 });
 
 describe("loadGatewayStartupPluginRuntime", () => {
   beforeEach(() => {
     resolveProviderPolicySurfaceForOwner.mockReset().mockReturnValue(null);
-    prepareGatewayPluginLoad
-      .mockReset()
-      .mockImplementation((params) => makeLoadedRuntime(params.cfg));
+    prepareGatewayPluginLoad.mockReset().mockImplementation((params) => ({
+      pluginRegistry: createEmptyPluginRegistry(),
+      gatewayMethods: ["ping"],
+      resolvedConfig: params.cfg,
+      retireGatewayRuntimeBindings: vi.fn(),
+    }));
   });
 
   it("returns admitted plugins while native receipt persistence remains owned by cache cleanup", async () => {
@@ -597,8 +712,9 @@ describe("loadGatewayStartupPluginRuntime", () => {
       };
       const retireGatewayRuntimeBindings = vi.fn();
       const candidate = {
-        ...makeLoadedRuntime(config, registry),
+        pluginRegistry: registry,
         gatewayMethods: [],
+        resolvedConfig: config,
         retireGatewayRuntimeBindings,
       };
       prepareGatewayPluginLoad.mockReturnValueOnce(candidate);
@@ -639,17 +755,31 @@ describe("loadGatewayStartupPluginRuntime", () => {
   it("warns after a full startup runtime load when configured memory embedding providers stay unregistered", async () => {
     const log = createLog();
     const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
+
     await loadGatewayStartupPluginRuntime({
-      cfg: { memory: { search: { provider: "voyage" } }, agents: { defaults: {} } },
+      cfg: {
+        memory: {
+          search: {
+            provider: "voyage",
+          },
+        },
+
+        agents: {
+          defaults: {},
+        },
+      } as OpenClawConfig,
       workspaceDir: "/workspace",
       log,
       baseMethods: ["ping"],
       startupPluginIds: ["voyage"],
     });
-    expect(prepareGatewayPluginLoad.mock.calls[0]?.[0]).toMatchObject({
-      channelPluginLoadIntent: "full",
-      loadIntent: "startup",
-    });
+
+    const startupInput = firstCallArg<{
+      channelPluginLoadIntent?: "full" | "setup";
+      loadIntent: "startup" | "replacement";
+    }>(prepareGatewayPluginLoad);
+    expect(startupInput.channelPluginLoadIntent).toBe("full");
+    expect(startupInput.loadIntent).toBe("startup");
     expect(log.warn).toHaveBeenCalledWith(
       expect.stringContaining('memory.search.provider="voyage"'),
     );
@@ -676,7 +806,12 @@ describe("loadGatewayStartupPluginRuntime", () => {
       const cfg: OpenClawConfig = {
         memory: { search: { provider: "local" } },
         plugins: { entries: { "a-disabled": { enabled: false } } },
-        agents: { entries: { main: { memory: { search: { enabled: false } } }, helper: {} } },
+        agents: {
+          entries: {
+            main: { memory: { search: { enabled: false } } },
+            helper: {},
+          },
+        },
       };
       const inspectionGate = createDeferred();
       if (outcome !== "inspection stalled") {
@@ -702,7 +837,12 @@ describe("loadGatewayStartupPluginRuntime", () => {
       resolveProviderPolicySurfaceForOwner.mockImplementation((owner) =>
         owner === registeredOwner ? { inspectEmbeddingProviderSetup } : disabledPolicy,
       );
-      prepareGatewayPluginLoad.mockReturnValueOnce(makeLoadedRuntime(cfg, registry));
+      prepareGatewayPluginLoad.mockReturnValueOnce({
+        pluginRegistry: registry,
+        gatewayMethods: ["ping"],
+        resolvedConfig: cfg,
+        retireGatewayRuntimeBindings: vi.fn(),
+      });
       const { loadGatewayStartupPluginRuntime } = await import("./server-startup-plugins.js");
 
       let startupCompleted = false;
