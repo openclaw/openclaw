@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { CronJobSchema } from "../../../packages/gateway-protocol/src/schema/cron.ts";
 import { GatewaySessionRowEvents } from "../api/gateway-session-row-events.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { canApplySessionListSnapshot } from "../lib/sessions/session-list-query.ts";
 import { createTeamScaleSidebarListOwner } from "./control-ui-sidebar-list-fixture.ts";
 import { createControlUiTeamScaleFixture } from "./control-ui-team-scale-fixture.ts";
 
@@ -19,6 +20,14 @@ describe("Team-scale Gateway fixture", () => {
     expect(fixture.liveEvents).toHaveLength(1081);
     expect(fixture.liveEvents[0]?.atMs).toBe(125);
     expect(fixture.liveEvents.at(-1)?.atMs).toBe(135_125);
+    const childQuery = { spawnedBy: "agent:main:main", limit: 100 };
+    const children = createTeamScaleSidebarListOwner(fixture.sidebarListInput).list({
+      ...childQuery,
+      rowMode: "compact",
+    }).result;
+    expect(canApplySessionListSnapshot(children, fixture.liveEvents[0]!.payload, childQuery)).toBe(
+      true,
+    );
     const decoder = new GatewaySessionRowEvents();
     let references = 0;
     for (const event of fixture.liveEvents) {

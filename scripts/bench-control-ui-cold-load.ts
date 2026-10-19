@@ -417,7 +417,7 @@ try {
   await context.exposeBinding("__teamScaleList", (_source, params: Record<string, unknown>) => {
     const { result, previousRows } = sidebarLists.list(params);
     const response =
-      params.rowMode === "sidebar"
+      params.rowMode === "sidebar" || params.ifRowsRevision !== undefined
         ? {
             ...result,
             ...shareSidebarSessionRows(
