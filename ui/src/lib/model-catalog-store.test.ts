@@ -111,6 +111,43 @@ describe("model catalog display cache", () => {
     }
   });
 
+  it("reuses pending catalogs until the native discovery owner invalidates them", async () => {
+    const reply = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock().mockReturnValue(reply.promise);
+    const client = createTestGatewayClient(request);
+    const scope = { agentId: "main" };
+    const pending = { models: [prepared], pendingProviders: ["example"] };
+    const preview = { ...scope, preparedOnly: true };
+    publishModelCatalogResult(beginModelCatalogRead(client, preview), preview, pending);
+    expect(await loadModelCatalog(client, preview)).toEqual(pending);
+    expect(request).not.toHaveBeenCalled();
+    publishModelCatalogResult(beginModelCatalogRead(client, scope), scope, pending);
+    expect(await loadModelCatalog(client, scope)).toEqual(pending);
+    expect(await loadModelCatalog(client, scope)).toEqual(pending);
+    expect(request).not.toHaveBeenCalled();
+    invalidateModelCatalogCache(client, scope);
+    const first = loadModelCatalog(client, scope);
+    const second = loadModelCatalog(client, scope);
+    try {
+      expect(request).toHaveBeenCalledExactlyOnceWith("models.list", {
+        agentId: "main",
+        view: "configured",
+      });
+      expect(peekModelCatalog(client, scope, { allowStale: true })?.models).toEqual([prepared]);
+      reply.resolve({ models: [published], pendingProviders: [] });
+      expect(await first).toEqual({ models: [published], pendingProviders: [] });
+      expect(await second).toEqual({ models: [published], pendingProviders: [] });
+      expect(await loadModelCatalog(client, scope)).toEqual({
+        models: [published],
+        pendingProviders: [],
+      });
+      expect(request).toHaveBeenCalledTimes(1);
+    } finally {
+      reply.resolve({ models: [published], pendingProviders: [] });
+      await Promise.all([first, second]);
+    }
+  });
+
   it("reuses a published snapshot synchronously until its Gateway generation changes", async () => {
     const request = createGatewayRequestMock()
       .mockResolvedValueOnce({ models: [prepared] })
@@ -303,6 +340,26 @@ describe("model catalog display cache", () => {
     retired.resolve({ models: [prepared] });
     await retiring;
     expect(modelCatalogCache.get(client)?.entries.size).toBeLessThanOrEqual(64);
+  });
+
+  it("reads again after an invalidation instead of joining the earlier request", async () => {
+    const earlier = createDeferred<ModelCatalogResult>();
+    const later = createDeferred<ModelCatalogResult>();
+    const request = createGatewayRequestMock()
+      .mockReturnValueOnce(earlier.promise)
+      .mockReturnValueOnce(later.promise);
+    const client = createTestGatewayClient(request);
+    const scope = { agentId: "main" };
+    const before = loadModelCatalog(client, scope);
+    invalidateModelCatalogCache(client);
+    const after = loadModelCatalog(client, scope);
+    earlier.resolve({ models: [prepared] });
+    expect(await before).toEqual({ models: [prepared] });
+    expect(peekModelCatalog(client, scope)).toBeUndefined();
+    later.resolve({ models: [published] });
+    expect(await after).toEqual({ models: [published] });
+    expect(request).toHaveBeenCalledTimes(2);
+    expect(peekModelCatalog(client, scope)?.models).toEqual([published]);
   });
 
   it("rejects an already retired request before transport or cached publication", async () => {

@@ -28,7 +28,7 @@ let unsubscribeSessionChanges: (() => void) | undefined;
 let unsubscribeHistoryChanges: (() => void) | undefined;
 let unsubscribeDatabaseLifecycle: (() => void) | undefined;
 
-function scheduleSweep() {
+function scheduleSweep(getCronStorePath: () => string) {
   if (!scope || scope.signal.aborted || scheduledSweep) {
     return;
   }
@@ -41,14 +41,14 @@ function scheduleSweep() {
     id: "cron-maintenance",
     atMs,
     run: () =>
-      (scheduledSweep ??= sweep(signal).finally(() => {
+      (scheduledSweep ??= sweep(signal, getCronStorePath).finally(() => {
         scheduledSweep = undefined;
-        scheduleSweep();
+        scheduleSweep(getCronStorePath);
       })),
   });
 }
 
-async function sweep(signal: AbortSignal) {
+async function sweep(signal: AbortSignal, getCronStorePath: () => string) {
   let admitted = false;
   try {
     const preparation = getAgentDatabaseStartupAdmission()?.pendingPreparation;
@@ -77,7 +77,11 @@ async function sweep(signal: AbortSignal) {
           // Receipts arriving during the sweep can schedule another pass independently.
           nextRegistrySweepAtMs = Infinity;
           try {
-            const result = await runSessionRegistryMaintenance({ apply: true, assertCurrent });
+            const result = await runSessionRegistryMaintenance({
+              apply: true,
+              assertCurrent,
+              cronStorePath: getCronStorePath(),
+            });
             assertCurrent();
             nextRegistrySweepAtMs = Math.min(
               nextRegistrySweepAtMs,
@@ -111,7 +115,7 @@ async function sweep(signal: AbortSignal) {
 }
 
 /** Gateway lifecycle owns retention even when scheduled execution is disabled. */
-export function startCronMaintenance(scheduler: GatewayScheduler) {
+export function startCronMaintenance(scheduler: GatewayScheduler, getCronStorePath: () => string) {
   if (scope && !scope.signal.aborted) {
     return;
   }
@@ -120,7 +124,7 @@ export function startCronMaintenance(scheduler: GatewayScheduler) {
   const invalidateHistory = () => {
     if (scope) {
       nextHistorySweepAtMs = Math.min(nextHistorySweepAtMs, scope.now() + 60_000);
-      scheduleSweep();
+      scheduleSweep(getCronStorePath);
     }
   };
   unsubscribeHistoryChanges = subscribeCronRunHistoryChanges((databasePath) => {
@@ -144,9 +148,9 @@ export function startCronMaintenance(scheduler: GatewayScheduler) {
     if (scope) {
       nextRegistrySweepAtMs = Math.min(nextRegistrySweepAtMs, scope.now() + 60_000);
     }
-    scheduleSweep();
+    scheduleSweep(getCronStorePath);
   });
-  scheduleSweep();
+  scheduleSweep(getCronStorePath);
 }
 
 export async function stopCronMaintenance(): Promise<void> {

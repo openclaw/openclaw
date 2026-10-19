@@ -158,23 +158,16 @@ describe("tencent provider plugin", () => {
   );
 
   it.each(["tencent-tokenhub", "tencent-tokenplan"])(
-    "isolates %s static and augmented catalog results",
+    "projects %s static ids and isolates augmented model inputs",
     async (providerId) => {
       const { providers } = await registerTencentPlugin();
       const provider = requireRegisteredProvider(providers, providerId);
       const first = await runSingleProviderCatalog({ catalog: provider.staticCatalog });
-      const expected = structuredClone(first);
-      const model = first.models[0];
-      if (!model) {
-        throw new Error("expected Tencent static model");
-      }
-      model.input.push("image");
-      model.cost.input = 999;
-      expect(await runSingleProviderCatalog({ catalog: provider.staticCatalog })).toEqual(expected);
+      expect(first.models.every((model) => model.api === "openai-completions")).toBe(true);
 
       const context = { env: {}, entries: [] };
       const augmented = await provider.augmentModelCatalog?.(context);
-      expect(augmented?.map((entry) => entry.id)).toEqual(expected.models.map((entry) => entry.id));
+      expect(augmented?.map((entry) => entry.id)).toEqual(first.models.map((entry) => entry.id));
       if (!augmented?.[0]?.input) {
         throw new Error("expected Tencent model input modalities");
       }

@@ -20,18 +20,13 @@ export class PlaceBrowserState {
   error: string | null = null;
   activeIndex = -1;
   private token = 0;
-  private listingGenerationValue = 0;
   private timer: ReturnType<typeof globalThis.setTimeout> | undefined;
 
   constructor(
     private readonly listDirectory: (path?: string) => Promise<FsListDirResult>,
-    private readonly requestUpdate: () => void,
+    private readonly changed: () => void,
     private readonly onListing?: (listing: FsListDirResult) => void,
   ) {}
-
-  get listingGeneration(): number {
-    return this.listingGenerationValue;
-  }
 
   navigate(path: string | undefined, mode: "initial" | "navigation" = "navigation"): Promise<void> {
     this.cancelPending();
@@ -39,7 +34,7 @@ export class PlaceBrowserState {
     this.activeIndex = -1;
     this.error = null;
     this.loading = true;
-    this.requestUpdate();
+    this.changed();
     return this.load(path, mode, this.token);
   }
 
@@ -58,7 +53,7 @@ export class PlaceBrowserState {
         void this.load(split.directory, "typing", requestId);
       }, PICKER_INPUT_DEBOUNCE_MS);
     }
-    this.requestUpdate();
+    this.changed();
   }
 
   draftInLoadedDirectory(): boolean {
@@ -85,7 +80,7 @@ export class PlaceBrowserState {
           ? 0
           : count - 1
         : (this.activeIndex + delta + count) % count;
-    this.requestUpdate();
+    this.changed();
   }
 
   highlightedEntry(): FsDirEntry | undefined {
@@ -118,7 +113,6 @@ export class PlaceBrowserState {
   reset() {
     this.cancelPending();
     this.listing = null;
-    this.listingGenerationValue += 1;
     this.draft = "";
     this.loading = false;
     this.error = null;
@@ -149,7 +143,6 @@ export class PlaceBrowserState {
         return;
       }
       this.listing = listing;
-      this.listingGenerationValue += 1;
       if (mode !== "typing" && this.draft === draftAtRequest) {
         this.draft = listing.path;
       }
@@ -173,7 +166,7 @@ export class PlaceBrowserState {
     } finally {
       if (requestId === this.token) {
         this.loading = false;
-        this.requestUpdate();
+        this.changed();
       }
     }
   }

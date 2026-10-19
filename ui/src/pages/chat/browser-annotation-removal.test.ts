@@ -49,7 +49,6 @@ function createHost(initial: ChatAttachment[]) {
       setAttachments: (next: ChatAttachment[]) => {
         attachments = next;
       },
-      requestUpdate: vi.fn(),
       focusComposer: vi.fn(),
       focusRestoredAnnotation: vi.fn(),
     },

@@ -2,6 +2,7 @@ package ai.openclaw.wear
 
 import android.app.Application
 import android.graphics.Bitmap
+import android.os.Bundle
 import android.os.Looper
 import android.provider.Settings
 import androidx.activity.ComponentActivity
@@ -134,6 +135,75 @@ class WearRoundLayoutTest {
     capture("checking-german-initial")
   }
 
+  @Test fun removingSelectedPulseReturnsToChat() {
+    snapshot = WearScreenshotFixture.snapshot.copy(agentPulseSupported = true)
+    loading = false
+    show(WearHomePage.Pulse)
+    compose.onNodeWithText("PULSE").assertIsDisplayed()
+    capture("pulse-before-removal")
+
+    compose.runOnIdle {
+      snapshot = WearScreenshotFixture.snapshot.copy(agentPulseSupported = false)
+    }
+
+    assertChatAndCapture("after-pulse-removal")
+  }
+
+  @Test fun changingPulseAvailabilityPreservesControls() {
+    snapshot = WearScreenshotFixture.snapshot.copy(agentPulseSupported = true)
+    loading = false
+    show(WearHomePage.Controls)
+    compose.onNodeWithText("CONTROLS").assertIsDisplayed()
+
+    compose.runOnIdle { snapshot = WearScreenshotFixture.snapshot }
+    compose.onNodeWithText("CONTROLS").assertIsDisplayed()
+    capture("controls-without-pulse")
+
+    compose.runOnIdle { snapshot = WearScreenshotFixture.snapshot.copy(agentPulseSupported = true) }
+    compose.onNodeWithText("CONTROLS").assertIsDisplayed()
+    capture("controls-with-pulse")
+  }
+
+  @Test fun reconnectingWithoutPulseReturnsToChat() {
+    snapshot = WearScreenshotFixture.snapshot.copy(agentPulseSupported = true)
+    loading = false
+    show(WearHomePage.Pulse)
+    compose.onNodeWithText("PULSE").assertIsDisplayed()
+
+    compose.runOnIdle { snapshot = null }
+    compose.onNodeWithText("Retry").assertIsDisplayed()
+    compose.runOnIdle { snapshot = WearScreenshotFixture.snapshot }
+
+    assertChatAndCapture("chat-after-reconnect")
+  }
+
+  @Test fun restoringWithoutSelectedPulseReturnsToChat() {
+    snapshot = WearScreenshotFixture.snapshot.copy(agentPulseSupported = true)
+    loading = false
+    show(WearHomePage.Pulse)
+    compose.onNodeWithText("PULSE").assertIsDisplayed()
+    val savedState = Bundle()
+    compose.runOnIdle {
+      checkNotNull(controller)
+        .pause()
+        .saveInstanceState(savedState)
+        .stop()
+        .destroy()
+      snapshot = WearScreenshotFixture.snapshot
+    }
+
+    show(WearHomePage.Chat, savedState)
+
+    assertChatAndCapture("chat-after-restoration")
+  }
+
+  private fun assertChatAndCapture(name: String) {
+    compose.onNodeWithText("Speak latest reply").assertIsDisplayed()
+    compose.onNode(hasScrollToIndexAction() and SemanticsMatcher.keyIsDefined(SemanticsProperties.VerticalScrollAxisRange)).performScrollToIndex(0)
+    capture(name)
+    compose.onNodeWithText("CHAT").assertIsDisplayed()
+  }
+
   private fun connection(largeText: Boolean = false) {
     show(WearHomePage.Chat)
     if (largeText) {
@@ -216,10 +286,17 @@ class WearRoundLayoutTest {
     assertTrue("$name: $clippedPixels content pixels outside round display", clippedPixels == 0)
   }
 
-  private fun show(page: WearHomePage) {
-    previousAnimationScale = Settings.Global.getFloat(RuntimeEnvironment.getApplication().contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
-    Settings.Global.putFloat(RuntimeEnvironment.getApplication().contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
-    val activity = Robolectric.buildActivity(ComponentActivity::class.java).setup().visible()
+  private fun show(
+    page: WearHomePage,
+    savedState: Bundle? = null,
+  ) {
+    if (savedState == null) {
+      previousAnimationScale = Settings.Global.getFloat(RuntimeEnvironment.getApplication().contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 1f)
+      Settings.Global.putFloat(RuntimeEnvironment.getApplication().contentResolver, Settings.Global.ANIMATOR_DURATION_SCALE, 0f)
+    }
+    val activity = Robolectric.buildActivity(ComponentActivity::class.java)
+    if (savedState == null) activity.setup() else activity.setup(savedState)
+    activity.visible()
     controller = activity
     activity.get().setContent {
       CompositionLocalProvider(LocalReduceMotion provides reduceMotion) {

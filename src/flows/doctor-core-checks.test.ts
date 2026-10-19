@@ -17,13 +17,6 @@ const mocks = vi.hoisted(() => ({
   detectUnavailableSkills: vi.fn<() => Promise<SkillStatusEntry[]>>(async () => []),
   collectSecurityWarnings: vi.fn<() => Promise<SecurityAuditFinding[]>>(async () => []),
   collectWorkspaceSuggestionNotes: vi.fn<() => string[]>(() => []),
-  collectClawStateHealthFindings: vi.fn(
-    async (_options?: {
-      cronGateway?: {
-        list: (opts?: { includeDisabled?: boolean }) => Promise<readonly unknown[]>;
-      };
-    }) => [],
-  ),
 }));
 
 vi.mock("./doctor-core-checks.runtime.js", () => ({
@@ -44,11 +37,6 @@ vi.mock("../agents/prepared-model-catalog.js", () => ({
   loadProviderScopedThinkingCatalog: vi.fn(async () => []),
   readPreparedModelCatalog: mocks.loadModelCatalog,
 }));
-
-vi.mock("../claws/doctor.js", () => ({
-  collectClawStateHealthFindings: mocks.collectClawStateHealthFindings,
-}));
-
 vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
@@ -116,8 +104,6 @@ describe("CORE_HEALTH_CHECKS", () => {
     mocks.loadModelCatalog.mockClear();
     mocks.loadModelCatalog.mockResolvedValue([]);
     mocks.callGateway.mockReset();
-    mocks.collectClawStateHealthFindings.mockReset();
-    mocks.collectClawStateHealthFindings.mockResolvedValue([]);
     mocks.detectUnavailableSkills.mockReset();
     mocks.collectSecurityWarnings.mockReset();
     mocks.collectWorkspaceSuggestionNotes.mockReset();
@@ -129,52 +115,6 @@ describe("CORE_HEALTH_CHECKS", () => {
       await fs.rm(tmp, { force: true, recursive: true });
     }
   });
-
-  it.each([false, true])(
-    "reads cron pages only from one stable inventory (changed=%s)",
-    async (changed) => {
-      vi.stubEnv("OPENCLAW_EXPERIMENTAL_CLAWS", "1");
-      const jobs = [{ id: "job-1" }, { id: "job-2" }];
-      for (const [offset, job] of jobs.entries()) {
-        mocks.callGateway.mockResolvedValueOnce({
-          jobs: [job],
-          snapshotRevision: changed && offset === 1 ? "revision-2" : "revision-1",
-          total: 2,
-          offset,
-          limit: 200,
-          hasMore: offset === 0,
-          nextOffset: offset === 0 ? 1 : null,
-        });
-      }
-      let listedJobs: readonly unknown[] = [];
-      mocks.collectClawStateHealthFindings.mockImplementationOnce(async (options) => {
-        listedJobs = (await options?.cronGateway?.list({ includeDisabled: true })) ?? [];
-        return [];
-      });
-      const result = getCheck(createCoreHealthChecks(), "core/doctor/claws-state").detect({
-        mode: "doctor",
-        runtime,
-        cfg: {},
-      });
-      if (changed) {
-        await expect(result).rejects.toThrow(
-          "Gateway cron inventory changed while doctor was reading it.",
-        );
-      } else {
-        await expect(result).resolves.toEqual([]);
-        expect(listedJobs).toEqual(jobs);
-        for (const offset of [0, 1]) {
-          expect(mocks.callGateway).toHaveBeenNthCalledWith(
-            offset + 1,
-            expect.objectContaining({
-              method: "cron.list",
-              params: { includeDisabled: true, limit: 200, offset },
-            }),
-          );
-        }
-      }
-    },
-  );
 
   it("converts unavailable skills into scoped repair-capable findings", async () => {
     const detectUnavailableSkills = mocks.detectUnavailableSkills.mockResolvedValue([
@@ -461,9 +401,11 @@ describe("CORE_HEALTH_CHECKS", () => {
                 "codex-cli/gpt-5.6-sol",
                 "groq/llama3-70b-8192",
                 "groq/llama-3.3-70b-versatile",
+                "groq/openai/gpt-oss-120b",
                 "openai/not-in-the-local-catalog",
                 "google/gemini-2.5-flash",
                 "google/gemini-3.8-flash",
+                "google/not-in-the-local-catalog",
                 "google-gemini-cli/gemini-2.5-pro",
                 "openrouter/auto",
                 "openrouter/deepseek/deepseek-v4-pro",
@@ -494,13 +436,19 @@ describe("CORE_HEALTH_CHECKS", () => {
       expect.arrayContaining([
         expect.objectContaining({
           severity: "info",
+          target: "groq/llama-3.3-70b-versatile",
+          fixHint:
+            "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
+        }),
+        expect.objectContaining({
+          severity: "info",
           target: "openai/not-in-the-local-catalog",
           fixHint:
             "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
         }),
         expect.objectContaining({
           severity: "info",
-          target: "google/gemini-3.8-flash",
+          target: "google/not-in-the-local-catalog",
           fixHint:
             "Verify the model id with the provider, or rerun with --severity-min info after refreshing the local catalog.",
         }),
@@ -513,12 +461,15 @@ describe("CORE_HEALTH_CHECKS", () => {
       ]),
     );
     expect(findings).not.toContainEqual(
-      expect.objectContaining({ target: "groq/llama-3.3-70b-versatile" }),
+      expect.objectContaining({ target: "groq/openai/gpt-oss-120b" }),
     );
     expect(findings).not.toContainEqual(
       expect.objectContaining({ target: "google/gemini-2.5-flash" }),
     );
-    // OpenRouter plans no catalog rows, so an unlisted id there is not a finding.
+    expect(findings).not.toContainEqual(
+      expect.objectContaining({ target: "google/gemini-3.8-flash" }),
+    );
+    // OpenRouter's decision-only seed rows do not establish a conversational catalog.
     for (const target of ["openrouter/openrouter/auto", "openrouter/deepseek/deepseek-v4-pro"]) {
       expect(findings).not.toContainEqual(expect.objectContaining({ target }));
     }

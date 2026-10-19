@@ -1,7 +1,10 @@
 /* @vitest-environment jsdom */
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { toSanitizedMarkdownHtml } from "../../../components/markdown.ts";
-import { prepareChatMessageRender, resolveMessageActionDetails } from "./chat-message-markdown.ts";
+import {
+  prepareChatMessageRender,
+  resolveMessageActionDetails,
+} from "./chat-message-markdown-view.tsx";
 import {
   handleTranscriptContextMenu,
   resetThreadPresentation,

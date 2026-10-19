@@ -97,6 +97,23 @@ function execute(
 }
 
 describe("release shard timing refresh CLI", () => {
+  it.each(["bun-all", "dual-all"])("keeps %s release wall costs separate from Node", (policy) => {
+    const runtimeLog =
+      policy === "bun-all"
+        ? log("fixture").replaceAll("[shard:fixture]", "[shard:bun:fixture]")
+        : log("fixture") + log("fixture").replaceAll("[shard:fixture]", "[shard:bun:fixture]");
+    const { result, bytes } = execute({
+      logs: {
+        "1": `2026-09-01T01:01:00Z OPENCLAW_CI_TEST_RUNTIME_POLICY: ${policy}\n${runtimeLog}`,
+      },
+    });
+    expect(result.status, result.stderr).toBe(0);
+    expect(JSON.parse(bytes).compactGroupSeconds.github).toEqual({
+      ...baseline.compactGroupSeconds.github,
+      [`${policy}:release-full-fixture`]: 900,
+    });
+  });
+
   it.each([
     { name: "whole owner", files: undefined },
     { name: "explicit files", files: ["test/fixture.test.ts"] },

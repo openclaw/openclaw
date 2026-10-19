@@ -180,6 +180,28 @@ it("keeps text and thinking content and signatures in their own stream blocks", 
   }
 });
 
+it.each([62_500, null])(
+  "retains provider retry floor %s when a worker error becomes an assistant failure",
+  async (retryAfterMs) => {
+    const fixture = createAdapterFixture();
+    fixture.start.mockResolvedValue({
+      type: "error",
+      reason: "provider-error",
+      message: "429: rate_limit_exceeded",
+      retryAfterMs,
+    });
+    try {
+      const result = await fixture
+        .stream({ modelRef, context: { messages: [] }, options: {} })
+        .result();
+      expect(result).toMatchObject({ stopReason: "error", retryAfterMs });
+      expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
+    } finally {
+      fixture.client.dispose();
+    }
+  },
+);
+
 it.each([
   ["text", "end", { type: "text_end", contentIndex: 0 }],
   ["thinking", "delta", { type: "thinking_delta", contentIndex: 0, delta: "wrong block" }],
@@ -251,39 +273,6 @@ it("preserves the provider failure and usage after an oversized partial response
       content: [],
     });
     expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
-  } finally {
-    fixture.client.dispose();
-  }
-});
-
-it("rejects an oversized successful reply without truncating it or losing its usage", async () => {
-  const fixture = createAdapterFixture();
-  const reply: Extract<WorkerInferenceTerminalOutcome, { type: "done" }>["message"] = {
-    role: "assistant",
-    content: [{ type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) }],
-    api: "openai-responses",
-    provider: modelRef.provider,
-    model: modelRef.model,
-    stopReason: "stop",
-    usage,
-    timestamp: 1,
-  };
-  fixture.start.mockResolvedValue({ type: "done", message: reply });
-
-  try {
-    const result = await fixture
-      .stream({ modelRef, context: { messages: [] }, options: {} })
-      .result();
-    expect(result).toMatchObject({
-      stopReason: "error",
-      errorMessage: "Worker inference result exceeds the transcript message limit.",
-      usage,
-      content: [],
-    });
-    expect(isWorkerTranscriptMessageFrameSafe(result)).toBe(true);
-    expect(reply.content).toEqual([
-      { type: "text", text: "x".repeat(WORKER_PROTOCOL_MAX_PAYLOAD_BYTES) },
-    ]);
   } finally {
     fixture.client.dispose();
   }

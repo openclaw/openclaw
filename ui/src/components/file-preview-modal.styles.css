@@ -428,6 +428,8 @@ openclaw-file-preview-modal {
 
   .foot {
     display: flex;
+    flex-shrink: 0;
+    flex-wrap: wrap;
     align-items: center;
     gap: 18px;
     padding: 12px 20px;
@@ -453,8 +455,13 @@ openclaw-file-preview-modal {
     color: var(--text);
   }
 
-  .spacer {
-    flex: 1;
+  .foot > openclaw-modal-actions {
+    margin-inline-start: auto;
+  }
+
+  .foot .button {
+    height: auto;
+    min-height: 36px;
   }
 
   .button {

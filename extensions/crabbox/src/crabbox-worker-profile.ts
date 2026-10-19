@@ -112,6 +112,12 @@ function requirePositiveDuration(
   return { duration, milliseconds: Number(nanoseconds) / 1_000_000 };
 }
 
+export function parseCrabboxDurationMs(value: unknown): number | undefined {
+  const text = nonEmptyString(value);
+  const nanoseconds = text ? parsePositiveGoDurationNanoseconds(text) : undefined;
+  return nanoseconds === undefined ? undefined : Number(nanoseconds) / 1_000_000;
+}
+
 function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefined {
   if (!GO_DURATION_PATTERN.test(duration)) {
     return undefined;
@@ -140,7 +146,7 @@ function parsePositiveGoDurationNanoseconds(duration: string): bigint | undefine
   return total > 0n ? total : undefined;
 }
 
-function heartbeatIntervalMs(idleTimeoutMs: number): number {
+export function heartbeatIntervalMs(idleTimeoutMs: number): number {
   const referenceIntervalMs = Math.max(5_000, Math.min(60_000, idleTimeoutMs / 3));
   // Crabbox's floor can exceed short accepted timeouts. Keep renewal ahead of
   // coordinator idle expiry without changing the profile contract.

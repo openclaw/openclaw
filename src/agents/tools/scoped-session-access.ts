@@ -4,7 +4,10 @@ import { isPerAgentSessionStoreConfig } from "../../config/sessions/session-stor
 import { resolvePersistedSessionStoreOwnerForKey } from "../../config/sessions/session-store-owner.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { parseAgentSessionKey } from "../../routing/session-key.js";
-import { beginSessionWorkAdmission } from "../../sessions/session-lifecycle-admission.js";
+import {
+  captureSessionTarget,
+  beginSessionEffect,
+} from "../../sessions/session-controller.lifecycle.js";
 import { resolveSessionAgentIds } from "../agent-scope.js";
 
 /** Resolves a target key without letting requester scope override a durable fixed-store owner. */
@@ -51,10 +54,10 @@ export async function runWithScopedSessionAccess<T>(params: {
   });
   const storePath =
     params.storePath ?? resolveSessionStorePathCore(params.cfg.session?.store, { agentId });
-  const assertExpectedIncarnation = () =>
-    withSessionEntryReadOnlyInWorker(
+  const assertExpectedIncarnation = async (signal = params.signal) =>
+    await withSessionEntryReadOnlyInWorker(
       { agentId, storePath, sessionKey: params.targetSessionKey },
-      () => params.signal?.throwIfAborted(),
+      () => signal?.throwIfAborted(),
       async (read) => {
         if (!read.ok) {
           throw read.error;
@@ -64,11 +67,14 @@ export async function runWithScopedSessionAccess<T>(params: {
         }
       },
     );
-  const admission = await beginSessionWorkAdmission({
-    agentId,
-    scope: storePath,
-    identities: [params.targetSessionKey, expectedSessionId],
-    assertAllowed: assertExpectedIncarnation,
+  const admission = await beginSessionEffect({
+    target: captureSessionTarget({
+      storeScope: storePath,
+      sessionKey: params.targetSessionKey,
+      incarnation: expectedSessionId,
+      agentId,
+    }),
+    assertAllowed: (signal) => assertExpectedIncarnation(signal),
     revalidateAllowed: assertExpectedIncarnation,
     ...(params.signal ? { signal: params.signal } : {}),
   });

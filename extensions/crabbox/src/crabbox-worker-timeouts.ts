@@ -31,7 +31,7 @@ export const CRABBOX_STOP_TIMEOUT_MS =
   2 * 10_000 + 35_000 + 2 * (5 * 60_000 + 20_000) + 5 * 60_000 + 10_000;
 // Process timeout begins termination; allow the SDK's 300ms grace and Windows'
 // 5s taskkill to settle before core reports the provider result.
-export const CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS = 10_000;
+const CRABBOX_COMMAND_SETTLEMENT_TIMEOUT_MS = 10_000;
 // AWS coordinator heartbeat latency reached 107.6 seconds in production measurements.
 export const CRABBOX_HEARTBEAT_TIMEOUT_MS = 150_000;
 
@@ -58,6 +58,11 @@ export function resolveCrabboxWarmImageCaptureTimeoutMs(provider: string): numbe
   // Include collection, verification, missing-image deletion, capacity reclamation,
   // and predecessor retirement as well as scrub/create; core must await the owner.
   return (
+    // Lifetime admission: inspect/heartbeat/inspect/list, up to two identical
+    // extension attempts, then inspect/list readback. Runtime preparation can
+    // also precede scrub for a required project capture.
+    8 * resolveCrabboxLifecycleTimeoutMs(provider) +
+    CRABBOX_SETUP_TIMEOUT_MS +
     5 * WARM_IMAGE_COMMAND_TIMEOUT_MS +
     WARM_IMAGE_COMMAND_ROUND_TRIP_TIMEOUT_MS +
     resolveCrabboxCheckpointCaptureTimeoutMs(provider) +

@@ -31,6 +31,7 @@ import {
   CODEX_PROMPT_SNAPSHOT_BASE_SCENARIO,
   CODEX_PROMPT_SNAPSHOT_FILES,
   CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
+  LOCAL_OLLAMA_PROMPT_SNAPSHOT_DIR,
 } from "../helpers/agents/prompt-snapshot-paths.js";
 
 function readCommittedSnapshot(fileName: string): string {
@@ -88,7 +89,8 @@ describe("happy path prompt snapshots", () => {
     const scenarios = [
       { name: "telegram-direct", replacements: [] },
       { name: "discord-group", replacements: ["sessions_spawn"] },
-      { name: "heartbeat-turn", replacements: ["openclaw_direct"] },
+      // Heartbeat turns offer the session's catalog, so the provider prompt cache holds.
+      { name: "heartbeat-turn", replacements: [] },
     ];
 
     for (const { name, replacements } of scenarios) {
@@ -198,9 +200,11 @@ describe("happy path prompt snapshots", () => {
     try {
       const snapshotDir = path.join(root, CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR);
       fs.mkdirSync(snapshotDir, { recursive: true });
+      fs.mkdirSync(path.join(root, LOCAL_OLLAMA_PROMPT_SNAPSHOT_DIR), { recursive: true });
       const stalePaths = ["stale-snapshot.md", "stale-snapshot.md.patch"].map((fileName) =>
         path.join(CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR, fileName),
       );
+      stalePaths.push(path.join(LOCAL_OLLAMA_PROMPT_SNAPSHOT_DIR, "stale-snapshot.json"));
       const currentPath = path.join(
         CODEX_RUNTIME_HAPPY_PATH_PROMPT_SNAPSHOT_DIR,
         "current-snapshot.md.diff",

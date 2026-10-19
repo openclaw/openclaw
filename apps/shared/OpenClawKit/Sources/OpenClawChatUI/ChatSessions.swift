@@ -659,6 +659,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
     public var systemSent: Bool?
     public var abortedLastRun: Bool?
     public var thinkingLevel: String?
+    public var reasoningLevel: String?
     public var verboseLevel: String?
     public var fastMode: OpenClawChatFastMode?
     public var effectiveFastMode: OpenClawChatFastMode?
@@ -804,6 +805,7 @@ public struct OpenClawChatSessionEntry: Codable, Identifiable, Sendable, Hashabl
         self.systemSent = systemSent
         self.abortedLastRun = abortedLastRun
         self.thinkingLevel = thinkingLevel
+        self.reasoningLevel = nil
         self.verboseLevel = verboseLevel
         self.fastMode = fastMode
         self.effectiveFastMode = effectiveFastMode

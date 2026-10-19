@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Called after the canonical source build, before the app is signed. The npm
-# artifact is only an installation source; the full published package is retained.
+# artifact is only an installation source; trim development files before sealing.
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 DESTINATION="$1"
 shift
@@ -114,6 +114,7 @@ function visit(dir, packageDirectory = false) {
 }
 visit(process.argv[2]);
 JS
+  node "$ROOT_DIR/scripts/lib/desktop-runtime-prune.mjs" "$STAGE/installed-$arch/lib/node_modules"
 
   runtime="$STAGE/runtime"
   [[ "$arch" = "$1" ]] || runtime="$STAGE/runtime-$arch"

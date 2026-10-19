@@ -7,7 +7,6 @@ vi.hoisted(() => {
   vi.stubEnv("OPENCLAW_TEST_FAST", "1");
 });
 
-import { isLikelyInterimCronMessage } from "./subagent-followup-hints.js";
 import {
   readDescendantSubagentFallbackReply,
   waitForDescendantSubagentSummary,
@@ -76,18 +75,20 @@ function createDescendantRun(params?: {
         }
       : params?.active
         ? { status: "running" }
-        : { status: "terminal", endedAt },
+        : { status: "terminal", endedAt, outcome: { status: "ok" } },
     ...(params?.resultText === undefined
       ? {}
-      : { completion: { required: true, resultText: params.resultText } }),
+      : {
+          completion: {
+            required: true,
+            resultText: params.resultText,
+            terminalReply: params.resultText
+              ? { disposition: "visible", text: params.resultText }
+              : { disposition: "empty" },
+          },
+        }),
   };
 }
-
-describe("isLikelyInterimCronMessage", () => {
-  it("does not treat whitespace-only as interim", () => {
-    expect(isLikelyInterimCronMessage("   ")).toBe(false);
-  });
-});
 
 describe("readDescendantSubagentFallbackReply", () => {
   const runStartedAt = 1000;
@@ -95,15 +96,27 @@ describe("readDescendantSubagentFallbackReply", () => {
   it.each([
     {
       name: "visible",
-      terminalReply: { disposition: "visible", text: "authoritative child output" } as const,
-      resultText: "older captured output",
-      expected: "authoritative child output",
+      terminalReply: { disposition: "visible", text: "bounded child output" } as const,
+      resultText: "authoritative full child output",
+      expected: "bounded child output",
     },
     {
       name: "silent",
       terminalReply: { disposition: "silent" } as const,
-      resultText: "NO_REPLY",
+      resultText: "stale visible child output",
       expected: undefined,
+    },
+    {
+      name: "empty",
+      terminalReply: { disposition: "empty" } as const,
+      resultText: "stale visible child output",
+      expected: undefined,
+    },
+    {
+      name: "visible literal token",
+      terminalReply: { disposition: "visible", text: "NO_REPLY" } as const,
+      resultText: "NO_REPLY",
+      expected: "NO_REPLY",
     },
   ])(
     "uses producer-owned $name terminal evidence instead of a stale child transcript",
@@ -125,35 +138,31 @@ describe("readDescendantSubagentFallbackReply", () => {
     },
   );
 
-  it.each([
-    { name: "silent transcript", hasInternalTranscript: false, transcript: "NO_REPLY" },
-    {
-      name: "internal resume",
-      hasInternalTranscript: true,
-      transcript: "stale visible transcript",
-    },
-  ])(
-    "retains a successful NO_REPLY fallback with a $name",
-    async ({ hasInternalTranscript, transcript }) => {
-      const descendant = createDescendantRun({ resultText: "NO_REPLY", hasInternalTranscript });
+  it.each(["NO_REPLY", "captured child answer"])(
+    "does not reconstruct missing terminal facts from retained output: %s",
+    async (resultText) => {
+      const descendant = createDescendantRun({ resultText });
       descendant.execution.outcome = { status: "ok" };
       descendant.completion = {
         required: true,
-        resultText: "NO_REPLY",
+        resultText,
         fallbackResultText: "captured child findings",
       };
       vi.mocked(listDescendantRunsForRequester).mockResolvedValue([descendant]);
-      vi.mocked(readLatestAssistantReply).mockResolvedValue(transcript);
-
+      vi.mocked(readLatestAssistantReply).mockResolvedValue("stale child transcript");
+      vi.mocked(readLatestAssistantReply).mockClear();
       await expect(
         readDescendantSubagentFallbackReply({ sessionKey: "test-session", runStartedAt }),
-      ).resolves.toBe("captured child findings");
+      ).resolves.toBeUndefined();
+      expect(readLatestAssistantReply).not.toHaveBeenCalled();
     },
   );
 
-  it("skips SILENT_REPLY_TOKEN descendants", async () => {
+  it("skips descendants with producer-owned silence", async () => {
+    const silent = createDescendantRun({ resultText: "NO_REPLY" });
+    silent.completion = { required: true, terminalReply: { disposition: "silent" } };
     vi.mocked(listDescendantRunsForRequester).mockResolvedValue([
-      createDescendantRun(),
+      silent,
       createDescendantRun({
         runId: "run-2",
         childSessionKey: "child-2",
@@ -162,12 +171,6 @@ describe("readDescendantSubagentFallbackReply", () => {
         resultText: "useful output",
       }),
     ]);
-    vi.mocked(readLatestAssistantReply).mockImplementation(async (params) => {
-      if (params.sessionKey === "child-1") {
-        return "NO_REPLY";
-      }
-      return undefined;
-    });
     const result = await readDescendantSubagentFallbackReply({
       sessionKey: "test-session",
       runStartedAt,
@@ -420,7 +423,7 @@ describe("waitForDescendantSubagentSummary", () => {
     expect(readLatestAssistantReply).toHaveBeenCalledTimes(1);
   });
 
-  it.each(["NO_REPLY", "**HEARTBEAT_OK**", '{"action":"HEARTBEAT_OK"}'])(
+  it.each(["HEARTBEAT_OK"])(
     "skips the %s control-only parent reply instead of treating it as child output",
     async (parentReply) => {
       vi.useFakeTimers();
@@ -441,22 +444,21 @@ describe("waitForDescendantSubagentSummary", () => {
   );
 
   it.each([
+    "NO_REPLY",
+    "NO_REPLY\nexample",
     "HEARTBEAT_OK child completed the scheduled reminder",
     '{"action":"HEARTBEAT_OK","message":"child completed the scheduled reminder"}',
-  ])(
-    "preserves substantive synthesis that also contains a heartbeat token: %s",
-    async (synthesis) => {
-      vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
-      vi.mocked(readLatestAssistantReply).mockResolvedValue(synthesis);
+  ])("preserves prepared synthesis without reclassifying its text: %s", async (synthesis) => {
+    vi.mocked(listDescendantRunsForRequester).mockResolvedValue([]);
+    vi.mocked(readLatestAssistantReply).mockResolvedValueOnce("on it").mockResolvedValue(synthesis);
 
-      const result = await waitForDescendantSubagentSummary({
-        sessionKey: "cron-session",
-        initialReply: undefined,
-        timeoutMs: 100,
-        observedActiveDescendants: true,
-      });
+    const result = await waitForDescendantSubagentSummary({
+      sessionKey: "cron-session",
+      initialReply: undefined,
+      timeoutMs: 100,
+      observedActiveDescendants: true,
+    });
 
-      expect(result).toBe(synthesis);
-    },
-  );
+    expect(result).toBe(synthesis);
+  });
 });

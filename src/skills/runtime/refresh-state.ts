@@ -1,4 +1,5 @@
 import { notifyListeners, registerListener } from "../../shared/listeners.js";
+import type { ExecutionSkillWorkspace } from "../loading/workspace-skill-roots.js";
 import { normalizeWorkspaceSkillRoots } from "../loading/workspace-skill-roots.js";
 
 type SkillsChangeEvent = {
@@ -15,10 +16,7 @@ type SkillsChangeEvent = {
   sourceScope?: SkillsSourceScope;
 };
 
-export type SkillsSourceScope = {
-  executionWorkspaceDir?: string;
-  executionWorkspaceFileHost?: "gateway";
-};
+export type SkillsSourceScope = ExecutionSkillWorkspace;
 
 const listeners = new Set<(event: SkillsChangeEvent) => void>();
 const workspaceVersions = new Map<string, number>();
@@ -157,12 +155,7 @@ export function getSkillsSnapshotVersion(workspaceDir?: string): number {
   return Math.max(globalVersion, workspaceVersions.get(workspaceDir) ?? 0);
 }
 
-export function shouldRefreshSnapshotForVersion(
-  cachedVersion?: number,
-  nextVersion?: number,
-): boolean {
-  const cached = typeof cachedVersion === "number" ? cachedVersion : 0;
-  const next = typeof nextVersion === "number" ? nextVersion : 0;
+export function shouldRefreshSnapshotForVersion(cached = 0, next = 0): boolean {
   return next === 0 ? cached > 0 : cached < next;
 }
 

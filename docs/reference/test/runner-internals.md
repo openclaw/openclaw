@@ -131,7 +131,7 @@ the native Rayon and Rolldown worker pools to four threads each, preserving expl
 `RAYON_NUM_THREADS` and `ROLLDOWN_WORKER_THREADS` overrides.
 
 Packaged SDK declarations belong to one staged owner shared by full, package, and
-`ciArtifacts` builds. It serializes the two canonical tsdown SDK groups on a miss
+`ciArtifacts` builds. It serializes the two standard tsdown SDK groups on a miss
 and caches their complete staged generation. Each successful compiler supplies its
 source and package-manifest membership through a private staged receipt; missing receipts or inputs
 changed during compilation prevent publication. The shared input snapshot policy
@@ -192,6 +192,12 @@ threads, named builtin imports, and import-time captures; changing only a worker
 JavaScript `process.env` does not change native thread home lookup. Per-worker and
 per-test fixture homes remain separate. Installed Corepack and Playwright browser
 caches retain their caller-selected locations.
+
+Source subprocesses reuse the invocation's temporary TSX disk cache. Fixtures
+with descriptor-heavy source Worker imports opt out locally with
+`TSX_DISABLE_CACHE=1`: those threads share the parent's file descriptor table,
+and bursts of asynchronous cache writes can exhaust it. Tooling shims retain
+their separate cache policy.
 
 Gateway port claims remain in the common temporary directory outside all enclosing
 Vitest namespaces, found through their explicit resource owners. Parallel invocations

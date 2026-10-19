@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import type { PreparedTranscriptMessageAppend } from "../../config/sessions/session-accessor.sqlite-transcript-message-append.js";
 import { canRebasePreparedAssistantInTransaction } from "../../config/sessions/session-accessor.sqlite-transcript-parent.js";
 import {
@@ -9,6 +8,7 @@ import { isReadableSessionMessage } from "../../config/sessions/session-entry-co
 import type { SessionMetadataOperations } from "../../config/sessions/session-manager-write-contract.js";
 import { SqliteTranscriptMutationConflictError } from "../../config/sessions/session-mutation-conflict-error.js";
 import { prepareTranscriptPayloadForReuse } from "../../config/sessions/transcript-payload.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db-contract.js";
 import { decodeMetadataAppendEvent } from "./session-manager-append-codec.js";
 import type {
@@ -24,7 +24,7 @@ type PreparedSessionManagerAppend = {
 };
 
 export function prepareSessionMetadataAppend(
-  database: DatabaseSync,
+  database: EngineConnection,
   input: SessionMetadataOperations["session.metadata.append"]["input"],
 ): PreparedSessionManagerAppend {
   const event = decodeMetadataAppendEvent(input);

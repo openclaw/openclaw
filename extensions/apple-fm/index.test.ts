@@ -8,6 +8,7 @@ import {
   createNonExitingRuntimeEnv,
   createTestWizardPrompter,
 } from "openclaw/plugin-sdk/plugin-test-runtime";
+import { applyProviderAuthConfigPatch } from "openclaw/plugin-sdk/provider-auth";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import plugin from "./index.js";
 import type { AppleFmFacts } from "./native.js";
@@ -105,7 +106,8 @@ describe("Apple Foundation Models setup", () => {
     expect(native.createAppleFmNative).toHaveBeenCalledExactlyOnceWith(
       "/bundle/dist/extensions/apple-fm",
     );
-    const configured = result.configPatch?.models?.providers?.["apple-fm"];
+    const config = applyProviderAuthConfigPatch({}, result.configPatch, result);
+    const configured = config.models?.providers?.["apple-fm"];
 
     expect(result.profiles).toEqual([]);
     expect(result.defaultModel).toBe("apple-fm/system");
@@ -125,7 +127,7 @@ describe("Apple Foundation Models setup", () => {
     });
     expect(provider.resolveSyntheticAuth?.({ provider: "apple-fm" })).toBeUndefined();
     const context = {
-      config: result.configPatch ?? {},
+      config,
       env: {},
       resolveProviderApiKey: () => ({ apiKey: undefined }),
       resolveProviderAuth: () => ({

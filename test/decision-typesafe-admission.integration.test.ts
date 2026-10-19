@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { expect, it, vi } from "vitest";
 import { evaluateAttemptDecisionToolPrefilter } from "../src/agents/embedded-agent-runner/run/attempt-decision-prefilter.js";
 import { createDecisionTool } from "../src/agents/tools/decision-tool.js";
@@ -102,6 +102,13 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     setActivePluginRegistry(builder.registry);
     const initial = config(true);
     setRuntimeConfigSnapshot(initial);
+    // Keep host policy initialization outside the 500 ms consumer budget;
+    // the suspended import and DNS below exercise admission, not cold setup.
+    providerHttp.resolveProviderHttpRequestConfigWithOriginTrust({
+      provider: "typesafe",
+      baseUrl: "http://localhost:" + server.claim.port + "/v1",
+      defaultBaseUrl: "https://api.typesafe.ai/v1",
+    });
     const pending = turn(initial);
     await loading.promise;
     const disabledConfig = config(false);
@@ -132,16 +139,16 @@ it("lets admitted TypeSafe work finish after opt-out while preserving independen
     // Hold real DNS preparation. Labs opt-out permits admitted I/O; independent
     // guards still reject it. Restoring config during cleanup must not erase an
     // observed authority failure or poison shared provider health.
-    const guardedFetch = ssrfRuntime.fetchWithSsrFGuard;
+    const guardedFetch = providerHttp.fetchWithProviderHttpGuard;
     for (const change of ["optout", "model", "authority", "provider-config", "secrets"] as const) {
       const resolving = createDeferredCore();
       const resolved = createDeferredCore();
-      const localConfig = config(true);
-      setRuntimeConfigSnapshot(localConfig);
+      setRuntimeConfigSnapshot(config(true));
+      const localConfig = getRuntimeConfigSnapshot()!;
       const before = requests;
       const originalError = new Error("synthetic authority closed");
       const intercepted = vi
-        .spyOn(ssrfRuntime, "fetchWithSsrFGuard")
+        .spyOn(providerHttp, "fetchWithProviderHttpGuard")
         .mockImplementation((params) => {
           const lookup = params.lookupFn;
           if (!lookup) {

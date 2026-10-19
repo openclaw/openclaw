@@ -3,7 +3,11 @@
 import type { AgentMessage } from "openclaw/plugin-sdk/agent-core";
 import { createAssistantMessageEventStream } from "openclaw/plugin-sdk/llm";
 import { describe, expect, it, vi } from "vitest";
-import { castAgentMessage, castAgentMessages } from "../test-helpers/agent-message-fixtures.js";
+import {
+  castAgentMessage,
+  castAgentMessages,
+  makeAgentAssistantMessage,
+} from "../test-helpers/agent-message-fixtures.js";
 import { textAssistant } from "../test-helpers/sparse-transcript.test-support.js";
 import { createZeroUsageFixture } from "../test-helpers/usage-fixtures.js";
 import { stripStaleThinkingSignaturesForCompactionReplay } from "../thinking-signatures.js";
@@ -388,15 +392,12 @@ describe("wrapAnthropicStreamWithRecovery", () => {
   function createTestAssistantMessage(
     overrides: Partial<AssistantMessage> & Pick<AssistantMessage, "content" | "stopReason">,
   ): AssistantMessage {
-    return castAgentMessage({
-      role: "assistant",
+    return makeAgentAssistantMessage({
       api: "anthropic-messages",
       provider: "anthropic",
       model: "claude-sonnet-4-6",
-      usage: createZeroUsageFixture(),
-      timestamp: 0,
       ...overrides,
-    }) as AssistantMessage;
+    });
   }
 
   function thinkingHistory(): AgentMessage[] {

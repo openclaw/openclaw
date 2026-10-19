@@ -165,7 +165,6 @@ async function captureChromeMcpTabOwnership(params: {
   return { ownership, nativeTargetId };
 }
 
-/** Open a new Chrome MCP tab and navigate it to the requested URL. */
 export async function openChromeMcpTab(
   profileName: string,
   url: string,

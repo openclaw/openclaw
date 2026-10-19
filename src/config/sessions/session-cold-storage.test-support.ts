@@ -5,6 +5,7 @@ import {
   openOpenClawAgentDatabase,
   runOpenClawAgentWriteTransaction,
 } from "../../state/openclaw-agent-db.js";
+import { requireNativeSqliteDatabase } from "../../test-utils/native-sqlite.js";
 import type { AgentsConfig } from "../types.agents.js";
 import { replaceSessionEntrySync } from "./session-accessor.js";
 import { replaceTranscriptEvents } from "./session-accessor.sqlite-transcript-write.test-support.js";
@@ -96,7 +97,7 @@ export async function createSessionColdStorageFixture(
     );
   }, options);
 
-  const database = () => openOpenClawAgentDatabase(options).db;
+  const database = () => requireNativeSqliteDatabase(openOpenClawAgentDatabase(options).db);
   const snapshot = (db = database()) => {
     return {
       events: executeSqliteQuerySync(

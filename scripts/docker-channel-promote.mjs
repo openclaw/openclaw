@@ -4,9 +4,8 @@ import { execFileSync } from "node:child_process";
 import process from "node:process";
 import { parseArgs } from "node:util";
 import { isDirectRunUrl } from "./lib/direct-run.mjs";
-import { isMissingManifestError } from "./lib/docker-manifest-error.mjs";
 import {
-  parseDockerImageConfigVersion,
+  inspectDockerImageVersion,
   resolveDockerReleasePolicy,
 } from "./lib/docker-release-policy.mjs";
 import { compareReleaseVersions } from "./lib/release-version.mjs";
@@ -117,51 +116,9 @@ function inspectManifestDigest(imageRef, execFileSyncImpl) {
   return digest;
 }
 
-function formatPlatform(platform) {
-  const suffix = platform.variant ? `/${platform.variant}` : "";
-  return `${platform.os}/${platform.architecture}${suffix}`;
-}
-
-function inspectImageVersion(imageRef, execFileSyncImpl, { allowMissing = false } = {}) {
-  const versions = new Map();
-  for (const [index, platform] of REQUIRED_PLATFORMS.entries()) {
-    const platformName = formatPlatform(platform);
-    let raw;
-    try {
-      // In formatted multi-platform inspection, Buildx keys .Image by os/arch.
-      // Read every promoted platform rather than trusting one config label.
-      raw = runDocker(
-        [
-          "buildx",
-          "imagetools",
-          "inspect",
-          imageRef,
-          "--format",
-          `{{json (index .Image "${platformName}")}}`,
-        ],
-        execFileSyncImpl,
-      );
-    } catch (error) {
-      if (allowMissing && index === 0 && isMissingManifestError(error, imageRef)) {
-        return null;
-      }
-      throw error;
-    }
-
-    const version = parseDockerImageConfigVersion(raw, imageRef, platformName);
-    versions.set(platformName, version);
-  }
-  const uniqueVersions = new Set(versions.values());
-  if (uniqueVersions.size !== 1) {
-    const details = [...versions].map(([platform, version]) => `${platform}=${version}`).join(", ");
-    throw new Error(`${imageRef} has inconsistent platform versions: ${details}.`);
-  }
-  return uniqueVersions.values().next().value;
-}
-
 function verifySourceVersions(resolved, version, execFileSyncImpl) {
   for (const promotion of resolved) {
-    const sourceVersion = inspectImageVersion(promotion.sourceDigestRef, execFileSyncImpl);
+    const sourceVersion = inspectDockerImageVersion(promotion.sourceDigestRef, execFileSyncImpl);
     if (sourceVersion !== version) {
       throw new Error(
         `${promotion.sourceDigestRef} reports version ${sourceVersion}, expected ${version}.`,
@@ -173,7 +130,7 @@ function verifySourceVersions(resolved, version, execFileSyncImpl) {
 function preventChannelRollback(resolved, version, execFileSyncImpl) {
   for (const promotion of resolved) {
     for (const targetRef of promotion.targetRefs) {
-      const currentVersion = inspectImageVersion(targetRef, execFileSyncImpl, {
+      const currentVersion = inspectDockerImageVersion(targetRef, execFileSyncImpl, {
         allowMissing: true,
       });
       if (currentVersion === null) {

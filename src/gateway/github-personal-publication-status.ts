@@ -63,7 +63,6 @@ function presentPersonalGitHubPublicationStatus(
   const pending = isPendingPersonalPublication(receipt, executing);
   let repositoryOwner: ReturnType<typeof resolveReceiptOwner>;
   if (receipt.kind === "repository") {
-    action.assertCurrent();
     if (
       row.owner_profile_id !== action.owner ||
       row.session_key !== session.sessionKey ||

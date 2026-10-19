@@ -51,17 +51,22 @@ function fixture(overrides: { maxBytes?: number } = {}) {
       },
     },
   });
-  invokeNode.mockImplementation(async ({ params } = {}) => ({
-    ok: true,
-    payload: {
+  invokeNode.mockImplementation(async (options = {}) => {
+    const { params } = options;
+    return {
       ok: true,
-      path: "/workspace/input",
-      binding,
-      ...((params as Record<string, unknown>).preflightOnly === true ? {} : { status: "created" }),
-      size: sizeBytes,
-      sha256: expectedSha256,
-    },
-  }));
+      payload: {
+        ok: true,
+        path: "/workspace/input",
+        binding,
+        ...((params as Record<string, unknown>).preflightOnly === true
+          ? {}
+          : { status: "created" }),
+        size: sizeBytes,
+        sha256: expectedSha256,
+      },
+    };
+  });
   return { ctx, invokeNode };
 }
 
@@ -202,7 +207,8 @@ describe("file-transfer dir.list policy", () => {
       }),
     };
     const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(
-      async ({ params } = {}) => {
+      async (options = {}) => {
+        const { params } = options;
         const record = requireRecord(params, "invoke params");
         events.push(record.preflightOnly === true ? "preflight" : "list");
         if (record.preflightOnly === true && record.expectedCanonicalPath === "/tmp/old-project") {

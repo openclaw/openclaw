@@ -70,6 +70,7 @@ describe("cron edit", () => {
     ],
     [["--trigger-script", "", "--clear-trigger"], "--trigger-script must not be blank"],
     [["--script", " ", "--pacing-min", "30m"], "--script must not be blank"],
+    [["--command", "", "--name", "Renamed"], "--command must not be blank"],
     [["--tools", "", "--clear-tools", "--pacing-min", "30m"], "Use --tools or --clear-tools"],
     [["--agent", "main", "--clear-agent"], "Use --agent or --clear-agent"],
     [

@@ -41,7 +41,8 @@ const { fetchWithSsrFGuard, prepare, providerStream, reconcile, runtimeHandle } 
   };
 });
 
-vi.mock("../infra/net/fetch-guard.js", () => ({
+vi.mock("../infra/net/fetch-guard.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/net/fetch-guard.js")>()),
   fetchWithSsrFGuard,
   withTrustedEnvProxyGuardedFetchMode: vi.fn((params) => params),
 }));

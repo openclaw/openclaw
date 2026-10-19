@@ -1,8 +1,110 @@
 import { MessageChannel } from "node:worker_threads";
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
 import { expect, it } from "vitest";
+import { createDeferred } from "../../../test/helpers/promise.js";
 import { createSpawnBrokerHost } from "./host.js";
 import { attachBrokerNativeResource } from "./resource-client.js";
+
+it.skipIf(process.platform === "win32").each([
+  ["import", 'throw new Error("synthetic resource import failure");'],
+  [
+    "factory",
+    'export function createNativeWorkerResource() { throw new Error("synthetic resource factory failure"); }',
+  ],
+])(
+  "closes failed resource %s initialization without losing its original error",
+  async (stage, source) => {
+    const host = createSpawnBrokerHost({ nativeResources: true });
+    const { port1, port2 } = new MessageChannel();
+    const failure = createDeferred<Error>();
+    const failures: Error[] = [];
+    let client: ReturnType<typeof attachBrokerNativeResource> | undefined;
+    let lease: ReturnType<typeof host.captureNativeResource> | undefined;
+    try {
+      await host.ready();
+      lease = host.captureNativeResource(
+        { moduleUrl: `data:text/javascript,${encodeURIComponent(source)}`, ownerPort: false },
+        { message() {}, failed: (error) => failures.push(error) },
+      );
+      client = attachBrokerNativeResource(lease.attachment, port1, () => {}, failure.resolve);
+      expect((await failure.promise).message).toContain(`synthetic resource ${stage} failure`);
+      await client.close();
+      await lease.close();
+      lease.release();
+      expect(
+        failures.some((error) => error.message.includes(`synthetic resource ${stage} failure`)),
+      ).toBe(true);
+    } finally {
+      client?.dispose();
+      port1.close();
+      port2.close();
+      await lease?.close();
+      lease?.release();
+      await host.close();
+    }
+  },
+  20_000,
+);
+
+it.skipIf(process.platform === "win32")(
+  "keeps owner cleanup replies usable after an admitted resource operation fails",
+  async () => {
+    const moduleUrl = `data:text/javascript,${encodeURIComponent(`
+      export function createNativeWorkerResource(target, _input, owner) {
+        let permit;
+        const permitted = new Promise(resolve => { permit = resolve; });
+        owner.on("message", () => permit());
+        target.on("message", () => { throw new Error("synthetic resource operation failure"); });
+        return { async close() { owner.postMessage("close-requested"); await permitted; } };
+      }
+    `)}`;
+    const host = createSpawnBrokerHost({ nativeResources: true });
+    const { port1, port2 } = new MessageChannel();
+    const created = createDeferred();
+    const failure = createDeferred<Error>();
+    let client: ReturnType<typeof attachBrokerNativeResource> | undefined;
+    let lease: ReturnType<typeof host.captureNativeResource> | undefined;
+    try {
+      await host.ready();
+      lease = host.captureNativeResource(
+        { moduleUrl, ownerPort: true },
+        { message() {}, failed() {} },
+      );
+      client = attachBrokerNativeResource(
+        lease.attachment,
+        port1,
+        (response) => {
+          if (response.type === "resource-created") {
+            created.resolve();
+          } else if (response.type === "resource-owner") {
+            expect(response.value).toBe("close-requested");
+            client!.ownerMessage("permit-close", 1);
+          }
+        },
+        failure.resolve,
+      );
+      await created.promise;
+      port2.postMessage("fail-operation");
+      expect((await failure.promise).message).toContain("synthetic resource operation failure");
+      await client.close();
+      await lease.close();
+      lease.release();
+    } finally {
+      try {
+        void lease?.ownerMessage("permit-close").result.catch(() => {});
+      } catch {
+        // A successfully closed/released fixture needs no fallback permission.
+      }
+      client?.dispose();
+      port1.close();
+      port2.close();
+      await lease?.close();
+      lease?.release();
+      await host.close();
+    }
+  },
+  20_000,
+);
 
 it.skipIf(process.platform === "win32")(
   "retains both disposal failures through the running native resource server and client",

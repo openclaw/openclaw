@@ -3,6 +3,8 @@ import { findLegacyConfigIssues } from "../../../config/legacy.js";
 import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 
 describe("per-agent legacy migrations after roster normalization", () => {
+  // Keep the migration sources independent: default params must not create the
+  // model row that the inherited-agent case claims to exercise.
   it.each(["defaults", "inherited agent"])(
     "creates absent provider ancestors for Qwen params from %s",
     (source) => {

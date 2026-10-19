@@ -74,6 +74,7 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
   apply: boolean;
   authority?: DoctorSqliteMaintenanceAuthority;
   targets?: readonly ExistingAgentDatabaseTarget[];
+  integrityCheck?: "quick" | "full";
 }): Promise<AcpSessionKeyRepairReport> {
   const result: AcpSessionKeyRepairReport = {
     found: 0,
@@ -92,7 +93,10 @@ export async function repairAcpSessionMetaKeysForDoctor(params: {
     params.authority?.assertCurrent();
     assertExistingDatabaseIdentity(sourcePath, sourceIdentity.key, sourceIdentity.birthtime);
   };
-  const database = await openExistingOpenClawStateDatabaseReadOnly({ env: params.env });
+  const database = await openExistingOpenClawStateDatabaseReadOnly({
+    env: params.env,
+    integrityCheck: params.integrityCheck ?? "quick",
+  });
   let rows: AcpSessionRow[] = [];
   if (database) {
     try {

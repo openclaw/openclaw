@@ -55,7 +55,7 @@ export type SecretStoreBatchWriteParams = {
   database?: OpenClawStateDatabaseOptions;
 };
 
-export type SecretStoreWriteResult = {
+type SecretStoreWriteResult = {
   kind: SecretStoreKind;
   previous: SecretStoreWriteSnapshot | undefined;
 };

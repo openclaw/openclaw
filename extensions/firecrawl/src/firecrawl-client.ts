@@ -106,7 +106,7 @@ type FirecrawlScrapeParams = {
   signal?: AbortSignal;
 };
 
-export function assertFirecrawlScrapeTargetAllowed(url: string): void {
+function assertFirecrawlScrapeTargetAllowed(url: string): void {
   let parsed: URL;
   try {
     parsed = new URL(url);
@@ -366,14 +366,10 @@ export async function runFirecrawlSearch(
   const count = resolveIntegerOption(params.count, DEFAULT_SEARCH_COUNT, { min: 1, max: 100 });
   const timeoutSeconds = resolveFirecrawlSearchTimeoutSeconds(params.timeoutSeconds);
   const scrapeResults = params.scrapeResults === true;
-  const sources = Array.isArray(params.sources) ? params.sources.filter(Boolean) : [];
-  const categories = Array.isArray(params.categories) ? params.categories.filter(Boolean) : [];
-  const includeDomains = Array.isArray(params.includeDomains)
-    ? params.includeDomains.filter(Boolean)
-    : [];
-  const excludeDomains = Array.isArray(params.excludeDomains)
-    ? params.excludeDomains.filter(Boolean)
-    : [];
+  const sources = params.sources?.filter(Boolean) ?? [];
+  const categories = params.categories?.filter(Boolean) ?? [];
+  const includeDomains = params.includeDomains?.filter(Boolean) ?? [];
+  const excludeDomains = params.excludeDomains?.filter(Boolean) ?? [];
   if (includeDomains.length > 0 && excludeDomains.length > 0) {
     throw new Error("Firecrawl search accepts includeDomains or excludeDomains, not both.");
   }
@@ -484,7 +480,7 @@ export async function runFirecrawlSearch(
   return result;
 }
 
-export function parseFirecrawlScrapePayload(params: {
+function parseFirecrawlScrapePayload(params: {
   payload: Record<string, unknown>;
   url: string;
   extractMode: "markdown" | "text";
@@ -619,10 +615,3 @@ export async function runFirecrawlScrape(params: FirecrawlScrapeParams) {
     maxChars,
   });
 }
-
-export const testing = {
-  assertFirecrawlScrapeTargetAllowed,
-  parseFirecrawlScrapePayload,
-  resolveEndpoint,
-  resolveSearchItems,
-};

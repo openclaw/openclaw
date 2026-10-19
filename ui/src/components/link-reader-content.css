@@ -304,3 +304,34 @@
 .lr-review-diff {
   margin-top: 8px;
 }
+.lr-section-loading {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 14px 16px;
+  margin: 20px 0 24px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  color: var(--muted);
+  font-size: 12px;
+  min-height: 64px;
+}
+.lr-section-loading--checks {
+  min-height: 80px;
+}
+.lr-loading-dot {
+  flex: none;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+}
+.lr-loading-dot--active {
+  animation: lr-loading-pulse 1.8s ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .lr-loading-dot--active {
+    animation: none;
+  }
+}

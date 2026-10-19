@@ -2,8 +2,11 @@
 import path from "node:path";
 import { onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
+import { createReplyOperationExecutionCustody } from "../../sessions/session-controller.execution-custody.js";
+import type { ReplyOperation } from "../../sessions/session-controller.js";
+import { createSessionControllerWatchdog } from "../../sessions/session-controller.watchdog.js";
+import { createDeferredCore } from "../../shared/deferred.js";
 import type { FollowupRun } from "./queue.js";
-import type { ReplyOperation } from "./reply-run-registry.js";
 import type { TypingController } from "./typing.js";
 
 /** Creates a stateful reply-operation double without registering global run state. */
@@ -17,7 +20,6 @@ export function createMockReplyOperation(
 ) {
   const failMock = vi.fn();
   const freezeAbortMock = vi.fn();
-  const retainFailureUntilCompleteMock = vi.fn();
   let sessionId = overrides.sessionId ?? "session";
   const updateSessionIdMock = vi.fn((nextSessionId: string) => {
     sessionId = nextSessionId;
@@ -25,7 +27,30 @@ export function createMockReplyOperation(
   let toolAuthorityFingerprint = overrides.toolAuthorityFingerprint;
   let toolAuthoritySnapshot: Parameters<ReplyOperation["bindToolAuthoritySnapshot"]>[0] | undefined;
   let toolAuthorityRoute: ReplyOperation["toolAuthorityRoute"];
+  const owner = createDeferredCore();
+  const watchdog = createSessionControllerWatchdog({
+    startedAtMs: Date.now(),
+    isCurrent: () => true,
+    readPhase: () =>
+      replyOperation.result ? "terminal" : replyOperation.abortFrozen ? "finishing" : "active",
+    requestStop: () => "blocked",
+    expireCleanup: () => "blocked",
+  });
+  const executionCustody = createReplyOperationExecutionCustody();
+  const complete = () =>
+    executionCustody.completeWhenReleased(() => {
+      watchdog.close();
+      owner.resolve();
+    });
   const replyOperation: ReplyOperation = {
+    watchdog,
+    admissionRetired: false,
+    retireAdmissionAfterFencing: vi.fn(async () => false),
+    retainExecution: () => executionCustody.retain(),
+    ownerSettlement: owner.promise,
+    registerExecutionCleanup: vi.fn(() => () => {}),
+    registerTerminalProducerFence: vi.fn(() => () => {}),
+    terminalProducerBlocked: false,
     key: overrides.key ?? "main",
     get sessionId() {
       return sessionId;
@@ -44,9 +69,11 @@ export function createMockReplyOperation(
     },
     phase: "running",
     result: null,
+    abortFrozen: false,
     staleExpiryReason: undefined,
     startedAtMs: Date.now(),
     lastActivityAtMs: Date.now(),
+    hasOwnedSessionId: (candidateSessionId) => candidateSessionId === sessionId,
     captureOwnedSessionIds: vi.fn(() => new Set([sessionId])),
     recordActivity: vi.fn(),
     setPhase: vi.fn(),
@@ -123,10 +150,20 @@ export function createMockReplyOperation(
     attachBackend: vi.fn(),
     detachBackend: vi.fn(),
     freezeAbort: freezeAbortMock,
-    retainFailureUntilComplete: retainFailureUntilCompleteMock,
-    complete: vi.fn(),
-    completeWithAfterClearBarrier: vi.fn(),
+    retainFailureUntilComplete: vi.fn(),
+    yield: vi.fn(() => true),
+    complete: vi.fn(complete),
+    completeThen: vi.fn((afterClear) => {
+      complete();
+      afterClear();
+    }),
+    completeWithAfterClearBarrier: vi.fn((barrier) => {
+      void Promise.resolve(barrier).then(complete, complete);
+    }),
+
     fail: failMock,
+    abort: vi.fn(() => true),
+    abortForStall: vi.fn(() => true),
     abortByUser: vi.fn(() => true),
     abortForRestart: vi.fn(() => true),
     supersede: vi.fn(() => true),
@@ -135,7 +172,6 @@ export function createMockReplyOperation(
     replyOperation,
     failMock,
     freezeAbortMock,
-    retainFailureUntilCompleteMock,
     updateSessionIdMock,
   };
 }

@@ -39,7 +39,7 @@ export function normalizeMSTeamsDelegatedTokens(value: unknown): MSTeamsDelegate
     accessToken: token.accessToken,
     refreshToken: token.refreshToken,
     expiresAt: token.expiresAt,
-    scopes: [...token.scopes],
+    scopes: token.scopes,
     ...(typeof token.userPrincipalName === "string"
       ? { userPrincipalName: token.userPrincipalName }
       : {}),

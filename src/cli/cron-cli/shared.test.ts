@@ -17,11 +17,26 @@ import {
   getCronChannelOptions,
   handleCronCliError,
   parseAt,
+  parseCronCommandEnv,
   parseCronStringList,
   parsePositiveCronDurationMs,
   printCronList,
   printCronShow,
 } from "./shared.js";
+
+describe("parseCronCommandEnv", () => {
+  it("serializes prototype-named overrides with last-value precedence", () => {
+    const env = parseCronCommandEnv([
+      "__proto__=first",
+      "NORMAL_KEY=control",
+      "__proto__=kept=tail",
+      "constructor=ordinary",
+    ]);
+    expect(JSON.stringify(env)).toBe(
+      '{"__proto__":"kept=tail","NORMAL_KEY":"control","constructor":"ordinary"}',
+    );
+  });
+});
 
 const hoisted = vi.hoisted(() => ({
   listChannelPluginsMock: vi.fn(),
@@ -229,22 +244,11 @@ describe("printCronList", () => {
       schedule: { kind: "cron", expr: "* * * * *", staggerMs: 1_001 },
       expected: "cron * * * * * (stagger 1s 1ms)",
     },
-  ] as const)(
-    "preserves configured duration precision in list and show: $expected",
-    ({ schedule, expected }) => {
-      const job = createBaseJob({ schedule, state: {} });
-      const list = createRuntimeLogCapture();
-      printCronList([job], list.runtime);
-      expectLogsToInclude(list.logs, expected);
-
-      const show = createRuntimeLogCapture();
-      printCronShow(job, show.runtime);
-      expectLogsToInclude(show.logs, `schedule: ${expected}`);
+    {
+      schedule: { kind: "cron", expr: "0 7 * * *", staggerMs: 0 },
+      expected: "cron 0 7 * * * (exact)",
     },
-  );
-
-  it("marks trigger schedules and shows evaluation details", () => {
-    const job = createBaseJob({
+    {
       schedule: { kind: "every", everyMs: 30_000 },
       trigger: { script: "json({ fire: true })", once: true },
       state: {
@@ -252,31 +256,35 @@ describe("printCronList", () => {
         lastTriggerEvalAtMs: Date.now() - 30_000,
         lastTriggerFireAtMs: Date.now() - 60_000,
       },
-    });
-
-    const list = createRuntimeLogCapture();
-    printCronList([job], list.runtime);
-    expectLogsToInclude(list.logs, "every 30s+trigger");
-
-    const show = createRuntimeLogCapture();
-    printCronShow(job, show.runtime);
-    expectLogsToInclude(show.logs, "trigger: once=yes; evals=4;");
-  });
-
-  it("includes condition triggers on stream schedules", () => {
-    const job = createBaseJob({
+      expected: "every 30s+trigger",
+      triggerDetail: "trigger: once=yes; evals=4;",
+    },
+    {
       schedule: { kind: "stream", command: ["node", "events.mjs"] },
       trigger: { script: "json({ fire: true })" },
-      state: {},
-    });
-
+      expected: "stream node events.mjs+trigger",
+    },
+    {
+      schedule: { kind: "on-exit", command: "pnpm build", cwd: "/repo" },
+      expected: "on-exit pnpm build @ /repo",
+    },
+  ] satisfies Array<{
+    schedule: CronJob["schedule"];
+    expected: string;
+    trigger?: CronJob["trigger"];
+    state?: CronJob["state"];
+    triggerDetail?: string;
+  }>)("formats schedules in list and show: $expected", ({ schedule, expected, ...details }) => {
+    const job = createBaseJob({ schedule, state: {}, ...details });
     const list = createRuntimeLogCapture();
     printCronList([job], list.runtime);
-    expectLogsToInclude(list.logs, "stream node events.mjs+trigger");
-
+    expectLogsToInclude(list.logs, expected);
     const show = createRuntimeLogCapture();
     printCronShow(job, show.runtime);
-    expectLogsToInclude(show.logs, "schedule: stream node events.mjs+trigger");
+    expectLogsToInclude(show.logs, `schedule: ${expected}`);
+    if (details.triggerDetail) {
+      expectLogsToInclude(show.logs, details.triggerDetail);
+    }
   });
 
   it.each([false, true])("shows disabled stream sources with running=%s", (running) => {
@@ -308,25 +316,6 @@ describe("printCronList", () => {
       "stream error: stream sources require cron.triggers.enabled=true",
     );
     expect(enrichCronJsonWithStatus(job)).toMatchObject({ status: running ? "running" : "ok" });
-  });
-
-  it("shows on-exit schedules in list and show output", () => {
-    const job = createBaseJob({
-      id: "on-exit-job",
-      name: "Watch build",
-      schedule: { kind: "on-exit", command: "pnpm build", cwd: "/repo" },
-      sessionTarget: "main",
-      state: {},
-      payload: { kind: "systemEvent", text: "done" },
-    });
-
-    const list = createRuntimeLogCapture();
-    printCronList([job], list.runtime);
-    expectLogsToInclude(list.logs, "on-exit pnpm build @ /repo");
-
-    const show = createRuntimeLogCapture();
-    printCronShow(job, show.runtime);
-    expectLogsToInclude(show.logs, "schedule: on-exit pnpm build @ /repo");
   });
 
   it("shows the consecutive failure count for chronically failing jobs", () => {
@@ -499,21 +488,6 @@ describe("printCronList", () => {
     const dataLine = logs[1] ?? "";
     expect(dataLine).not.toContain("default");
   });
-
-  it("shows exact label for cron schedules with stagger disabled", () => {
-    const { logs, runtime } = createRuntimeLogCapture();
-    const job = createBaseJob({
-      id: "exact-job",
-      name: "Exact",
-      schedule: { kind: "cron", expr: "0 7 * * *", staggerMs: 0 },
-      sessionTarget: "main",
-      state: {},
-      payload: { kind: "systemEvent", text: "tick" },
-    });
-
-    printCronList([job], runtime);
-    expectLogsToInclude(logs, "(exact)");
-  });
 });
 
 describe("parseAt", () => {
@@ -531,42 +505,26 @@ describe("parseAt", () => {
     }
   });
 
-  it("accepts leading plus relative durations for cron add --at", () => {
+  it.each([
+    { input: "+30m", now: "2026-05-25T00:00:00.000Z", expected: "2026-05-25T00:30:00.000Z" },
+    { input: "30m", now: "2026-05-25T00:00:00.000Z", expected: "2026-05-25T00:30:00.000Z" },
+    { input: String(Number.MAX_SAFE_INTEGER), now: "2026-05-25T00:00:00.000Z", expected: null },
+    { input: "+999999999999999999d", now: "2026-05-25T00:00:00.000Z", expected: null },
+    { input: "+1m", now: 8_640_000_000_000_000, expected: null },
+  ])("parses relative/epoch time $input at $now", ({ input, now, expected }) => {
     vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
-
-    expect(parseAt("+30m")).toBe("2026-05-25T00:30:00.000Z");
-    expect(parseAt("30m")).toBe("2026-05-25T00:30:00.000Z");
-  });
-
-  it("rejects out-of-range epoch milliseconds", () => {
-    expect(parseAt(String(Number.MAX_SAFE_INTEGER))).toBeNull();
-  });
-
-  it("rejects relative durations outside the Date range", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date("2026-05-25T00:00:00.000Z"));
-
-    expect(parseAt("+999999999999999999d")).toBeNull();
-  });
-
-  it("rejects relative durations when the current clock is at the Date boundary", () => {
-    vi.useFakeTimers();
-    vi.setSystemTime(new Date(8_640_000_000_000_000));
-
-    expect(parseAt("+1m")).toBeNull();
+    vi.setSystemTime(new Date(now));
+    expect(parseAt(input)).toBe(expected);
   });
 });
 
 describe("getCronChannelOptions", () => {
-  it("falls back to a channel plugin id placeholder when no plugins are loaded", () => {
-    hoisted.listChannelPluginsMock.mockReturnValue([]);
-    expect(getCronChannelOptions()).toBe("last|<channel-plugin-id>");
-  });
-
-  it("lists discovered channel plugin ids when plugins are available", () => {
-    hoisted.listChannelPluginsMock.mockReturnValue([{ id: "quietchat" }, { id: "forum" }]);
-    expect(getCronChannelOptions()).toBe("last|quietchat|forum");
+  it.each([
+    { plugins: [], expected: "last|<channel-plugin-id>" },
+    { plugins: [{ id: "quietchat" }, { id: "forum" }], expected: "last|quietchat|forum" },
+  ])("lists channel options as $expected", ({ plugins, expected }) => {
+    hoisted.listChannelPluginsMock.mockReturnValue(plugins);
+    expect(getCronChannelOptions()).toBe(expected);
   });
 });
 
@@ -581,50 +539,37 @@ describe("parseCronStringList", () => {
 });
 
 describe("coerceCronDeliveryPreviews", () => {
-  it("keeps gateway-provided preview entries", () => {
-    expect(
-      coerceCronDeliveryPreviews({
+  it("keeps valid previews and drops malformed entries", () => {
+    expect([
+      ...coerceCronDeliveryPreviews({
         deliveryPreviews: {
           job1: { label: "announce -> telegram:123", detail: "explicit" },
+          job2: { label: "announce -> telegram:456" },
         },
-      }).get("job1"),
-    ).toEqual({ label: "announce -> telegram:123", detail: "explicit" });
-  });
-
-  it("drops malformed preview entries", () => {
-    expect(
-      coerceCronDeliveryPreviews({
-        deliveryPreviews: {
-          job1: { label: "announce -> telegram:123" },
-        },
-      }).size,
-    ).toBe(0);
+      }),
+    ]).toEqual([["job1", { label: "announce -> telegram:123", detail: "explicit" }]]);
   });
 });
 
 describe("parsePositiveCronDurationMs", () => {
-  it("parses valid positive durations", () => {
-    expect(parsePositiveCronDurationMs("500ms")).toBe(500);
-    expect(parsePositiveCronDurationMs("30s")).toBe(30_000);
-    expect(parsePositiveCronDurationMs("1.5h")).toBe(5_400_000);
-    expect(parsePositiveCronDurationMs("1h30m")).toBe(5_400_000);
-    expect(parsePositiveCronDurationMs("1d")).toBe(86_400_000);
-  });
-
-  it("rejects non-positive and malformed durations", () => {
-    expect(parsePositiveCronDurationMs("0s")).toBeNull();
-    expect(parsePositiveCronDurationMs("0.5ms")).toBe(1);
-    expect(parsePositiveCronDurationMs("0.001ms")).toBeNull();
-    expect(parsePositiveCronDurationMs("-5s")).toBeNull();
-    expect(parsePositiveCronDurationMs("abc")).toBeNull();
-    expect(parsePositiveCronDurationMs("")).toBeNull();
-  });
-
-  it("rejects durations that overflow to a non-finite millisecond value (#83906)", () => {
-    // A finite mantissa can still overflow once multiplied by a large unit factor.
-    expect(parsePositiveCronDurationMs(`1${"0".repeat(302)}d`)).toBeNull();
-    expect(parsePositiveCronDurationMs("8640000000000000ms")).toBe(8_640_000_000_000_000);
-    expect(parsePositiveCronDurationMs("8640000000000001ms")).toBeNull();
+  it.each([
+    ["500ms", 500],
+    ["30s", 30_000],
+    ["1.5h", 5_400_000],
+    ["1h30m", 5_400_000],
+    ["1d", 86_400_000],
+    ["0s", null],
+    ["0.5ms", 1],
+    ["0.001ms", null],
+    ["-5s", null],
+    ["abc", null],
+    ["", null],
+    // A finite mantissa can overflow when multiplied by a unit factor (#83906).
+    [`1${"0".repeat(302)}d`, null],
+    ["8640000000000000ms", 8_640_000_000_000_000],
+    ["8640000000000001ms", null],
+  ] as const)("parses bounded positive duration %j as %j", (input, expected) => {
+    expect(parsePositiveCronDurationMs(input)).toBe(expected);
   });
 });
 

@@ -156,8 +156,6 @@ export function createDirectChatContext(
       debug: vi.fn(),
     } satisfies GatewayRequestContext["logGateway"],
     agentRunSeq: new Map(),
-    chatAbortControllers: new Map(),
-    chatQueuedTurns: new Map(),
     chatRunState: createChatRunState(),
     addChatRun: vi.fn(),
     removeChatRun: vi.fn(),

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { lookup } from "node:dns/promises";
 import { createServer } from "node:http";
+import type { Socket } from "node:net";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/plugin-entry";
 import { getPreparedPluginSecretInput } from "openclaw/plugin-sdk/secret-input-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
@@ -75,6 +76,9 @@ function registeredProvider(endpoint?: string) {
   } as unknown as OpenClawPluginApi);
   const provider = registerDecisionProvider.mock.calls[0]?.[0];
   assert(provider);
+  if (provider.contractVersion !== 1) {
+    throw new Error("TypeSafe fixture registered an unexpected decision contract");
+  }
   return provider;
 }
 
@@ -133,7 +137,7 @@ it.each([
   await expect(evaluate(input, runtimeConfig({ baseUrl }))).rejects.toThrow("invalid response");
 });
 
-it("keeps hosted response validation strict and ignores stale keys even on direct local calls", async () => {
+it("accepts hosted metadata and ignores stale keys even on direct local calls", async () => {
   const fetch = vi.fn(
     async (_url: RequestInfo | URL, _init?: RequestInit) =>
       new Response(JSON.stringify(localAnswer)),
@@ -157,9 +161,9 @@ it("keeps hosted response validation strict and ignores stale keys even on direc
       },
     },
   };
-  await expect(evaluate(hostedInput, runtimeConfig({ apiKey: "hosted-secret" }))).rejects.toThrow(
-    "invalid response",
-  );
+  await expect(
+    evaluate(hostedInput, runtimeConfig({ apiKey: "hosted-secret" })),
+  ).resolves.toHaveProperty("evaluation.model", "kev-latest");
   expect(fetch.mock.calls[1]?.[0]).toBe("https://api.typesafe.ai/v1/systemone");
   expect(new Headers(fetch.mock.calls[1]?.[1]?.headers).get("authorization")).toBe(
     "Bearer hosted-secret",
@@ -167,10 +171,12 @@ it("keeps hosted response validation strict and ignores stale keys even on direc
 });
 
 it.each(["127.0.0.1", "localhost", "[::1]"])(
-  "reaches a real %s server without ambient proxies or localhost DNS",
+  "reuses connections to a real %s server without ambient proxies or localhost DNS",
   async (hostname) => {
     const received: { url?: string; authorization?: string; host?: string; body: string }[] = [];
+    const sockets = new Set<Socket>();
     const server = createServer((request, response) => {
+      sockets.add(request.socket);
       const chunks: Buffer[] = [];
       request.on("data", (chunk: Buffer) => chunks.push(chunk));
       request.on("end", () => {
@@ -208,30 +214,33 @@ it.each(["127.0.0.1", "localhost", "[::1]"])(
       }
       const provider = registeredProvider(`http://${hostname}:${address.port}`);
       expect(provider.isReady?.()).toBe(true);
-      await expect(
-        provider.evaluate(
-          {
-            ...input,
-            questions: { ...input.questions, b: { ...input.questions.b, type: "boolean" } },
+      for (let attempt = 0; attempt < 5; attempt += 1) {
+        await expect(
+          provider.evaluate(
+            {
+              ...input,
+              questions: { ...input.questions, b: { ...input.questions.b, type: "boolean" } },
+            },
+            {
+              model: input.model,
+              signal: new AbortController().signal,
+              deadlineMonotonicMs: performance.now() + 1000,
+            },
+          ),
+        ).resolves.toMatchObject({
+          status: "ok",
+          result: {
+            answers: {
+              c: localAnswer.answers.c,
+              s: { type: "score", score: 0.8, probabilities: [0.2, 0.8] },
+              b: { type: "boolean", probabilityTrue: 0.75 },
+            },
           },
-          {
-            model: input.model,
-            signal: new AbortController().signal,
-            deadlineMonotonicMs: performance.now() + 1000,
-          },
-        ),
-      ).resolves.toMatchObject({
-        status: "ok",
-        result: {
-          answers: {
-            c: localAnswer.answers.c,
-            s: { type: "score", score: 0.8, probabilities: [0.2, 0.8] },
-            b: { type: "boolean", probabilityTrue: 0.75 },
-          },
-        },
-      });
+        });
+      }
       expect(getPreparedPluginSecretInput).not.toHaveBeenCalled();
-      expect(received).toHaveLength(1);
+      expect(received).toHaveLength(5);
+      expect(sockets.size).toBeLessThan(received.length);
       expect(received[0]).toMatchObject({
         url: "/v1/systemone",
         authorization: undefined,

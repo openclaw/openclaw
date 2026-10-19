@@ -4,8 +4,9 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { resolveRestartRecoverySteeringBlockReason } from "../../config/sessions/restart-recovery-receipt.js";
 import { replaceSessionEntry } from "../../config/sessions/session-accessor.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { createReplyAgentRestartRecoveryController } from "./agent-runner-execute.js";
-import { createReplyOperation, replyRunRegistry } from "./reply-run-registry.js";
+import { createReplyOperation } from "../../sessions/session-controller.js";
+import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
+import { createReplyAgentRestartRecoveryController } from "./agent-runner-restart-recovery.js";
 import { createReplyRecoveryActorFixture } from "./restart-recovery-claim.test-support.js";
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -90,7 +91,7 @@ describe("admitted Gateway source identity", () => {
 
       await expect(controller.admitUserTurn()).resolves.toBe("admitted");
 
-      const target = replyRunRegistry.resolveCurrentMessageInjectionTarget(sessionKey);
+      const target = captureCurrentReplyMessageInjectionTarget(sessionKey);
       expect(target).toMatchObject({ sourceTurnId });
       expect(
         resolveRestartRecoverySteeringBlockReason(entry, sessionId, target?.sourceTurnId ?? ""),

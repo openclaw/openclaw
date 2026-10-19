@@ -10,6 +10,7 @@ import {
 import type { PluginRuntime } from "openclaw/plugin-sdk/plugin-runtime";
 import {
   type CodexAppServerRuntimeOptions,
+  readCodexPluginConfig,
   resolveCodexAppServerRuntimeOptions,
   type CodexPluginConfig,
 } from "./src/app-server/config.js";
@@ -68,7 +69,7 @@ export function resolveCodexPromptSnapshotAppServerOptions(
   pluginConfig?: unknown,
 ): CodexAppServerRuntimeOptions {
   return resolveCodexAppServerRuntimeOptions({
-    pluginConfig,
+    pluginConfig: readCodexPluginConfig(pluginConfig),
     env: {},
     requirementsToml: null,
   });
@@ -83,12 +84,15 @@ export async function buildCodexHarnessPromptSnapshot(params: {
   appServer: CodexAppServerRuntimeOptions;
   config?: JsonObject;
   promptText?: string;
+  nativeCodeModeEnabled?: boolean;
   developerInstructionAdditions?: string;
   personaInstructions?: string;
 }): Promise<CodexHarnessPromptSnapshot> {
   const developerInstructions = joinPresentSections(
     buildDeveloperInstructions(params.attempt, {
       dynamicTools: params.dynamicTools,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled !== false,
+      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
     }),
     params.developerInstructionAdditions,
   );
@@ -101,12 +105,16 @@ export async function buildCodexHarnessPromptSnapshot(params: {
       cwd: params.cwd,
       dynamicTools: params.dynamicTools,
       appServer: params.appServer,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
       developerInstructions,
       config: params.config,
     }),
     threadResumeParams: await buildThreadResumeParams(params.attempt, {
       threadId: params.threadId,
       appServer: params.appServer,
+      nativeCodeModeEnabled: params.nativeCodeModeEnabled,
+      nativeCodeModeOnlyEnabled: params.appServer.codeModeOnly,
       developerInstructions,
       config: params.config,
     }),

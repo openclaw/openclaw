@@ -1,5 +1,5 @@
 // Live OpenAI AgentSession coverage for repeated automatic compaction and long-context opt-in.
-import { randomUUID } from "node:crypto";
+import { randomBytes, randomUUID } from "node:crypto";
 import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -204,7 +204,10 @@ describeLive("OpenAI AgentSession repeated compaction live", () => {
         storePath: join(agentDir, "openclaw-agent.sqlite"),
       };
       ownedDatabasePaths.add(sessionTarget.storePath);
-      const marker = `TOOL-MEMORY-${randomUUID()}`;
+      // The model must reproduce this marker verbatim after a model-written compaction summary.
+      // A short random token keeps the proof unguessable without testing 36-character UUID
+      // copy fidelity, which GPT-5.6 occasionally garbles.
+      const marker = `TOOL-MEMORY-${randomBytes(4).toString("hex").toUpperCase()}`;
       const tailMarker = `SYNTHETIC-END-${randomUUID()}`;
       const sourceFile = join(workspaceDir, "synthetic-context.txt");
       const sourceText = `The durable verification marker is ${marker}. Remember it.\n${buildContextChunk(24_000)}\n${tailMarker}\n`;

@@ -1,4 +1,4 @@
-import { For, createMemo } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import "../../../components/tooltip.ts";
 import { registerModelControlsEnglish } from "../../../i18n/locales/en-model-controls.ts";
@@ -9,7 +9,7 @@ import type {
 import type { ChatThinkingSelectState } from "../../../lib/chat/thinking.ts";
 import { registerEnglishCatalog, t } from "../../../lib/reactive/i18n.ts";
 import { liveValue } from "../../../lib/reactive/live-value.ts";
-import { handleChatComposerDetailsToggle, syncChatPickerOverlay } from "./chat-picker-overlay.ts";
+import { createChatPickerOverlay } from "./chat-picker-overlay.ts";
 
 registerEnglishCatalog(registerModelControlsEnglish);
 
@@ -21,18 +21,12 @@ export type ChatEffortPickerParams = {
   thinkingDisabled: boolean;
   thinking: ChatThinkingSelectState;
   onFastModeSelect: (value: ChatFastModeSelectValue, sessionKey: string) => Promise<unknown>;
-  onRequestUpdate?: () => void;
   onThinkingSelect: (value: string, sessionKey: string) => Promise<unknown>;
   reserved?: boolean;
 };
 
 function formatEffortLabel(label: string): string {
   return label.replace(/^Inherited:\s*/u, "");
-}
-
-function refreshAfterSelection(pending: Promise<unknown>, requestUpdate?: () => void) {
-  void pending.finally(() => requestUpdate?.());
-  requestUpdate?.();
 }
 
 export function ChatEffortPicker(props: ChatEffortPickerParams) {
@@ -210,273 +204,278 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
     if (props.thinkingDisabled || !stop || stop.value === view().selectedThinkingValue) {
       return;
     }
-    refreshAfterSelection(
-      props.onThinkingSelect(stop.value, props.sessionKey),
-      props.onRequestUpdate,
-    );
+    void props.onThinkingSelect(stop.value, props.sessionKey);
   };
   return (
-    <>
-      {visible() && (
-        <details
-          class={[
-            "chat-controls__inline-select chat-controls__effort-picker",
-            {
-              "chat-controls__effort-picker--reserved": props.reserved,
-            },
-          ]}
-          aria-hidden={props.reserved === true ? "true" : "false"}
-          inert={props.reserved === true}
-          onToggle={(event: Event) => {
-            // SAFETY: This toggle handler belongs to the surrounding native details.
-            const details = event.currentTarget as HTMLDetailsElement;
-            handleChatComposerDetailsToggle(event);
-            syncChatPickerOverlay(details);
-          }}
-        >
-          <summary
+    <Show when={visible()}>
+      {(_visible) => {
+        const [open, setOpen] = createSignal(false);
+        const pickerOverlay = createChatPickerOverlay((details) => setOpen(details.open));
+        return (
+          <details
+            ref={pickerOverlay}
             class={[
-              "chat-controls__inline-select-trigger chat-controls__effort-trigger",
+              "chat-controls__inline-select chat-controls__effort-picker",
               {
-                "chat-controls__effort-trigger--ultrafast": view().ultrafast,
-                "chat-controls__inline-select-trigger--disabled": props.disabled,
+                "chat-controls__effort-picker--reserved": props.reserved,
               },
             ]}
-            data-chat-thinking-select="true"
-            data-chat-thinking-value={view().selectedThinkingValue}
-            data-chat-thinking-disabled={props.thinkingDisabled ? "true" : "false"}
-            data-chat-fast-mode={props.fastMode.active ? "true" : "false"}
-            aria-label={
-              view().showReasoning
-                ? `${t("chat.selectors.thinkingLevel")}: ${view().triggerTitle}`
-                : view().triggerTitle
-            }
-            aria-disabled={props.disabled ? "true" : "false"}
-            title={props.disabledReason ?? view().triggerTitle}
-            onClick={(event: MouseEvent) => {
-              if (props.disabled) {
-                event.preventDefault();
-              }
-            }}
+            aria-hidden={props.reserved === true ? "true" : "false"}
+            inert={props.reserved === true}
           >
-            {view().showReasoning ? (
-              <span
-                class={[
-                  "chat-controls__effort-gauge",
-                  { "chat-controls__effort-gauge--off": view().effortIsOff },
-                ]}
-                aria-hidden="true"
-              >
-                <svg
-                  viewBox="0 0 24 24"
-                  fill="none"
-                  stroke="currentColor"
-                  stroke-width="2"
-                  stroke-linecap="round"
-                  stroke-linejoin="round"
-                >
-                  <path class="chat-controls__effort-gauge-dial" d="M3.34 17a10 10 0 1 1 17.32 0" />
-                  <path
-                    class="chat-controls__effort-gauge-needle"
-                    d="M12 12V6"
-                    style={{ transform: `rotate(${view().effortAngle}deg)` }}
-                  />
-                  <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
-                </svg>
-                {props.fastMode.active && (
-                  <span class="chat-controls__effort-fast-badge">
-                    <Icon name="zap" />
-                  </span>
-                )}
-              </span>
-            ) : (
-              <span class="chat-controls__effort-speed" aria-hidden="true">
-                <Icon name="zap" />
-              </span>
-            )}
-            {props.fastMode.active && (
-              <span
-                class={[
-                  "chat-controls__effort-zap",
-                  { "chat-controls__effort-zap--ultrafast": view().ultrafast },
-                ]}
-                aria-hidden="true"
-              >
-                {view().ultrafast && <Icon name="zap" />}
-                <Icon name="zap" />
-              </span>
-            )}
-            <span class="chat-controls__inline-select-label">{view().triggerLabel}</span>
-            <span class="chat-controls__inline-select-chevron" aria-hidden="true">
-              <Icon name="chevronUp" />
-            </span>
-          </summary>
-          <wa-popup data-anchored-overlay>
-            <div
-              class="chat-controls__inline-select-menu chat-controls__effort-menu"
-              aria-label={t(
-                view().showReasoning ? "chat.modelControls.effort" : "chat.modelControls.fastMode",
-              )}
+            <summary
+              class={[
+                "chat-controls__inline-select-trigger chat-controls__effort-trigger",
+                {
+                  "chat-controls__effort-trigger--ultrafast": view().ultrafast,
+                  "chat-controls__inline-select-trigger--disabled": props.disabled,
+                },
+              ]}
+              data-chat-thinking-select="true"
+              data-chat-thinking-value={view().selectedThinkingValue}
+              data-chat-thinking-disabled={props.thinkingDisabled ? "true" : "false"}
+              data-chat-fast-mode={props.fastMode.active ? "true" : "false"}
+              aria-label={
+                view().showReasoning
+                  ? `${t("chat.selectors.thinkingLevel")}: ${view().triggerTitle}`
+                  : view().triggerTitle
+              }
+              aria-disabled={props.disabled ? "true" : "false"}
+              title={props.disabledReason ?? view().triggerTitle}
             >
-              {view().showReasoning && (
-                <div class="chat-controls__reasoning-panel">
-                  <div class="chat-controls__reasoning-head">
-                    <span class="chat-controls__effort-heading">
-                      {t("chat.modelControls.effort")}
-                    </span>
-                    <span class="chat-controls__effort-value" aria-hidden="true">
-                      <span data-chat-thinking-preview-committed>{view().reasoningValueText}</span>
-                      <For each={view().sliderStops} keyed={(stop) => stop.value}>
-                        {(stop, index) => (
-                          <span data-chat-thinking-preview-index={index()} hidden>
-                            {formatEffortLabel(stop().label)}
-                          </span>
-                        )}
-                      </For>
-                    </span>
-                  </div>
-                  {view().sliderStops.length > 1 ? (
-                    <div class="chat-controls__reasoning-slider">
-                      <div class="chat-controls__reasoning-dots" aria-hidden="true">
-                        <For each={view().sliderStops} keyed={(stop) => stop.value}>
-                          {(stop) => (
-                            <span class="chat-controls__reasoning-dot" data-stop={stop().value} />
-                          )}
-                        </For>
-                      </div>
-                      <input
-                        class={[
-                          "chat-controls__reasoning-range",
-                          {
-                            "chat-controls__reasoning-range--inherit": !view().hasThinkingOverride,
-                            "chat-controls__reasoning-range--unanchored": view().sliderUnanchored,
-                          },
-                        ]}
-                        type="range"
-                        min="0"
-                        max={view().sliderStops.length - 1}
-                        step="1"
-                        ref={liveValue(committedSliderValue)}
-                        style={{
-                          "--reasoning-fill": `${sliderFillPercent(view().sliderIndex, view().sliderStops.length)}%`,
-                        }}
-                        data-chat-thinking-slider="true"
-                        data-effort-boost={view().committedBoost}
-                        data-chat-thinking-values={view()
-                          .sliderStops.map((stop) => stop.value)
-                          .join(",")}
-                        aria-label={t("chat.selectors.thinkingLevel")}
-                        aria-valuetext={view().reasoningValueLabel}
-                        disabled={props.thinkingDisabled}
-                        onInput={onSliderDrag}
-                        onChange={onSliderCommit}
-                        onClick={(event: MouseEvent) => {
-                          if (
-                            view().sliderUnanchored &&
-                            // SAFETY: This click handler belongs to the range input.
-                            Number((event.currentTarget as HTMLInputElement).value) ===
-                              view().sliderIndex
-                          ) {
-                            onSliderCommit(event);
-                          }
-                        }}
-                        onKeyDown={(event: KeyboardEvent) => {
-                          if (
-                            view().sliderUnanchored &&
-                            ["Home", "ArrowLeft", "ArrowDown", "PageDown"].includes(event.key)
-                          ) {
-                            onSliderCommit(event);
-                          }
-                        }}
-                        onPointerCancel={(event: PointerEvent) =>
-                          // SAFETY: This cancellation handler belongs to the range input.
-                          resetSliderPreview(event.currentTarget as HTMLInputElement, true)
-                        }
-                        onBlur={(event: FocusEvent) =>
-                          // SAFETY: This blur handler belongs to the range input.
-                          resetSliderPreview(event.currentTarget as HTMLInputElement, true)
-                        }
-                      />
-                    </div>
-                  ) : view().onlyStop ? (
-                    <button
-                      class={[
-                        "chat-controls__reasoning-option",
-                        { "chat-controls__reasoning-option--selected": view().onlyStopSelected },
-                      ]}
-                      data-chat-thinking-option={view().onlyStop?.value}
-                      type="button"
-                      aria-pressed={view().onlyStopSelected ? "true" : "false"}
-                      disabled={props.thinkingDisabled}
-                      onClick={(event: MouseEvent) => {
-                        event.stopPropagation();
-                        if (props.thinkingDisabled || view().onlyStopSelected) {
-                          event.preventDefault();
-                          return;
-                        }
-                        const stop = view().onlyStop;
-                        if (stop) {
-                          refreshAfterSelection(
-                            props.onThinkingSelect(stop.value, props.sessionKey),
-                            props.onRequestUpdate,
-                          );
-                        }
-                      }}
-                    >
-                      <span>{view().onlyStop?.label}</span>
-                      {view().onlyStopSelected && (
-                        <span class="chat-controls__inline-select-check" aria-hidden="true">
-                          <Icon name="check" />
-                        </span>
-                      )}
-                    </button>
-                  ) : undefined}
-                </div>
-              )}
-              {props.fastMode.supported && (
-                <div class="chat-controls__speed-panel">
-                  <span class="chat-controls__effort-heading">{t("chat.modelControls.speed")}</span>
-                  <div
-                    class="chat-controls__speed-options"
-                    role="radiogroup"
-                    aria-label={t("chat.modelControls.speed")}
-                    onKeyDown={onSpeedKeyDown}
+              {view().showReasoning ? (
+                <span
+                  class={[
+                    "chat-controls__effort-gauge",
+                    { "chat-controls__effort-gauge--off": view().effortIsOff },
+                  ]}
+                  aria-hidden="true"
+                >
+                  <svg
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="2"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
                   >
-                    <For each={view().speedOptions} keyed={(option) => option.value}>
-                      {(option, index) => (
+                    <path
+                      class="chat-controls__effort-gauge-dial"
+                      d="M3.34 17a10 10 0 1 1 17.32 0"
+                    />
+                    <path
+                      class="chat-controls__effort-gauge-needle"
+                      d="M12 12V6"
+                      style={{ transform: `rotate(${view().effortAngle}deg)` }}
+                    />
+                    <circle cx="12" cy="12" r="1" fill="currentColor" stroke="none" />
+                  </svg>
+                  {props.fastMode.active && (
+                    <span class="chat-controls__effort-fast-badge">
+                      <Icon name="zap" />
+                    </span>
+                  )}
+                </span>
+              ) : (
+                <span class="chat-controls__effort-speed" aria-hidden="true">
+                  <Icon name="zap" />
+                </span>
+              )}
+              {props.fastMode.active && (
+                <span
+                  class={[
+                    "chat-controls__effort-zap",
+                    { "chat-controls__effort-zap--ultrafast": view().ultrafast },
+                  ]}
+                  aria-hidden="true"
+                >
+                  {view().ultrafast && <Icon name="zap" />}
+                  <Icon name="zap" />
+                </span>
+              )}
+              <span class="chat-controls__inline-select-label">{view().triggerLabel}</span>
+              <span class="chat-controls__inline-select-chevron" aria-hidden="true">
+                <Icon name="chevronUp" />
+              </span>
+            </summary>
+            <div class="oc-overlay chat-picker-overlay" data-anchored-overlay popover="manual">
+              <Show when={open()}>
+                <div
+                  class="chat-controls__inline-select-menu chat-controls__effort-menu"
+                  aria-label={t(
+                    view().showReasoning
+                      ? "chat.modelControls.effort"
+                      : "chat.modelControls.fastMode",
+                  )}
+                >
+                  {view().showReasoning && (
+                    <div class="chat-controls__reasoning-panel">
+                      <div class="chat-controls__reasoning-head">
+                        <span class="chat-controls__effort-heading">
+                          {t("chat.modelControls.effort")}
+                        </span>
+                        <span class="chat-controls__effort-value" aria-hidden="true">
+                          <span data-chat-thinking-preview-committed>
+                            {view().reasoningValueText}
+                          </span>
+                          <For each={view().sliderStops} keyed={(stop) => stop.value}>
+                            {(stop, index) => (
+                              <span data-chat-thinking-preview-index={index()} hidden>
+                                {formatEffortLabel(stop().label)}
+                              </span>
+                            )}
+                          </For>
+                        </span>
+                      </div>
+                      {view().sliderStops.length > 1 ? (
+                        <div class="chat-controls__reasoning-slider">
+                          <div class="chat-controls__reasoning-dots" aria-hidden="true">
+                            <For each={view().sliderStops} keyed={(stop) => stop.value}>
+                              {(stop) => (
+                                <span
+                                  class="chat-controls__reasoning-dot"
+                                  data-stop={stop().value}
+                                />
+                              )}
+                            </For>
+                          </div>
+                          <input
+                            class={[
+                              "chat-controls__reasoning-range",
+                              {
+                                "chat-controls__reasoning-range--inherit":
+                                  !view().hasThinkingOverride,
+                                "chat-controls__reasoning-range--unanchored":
+                                  view().sliderUnanchored,
+                              },
+                            ]}
+                            type="range"
+                            min="0"
+                            max={view().sliderStops.length - 1}
+                            step="1"
+                            ref={liveValue(committedSliderValue)}
+                            style={{
+                              "--reasoning-fill": `${sliderFillPercent(view().sliderIndex, view().sliderStops.length)}%`,
+                            }}
+                            data-chat-thinking-slider="true"
+                            data-effort-boost={view().committedBoost}
+                            data-chat-thinking-values={view()
+                              .sliderStops.map((stop) => stop.value)
+                              .join(",")}
+                            aria-label={t("chat.selectors.thinkingLevel")}
+                            aria-valuetext={view().reasoningValueLabel}
+                            disabled={props.thinkingDisabled}
+                            onInput={onSliderDrag}
+                            onChange={onSliderCommit}
+                            onClick={(event: MouseEvent) => {
+                              if (
+                                view().sliderUnanchored &&
+                                // SAFETY: This click handler belongs to the range input.
+                                Number((event.currentTarget as HTMLInputElement).value) ===
+                                  view().sliderIndex
+                              ) {
+                                onSliderCommit(event);
+                              }
+                            }}
+                            onKeyDown={(event: KeyboardEvent) => {
+                              if (
+                                view().sliderUnanchored &&
+                                ["Home", "ArrowLeft", "ArrowDown", "PageDown"].includes(event.key)
+                              ) {
+                                onSliderCommit(event);
+                              }
+                            }}
+                            onPointerCancel={(event: PointerEvent) =>
+                              // SAFETY: This cancellation handler belongs to the range input.
+                              resetSliderPreview(event.currentTarget as HTMLInputElement, true)
+                            }
+                            onBlur={(event: FocusEvent) =>
+                              // SAFETY: This blur handler belongs to the range input.
+                              resetSliderPreview(event.currentTarget as HTMLInputElement, true)
+                            }
+                          />
+                        </div>
+                      ) : view().onlyStop ? (
                         <button
+                          class={[
+                            "chat-controls__reasoning-option",
+                            {
+                              "chat-controls__reasoning-option--selected": view().onlyStopSelected,
+                            },
+                          ]}
+                          data-chat-thinking-option={view().onlyStop?.value}
                           type="button"
-                          role="radio"
-                          class="chat-controls__speed-option"
-                          data-chat-speed-option={option().value}
-                          aria-checked={option().value === view().selectedSpeed ? "true" : "false"}
-                          tabindex={index() === view().tabbableSpeedIndex ? 0 : -1}
-                          disabled={props.fastMode.disabled || option().disabled}
+                          aria-pressed={view().onlyStopSelected ? "true" : "false"}
+                          disabled={props.thinkingDisabled}
                           onClick={(event: MouseEvent) => {
                             event.stopPropagation();
-                            if (
-                              !props.fastMode.disabled &&
-                              !option().disabled &&
-                              option().value !== props.fastMode.currentOverride
-                            ) {
-                              refreshAfterSelection(
-                                props.onFastModeSelect(option().value, props.sessionKey),
-                                props.onRequestUpdate,
-                              );
+                            if (props.thinkingDisabled || view().onlyStopSelected) {
+                              event.preventDefault();
+                              return;
+                            }
+                            const stop = view().onlyStop;
+                            if (stop) {
+                              void props.onThinkingSelect(stop.value, props.sessionKey);
                             }
                           }}
                         >
-                          {option().label}
+                          <span>{view().onlyStop?.label}</span>
+                          {view().onlyStopSelected && (
+                            <span class="chat-controls__inline-select-check" aria-hidden="true">
+                              <Icon name="check" />
+                            </span>
+                          )}
                         </button>
-                      )}
-                    </For>
-                  </div>
+                      ) : undefined}
+                    </div>
+                  )}
+                  {props.fastMode.supported && (
+                    <div class="chat-controls__speed-panel">
+                      <span class="chat-controls__effort-heading">
+                        {t("chat.modelControls.speed")}
+                      </span>
+                      <div
+                        class="chat-controls__speed-options"
+                        role="radiogroup"
+                        aria-label={t("chat.modelControls.speed")}
+                        onKeyDown={onSpeedKeyDown}
+                      >
+                        <For each={view().speedOptions} keyed={(option) => option.value}>
+                          {(option, index) => (
+                            <button
+                              type="button"
+                              role="radio"
+                              class="chat-controls__speed-option"
+                              data-chat-speed-option={option().value}
+                              aria-checked={
+                                option().value === view().selectedSpeed ? "true" : "false"
+                              }
+                              tabindex={index() === view().tabbableSpeedIndex ? 0 : -1}
+                              disabled={props.fastMode.disabled || option().disabled}
+                              onClick={(event: MouseEvent) => {
+                                event.stopPropagation();
+                                if (
+                                  !props.fastMode.disabled &&
+                                  !option().disabled &&
+                                  option().value !== props.fastMode.persistedOverride
+                                ) {
+                                  void props.onFastModeSelect(option().value, props.sessionKey);
+                                }
+                              }}
+                            >
+                              {option().label}
+                            </button>
+                          )}
+                        </For>
+                      </div>
+                    </div>
+                  )}
                 </div>
-              )}
+              </Show>
             </div>
-          </wa-popup>
-        </details>
-      )}
-    </>
+          </details>
+        );
+      }}
+    </Show>
   );
 }

@@ -1,10 +1,8 @@
-// Gateway maintenance timers.
-// Starts periodic health, dedupe, abort, and media cleanup loops.
 import { isFutureDateTimestampMs } from "@openclaw/normalization-core/number-coercion";
-import { AGENT_RUN_TERMINAL_RETRY_GRACE_MS } from "../agents/agent-run-terminal-outcome.js";
 import { isActiveEmbeddedRunId } from "../agents/embedded-agent-runner/runs.js";
 import { formatWorktreeGcResult } from "../agents/worktrees/gc-result.js";
 import type { ManagedWorktreeGcResult } from "../agents/worktrees/types.js";
+import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   hasAgentRunContextExecutionOwner,
@@ -31,15 +29,10 @@ import {
   isGatewayWorkAdmissionClosed,
   tryBeginGatewaySuspendAdmission,
 } from "../process/gateway-work-admission.js";
+import { listRpcSourceEntries } from "../sessions/session-controller.rpc-sources.js";
 import { registerSkillUsageTracking } from "../skills/workshop/skill-usage.js";
 import { pruneExpiredArtifactDownloads } from "./artifact-download-grants.js";
-import {
-  abortChatRunById,
-  type ChatAbortControllerEntry,
-  removeChatAbortControllerEntry,
-  type RestartRecoveryCandidate,
-} from "./chat-abort.js";
-import type { QueuedChatTurnMap } from "./chat-queued-turns.js";
+import type { RestartRecoveryCandidate } from "./chat-abort.js";
 import { pruneStaleControlPlaneBuckets } from "./control-plane-rate-limit.js";
 import type { HealthSummary } from "./health/types.js";
 import {
@@ -65,21 +58,25 @@ import {
   waitForMediaCleanupDrainsToSettle,
 } from "./server-media-cleanup-lifecycle.js";
 import { hasRegisteredChatRunForSessionKey } from "./server-methods/session-active-runs.js";
-import type { GatewayClient } from "./server-methods/types.js";
+import type { GatewayClient, GatewayContextResolver } from "./server-methods/types.js";
 import { PENDING_CHAT_SEND_DEDUPE_PREFIX, type DedupeEntry } from "./server-shared.js";
 import { setBroadcastHealthUpdate } from "./server/health-state.js";
 import { startSessionColdStorageMaintenance } from "./session-cold-storage-maintenance.js";
 import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import { captureGatewayScopeMatcher } from "./session-runtime-scope.js";
 import { checkGatewayInstallationReplacement } from "./stale-install.js";
 import { startWorktreeMaintenance } from "./worktree-maintenance.js";
 
 // Hourly sweep plus a one-day grace bounds orphan storage without racing the
 // stage-before-row-commit window.
 const DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS = 60 * 60_000;
+// Maintenance phases can run 10s early; keep cleanup beyond the two-minute reconnect wave.
+const MEDIA_CLEANUP_STARTUP_DELAY_MS = 130_000;
 const TELEMETRY_MAINTENANCE_INTERVAL_MS = 5 * 60_000;
 
 export function startGatewayMaintenanceTimers(params: {
   scheduler: GatewayScheduler;
+  resolveGatewayContext?: GatewayContextResolver;
   clients: ReadonlySet<GatewayClient>;
   broadcast: (
     event: string,
@@ -105,8 +102,6 @@ export function startGatewayMaintenanceTimers(params: {
   refreshPresence: () => void;
   resetEventLoopHealth: () => void;
   dedupe: Map<string, DedupeEntry>;
-  chatAbortControllers: Map<string, ChatAbortControllerEntry>;
-  chatQueuedTurns: QueuedChatTurnMap;
   restartRecoveryCandidates: Map<string, RestartRecoveryCandidate>;
   chatRunState: ChatRunState;
   removeChatRun: (
@@ -127,6 +122,7 @@ export function startGatewayMaintenanceTimers(params: {
   stopMediaCleanup: () => Promise<MediaCleanupStopResult>;
   skillUsageCleanup: () => Promise<void>;
 } {
+  const matchesGateway = captureGatewayScopeMatcher(params.resolveGatewayContext);
   const restartDrainSignal = getGatewayRestartDrainSignal();
   const scheduler = params.scheduler.scope();
   const schedulePeriodic = (
@@ -166,9 +162,17 @@ export function startGatewayMaintenanceTimers(params: {
     // Inspection and admission commit are synchronous: no new work can enter
     // between them, and a busy tick never changes the admission phase.
     let invalidated = false;
-    const admission = tryBeginGatewaySuspendAdmission(() => {
-      invalidated = true;
-    });
+    const admission = tryBeginGatewaySuspendAdmission(
+      () => {
+        invalidated = true;
+      },
+      {
+        owner: "host-thaw-recovery",
+        leaseId: `host-thaw-${scheduler.now()}`,
+        caller: "maintenance:host-thaw",
+        reason: mode,
+      },
+    );
     if (!admission?.commit()) {
       return { status: "retry", reason: "admission-closed" };
     }
@@ -274,6 +278,7 @@ export function startGatewayMaintenanceTimers(params: {
   // Queue tombstone expiry and reference-aware media GC share one maintenance
   // cycle even when the general media TTL sweep is disabled.
   const mediaScheduler = params.scheduler.scope();
+  const mediaCleanupAtMs = mediaScheduler.now() + MEDIA_CLEANUP_STARTUP_DELAY_MS;
   const runDeliveryQueueMediaGc =
     params.runDeliveryQueueMediaGc ??
     (async () => {
@@ -287,7 +292,7 @@ export function startGatewayMaintenanceTimers(params: {
   const scheduleMedia = (id: string, run: () => Promise<unknown>) => {
     mediaScheduler.schedule({
       id: `maintenance:${id}`,
-      atMs: mediaScheduler.now(),
+      atMs: mediaCleanupAtMs,
       everyMs: DELIVERY_QUEUE_MEDIA_GC_INTERVAL_MS,
       phase: "maintenance",
       run,
@@ -314,19 +319,20 @@ export function startGatewayMaintenanceTimers(params: {
   schedulePeriodic("dedupe", 60_000, () => {
     const AGENT_RUN_SEQ_MAX = 10_000;
     const now = scheduler.now();
-    pruneExpiredArtifactDownloads(params.clients, now);
+    pruneExpiredArtifactDownloads(now);
     params.chatRunState.toolEventRecipients.pruneExpired(now);
+    const sources = new Map(
+      listRpcSourceEntries().filter(([, source]) => matchesGateway(source.input)),
+    );
     const resolveDedupeRunId = (key: string, entry: DedupeEntry) => {
       const keyRunId = key.slice(key.indexOf(":") + 1);
-      if (keyRunId) {
-        if (params.chatAbortControllers.has(keyRunId) || params.chatQueuedTurns.has(keyRunId)) {
-          return keyRunId;
-        }
+      if (keyRunId && sources.has(keyRunId)) {
+        return keyRunId;
       }
       const payload = entry.payload;
       return payload && typeof payload === "object" && !Array.isArray(payload)
         ? typeof (payload as { runId?: unknown }).runId === "string"
-          ? (payload as { runId: string }).runId.trim() || undefined
+          ? (payload as { runId: string }).runId || undefined
           : undefined
         : undefined;
     };
@@ -347,17 +353,9 @@ export function startGatewayMaintenanceTimers(params: {
     const isActiveRunDedupeKey = (key: string, dedupeEntry: DedupeEntry) => {
       // Keep idempotency records for active runs so retries cannot create
       // duplicate chat/agent work while a command is still draining.
-      const isAgentKey = key.startsWith("agent:");
-      const isChatKey = key.startsWith("chat:");
-      if (!isAgentKey && !isChatKey) {
-        return false;
-      }
       const runId = resolveDedupeRunId(key, dedupeEntry);
-      const entry = runId ? params.chatAbortControllers.get(runId) : undefined;
-      if (entry) {
-        return isAgentKey ? entry.kind === "agent" : entry.kind !== "agent";
-      }
-      return Boolean(isChatKey && runId && params.chatQueuedTurns.has(runId));
+      const entry = runId ? sources.get(runId) : undefined;
+      return entry !== undefined && (entry.adapter.kind === "agent") === key.startsWith("agent:");
     };
     for (const [k, v] of params.dedupe) {
       if (isActiveRunDedupeKey(k, v) || isPendingAcceptedRunDedupeKey(k, v)) {
@@ -384,37 +382,6 @@ export function startGatewayMaintenanceTimers(params: {
 
     pruneMapToMaxSize(params.agentRunSeq, AGENT_RUN_SEQ_MAX);
 
-    for (const [runId, entry] of params.chatAbortControllers) {
-      // A stamped terminal observation whose async projection clear never ran
-      // (dropped claim, swallowed handler error) would otherwise pin the entry
-      // forever: phantom active run in sessions.list, pinned dedupe key,
-      // skipped media GC. Past the grace window the entry re-enters the
-      // ordinary expiry branches below, which are terminal-safe.
-      const terminalClearOverdue =
-        typeof entry.projectSessionTerminalObservedAt === "number" &&
-        now - entry.projectSessionTerminalObservedAt > AGENT_RUN_TERMINAL_RETRY_GRACE_MS;
-      if (entry.projectSessionTerminalPending === true && !terminalClearOverdue) {
-        continue;
-      }
-      if (isFutureDateTimestampMs(entry.expiresAtMs, { nowMs: now })) {
-        continue;
-      }
-      if (!entry.projectSessionTerminalPersistence && entry.projectSessionActive !== false) {
-        const aborted = abortChatRunById(params, {
-          runId,
-          sessionKey: entry.sessionKey,
-          stopReason: "timeout",
-        });
-        if (aborted.aborted) {
-          continue;
-        }
-        // A non-abortable expired entry (signal already aborted, frozen reply
-        // op) whose owner cleanup was lost would otherwise survive every sweep:
-        // phantom active run, dead Stop button, pinned dedupe, skipped media GC.
-      }
-      removeChatAbortControllerEntry(params.chatAbortControllers, runId, entry);
-    }
-
     const ABORTED_RUN_TTL_MS = 60 * 60_000;
     // Prune expired control-plane rate-limit buckets to prevent unbounded
     // growth when many unique clients connect over time.
@@ -423,8 +390,7 @@ export function startGatewayMaintenanceTimers(params: {
     // Idle execution and queued delivery retain their projection until their owners settle.
     for (const [runId, record] of params.chatRunState.runs) {
       if (
-        params.chatAbortControllers.has(runId) ||
-        params.chatQueuedTurns.has(runId) ||
+        sources.has(runId) ||
         hasAgentRunContextExecutionOwner(runId) ||
         isActiveEmbeddedRunId(runId)
       ) {
@@ -454,11 +420,18 @@ export function startGatewayMaintenanceTimers(params: {
       return await cleanupManagedOutgoingMediaRecords({
         hasActiveSessionRun: (sessionKey, agentId) => {
           const cfg = params.getRuntimeConfig();
+          const defaultAgentId = tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey);
+          if (!agentId && !defaultAgentId) {
+            return false;
+          }
           return hasRegisteredChatRunForSessionKey({
-            context: { chatAbortControllers: params.chatAbortControllers },
+            storePath: resolveSessionStorePathCore(cfg.session?.store, {
+              agentId: agentId ?? defaultAgentId,
+            }),
+            resolveGatewayContext: params.resolveGatewayContext,
             sessionKey,
             agentId,
-            defaultAgentId: tryResolveSessionCompatibilityOwnerAgentId(cfg, sessionKey),
+            defaultAgentId,
           });
         },
       });

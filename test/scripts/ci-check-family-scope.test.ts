@@ -128,6 +128,10 @@ const cases: ScopeCase[] = [
   },
   { paths: ["test/openclaw-launcher.e2e.test.ts"], expected: { fastTasks: ["bun-launcher"] } },
   {
+    paths: ["cli-invocation.mjs"],
+    expected: { fastTasks: expect.arrayContaining(["bun-launcher"]) },
+  },
+  {
     paths: ["src/infra/sqlite-existing-database.ts"],
     expected: { fastTasks: ["bun-launcher"] },
   },

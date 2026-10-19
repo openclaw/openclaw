@@ -196,31 +196,31 @@ async function observeNodeWorkerChildOutput(
     await active.journalReady;
     await drain();
     if (active.stopState) {
-      return Object.freeze({
+      return {
         state: active.stopState,
         errorText:
           active.connectionFailure.errorText ??
           (active.stopState === "cancelled"
             ? "node worker launch cancelled"
             : "node worker launch interrupted during node-host shutdown"),
-      });
+      };
     }
     if (outputError || framer.pendingByteLength > 0 || (exit.code === 0 && !lastResult)) {
-      return Object.freeze({
+      return {
         state: "failed",
         errorText: sanitizeNodeWorkerDiagnostic(
           outputError ?? new Error("worker exited without a complete turn result"),
           "invalid worker result",
           active.scrubber.scrub,
         ),
-      });
+      };
     }
     if (exit.code === 0 && exit.signal === null && lastResult) {
-      return Object.freeze({ state: "completed", resultJson: lastResult });
+      return { state: "completed", resultJson: lastResult };
     }
     const detail = finalizeCapturedOutput(currentStderr(), "tail", true).toString("utf8");
     const exitLabel = exit.signal ? `signal ${exit.signal}` : `exit code ${String(exit.code)}`;
-    return Object.freeze({
+    return {
       state: "failed",
       errorText:
         active.connectionFailure.errorText ??
@@ -229,19 +229,19 @@ async function observeNodeWorkerChildOutput(
           "node worker failed",
           active.scrubber.scrub,
         ),
-    });
+    };
   } catch (error) {
     // A failed wait can leave stdout open under deferred cleanup ownership.
     // Fence new frames, but join the durable write already accepted by this observer.
     observationEnded = true;
     await active.journalReady;
     await draining;
-    return Object.freeze({
+    return {
       state: active.stopState ?? "failed",
       errorText:
         active.connectionFailure.errorText ??
         sanitizeNodeWorkerDiagnostic(error, "node worker wait failed", active.scrubber.scrub),
-    });
+    };
   } finally {
     observationEnded = true;
     stdout = "";

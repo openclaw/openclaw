@@ -10,67 +10,76 @@ import {
 } from "../../components/solid/settings-ui.tsx";
 import { t } from "../../lib/reactive/i18n.ts";
 import { uploadsDisabledMessage } from "../../lib/uploads.ts";
-import type { SkillLibraryController } from "./library-controller.ts";
-import { libraryFileText } from "./library-files.ts";
+import { libraryFileText } from "./library-file-text.ts";
+import type { SkillLibraryModel } from "./library-state.ts";
 import { SkillLibraryToolbar } from "./library-toolbar.tsx";
 
 export function SkillLibrary(props: {
-  library: SkillLibraryController;
+  library: SkillLibraryModel;
   navigationActions: JSX.Element;
 }) {
+  const current = () => props.library.state;
+  // List receipts replace the snapshot; mutable editor drafts and feedback do not.
+  const list = createMemo(() => current().list);
+  const query = createMemo(() => props.library.local.query.toLowerCase().trim());
+  const scope = createMemo(() => current().view);
   const entries = createMemo(() => {
-    const library = props.library;
-    const list = library.list;
-    const query = library.query.toLowerCase().trim();
-    return (list?.entries ?? []).filter((entry) => {
+    const snapshot = list();
+    const search = query();
+    const view = scope();
+    return (snapshot?.entries ?? []).filter((entry) => {
       const scopeMatches =
-        library.view === "mine"
-          ? entry.ownerProfileId === list?.profileId
-          : library.view !== "team" || entry.shared || entry.ownerProfileId === null;
+        view === "mine"
+          ? entry.ownerProfileId === snapshot?.profileId
+          : view !== "team" || entry.shared || entry.ownerProfileId === null;
       return (
         scopeMatches &&
-        (!query ||
+        (!search ||
           `${entry.slug} ${entry.name} ${entry.description} ${entry.ownerLabel}`
             .toLowerCase()
-            .includes(query))
+            .includes(search))
       );
     });
   });
   return (
     <>
       <SkillLibraryToolbar library={props.library} navigationActions={props.navigationActions} />
-      <Show when={props.library.list?.defaultTarget === "unavailable"}>
+      <Show when={current().list?.defaultTarget === "unavailable"}>
         <p class="muted">{t("skillLibrary.signIn")}</p>
       </Show>
       <SkillLibraryFeedback library={props.library} />
-      <Show when={props.library.list && !props.library.showWorkspace}>
+      <Show when={current().list && !props.library.showWorkspace()}>
         <p class="muted">
           {t("skillLibrary.defaultLimit", {
-            count: String(props.library.list!.defaultSelectionLimit),
+            count: String(current().list!.defaultSelectionLimit),
           })}
         </p>
-        <Show when={props.library.list?.defaultSelectionNotice}>
+        <Show when={current().list?.defaultSelectionNotice}>
           <p class="callout" role="status">
-            {props.library.list?.defaultSelectionNotice}
+            {current().list?.defaultSelectionNotice}
           </p>
         </Show>
       </Show>
-      <Show when={!props.library.showWorkspace}>
+      <Show when={!props.library.showWorkspace()}>
         <label class="field">
           <span>{t("common.search")}</span>
           <input
             class="settings-input"
             name="library-search"
-            value={props.library.query}
+            value={props.library.local.query}
             placeholder={t("skillLibrary.search")}
-            onInput={(event) => {
-              props.library.query = event.currentTarget.value;
-              props.library.changed();
-            }}
+            onInput={(event) =>
+              props.library.setLocal((state) => {
+                state.query = event.currentTarget.value;
+              })
+            }
           />
         </label>
-        <Show when={!props.library.loading} fallback={<p role="status">{t("common.loading")}</p>}>
-          <SettingsSection title={t(`skillLibrary.${props.library.view}`)} count={entries().length}>
+        <Show
+          when={Boolean(list()) || !current().loading}
+          fallback={<p role="status">{t("common.loading")}</p>}
+        >
+          <SettingsSection title={t(`skillLibrary.${current().view}`)} count={entries().length}>
             <Show
               when={entries().length > 0}
               fallback={<SettingsEmpty message={t("skillLibrary.empty")} />}
@@ -81,7 +90,7 @@ export function SkillLibrary(props: {
                     <button
                       type="button"
                       class="settings-row__text plugins-item__detail-button"
-                      disabled={props.library.loading || props.library.busy}
+                      disabled={current().loading || current().busy}
                       onClick={() => void props.library.open(entry().skillId)}
                     >
                       <span class="settings-row__title">{entry().slug}</span>
@@ -110,39 +119,43 @@ export function SkillLibrary(props: {
   );
 }
 
-function LibraryFeedback(props: { error: string | null; notice?: string | null }) {
+export function SkillLibraryFeedback(props: {
+  library: SkillLibraryModel;
+  dialog?: "editor" | "import";
+}) {
+  const current = () => props.library.state;
   return (
     <>
-      <Show when={props.error}>
+      <Show
+        when={
+          current().error && (props.dialog || (!current().draft && !props.library.local.importOpen))
+        }
+      >
         <div class="callout danger" role="alert">
-          {props.error}
+          {current().error}
         </div>
       </Show>
-      <Show when={props.notice}>
+      <Show
+        when={
+          current().notice && (props.dialog === "editor" || (!props.dialog && !current().draft))
+        }
+      >
         <div class="callout success" role="status">
-          {props.notice}
+          {current().notice}
         </div>
       </Show>
     </>
   );
 }
 
-export function SkillLibraryFeedback(props: { library: SkillLibraryController }) {
-  return (
-    <LibraryFeedback
-      error={!props.library.draft && !props.library.importOpen ? props.library.error : null}
-      notice={!props.library.draft ? props.library.notice : null}
-    />
-  );
-}
-
-export function SkillLibraryDialogs(props: { library: SkillLibraryController }) {
+export function SkillLibraryDialogs(props: { library: SkillLibraryModel }) {
+  const current = () => props.library.state;
   return (
     <>
-      <Show when={props.library.draft}>
+      <Show when={current().draft}>
         <LibraryEditor library={props.library} />
       </Show>
-      <Show when={props.library.importOpen}>
+      <Show when={props.library.local.importOpen}>
         <LibraryImport library={props.library} />
       </Show>
     </>
@@ -150,16 +163,18 @@ export function SkillLibraryDialogs(props: { library: SkillLibraryController }) 
 }
 
 function LibraryDialog(props: {
-  library: SkillLibraryController;
+  library: SkillLibraryModel;
   children: JSX.Element;
+  footer: JSX.Element;
   editor?: { title: string; disabled: boolean };
 }) {
+  const current = () => props.library.state;
   return (
     <openclaw-modal-dialog
       label={props.editor?.title ?? t("skillLibrary.import")}
       style={props.editor ? { "--openclaw-modal-width": "960px" } : undefined}
       onModal-cancel={(event: Event) => {
-        // Native dismissal must not bypass the controller's busy and discard checks.
+        // Native dismissal must not bypass the library's busy and discard checks.
         event.preventDefault();
         props.library.close();
       }}
@@ -168,13 +183,13 @@ function LibraryDialog(props: {
         class="exec-approval-card skill-reader-dialog"
         onSubmit={(event: SubmitEvent) => {
           event.preventDefault();
-          const source = props.library.importSource;
+          const source = current().importSource;
           if (props.editor) {
             void props.library.save();
           } else if (source) {
-            void props.library.importClawHub(props.library.importSlug, source.slug, source.version);
+            void props.library.importClawHub(current().importSlug, source.slug, source.version);
           } else {
-            void props.library.importFiles(props.library.importSelection);
+            void props.library.importFiles(current().importSelection);
           }
         }}
         onKeyDown={(event) => {
@@ -197,7 +212,7 @@ function LibraryDialog(props: {
             type="button"
             class="btn btn--icon btn--ghost"
             aria-label={t("common.close")}
-            disabled={props.library.busy}
+            disabled={current().busy}
             onClick={() => props.library.close()}
           >
             <Icon name="x" />
@@ -211,36 +226,40 @@ function LibraryDialog(props: {
         >
           {props.children}
         </div>
+        {props.footer}
       </form>
     </openclaw-modal-dialog>
   );
 }
 
-function LibraryEditor(props: { library: SkillLibraryController }) {
-  const draft = () => props.library.draft!;
-  const disabled = () => !props.library.canEdit || props.library.busy || props.library.loading;
+function LibraryEditor(props: { library: SkillLibraryModel }) {
+  const current = () => props.library.state;
+  const draft = () => current().draft!;
+  const disabled = () => !props.library.canEdit() || current().busy || current().loading;
   const support = () => draft().files.find((file) => file.path === draft().selectedFile);
-  const text = () =>
+  const text = createMemo(() =>
     draft().selectedFile === "SKILL.md"
       ? draft().content
       : support()
         ? libraryFileText(support()!)
-        : null;
+        : null,
+  );
   const mutationLocked = () => disabled() || draft().dirty;
   const changeText = (value: string) => {
     if (disabled()) {
       return;
     }
-    const current = draft();
-    if (current.selectedFile === "SKILL.md") {
-      current.content = value;
-    } else {
-      current.files = current.files.map((file) =>
-        file.path === current.selectedFile ? { ...file, content: value, encoding: "utf8" } : file,
-      );
-    }
-    current.dirty = true;
-    props.library.changed();
+    props.library.edit((state) => {
+      const active = state.draft!;
+      if (active.selectedFile === "SKILL.md") {
+        active.content = value;
+      } else {
+        active.files = active.files.map((file) =>
+          file.path === active.selectedFile ? { ...file, content: value, encoding: "utf8" } : file,
+        );
+      }
+      active.dirty = true;
+    });
   };
   const MutationButton = (button: {
     action: SkillsLibraryMutateParams["action"];
@@ -248,7 +267,7 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
   }) => (
     <button
       type="button"
-      class={button.action === "remove" ? "btn danger" : "btn"}
+      class={["btn", { danger: button.action === "remove" }]}
       disabled={button.locked ?? mutationLocked()}
       onClick={() => void props.library.mutate(button.action)}
     >
@@ -259,6 +278,34 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
     <LibraryDialog
       library={props.library}
       editor={{ title: draft().entry?.slug ?? t("skillLibrary.create"), disabled: disabled() }}
+      footer={
+        <Show when={props.library.canEdit()}>
+          <openclaw-modal-actions class="skill-reader-dialog__actions">
+            <button
+              type="submit"
+              class="btn primary"
+              disabled={
+                disabled() ||
+                Boolean(draft().importedFiles && !props.library.uploadsEnabled()) ||
+                !draft().dirty ||
+                !draft().content.trim()
+              }
+            >
+              {current().busy ? t("common.loading") : t("skillLibrary.save")}
+            </button>
+            <Show when={draft().entry}>
+              <MutationButton action={draft().entry!.enabled ? "disable" : "enable"} />
+              <Show when={draft().entry?.ownerProfileId}>
+                <MutationButton action={draft().entry!.shared ? "unshare" : "share"} />
+              </Show>
+              <Show when={props.library.canTransfer() && draft().entry?.ownerProfileId}>
+                <MutationButton action="transfer" />
+              </Show>
+              <MutationButton action="remove" />
+            </Show>
+          </openclaw-modal-actions>
+        </Show>
+      }
     >
       <p class="muted">
         {draft().entry
@@ -281,7 +328,7 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
           </dl>
         </details>
       </Show>
-      <Show when={!props.library.canEdit}>
+      <Show when={!props.library.canEdit()}>
         <p role="status">{t("skillLibrary.readOnly")}</p>
       </Show>
       <label class="field">
@@ -295,11 +342,12 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
           maxlength={63}
           disabled={disabled()}
           value={draft().slug}
-          onInput={(event) => {
-            draft().slug = event.currentTarget.value;
-            draft().dirty = true;
-            props.library.changed();
-          }}
+          onInput={(event) =>
+            props.library.edit((state) => {
+              state.draft!.slug = event.currentTarget.value;
+              state.draft!.dirty = true;
+            })
+          }
         />
       </label>
       <div class="plugins-toolbar">
@@ -309,10 +357,11 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
             class="settings-select"
             aria-label={t("skillLibrary.file")}
             value={draft().selectedFile}
-            onChange={(event) => {
-              draft().selectedFile = event.currentTarget.value;
-              props.library.changed();
-            }}
+            onChange={(event) =>
+              props.library.edit((state) => {
+                state.draft!.selectedFile = event.currentTarget.value;
+              })
+            }
           >
             <option value="SKILL.md" selected={draft().selectedFile === "SKILL.md"}>
               SKILL.md
@@ -327,42 +376,44 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
             </For>
           </select>
         </label>
-        <Show when={support() && props.library.canEdit}>
+        <Show when={support() && props.library.canEdit()}>
           <button
             type="button"
             class="btn"
             disabled={disabled()}
-            onClick={() => {
-              const path = support()!.path;
-              if (!window.confirm(t("skillLibrary.deleteFileConfirm", { path }))) {
-                return;
-              }
-              draft().files = draft().files.filter((file) => file.path !== path);
-              draft().selectedFile = "SKILL.md";
-              draft().dirty = true;
-              props.library.changed();
-            }}
+            onClick={() =>
+              props.library.edit((state) => {
+                const path = state.draft!.selectedFile;
+                if (!window.confirm(t("skillLibrary.deleteFileConfirm", { path }))) {
+                  return;
+                }
+                state.draft!.files = state.draft!.files.filter((file) => file.path !== path);
+                state.draft!.selectedFile = "SKILL.md";
+                state.draft!.dirty = true;
+              })
+            }
           >
             {t("skillLibrary.deleteFile")}
           </button>
         </Show>
       </div>
-      <Show when={support() && props.library.canEdit}>
+      <Show when={support() && props.library.canEdit()}>
         <label class="field checkbox">
           <input
             type="checkbox"
             name="library-file-executable"
             disabled={disabled()}
             checked={support()!.executable === true}
-            onChange={(event) => {
-              const executable = event.currentTarget.checked;
-              const path = support()!.path;
-              draft().files = draft().files.map((file) =>
-                file.path === path ? Object.assign({}, file, { executable }) : file,
-              );
-              draft().dirty = true;
-              props.library.changed();
-            }}
+            onChange={(event) =>
+              props.library.edit((state) => {
+                const executable = event.currentTarget.checked;
+                const path = state.draft!.selectedFile;
+                state.draft!.files = state.draft!.files.map((file) =>
+                  file.path === path ? Object.assign({}, file, { executable }) : file,
+                );
+                state.draft!.dirty = true;
+              })
+            }
           />
           <span>{t("skillLibrary.executable")}</span>
         </label>
@@ -395,58 +446,46 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
             <input
               class="settings-input"
               name="library-file-path"
-              value={props.library.newFilePath}
-              onInput={(event) => {
-                props.library.newFilePath = event.currentTarget.value;
-                props.library.changed();
-              }}
+              value={props.library.local.newFilePath}
+              onInput={(event) =>
+                props.library.setLocal((state) => {
+                  state.newFilePath = event.currentTarget.value;
+                })
+              }
             />
           </label>
           <button
             type="button"
             class="btn"
-            disabled={!props.library.newFilePath.trim()}
+            disabled={!props.library.local.newFilePath.trim()}
             onClick={() => {
-              const path = props.library.newFilePath.trim();
-              if (path === "SKILL.md" || draft().files.some((file) => file.path === path)) {
-                props.library.error = t("skillLibrary.fileExists");
-              } else {
-                draft().files = [...draft().files, { path, content: "", encoding: "utf8" }];
-                draft().selectedFile = path;
-                draft().dirty = true;
-                props.library.newFilePath = "";
+              const path = props.library.local.newFilePath.trim();
+              const exists =
+                path === "SKILL.md" || draft().files.some((file) => file.path === path);
+              props.library.edit((state) => {
+                if (exists) {
+                  state.error = t("skillLibrary.fileExists");
+                } else {
+                  const active = state.draft!;
+                  active.files = [...active.files, { path, content: "", encoding: "utf8" }];
+                  active.selectedFile = path;
+                  active.dirty = true;
+                }
+              });
+              if (!exists) {
+                props.library.setLocal((local) => {
+                  local.newFilePath = "";
+                });
               }
-              props.library.changed();
             }}
           >
             {t("skillLibrary.addFile")}
           </button>
         </div>
       </Show>
-      <LibraryFeedback error={props.library.error} notice={props.library.notice} />
-      <div class="plugins-toolbar">
-        <Show when={props.library.canEdit}>
-          <button
-            type="submit"
-            class="btn primary"
-            disabled={
-              disabled() ||
-              Boolean(draft().importedFiles && !props.library.uploadsEnabled) ||
-              !draft().dirty ||
-              !draft().content.trim()
-            }
-          >
-            {props.library.busy ? t("common.loading") : t("skillLibrary.save")}
-          </button>
-        </Show>
-        <Show when={props.library.canEdit && draft().entry}>
-          <MutationButton action={draft().entry!.enabled ? "disable" : "enable"} />
-          <Show when={draft().entry?.ownerProfileId}>
-            <MutationButton action={draft().entry!.shared ? "unshare" : "share"} />
-          </Show>
-        </Show>
-      </div>
-      <Show when={props.library.canEdit && draft().entry && draft().revisions.length > 1}>
+      <SkillLibraryFeedback library={props.library} dialog="editor" />
+
+      <Show when={props.library.canEdit() && draft().entry && draft().revisions.length > 1}>
         <div class="plugins-toolbar">
           <label class="field" style={{ flex: "1", "min-width": "0" }}>
             <span>{t("skillLibrary.revision")}</span>
@@ -455,10 +494,11 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
               aria-label={t("skillLibrary.revision")}
               value={draft().rollbackRevision}
               disabled={mutationLocked()}
-              onChange={(event) => {
-                draft().rollbackRevision = event.currentTarget.value;
-                props.library.changed();
-              }}
+              onChange={(event) =>
+                props.library.edit((state) => {
+                  state.draft!.rollbackRevision = event.currentTarget.value;
+                })
+              }
             >
               <option value="" selected={draft().rollbackRevision === ""}>
                 {t("skillLibrary.selectRevision")}
@@ -487,24 +527,14 @@ function LibraryEditor(props: { library: SkillLibraryController }) {
           />
         </div>
       </Show>
-      <Show when={props.library.canEdit && draft().entry}>
-        <div
-          class="plugins-toolbar"
-          style={{ "border-top": "1px solid var(--border)", "padding-top": "var(--space-4)" }}
-        >
-          <Show when={props.library.canTransfer && draft().entry?.ownerProfileId}>
-            <MutationButton action="transfer" />
-          </Show>
-          <MutationButton action="remove" />
-        </div>
-      </Show>
     </LibraryDialog>
   );
 }
 
-function LibraryImport(props: { library: SkillLibraryController }) {
+function LibraryImport(props: { library: SkillLibraryModel }) {
+  const current = () => props.library.state;
   const selectionLabel = () => {
-    const selectedFiles = props.library.importSelection;
+    const selectedFiles = current().importSelection;
     return selectedFiles.length
       ? t(selectedFiles.length === 1 ? "skillLibrary.selectedFile" : "skillLibrary.selectedFiles", {
           count: String(selectedFiles.length),
@@ -517,13 +547,31 @@ function LibraryImport(props: { library: SkillLibraryController }) {
       : t("skillLibrary.noFilesSelected");
   };
   return (
-    <LibraryDialog library={props.library}>
-      <Show when={!props.library.importSource && !props.library.uploadsEnabled}>
+    <LibraryDialog
+      library={props.library}
+      footer={
+        <openclaw-modal-actions class="skill-reader-dialog__actions">
+          <button
+            type="submit"
+            class="btn primary"
+            disabled={
+              !props.library.canWrite() ||
+              current().busy ||
+              (!current().importSource &&
+                (!props.library.uploadsEnabled() || current().importSelection.length === 0))
+            }
+          >
+            {current().busy ? t("common.loading") : t("skillLibrary.import")}
+          </button>
+        </openclaw-modal-actions>
+      }
+    >
+      <Show when={!current().importSource && !props.library.uploadsEnabled()}>
         <p role="status">{uploadsDisabledMessage()}</p>
       </Show>
       <p class="muted">
-        {props.library.importSource
-          ? t("skillLibrary.importClawHub", { source: props.library.importSource.slug })
+        {current().importSource
+          ? t("skillLibrary.importClawHub", { source: current().importSource!.slug })
           : t("skillLibrary.importHelp")}
       </p>
       <label class="field">
@@ -534,15 +582,16 @@ function LibraryImport(props: { library: SkillLibraryController }) {
           name="library-import-slug"
           title={t("skillLibrary.slugHelp")}
           pattern="[a-z0-9][a-z0-9\-]{0,62}"
-          value={props.library.importSlug}
-          disabled={props.library.busy}
-          onInput={(event) => {
-            props.library.importSlug = event.currentTarget.value;
-            props.library.changed();
-          }}
+          value={current().importSlug}
+          disabled={current().busy}
+          onInput={(event) =>
+            props.library.edit((state) => {
+              state.importSlug = event.currentTarget.value;
+            })
+          }
         />
       </label>
-      <Show when={!props.library.importSource && props.library.uploadsEnabled}>
+      <Show when={!current().importSource && props.library.uploadsEnabled()}>
         <div class="field" role="group" aria-labelledby="library-import-files-label">
           <span id="library-import-files-label">{t("skillLibrary.files")}</span>
           <small id="library-import-files-help" class="settings-row__desc">
@@ -556,9 +605,9 @@ function LibraryImport(props: { library: SkillLibraryController }) {
                     type="button"
                     class="btn"
                     aria-describedby="library-import-files-help library-import-selection"
-                    disabled={props.library.busy}
+                    disabled={current().busy}
                     onClick={(event) => {
-                      if (!props.library.uploadsEnabled) {
+                      if (!props.library.uploadsEnabled()) {
                         return;
                       }
                       const input = event.currentTarget.nextElementSibling;
@@ -579,14 +628,16 @@ function LibraryImport(props: { library: SkillLibraryController }) {
                     webkitdirectory={directory()}
                     multiple
                     name={directory() ? "library-import-directory" : "library-import-files"}
-                    disabled={props.library.busy}
+                    disabled={current().busy}
                     onChange={(event) => {
                       const input = event.currentTarget;
-                      props.library.importSelection = props.library.uploadsEnabled
+                      const files = props.library.uploadsEnabled()
                         ? Array.from(input.files ?? [])
                         : [];
+                      props.library.edit((state) => {
+                        state.importSelection = files;
+                      });
                       input.value = "";
-                      props.library.changed();
                     }}
                   />
                 </>
@@ -597,15 +648,16 @@ function LibraryImport(props: { library: SkillLibraryController }) {
             <small id="library-import-selection" class="settings-row__desc" aria-live="polite">
               {selectionLabel()}
             </small>
-            <Show when={props.library.importSelection.length > 0}>
+            <Show when={current().importSelection.length > 0}>
               <button
                 type="button"
                 class="btn btn--sm btn--ghost"
-                disabled={props.library.busy}
-                onClick={() => {
-                  props.library.importSelection = [];
-                  props.library.changed();
-                }}
+                disabled={current().busy}
+                onClick={() =>
+                  props.library.edit((state) => {
+                    state.importSelection = [];
+                  })
+                }
               >
                 {t("skillLibrary.clearSelection")}
               </button>
@@ -613,18 +665,7 @@ function LibraryImport(props: { library: SkillLibraryController }) {
           </div>
         </div>
       </Show>
-      <LibraryFeedback error={props.library.error} />
-      <button
-        type="submit"
-        class="btn primary"
-        disabled={
-          props.library.busy ||
-          (!props.library.importSource &&
-            (!props.library.uploadsEnabled || props.library.importSelection.length === 0))
-        }
-      >
-        {props.library.busy ? t("common.loading") : t("skillLibrary.import")}
-      </button>
+      <SkillLibraryFeedback library={props.library} dialog="import" />
     </LibraryDialog>
   );
 }

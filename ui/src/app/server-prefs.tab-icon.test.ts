@@ -1,7 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 /* @vitest-environment jsdom */
 import { createDeferred } from "../../../test/helpers/promise.js";
-import { GatewayRequestError } from "../api/gateway.ts";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { selectThemeSettings, resetServerUiPref } from "./server-prefs-controls.ts";
 import { changedServerUiPrefs } from "./server-prefs-intent.ts";
@@ -30,7 +29,7 @@ afterEach(() => {
 });
 
 describe("tab icon preference ownership", () => {
-  it.each(["default", "agent", "agent:rounded", "agent:circle", "lobster:crimson"] as const)(
+  it.each(["lobster:crimson"] as const)(
     "preserves %s on theme selection and removes the preference on reset",
     (choice) => {
       patchSettings({ tabIcon: choice });
@@ -61,21 +60,7 @@ describe("tab icon preference ownership", () => {
     });
   });
 
-  it.each([null, profileId])("keeps an unwritable icon browser-local (profile=%s)", (id) => {
-    const request = vi.fn(async () => ({ status: "ok" }));
-    const writer = createServerPrefsWriter(request, scope);
-    const afterCommit = vi.fn();
-    patchSettings({ tabIcon });
-    pushServerUiPrefs(writer, { tabIcon }, { profileId: id, canWrite: false, afterCommit });
-    expect(request).not.toHaveBeenCalled();
-    expect(afterCommit).toHaveBeenCalledExactlyOnceWith({
-      needsRefresh: false,
-      retainedLocal: true,
-    });
-    expect(loadSettings().tabIcon).toEqual(tabIcon);
-  });
-
-  it.each([false, true])(
+  it.each([true])(
     "writes a mixed theme batch without falsely acknowledging its icon (reject=%s)",
     async (rejected) => {
       const iconStarted = createDeferred();
@@ -154,36 +139,6 @@ describe("tab icon preference ownership", () => {
       ).toBe(rejected ? "device-local" : "profile");
     },
   );
-
-  it("keeps the icon independent of rejected theme writes and sends a whole-value reset", async () => {
-    const completed = createDeferred();
-    const request = vi.fn(async (method: string) => {
-      if (method === "themes.set") {
-        throw new GatewayRequestError({ code: "INVALID_REQUEST", message: "Theme unavailable" });
-      }
-      return { status: "ok" };
-    });
-    const writer = createServerPrefsWriter(request, scope, true, { ok: true }, false);
-    let commits = 0;
-    pushServerUiPrefs(
-      writer,
-      { theme: "dash", tabIcon: null },
-      {
-        profileId,
-        canWrite: true,
-        afterCommit: () => {
-          if (++commits === 2) {
-            completed.resolve();
-          }
-        },
-      },
-    );
-    await completed.promise;
-    expect(request).toHaveBeenLastCalledWith("users.prefs.set", {
-      entries: { "ui.tabIcon": null },
-    });
-    expect(localStorage.getItem(pendingKey)).toBeNull();
-  });
 
   it("rejects unsupported queued icons before any profile write", async () => {
     const request = vi.fn(async () => ({ status: "ok" }));

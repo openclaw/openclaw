@@ -241,6 +241,22 @@ describe("execution identity context storage", () => {
         },
       ],
     });
+    prepareExecutionIdentityContextAtAdmission(facts("session-run"), {
+      ...database,
+      now: 102,
+      contextId: "context-third",
+      executionId: "execution-third",
+      runtimeInstanceId: "runtime-1",
+    });
+    const nextPage = await inspectExecutionIdentityRun(
+      { runId: "session-run", executionOffset: 2, executionLimit: 1 },
+      { ...database, now: 300 },
+    );
+    expect(nextPage.identity).toMatchObject({
+      state: "ambiguous",
+      candidates: [{ executionId: "execution-third", contextId: "context-third", createdAt: 102 }],
+    });
+    expect(nextPage).not.toHaveProperty("nextExecutionCursor");
   });
 
   it("confirms durable retries without manufacturing lost evidence", async () => {
@@ -454,6 +470,36 @@ describe("execution identity context storage", () => {
       first.db.close();
       second.db.close();
     }
+  });
+
+  it("prunes oldest overflow across timestamp ties within the remaining expiry budget", () => {
+    const database = databaseOptions();
+    const add = (id: string, now: number, limits?: { maxRows: number; pruneBatchRows: number }) =>
+      prepareExecutionIdentityContextAtAdmission(facts(`run-${id}`), {
+        ...database,
+        now,
+        contextId: id,
+        runtimeInstanceId: "runtime-1",
+        limits,
+      });
+    add("expired-a", 0);
+    add("expired-b", 0);
+    for (const id of ["b", "c", "d", "e"]) {
+      add(id, RETENTION_MS - 100);
+    }
+    const retained = () =>
+      openOpenClawStateDatabase(database)
+        .db.prepare(
+          "SELECT context_id FROM execution_identity_contexts ORDER BY created_at, context_id",
+        )
+        .all();
+    const limits = { maxRows: 2, pruneBatchRows: 3 };
+    add("new", RETENTION_MS + 1, limits);
+    expect(retained()).toEqual(["c", "d", "e", "new"].map((context_id) => ({ context_id })));
+    add("newer", RETENTION_MS + 2, limits);
+    expect(retained()).toEqual([{ context_id: "new" }, { context_id: "newer" }]);
+    add("last", RETENTION_MS + 3, { maxRows: 0, pruneBatchRows: 3 });
+    expect(retained()).toEqual([]);
   });
 
   it("inspects through a read-only connection while another writer holds the database", async () => {

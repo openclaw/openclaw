@@ -69,15 +69,12 @@ export function createCronScheduledToolProjection(
           }),
         })
       : Object.freeze({ targetTool });
-  scheduledToolProjections.set(
-    projectedTool,
-    Object.freeze({
-      assertActive,
-      sourceToolName: projectedTool.name,
-      info,
-      execute: projectedTool.execute,
-    }),
-  );
+  scheduledToolProjections.set(projectedTool, {
+    assertActive,
+    sourceToolName: projectedTool.name,
+    info,
+    execute: projectedTool.execute,
+  });
   return projectedTool;
 }
 

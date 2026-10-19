@@ -65,11 +65,6 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
     log.debug?.("reflection produced no output");
     return;
   }
-  log.info("reflection complete", {
-    sessionKey,
-    responseLength: reflection.responseLength,
-    followUp: reflection.followUp,
-  });
   try {
     await storeSessionLearning({
       storePath: reflection.storePath,
@@ -106,7 +101,6 @@ export async function runFeedbackReflection(params: RunFeedbackReflectionParams)
         serviceUrlBoundary: resolveMSTeamsSdkCloudOptions(msteamsCfg),
       },
     );
-    log.info("sent reflection follow-up", { sessionKey });
   } catch (err) {
     log.debug?.("failed to send reflection follow-up", { error: formatUnknownError(err) });
   }

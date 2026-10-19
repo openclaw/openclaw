@@ -271,6 +271,20 @@ describe("resolveTurnRecap", () => {
     ).toBeNull();
   });
 
+  it("retains a resumed request when the first identified event hides the working indicator", () => {
+    resolve({ indicator: { request: { askedAt: 1_000, runIds: ["handoff-run"] } } });
+    expect(resolve({ activeRunId: runId })).toBeNull();
+    const usageByRun = new Map([
+      ["handoff-run", { outputTokens: 4_100, seq: 1 }],
+      [runId, { outputTokens: 256, seq: 2 }],
+    ]);
+    expect(resolve({ row: { ...doneRow, endedAt: 78_000 }, usageByRun })).toEqual({
+      runId,
+      runtimeMs: 77_000,
+      outputTokens: 4_356,
+    });
+  });
+
   it("never invents a watch from history or an unidentified queued indicator", () => {
     expect(resolve({ row: doneRow, usageByRun: usage(695) })).toBeNull();
     expect(resolve({ indicator: {}, row: doneRow })).toBeNull();

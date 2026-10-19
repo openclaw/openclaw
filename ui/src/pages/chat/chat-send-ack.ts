@@ -6,7 +6,6 @@ import {
   asPositiveSafeInteger,
 } from "@openclaw/normalization-core/number-coercion";
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
-import type { ChatQueueItem } from "../../lib/chat/chat-types.ts";
 
 type ChatSendAckStatus = "started" | "in_flight" | "ok" | "timeout" | "error";
 
@@ -71,13 +70,3 @@ export function isTerminalFailureChatSendAck(
 ): ack is TerminalFailureChatSendAck {
   return ack?.status === "timeout" || ack?.status === "error";
 }
-
-export type ChatSendTimingEntry = {
-  runId: string;
-  sessionKey?: string;
-  agentId?: string;
-  sendAttempts: number;
-  sendState?: ChatQueueItem["sendState"];
-  submittedAtMs: number;
-  ackStatus?: ChatSendAckStatus;
-};

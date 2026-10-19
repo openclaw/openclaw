@@ -4,6 +4,8 @@ import { expect, it } from "vitest";
 import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import { takeControlUiScreenshotFrame } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import { installMockGateway } from "../test-helpers/control-ui-e2e.ts";
+import { expectHistoryBoundaryState } from "./chat-history-boundary.test-support.ts";
+import { expectTranscriptLayoutCommitted } from "./claude-sessions.test-support.ts";
 import { createControlUiE2eSuite } from "./control-ui-e2e-suite.test-support.ts";
 
 const suite = createControlUiE2eSuite({ name: "Empty history tail" });
@@ -41,7 +43,7 @@ suite.define(() => {
     },
     { name: "hidden activity in a short viewport", messages: hiddenActivity, height: 480 },
   ])(
-    "automatically loads earlier conversation through a $name",
+    "requires upward input after one empty automatic page through a $name",
     async ({ name, messages, height }) => {
       await suite.withPage({ viewport: { width: 1280, height } }, async ({ page }) => {
         const artifactDir = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR
@@ -90,6 +92,14 @@ suite.define(() => {
         await page.goto(`${suite.server.baseUrl}chat`);
         const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
         await gateway.waitForRequest("chat.startup");
+        await gateway.waitForRequest("chat.history");
+        await expectHistoryBoundaryState(page, false);
+        await expectTranscriptLayoutCommitted(thread);
+        expect(await gateway.getRequests("chat.history")).toMatchObject([
+          { params: { offset: 80 } },
+        ]);
+        await thread.hover();
+        await page.mouse.wheel(0, -100);
         const reply = page
           .locator(".chat-text")
           .getByText("The report is ready for review.", { exact: true });

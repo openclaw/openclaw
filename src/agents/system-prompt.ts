@@ -67,6 +67,7 @@ import type {
   ProviderSystemPromptContribution,
   ProviderSystemPromptSectionId,
 } from "./system-prompt-contribution.js";
+import { buildDocumentationSection } from "./system-prompt-documentation.js";
 import { buildMessagingSection, resolveSilentReplyPromptMode } from "./system-prompt-messaging.js";
 import { buildRuntimeLine } from "./system-prompt-runtime.js";
 import { buildSkillsSection } from "./system-prompt-skills.js";
@@ -346,6 +347,8 @@ export function buildAgentSystemPrompt(params: {
   projectMemoryBootstrap?: string[];
   /** Prepared repository identities used to filter curated raw context fail-closed. */
   activeProjectKeys?: readonly string[];
+  /** Current repository identity passed to memory prompt sections. */
+  projectKey?: string;
   promptContribution?: ProviderSystemPromptContribution;
 }) {
   const promptMode = params.promptMode ?? "full";
@@ -445,19 +448,21 @@ export function buildAgentSystemPrompt(params: {
   const collapsibleDetailsSupported = runtimeCapabilitiesLower.has("markdowndetails");
   const threadBoundAcpSpawnEnabled = runtimeCapabilitiesLower.has("threadbound-acp-spawn");
   const proactiveSubagentOrchestration = params.proactiveSubagentOrchestration === true;
-  const subagentDelegationPreferenceSection = hasSessionsSpawn
-    ? buildDelegationGuidanceSection({
-        mode: proactiveSubagentOrchestration
-          ? "suggest"
-          : (params.subagentDelegationMode ?? "suggest"),
-        isMinimal,
-        hiddenDelegationTool: "`sessions_spawn`",
-        hasVisibleSessionSpawn: hasSessionsSpawn,
-        hasSessionsYield: availableTools.has("sessions_yield"),
-        hasSubagentsList: availableTools.has("subagents"),
-        hasSessionsSend: availableTools.has("sessions_send"),
-      })
-    : [];
+  const subagentDelegationPreferenceSection = buildDelegationGuidanceSection({
+    mode: proactiveSubagentOrchestration ? "suggest" : (params.subagentDelegationMode ?? "suggest"),
+    isMinimal,
+    hiddenDelegationTool: hasSessionsSpawn ? "`sessions_spawn`" : "",
+    hasVisibleSessionSpawn: hasSessionsSpawn,
+    hasSessionsYield: availableTools.has("sessions_yield"),
+    hasSubagentsList: availableTools.has("subagents"),
+    hasSessionsSend: availableTools.has("sessions_send"),
+    sessionsCreateToolName: availableTools.has("sessions_create")
+      ? resolveToolName("sessions_create")
+      : undefined,
+    suggestTaskToolName: availableTools.has("suggest_task")
+      ? resolveToolName("suggest_task")
+      : undefined,
+  });
   const sourceMessageToolOnly = params.sourceReplyDeliveryMode === "message_tool_only";
   const messageChannelOptions = availableTools.has("message")
     ? buildMessageChannelOptions(runtimeChannel)
@@ -532,39 +537,27 @@ export function buildAgentSystemPrompt(params: {
             agentId: runtimeInfo?.agentId,
             agentSessionKey: runtimeInfo?.sessionKey,
             sandboxed: sandboxedRuntime,
+            projectKey: params.projectKey,
           },
           params.preparedMemoryPrompt,
         );
-  const docsPath = params.docsPath?.trim();
-  const sourcePath = params.sourcePath?.trim();
-  const docsReadTool =
-    visibleTools.has("read") || promptSurface === "cli_backend" ? readToolName : undefined;
   const docsSection = isMinimal
     ? []
-    : [
-        "## Documentation",
-        docsPath ? `Docs: ${docsPath}` : "Docs: https://docs.openclaw.ai",
-        docsPath ? "Mirror: https://docs.openclaw.ai" : undefined,
-        sourcePath ? `Source: ${sourcePath}` : "Source: https://github.com/openclaw/openclaw",
-        docsPath
-          ? `OpenClaw behavior questions: docs first${docsReadTool ? ` via \`${docsReadTool}\`/local search` : " using available tools"}. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.`
-          : "OpenClaw behavior questions: docs mirror first when web exists. AGENTS/project/workspace/profile/memory = instructions/user memory, not product design truth.",
-        hasGateway
-          ? "Config field: use `gateway(config.schema.lookup)` with an exact path only when that action is exposed by the tool schema. Otherwise use `docs/gateway/configuration.md` and `docs/gateway/configuration-reference.md`."
-          : "Configuration docs: `docs/gateway/configuration.md`, `docs/gateway/configuration-reference.md`.",
-        sourcePath
-          ? "If docs are silent/stale, say so and inspect local source."
-          : "If docs are silent/stale, say so and inspect GitHub source.",
-        "Diagnosis: run `openclaw status` when possible; ask only if blocked.",
-        "",
-      ].filter((line): line is string => line !== undefined);
+    : buildDocumentationSection({
+        docsPath: params.docsPath,
+        sourcePath: params.sourcePath,
+        readToolName:
+          visibleTools.has("read") || promptSurface === "cli_backend" ? readToolName : undefined,
+        availableTools,
+        sandboxed: sandboxedRuntime,
+      });
   const workspaceNotes = normalizeStringEntries(params.workspaceNotes);
 
   const preparedContextFiles = prepareContextFilesForPrompt(
     filterProjectScopedCuratedContextFiles({
       contextFiles: params.contextFiles,
       activeProjectKeys: params.activeProjectKeys,
-    }).filter((file) => typeof file.path === "string" && file.path.trim().length > 0),
+    }).filter((file) => file.path.trim().length > 0),
   );
   // Cache keys and bootstrap checks retain the original ordered file objects.
   const contextFiles = preparedContextFiles.map(({ file }) => file);
@@ -674,7 +667,7 @@ export function buildAgentSystemPrompt(params: {
       hasSessionsSpawn && [
         "Execute work directly by default. Delegate a bounded, independent task only when parallel execution or an independent review provides a concrete benefit. Keep dependent steps with the same owner.",
         '`sessions_spawn`: clean context => `context:"isolated"`; transcript needed => `context:"fork"`. Follow the accepted completion mode.',
-        "Once delegation is appropriate, use a hidden subagent unless the user needs a separate, independently steerable session.",
+        "Once delegation is appropriate, use a hidden subagent unless the user needs to revisit or steer deliberately supervised child work.",
       ],
       availableTools.has("screen") &&
         "`screen` present: web/app turn may drive UI; messaging turn: don't.",
@@ -849,8 +842,8 @@ export function buildAgentSystemPrompt(params: {
     !isMinimal &&
       silentReplyPromptMode !== "none" && [
         "## Silent Replies",
-        `Nothing to say: entire reply exactly ${SILENT_REPLY_TOKEN}`,
-        `Never append to real response or wrap in Markdown/code.`,
+        `Nothing to say: entire reply exactly uppercase ${SILENT_REPLY_TOKEN}, without Markdown, punctuation, quotes, or other text.`,
+        `Only that whole reply is silent. A literal leading ${SILENT_REPLY_TOKEN} followed by a newline removes just that line; all remaining text is visible. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`,
         "",
       ],
     // Approval UI and owner identity vary by turn, so keep both below the stable prefix.
@@ -910,7 +903,7 @@ export function buildAgentSystemPrompt(params: {
       sourceReplyDeliveryMode: params.sourceReplyDeliveryMode,
       requireExplicitMessageTarget: params.requireExplicitMessageTarget,
       silentReplyPromptMode,
-      delegationSectionRenders: subagentDelegationPreferenceSection.length > 0,
+      delegationSectionRenders: subagentDelegationPreferenceSection.includes("## Delegation"),
     }),
     // Capability-gated reply guidance stays below the cache boundary so channel changes
     // cannot alter the byte-identical stable prefix shared across sessions.

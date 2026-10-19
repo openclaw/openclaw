@@ -5,6 +5,7 @@ import { buildQaTarget, qaChannelPlugin } from "@openclaw/qa-channel/api.js";
 import { createOpenClawCodingTools } from "openclaw/plugin-sdk/agent-harness";
 import { resolveCommandAuthorization } from "openclaw/plugin-sdk/command-auth-native";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
+import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
 import {
   createTestRegistry,
   resetPluginRuntimeStateForTest,
@@ -117,11 +118,15 @@ describe("system-agent delegation scenario tool policy", () => {
   it.each([
     { senderId: "bob", provider: "qa-channel" },
     { senderId: "alice", provider: "webchat" },
-  ])("does not grant ownership to $provider:$senderId", ({ senderId, provider }) => {
+  ])("does not grant ownership to $provider:$senderId", async ({ senderId, provider }) => {
     expect(authorizationFor(config, senderId, provider).senderIsOwner).toBe(false);
-    expect(toolsFor(config, { senderId, provider }).map((tool) => tool.name)).not.toContain(
-      "openclaw",
+    const tool = expectDefined(
+      toolsFor(config, { senderId, provider }).find((candidate) => candidate.name === "openclaw"),
+      "offered openclaw tool",
     );
+    const result = await tool.execute("non-owner-delegation", {});
+    expect(result.details).toMatchObject({ gated: true });
+    expect(JSON.stringify(result.content)).toContain("openclaw needs the owner's authority");
   });
 
   it("does not bypass conversation-scoped tool policy", () => {

@@ -177,7 +177,6 @@ export class DebugProxyCaptureKernel {
     const { compiled, bind } = compileSqliteQueryBindings<Buffer>((parameter) =>
       getNodeSqliteKysely<CaptureDatabase>(this.db)
         .insertInto("capture_blobs")
-        .orIgnore()
         .values({
           blob_id: blobId,
           content_type: contentType ?? null,
@@ -186,7 +185,8 @@ export class DebugProxyCaptureKernel {
           sha256,
           data: parameter((value) => gzipSync(value)),
           created_at: parameter(() => Date.now()),
-        }),
+        })
+        .onConflict((conflict) => conflict.column("blob_id").doNothing()),
     );
     // Prepare errors must precede payload compression and its creation timestamp.
     // Size cache admission with source bytes so large payloads never retain a cached binding.
@@ -219,14 +219,14 @@ export class DebugProxyCaptureKernel {
       const implicitSession = compileSqliteQueryBindings<CaptureEventRecord>((parameter) =>
         getNodeSqliteKysely<CaptureDatabase>(this.db)
           .insertInto("capture_sessions")
-          .orIgnore()
           .values({
             id: parameter((value) => value.sessionId),
             started_at: parameter((value) => value.ts),
             mode: "implicit",
             source_scope: parameter((value) => value.sourceScope),
             source_process: parameter((value) => value.sourceProcess),
-          }),
+          })
+          .onConflict((conflict) => conflict.column("id").doNothing()),
       );
       const sessionParameters = implicitSession.bind(event);
       executeWithCachedStatement(

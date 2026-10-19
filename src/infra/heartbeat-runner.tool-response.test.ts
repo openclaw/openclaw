@@ -22,6 +22,7 @@ import {
   seedHeartbeatScratchForTest,
   seedMainSessionStore,
   setHeartbeatAgentTurnStatus,
+  setHeartbeatSilentCompletion,
   withTempTelegramHeartbeatSandbox,
 } from "./heartbeat-runner.test-utils.js";
 import { isRetryableHeartbeatSkipReason } from "./heartbeat-wake.js";
@@ -92,8 +93,8 @@ async function createFixture(
         deps: {
           telegram: sendTelegram,
           getReplyFromConfig: replySpy,
-          getQueueSize: () => 0,
-          nowMs: () => 0,
+          // Storage retention uses wall time, so isolated sessions must share that clock.
+          nowMs: Date.now,
         },
       }),
     expectSend: (text: string, silent?: boolean) => {
@@ -299,8 +300,11 @@ describe("runHeartbeatOnce heartbeat response tool", () => {
   it("recalculates isolated runtime instructions and suppresses a quiet text fallback", async () => {
     await withHeartbeat(
       async ({ replySpy, run, sendTelegram }) => {
-        replySpy.mockResolvedValue({ text: SILENT_REPLY_TOKEN });
-        expect((await run()).status).toBe("ran");
+        replySpy.mockImplementation(async (_ctx, options) => {
+          setHeartbeatSilentCompletion(options);
+          return undefined;
+        });
+        expect(await run()).toEqual({ status: "ran", durationMs: expect.any(Number) });
         expectToolPrompt(replySpy);
         const context = replySpy.mock.calls[0]?.[0];
         expect(context?.SessionKey).toMatch(/:heartbeat$/);

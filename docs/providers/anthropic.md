@@ -14,7 +14,7 @@ Anthropic builds the **Claude** model family. OpenClaw supports two auth routes:
 ## Choose a model route
 
 The model picker shows each Claude model once per route. API and Claude CLI are
-not interchangeable billing choices: `anthropic/*` is the canonical model
+not interchangeable billing choices: `anthropic/*` is the standard model
 identity and can run through either runtime; `claude-cli/*` selects the native
 Claude runtime explicitly. When a configured `anthropic/*` model already runs
 through Claude CLI, the picker omits its matching `claude-cli/*` entry, unless the
@@ -130,7 +130,8 @@ OpenClaw release:
     **Best for:** reusing an existing Claude CLI login without a separate API key.
 
     <Steps>
-      <Step title="Ensure Claude CLI is installed and logged in">
+      <Step title="Install Claude CLI and log in">
+        <a id="ensure-claude-cli-is-installed-and-logged-in" />
         OpenClaw communicates directly with the installed Claude Code executable.
         Verify that Claude Code is installed and up to date:
 
@@ -162,11 +163,12 @@ OpenClaw release:
         through OpenClaw's direct CLI transport. OpenClaw uses a non-secret route
         marker and never reads, persists, refreshes, selects, or forwards the
         native login tokens. Claude owns the login and token refresh lifecycle.
-        Gateway startup shares the native login availability check across agent
-        workspaces using the same config and environment. Explicit catalog/auth
-        captures recheck availability for their own generation. Model lists also
-        recheck it in the background at most once a minute, so `claude auth login`
-        or logout after Gateway startup reaches the model picker without a restart.
+        Gateway startup shares the native login check across agent workspaces using
+        the same config and environment. Checks use `claude auth status --json`;
+        an explicit logged-out response blocks the native route, while a timeout
+        or unreadable response allows Claude to try the request. Captures expire
+        after one minute. If a selected native login is unavailable, spawn admission
+        rechecks it immediately, so signing in does not require a Gateway restart.
 
         For native-login users, the model picker reads Claude Code's own model menu
         in the background, without sending a prompt or using an inference turn.
@@ -197,7 +199,7 @@ OpenClaw release:
         the `anthropic` provider require an explicit account selection for CLI
         forwarding. Existing sessions keep their account until you select another
         or remove its saved profile. Native-tool approvals remain under OpenClaw
-        control. Schema-valid native calls pass through OpenClaw's canonical
+        control. Schema-valid native calls pass through OpenClaw's shared
         tool policy before native approval. Isolated side-question completions
         and paired-node execution retain the supervised CLI path.
 
@@ -254,7 +256,7 @@ OpenClaw release:
 
     ### Config example
 
-    Prefer the canonical Anthropic model ref plus a CLI runtime override:
+    Prefer the standard Anthropic model ref plus a CLI runtime override:
 
     ```json5
     {
@@ -305,7 +307,7 @@ OpenClaw release:
 
 ## Use Claude Opus 5.5
 
-After setting up either auth route above, select the canonical model ref:
+After setting up either auth route above, select the standard model ref:
 
 ```bash
 openclaw models set anthropic/claude-opus-5-5
@@ -315,7 +317,7 @@ The bare `opus` alias and explicit aliases `opus-5.5` / `opus-5-5` select this m
 Fresh API and Claude CLI setup defaults to Opus 5.5; existing version-pinned
 models and authored aliases remain unchanged.
 
-For Claude CLI authentication, keep the canonical ref and select the CLI runtime:
+For Claude CLI authentication, keep the standard ref and select the CLI runtime:
 
 ```json5
 {
@@ -352,7 +354,7 @@ for model-switching and response-shape changes.
 
 ## Use Claude Sonnet 5.5
 
-After setting up either auth route above, select the canonical model ref:
+After setting up either auth route above, select the standard model ref:
 
 ```bash
 openclaw models set anthropic/claude-sonnet-5-5
@@ -363,7 +365,7 @@ this model. Fresh API and Claude CLI setup still defaults to Opus 5.5; select
 Sonnet 5.5 explicitly. Existing version-pinned models and authored aliases
 remain unchanged. Use `sonnet-5` to keep Sonnet 5.
 
-For Claude CLI authentication, keep the canonical ref and select the CLI runtime:
+For Claude CLI authentication, keep the standard ref and select the CLI runtime:
 
 ```json5
 {
@@ -410,7 +412,7 @@ for model-switching and response-shape changes.
 
 ## Use Claude Fable 5.1
 
-After setting up either auth route above, select the canonical model ref:
+After setting up either auth route above, select the standard model ref:
 
 ```bash
 openclaw models set anthropic/claude-fable-5-1
@@ -555,6 +557,13 @@ metadata appended to large transcripts is included without reading the entire
 history. Metadata outside those windows may be unavailable. Desktop rows retain
 their Desktop title and remain colorless.
 
+Routine discovery reads at most 64 MiB of transcript metadata across 10,000 files.
+If it reaches either limit, the final discovered page reports `DISCOVERY_TRUNCATED`
+instead of claiming the inventory is complete. Search by an exact session ID to
+look up matching transcripts independently of that frontier; reading, continuing,
+and opening a known session in a terminal use the same bounded lookup. Per-file
+metadata windows and normal path, sidechain, and archive checks still apply.
+
 No additional OpenClaw config is required for discovery. The Anthropic plugin
 is bundled and enabled by default; a native macOS node advertises the read-only
 Claude session commands when the local Claude projects directory exists
@@ -564,9 +573,9 @@ Approve the node pairing upgrade when those commands first appear.
 
 The sidebar groups rows by their Gateway or paired-node host and shows each
 host's newest bounded page as soon as that computer answers. It reconciles again
-after host-connectivity changes, when the page regains focus, and at most every
-30 seconds while visible, so Claude sessions created outside OpenClaw appear
-without a reload. A changed catalog gets a faster follow-up pass. Use **Load more
+after host-connectivity changes, when the page becomes visible, and every two
+minutes while visible, so Claude sessions created outside OpenClaw appear
+without a reload. Discovery pauses while hidden. Use **Load more
 sessions** below a catalog group to append the next page for every host that has
 more history; appended rows stay visible and are re-fetched to the same depth
 across refreshes. Catalog clients use `sessions.catalog.list`; opening a row uses

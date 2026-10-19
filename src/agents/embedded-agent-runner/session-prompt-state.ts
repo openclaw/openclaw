@@ -8,6 +8,7 @@ import { resolveGlobalSingleton } from "../../shared/global-singleton.js";
 import { getOpenClawSystemUpdateKind } from "../internal-runtime-context.js";
 import type { AgentMessage } from "../runtime/index.js";
 import type { SessionEntry } from "../sessions/session-manager-types.js";
+import { shareSystemPromptPrefix } from "../sessions/system-prompt-pool.js";
 import {
   prepareCacheTtlCheckpoint,
   serializeCacheTtlToolResultProjections,
@@ -22,8 +23,6 @@ type ToolResultMessage = Extract<AgentMessage, { role: "toolResult" }>;
 export type ToolResultPromptProjectionState = CacheTtlProjectionInput & {
   /** Null means an uncertain append requires a checkpoint, including for empty state. */
   cacheTtlCheckpoint?: CacheTtlCheckpoint | null;
-  /** Every baseline publication, including an empty-branch restore, invalidates pending writes. */
-  cacheTtlRevision?: number;
 };
 
 type EmbeddedSessionPromptState = {
@@ -103,9 +102,8 @@ export function prepareSessionSystemPrompt(params: {
   systemPrompt: string;
   entries: SessionEntry[];
 }) {
-  const { permissionNotice, systemPrompt: renderedPrefix } = extractAttemptPermissionNotice(
-    params.systemPrompt,
-  );
+  const { permissionNotice, systemPrompt } = extractAttemptPermissionNotice(params.systemPrompt);
+  const renderedPrefix = shareSystemPromptPrefix(systemPrompt);
   const historyId =
     params.entries.findLast((entry) => entry.type === "compaction" || entry.type === "reset")?.id ??
     null;
@@ -138,9 +136,9 @@ export function prepareSessionSystemPrompt(params: {
       !afterCheckpoint.some((later) => later.type === "model_change")
     ) {
       series = {
-        prefix: data.prefix,
+        prefix: shareSystemPromptPrefix(data.prefix),
         hash: data.hash,
-        renderedPrefix: data.renderedPrefix,
+        renderedPrefix: shareSystemPromptPrefix(data.renderedPrefix),
         routeKey: params.routeKey,
         historyId,
         permissionNotice:
@@ -172,6 +170,8 @@ export function prepareSessionSystemPrompt(params: {
         restart: true,
       }
     : { ...series!, renderedPrefix, permissionNotice, restart: false };
+  // Admission callbacks need the series, not the transcript used to restore it.
+  const { state, routeKey } = params;
   let committed = false;
   return {
     systemPrompt: next.prefix,
@@ -191,8 +191,8 @@ export function prepareSessionSystemPrompt(params: {
       }
       committed = true;
       // An early restart marker already retired old overrides; keep this turn's new operators.
-      params.state.pendingSystemPrompt = restartRecorded ? { ...next, restart: false } : next;
-      params.state.systemPromptRouteKey = params.routeKey;
+      state.pendingSystemPrompt = restartRecorded ? { ...next, restart: false } : next;
+      state.systemPromptRouteKey = routeKey;
     },
   };
 }
@@ -260,9 +260,7 @@ export function createToolResultPromptProjectionState(
     ambiguousBaseKeys: new Set(source?.ambiguousBaseKeys),
     sourceHashByKey: new Map(source?.sourceHashByKey),
     restoredCacheTtl: new Map(source?.restoredCacheTtl),
-    ...(source
-      ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint, cacheTtlRevision: source.cacheTtlRevision }
-      : {}),
+    ...(source ? { cacheTtlCheckpoint: source.cacheTtlCheckpoint } : {}),
   };
 }
 
@@ -354,7 +352,6 @@ export async function persistToolResultProjections(
 ): Promise<void> {
   const snapshot = serializeCacheTtlToolResultProjections(state);
   const previous = state.cacheTtlCheckpoint;
-  const revision = state.cacheTtlRevision ?? 0;
   if (
     previous === undefined &&
     !cacheTouch &&
@@ -374,11 +371,7 @@ export async function persistToolResultProjections(
     committedCheckpoint = checkpoint;
   } finally {
     // Rejection can follow a durable commit; the next write must re-establish the full base.
-    // A branch restore during the write owns its new baseline.
-    if ((state.cacheTtlRevision ?? 0) === revision) {
-      state.cacheTtlCheckpoint = committedCheckpoint;
-      state.cacheTtlRevision = revision + 1;
-    }
+    state.cacheTtlCheckpoint = committedCheckpoint;
   }
 }
 

@@ -321,6 +321,15 @@ describe("createMatrixGuardedFetch", () => {
     clearTestUndiciRuntimeDepsOverride();
   });
 
+  it.each(["not-a-url", ""])("rejects malformed URL %j before fetching", async (url) => {
+    const runtimeFetch = vi.fn<typeof fetch>();
+    stubRuntimeFetch(runtimeFetch);
+    const guardedFetch = createMatrixGuardedFetch({});
+
+    await expect(guardedFetch(url)).rejects.toBeInstanceOf(TypeError);
+    expect(runtimeFetch).not.toHaveBeenCalled();
+  });
+
   it("preserves redirect success when the discarded body fails to cancel", async () => {
     const unhandledRejections: unknown[] = [];
     const onUnhandledRejection = (reason: unknown) => {

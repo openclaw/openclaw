@@ -119,21 +119,49 @@ by default so normal chat output stays in the visible answer instead of
 exposing reasoning text.
 
 Use Ultra for the highest-capability NVIDIA default. Select Nemotron 3.5
-Lightning or Nemotron 3 Super when you want a smaller Nemotron option, or
-choose one of the third-party models
+Lightning for a smaller text-only Nemotron option, Nemotron 3.5 Super VL for
+image and video understanding, or choose one of the third-party models
 hosted in NVIDIA's catalog when their context, latency, or behavior fits better.
+
+## Nemotron 3.5 Super VL
+
+[Nemotron 3.5 Super VL](https://docs.nvidia.com/nemo/automodel/model-coverage/omni/nvidia/NVIDIA-Nemotron-3.5-Super-VL-120B-A12B-BF16)
+is NVIDIA's vision-language model for text, image, and video input.
+
+Select it for text, image, and video input with:
+
+```bash
+openclaw models set nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b
+```
+
+Pair Super VL's image support with Nemotron 3 Ultra for text. Set Ultra as the
+primary model and Super VL as the image model:
+
+```json
+{
+  "agents": {
+    "defaults": {
+      "model": { "primary": "nvidia/nvidia/nemotron-3-ultra-550b-a55b" },
+      "imageModel": { "primary": "nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b" }
+    }
+  }
+}
+```
+
+OpenClaw uses `imageModel` for image understanding when the primary model cannot
+accept images.
 
 ## Bundled fallback catalog
 
 The bundled rows provide known chat metadata and an offline fallback. Retired
 models are not included; existing configurations are not rewritten automatically.
 
-| Model ref                                      | Name                       | Context   | Max output |
-| ---------------------------------------------- | -------------------------- | --------- | ---------- |
-| `nvidia/nvidia/nemotron-3-ultra-550b-a55b`     | Nemotron 3 Ultra 550B      | 1,048,576 | 8,192      |
-| `nvidia/nvidia/nemotron-3.5-lightning-30b-a3b` | Nemotron 3.5 Lightning 30B | 1,048,576 | 16,384     |
-| `nvidia/nvidia/nemotron-3-super-120b-a12b`     | Nemotron 3 Super 120B      | 1,000,000 | 8,192      |
-| `nvidia/moonshotai/kimi-k2.6`                  | Kimi K2.6                  | 262,144   | 65,536     |
+| Model ref                                       | Name                       | Context   | Max output |
+| ----------------------------------------------- | -------------------------- | --------- | ---------- |
+| `nvidia/nvidia/nemotron-3-ultra-550b-a55b`      | Nemotron 3 Ultra 550B      | 1,048,576 | 8,192      |
+| `nvidia/nvidia/nemotron-3.5-lightning-30b-a3b`  | Nemotron 3.5 Lightning 30B | 1,048,576 | 16,384     |
+| `nvidia/nvidia/nemotron-3.5-super-vl-120b-a12b` | Nemotron 3.5 Super VL      | 1,048,576 | 8,192      |
+| `nvidia/moonshotai/kimi-k2.6`                   | Kimi K2.6                  | 262,144   | 65,536     |
 
 If a configured model has been retired, select an active model from
 `openclaw models list --provider nvidia`.

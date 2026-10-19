@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createTranscriptionSession,
+  createTranscriptionSocketHarness,
   emitCommitted,
   emitCompleted,
   emitDelta,
@@ -8,50 +9,10 @@ import {
   emitJson,
 } from "./realtime-transcription-provider.test-support.js";
 
-const { FakeWebSocket } = vi.hoisted(() => {
-  type Listener = (...args: unknown[]) => void;
-
-  class MockWebSocket {
-    static readonly OPEN = 1;
-    static readonly CLOSED = 3;
-    static instances: MockWebSocket[] = [];
-
-    readonly listeners = new Map<string, Listener[]>();
-    readyState = 0;
-    closed = false;
-
-    constructor() {
-      MockWebSocket.instances.push(this);
-    }
-
-    on(event: string, listener: Listener): this {
-      const listeners = this.listeners.get(event) ?? [];
-      listeners.push(listener);
-      this.listeners.set(event, listeners);
-      return this;
-    }
-
-    emit(event: string, ...args: unknown[]): void {
-      for (const listener of this.listeners.get(event) ?? []) {
-        listener(...args);
-      }
-    }
-
-    send(): void {}
-
-    close(code?: number, reason?: string): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-      this.emit("close", code ?? 1000, Buffer.from(reason ?? ""));
-    }
-
-    terminate(): void {
-      this.closed = true;
-      this.readyState = MockWebSocket.CLOSED;
-    }
-  }
-
-  return { FakeWebSocket: MockWebSocket };
+const { FakeWebSocket } = await vi.hoisted(async () => {
+  const { createTranscriptionMockWebSocket } =
+    await import("./realtime-transcription-socket.test-support.js");
+  return { FakeWebSocket: createTranscriptionMockWebSocket() };
 });
 
 // Intercept the shared transport constructor, not Bun's bare ws adapter.
@@ -59,35 +20,8 @@ vi.mock("../../packages/gateway-client/src/websocket.js", () => ({
   WebSocket: FakeWebSocket,
 }));
 
-type FakeWebSocketInstance = InstanceType<typeof FakeWebSocket>;
-
-async function waitForFakeSocket(index = 0): Promise<FakeWebSocketInstance> {
-  await vi.dynamicImportSettled();
-  let socket: FakeWebSocketInstance | undefined;
-  await vi.waitFor(() => {
-    socket = FakeWebSocket.instances[index];
-    if (!socket) {
-      throw new Error("expected session to create a websocket");
-    }
-  });
-  if (!socket) {
-    throw new Error("expected session to create a websocket");
-  }
-  return socket;
-}
-
-async function connectFakeSession(
-  session: { connect(): Promise<void> },
-  socketIndex = 0,
-): Promise<FakeWebSocketInstance> {
-  const connecting = session.connect();
-  const socket = await waitForFakeSocket(socketIndex);
-  socket.readyState = FakeWebSocket.OPEN;
-  socket.emit("open");
-  emitJson(socket, { type: "session.updated" });
-  await connecting;
-  return socket;
-}
+const socketHarness = createTranscriptionSocketHarness(FakeWebSocket);
+const { waitForFakeSocket, connectFakeSession } = socketHarness;
 
 describe("OpenAI realtime transcription terminal history bounds", () => {
   beforeEach(() => {
@@ -96,6 +30,7 @@ describe("OpenAI realtime transcription terminal history bounds", () => {
   });
 
   afterEach(() => {
+    socketHarness.close();
     vi.unstubAllEnvs();
   });
 
@@ -220,7 +155,7 @@ describe("OpenAI realtime transcription terminal history bounds", () => {
       expect(session.isConnected()).toBe(false);
 
       const reconnecting = session.connect();
-      const replacementSocket = await waitForFakeSocket(1);
+      const replacementSocket = await waitForFakeSocket(session, 1);
       replacementSocket.readyState = FakeWebSocket.OPEN;
       replacementSocket.emit("open");
       emitJson(replacementSocket, { type: "session.updated" });

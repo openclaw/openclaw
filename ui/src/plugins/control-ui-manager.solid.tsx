@@ -1,30 +1,30 @@
-import { For, Show, createSignal } from "solid-js";
+import { For, Show, createMemo, createSignal } from "solid-js";
 import { SettingsRow, SettingsSection } from "../components/solid/settings-ui.tsx";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { projectSource } from "../lib/reactive/projection.ts";
-import { defineSolidBridge, type SolidBridgeElement } from "../lit/solid-bridge.ts";
 import { CustomPluginUiDisabled } from "./control-ui-disabled.solid.tsx";
 
-function PluginManagerContent(_props: object, host: HTMLElement) {
+export function PluginManager() {
   const context = useApplication();
   const [reloading, setReloading] = createSignal(false);
   const [reloadError, setReloadError] = createSignal("");
-  host.style.display = "contents";
-  const source = projectSource(context?.plugins, {
+  const source = projectSource(context.plugins, {
     read: (runtime) => runtime,
-    subscribe: (runtime, notify) => runtime?.subscribe(notify) ?? (() => {}),
+    subscribe: (runtime, notify) => runtime.subscribe(notify),
     equality: "revision",
   });
-  const replacements = () => source.read()?.registrations("replacements") ?? [];
-  const surfaces = () => [...new Set(replacements().map((entry) => entry.value.surface))];
+  const replacements = createMemo(() => source.read().registrations("replacements"));
+  const surfaces = createMemo(() => [
+    ...new Set(replacements().map((entry) => entry.value.surface)),
+  ]);
   return (
-    <Show when={source.read()}>
+    <openclaw-plugin-manager style={{ display: "contents" }}>
       <Show
         when={
           replacements().length ||
-          source.read()?.errors.length ||
-          (source.read()?.hasPlugins && source.read()?.canReload)
+          source.read().errors.length ||
+          (source.read().hasPlugins && source.read().canReload)
         }
       >
         <SettingsSection title={t("pluginUi.customize")} carapace>
@@ -34,7 +34,7 @@ function PluginManagerContent(_props: object, host: HTMLElement) {
             stackedOnNarrow
             control={
               <>
-                <Show when={source.read()?.canReload}>
+                <Show when={source.read().canReload}>
                   <button
                     class="btn btn--sm oc-action oc-action-secondary"
                     type="button"
@@ -44,7 +44,7 @@ function PluginManagerContent(_props: object, host: HTMLElement) {
                         setReloading(true);
                         setReloadError("");
                         try {
-                          await source.read()?.reload();
+                          await source.read().reload();
                         } catch (error) {
                           setReloadError(error instanceof Error ? error.message : String(error));
                         } finally {
@@ -59,7 +59,7 @@ function PluginManagerContent(_props: object, host: HTMLElement) {
                 <button
                   class="btn btn--sm oc-action oc-action-secondary"
                   type="button"
-                  onClick={() => void source.read()?.refresh()}
+                  onClick={() => void source.read().refresh()}
                 >
                   {t("common.retry")}
                 </button>
@@ -76,9 +76,9 @@ function PluginManagerContent(_props: object, host: HTMLElement) {
                   <select
                     class="settings-select oc-select"
                     aria-label={t(`pluginUi.surface.${surface}`)}
-                    value={source.read()?.selectedReplacement(surface)?.key ?? ""}
+                    value={source.read().selectedReplacement(surface)?.key ?? ""}
                     onChange={(event) =>
-                      source.read()?.selectReplacement(surface, event.currentTarget.value || null)
+                      source.read().selectReplacement(surface, event.currentTarget.value || null)
                     }
                   >
                     <option value="">{t("pluginUi.builtin")}</option>
@@ -97,7 +97,7 @@ function PluginManagerContent(_props: object, host: HTMLElement) {
               />
             )}
           </For>
-          <For each={source.read()?.errors} keyed={(entry) => entry.pluginId}>
+          <For each={source.read().errors} keyed={(entry) => entry.pluginId}>
             {(entry) => (
               <SettingsRow
                 title={entry().pluginId}
@@ -120,18 +120,6 @@ function PluginManagerContent(_props: object, host: HTMLElement) {
           </Show>
         </SettingsSection>
       </Show>
-    </Show>
+    </openclaw-plugin-manager>
   );
-}
-
-export const PluginManager = defineSolidBridge<object>(
-  "openclaw-plugin-manager",
-  PluginManagerContent,
-  { properties: {} },
-);
-
-declare global {
-  interface HTMLElementTagNameMap {
-    "openclaw-plugin-manager": SolidBridgeElement<object>;
-  }
 }

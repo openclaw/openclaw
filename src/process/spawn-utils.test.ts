@@ -24,73 +24,13 @@ import {
   withChildProcessOperation,
   withGitProcessOperation,
 } from "./spawn-diagnostics.js";
-import { spawnProcess, spawnWithFallback } from "./spawn-utils.js";
+import { spawnProcess, spawnAndWait } from "./spawn-utils.js";
 
-type SpawnImplementation = NonNullable<Parameters<typeof spawnWithFallback>[0]["spawnImpl"]>;
-
-function createStubChild() {
-  const child = new EventEmitter() as ChildProcess;
-  queueMicrotask(() => {
-    child.emit("spawn");
-  });
-  return child;
-}
-
-describe("spawnWithFallback", () => {
-  it("retries on EBADF using fallback options", async () => {
-    const spawnMock = vi
-      .fn<SpawnImplementation>()
-      .mockImplementationOnce(() => {
-        const err = new Error("spawn EBADF");
-        (err as NodeJS.ErrnoException).code = "EBADF";
-        throw err;
-      })
-      .mockImplementationOnce(() => createStubChild());
-
-    const result = await spawnWithFallback({
-      argv: ["echo", "ok"],
-      options: { stdio: ["pipe", "pipe", "pipe"] },
-      fallbacks: [{ stdio: ["ignore", "pipe", "pipe"] }],
-      spawnImpl: spawnMock,
-    });
-
-    expect(result.usedFallback).toBe(true);
-    expect(spawnMock).toHaveBeenCalledTimes(2);
-    expect(spawnMock.mock.calls[0]?.[2].stdio).toEqual(["pipe", "pipe", "pipe"]);
-    expect(spawnMock.mock.calls[1]?.[2].stdio).toEqual(["ignore", "pipe", "pipe"]);
-  });
-
-  it("does not spawn a fallback after request authority retires during startup", async () => {
-    let current = true;
-    const retired = Object.assign(new Error("request authority retired"), { code: "EBADF" });
-    const firstChild = createStubChild();
-    const spawnMock = vi
-      .fn()
-      .mockReturnValueOnce(firstChild)
-      .mockImplementation(() => createStubChild());
-    const run = spawnWithFallback({
-      argv: ["agent-cli"],
-      options: {},
-      fallbacks: [{ detached: false }, { stdio: "ignore" }],
-      spawnImpl: spawnMock,
-      assertCurrent: () => {
-        if (!current) {
-          throw retired;
-        }
-      },
-    });
-    const outcome = Promise.allSettled([run]);
-    current = false;
-    firstChild.emit("error", Object.assign(new Error("spawn EBADF"), { code: "EBADF" }));
-
-    expect(await outcome).toEqual([{ status: "rejected", reason: retired }]);
-    expect(spawnMock).toHaveBeenCalledOnce();
-  });
-
+describe("spawnAndWait", () => {
   it("rejects ENOENT from a real missing executable", async () => {
     await withTempDir("openclaw-spawn-missing-", async (dir) => {
       await expect(
-        spawnWithFallback({
+        spawnAndWait({
           argv: [path.join(dir, "missing-executable")],
           options: { stdio: "ignore" },
         }),
@@ -273,43 +213,54 @@ describe("child-process spawn diagnostics", () => {
     expect(JSON.stringify(events)).not.toContain("private");
   });
 
-  it("captures child owners across async preparation without replacing explicit Git owners", async () => {
-    const first = new EventEmitter() as ChildProcess;
-    const second = new EventEmitter() as ChildProcess;
-    const git = new EventEmitter() as ChildProcess;
-    await Promise.all([
-      withChildProcessOperation("agent.exec", async () => {
-        await Promise.resolve();
-        withChildProcessOperation(
-          "service.relay",
-          () => recordChildProcessSpawn("bash", first, undefined, ["-c", "private command"]),
-          "default",
-        );
-        withGitProcessOperation("checkout.diff", () => recordChildProcessSpawn("git", git));
-      }),
-      withChildProcessOperation("service.relay", async () => {
-        await Promise.resolve();
-        recordChildProcessSpawn("node", second);
-      }),
-    ]);
-    const unknown = new EventEmitter() as ChildProcess;
-    Reflect.apply(withChildProcessOperation, undefined, [
-      "/private/customer",
-      () => recordChildProcessSpawn("helper", unknown),
-    ]);
-    for (const child of [second, first, git, unknown]) {
-      child.emit("spawn");
-    }
-    now = 60_000;
-    emitChildProcessSpawnSample();
-    expect(events).toEqual([
-      expect.objectContaining({ family: "node", operation: "service.relay", count: 1 }),
-      expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
-      expect.objectContaining({ family: "git", operation: "checkout.diff", count: 1 }),
-      expect.objectContaining({ family: "other", operation: "unknown", count: 1 }),
-    ]);
-    expect(JSON.stringify(events)).not.toContain("private");
-  });
+  it.each([
+    "service.relay",
+    "agent.cli",
+    "agent.file-read",
+    "service.manager",
+    "worktree.filesystem",
+    "worktree.cleanup",
+    "worktree.maintenance",
+  ] as const)(
+    "captures %s across async preparation without replacing explicit Git owners",
+    async (owner) => {
+      const first = new EventEmitter() as ChildProcess;
+      const second = new EventEmitter() as ChildProcess;
+      const git = new EventEmitter() as ChildProcess;
+      await Promise.all([
+        withChildProcessOperation("agent.exec", async () => {
+          await Promise.resolve();
+          withChildProcessOperation(
+            "service.relay",
+            () => recordChildProcessSpawn("bash", first, undefined, ["-c", "private command"]),
+            "default",
+          );
+          withGitProcessOperation("checkout.diff", () => recordChildProcessSpawn("git", git));
+        }),
+        withChildProcessOperation(owner, async () => {
+          await Promise.resolve();
+          recordChildProcessSpawn("node", second);
+        }),
+      ]);
+      const unknown = new EventEmitter() as ChildProcess;
+      Reflect.apply(withChildProcessOperation, undefined, [
+        "/private/customer",
+        () => recordChildProcessSpawn("helper", unknown),
+      ]);
+      for (const child of [second, first, git, unknown]) {
+        child.emit("spawn");
+      }
+      now = 60_000;
+      emitChildProcessSpawnSample();
+      expect(events).toEqual([
+        expect.objectContaining({ family: "node", operation: owner, count: 1 }),
+        expect.objectContaining({ family: "bash", operation: "agent.exec", count: 1 }),
+        expect.objectContaining({ family: "git", operation: "checkout.diff", count: 1 }),
+        expect.objectContaining({ family: "other", operation: "unknown", count: 1 }),
+      ]);
+      expect(JSON.stringify(events)).not.toContain("private");
+    },
+  );
 
   it.each([
     ["sh", ["-lc", "private command"], "sh", "unscoped.shell-command"],

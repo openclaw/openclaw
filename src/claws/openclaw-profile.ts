@@ -1,9 +1,8 @@
-// Safe loader for the conventional package-local OpenClaw profile.
 import { asOptionalRecord as record } from "@openclaw/normalization-core/record-coerce";
 import type { ToolProfileId } from "../agents/tool-policy-shared.js";
 import { FsSafeError, root as fsSafeRoot } from "../infra/fs-safe.js";
 import { isSafeClawRelativePath } from "./schema-portability.js";
-import { parseClawOpenClawProfile } from "./schema.js";
+import { parseClawOpenClawProfile, parseLegacyLocalUpdateClawOpenClawProfile } from "./schema.js";
 import {
   materializeClawToolProfile,
   resolveClawToolProfileSnapshot,
@@ -29,7 +28,10 @@ function isToolProfileId(value: string): value is ToolProfileId {
   return resolveClawToolProfileSnapshot({ profile: value }) !== undefined;
 }
 
-function migrateLegacyDynamicToolProfile(value: unknown): {
+function migrateLegacyDynamicToolProfile(
+  value: unknown,
+  parseProfile: typeof parseClawOpenClawProfile,
+): {
   value: unknown;
   legacyProfile?: ClawOpenClawProfile;
 } {
@@ -50,7 +52,7 @@ function migrateLegacyDynamicToolProfile(value: unknown): {
   if (toolProfile === "full") {
     return { value };
   }
-  const validationProbe = parseClawOpenClawProfile({
+  const validationProbe = parseProfile({
     ...profile,
     agent: {
       ...agent,
@@ -107,6 +109,7 @@ export async function readClawOpenClawProfile(params: {
   packageRoot: string;
   metadata?: Record<string, string>;
   allowLegacyDynamicToolProfile?: boolean;
+  allowLegacyLocalUpdateHostSettings?: boolean;
 }): Promise<
   | {
       ok: true;
@@ -210,11 +213,41 @@ export async function readClawOpenClawProfile(params: {
   if (!yaml.ok) {
     return yaml;
   }
+  const parseProfile = params.allowLegacyLocalUpdateHostSettings
+    ? parseLegacyLocalUpdateClawOpenClawProfile
+    : parseClawOpenClawProfile;
   const migration = params.allowLegacyDynamicToolProfile
-    ? migrateLegacyDynamicToolProfile(yaml.value)
+    ? migrateLegacyDynamicToolProfile(yaml.value, parseProfile)
     : { value: yaml.value };
-  const parsed = parseClawOpenClawProfile(migration.value);
+  const parsed = parseProfile(migration.value);
   if (!parsed.ok) {
+    // Only the released host-field shape gets migration guidance; other schema errors stay exact.
+    const legacy = params.allowLegacyLocalUpdateHostSettings
+      ? undefined
+      : parseLegacyLocalUpdateClawOpenClawProfile(migration.value);
+    if (legacy?.ok) {
+      const legacyFields = legacy.diagnostics
+        .filter(
+          (entry) =>
+            entry.code === "legacy_openclaw_model_ignored" ||
+            entry.code === "legacy_openclaw_subagents_ignored",
+        )
+        .map((entry) => entry.path.slice(2));
+      if (legacyFields.length > 0) {
+        return {
+          ok: false,
+          diagnostics: [
+            {
+              level: "error",
+              code: "legacy_openclaw_profile_requires_conversion",
+              phase: "schema",
+              path: `${diagnosticPath}.agent`,
+              message: `Released-v1 OpenClaw profile contains ${legacyFields.join(" and ")}. Copy the package and remove these fields from ${declaredPath}; configure model and delegation on the host, then run claws add --dry-run for a fresh consent plan.`,
+            },
+          ],
+        };
+      }
+    }
     return {
       ok: false,
       diagnostics: parsed.diagnostics.map((entry) => ({
@@ -223,12 +256,17 @@ export async function readClawOpenClawProfile(params: {
       })),
     };
   }
+  const profileDiagnostics = parsed.diagnostics.map((entry) => ({
+    ...entry,
+    path: `${diagnosticPath}${entry.path.slice(1)}`,
+  }));
+  const allDiagnostics = [...diagnostics, ...profileDiagnostics];
   return {
     ok: true,
     profile: parsed.profile,
     ...(migration.legacyProfile ? { legacyProfile: migration.legacyProfile } : {}),
     raw,
     path: declaredPath,
-    ...(diagnostics.length > 0 ? { diagnostics } : {}),
+    ...(allDiagnostics.length > 0 ? { diagnostics: allDiagnostics } : {}),
   };
 }

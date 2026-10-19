@@ -10,6 +10,7 @@ export type SessionCleanupReadInput = Pick<
   "database" | "expectedIdentity" | "continuation"
 > & {
   kind: "session-cleanup";
+  target: { agentId: string; storePath: string };
   env: NodeJS.ProcessEnv;
   fixMissing: boolean;
 };
@@ -19,4 +20,5 @@ export type SessionCleanupReadResult = {
   source?: SessionEntryListWorkerResult["source"];
   store: Record<string, SessionEntry>;
   missing: SessionEntryLifecycleRemoval[];
+  retainedArtifactPaths: string[];
 };

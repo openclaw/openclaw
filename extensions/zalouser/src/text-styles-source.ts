@@ -1,6 +1,6 @@
 import { markdownToIR } from "openclaw/plugin-sdk/text-chunking";
 import { isEscaped, protectLiteral, protectLocalInlineSyntax } from "./text-styles-inline.js";
-import type { MarkdownIRWithBlockMetadata, TokenRegistry } from "./text-styles-shared.js";
+import type { MarkdownIRWithMetadata, TokenRegistry } from "./text-styles-shared.js";
 import {
   sourceBlockquotePrefixLength,
   sourceContainerProjection,
@@ -34,7 +34,7 @@ export function restoreLeadingBlankLines(
 }
 
 export function stripUnsupportedHeadingStyles(
-  ir: MarkdownIRWithBlockMetadata,
+  ir: MarkdownIRWithMetadata,
   { ir: sourceIR, lines: sourceLines }: MarkdownSource,
 ): void {
   const unsupportedLines = new Set(
@@ -78,7 +78,7 @@ function sourceAtxHasClosingRun(line: string, level: number): boolean {
   return /^[ \t]+#+[ \t]*$/u.test(line.slice(Math.max(0, markerOffset) + marker.length));
 }
 
-export function parseSharedIR(source: string): MarkdownIRWithBlockMetadata {
+export function parseSharedIR(source: string): MarkdownIRWithMetadata {
   return markdownToIR(source, {
     autolink: false,
     enableHtmlUnderline: true,
@@ -87,7 +87,7 @@ export function parseSharedIR(source: string): MarkdownIRWithBlockMetadata {
     linkify: false,
     preserveSourceBlockSpacing: true,
     tableMode: "off",
-  }) as MarkdownIRWithBlockMetadata;
+  });
 }
 
 export function protectInlineSyntaxOutsideCode(

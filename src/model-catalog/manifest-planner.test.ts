@@ -1,4 +1,5 @@
 // Manifest model-catalog planner tests cover plugin-owned row planning, filters, conflicts, and suppressions.
+import type { ModelInferenceCapabilities } from "@openclaw/model-catalog-core/model-catalog-types";
 import { describe, expect, it, vi } from "vitest";
 import {
   planManifestModelCatalogRows,
@@ -78,6 +79,93 @@ describe("manifest model catalog planner", () => {
       "anthropic-messages",
       "anthropic-messages",
     ]);
+  });
+
+  describe("route-bound inference metadata", () => {
+    const inference = {
+      chat: false,
+      decision: {
+        protocol: "fixture-decision",
+        input: ["text"],
+        questions: { choice: { probabilities: "categorical", abstention: false } },
+        limits: { maxQuestions: 100 },
+        billing: { unit: "requests", source: "provider-docs" },
+      },
+    } satisfies ModelInferenceCapabilities;
+    const registry = {
+      plugins: [
+        {
+          id: "fixture",
+          providers: ["fixture"],
+          modelCatalog: {
+            providers: {
+              fixture: {
+                api: "openai-responses" as const,
+                baseUrl: "https://fixture.invalid/v1",
+                models: [{ id: "typed", baseUrl: "https://fixture.invalid/v1", inference }],
+              },
+            },
+            aliases: {
+              same: { provider: "fixture", baseUrl: "https://fixture.invalid/v1/" },
+              endpoint: { provider: "fixture", baseUrl: "https://routed.invalid/v1" },
+              protocol: { provider: "fixture", api: "openai-completions" as const },
+            },
+          },
+        },
+      ],
+    };
+
+    it.each([
+      { provider: "same", expected: inference },
+      { provider: "endpoint", expected: { chat: false } },
+      { provider: "protocol", expected: { chat: false } },
+    ])("binds alias facts to the effective route: $provider", ({ provider, expected }) => {
+      const plan = planManifestModelCatalogRows({ registry, providerFilter: provider });
+      expect(plan.rows).toHaveLength(1);
+      expect(plan.rows[0]?.inference).toEqual(expected);
+    });
+
+    it("retains matching hosted facts when a remote row replaces its label", () => {
+      const plan = planManifestModelCatalogRows({
+        registry,
+        remoteOverlay: { fixture: { models: [{ id: "typed", name: "Refreshed" }] } },
+      });
+      expect(plan.rows).toMatchObject([
+        { name: "Refreshed", source: "runtime-refresh", inference },
+      ]);
+    });
+
+    it.each([{ models: [] }, { models: [{ id: "typed", name: "Refreshed" }] }])(
+      "clears facts when remote provider defaults change the effective API: %j",
+      ({ models }) => {
+        const plan = planManifestModelCatalogRows({
+          registry,
+          remoteOverlay: { fixture: { api: "openai-completions", models } },
+        });
+        expect(plan.rows).toMatchObject([
+          { api: "openai-completions", inference: { chat: false } },
+        ]);
+      },
+    );
+
+    it.each([
+      { baseUrl: "https://remote.invalid/v1", models: [{ id: "typed", inference }] },
+      { models: [{ id: "typed", baseUrl: "https://remote.invalid/v1", inference }] },
+    ])("does not attach remote declarations to a retained trusted endpoint: %j", (remote) => {
+      const plan = planManifestModelCatalogRows({ registry, remoteOverlay: { fixture: remote } });
+      expect(plan.rows).toMatchObject([
+        { baseUrl: "https://fixture.invalid/v1", inference: { chat: false } },
+      ]);
+    });
+
+    it("replaces a hosted contract as a whole when remote metadata supplies one", () => {
+      const replacement = { chat: true };
+      const plan = planManifestModelCatalogRows({
+        registry,
+        remoteOverlay: { fixture: { models: [{ id: "typed", inference: replacement }] } },
+      });
+      expect(plan.rows[0]?.inference).toEqual(replacement);
+    });
   });
 
   it("scopes requested merge keys while preserving alias overlays", () => {

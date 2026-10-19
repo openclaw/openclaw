@@ -1,4 +1,3 @@
-import { projectSessionActorContextMetadata } from "./session-actor-context-metadata.js";
 import type { SessionActorStoredState } from "./session-actor-hydration.types.js";
 import type { SessionTranscriptProjectionFacts } from "./session-transcript-projection-facts.types.js";
 
@@ -18,6 +17,7 @@ export function projectSessionTranscriptFacts(
     ) {
       latestIndexedReset = {
         active_position: row.active_position,
+        event_id: identity.event_id,
         event_type: "reset",
         seq: identity.seq,
       };
@@ -31,7 +31,6 @@ export function projectSessionTranscriptFacts(
     latestIndexedReset,
     hasUnindexedPrefix,
     latestSeq: navigation.at(-1)?.seq ?? null,
-    contextMetadata: projectSessionActorContextMetadata(actor),
     state: projection && {
       activeEventCount: projection.activeEventCount,
       activeMessageCount: projection.activeMessageCount,

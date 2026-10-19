@@ -109,6 +109,158 @@ async function fixture(initialReceipt?: CodexNativeSubagentSubmission) {
 }
 
 describe("native subagent submission receipts in the binding store", () => {
+  it("retains recorded completion across native resume without mutating incoming facts", async () => {
+    const { store, owner } = await fixture();
+    const assignment = {
+      runId: "codex-thread:child-thread",
+      childThreadId: "child-thread",
+      nativeTurnId: "original-turn",
+      nativeParentThreadId: binding.threadId,
+      owner,
+    };
+    const recordedCompletion = {
+      childThreadId: assignment.childThreadId,
+      status: "succeeded" as const,
+      statusLabel: "recorded_task_result" as const,
+      result: "Preserve the recorded result",
+    };
+    await store.mutate(
+      identity,
+      {
+        kind: "record-native-subagent-assignment",
+        owner,
+        assignment: { ...assignment, recordedCompletion },
+      },
+      currentAuthority,
+    );
+    const resumed = { ...assignment, nativeTurnId: "resumed-turn" };
+    await store.mutate(
+      identity,
+      { kind: "record-native-subagent-assignment", owner, assignment: resumed },
+      currentAuthority,
+    );
+
+    expect(await store.readNativeSubagentAssignments?.(identity, owner)).toEqual([
+      { ...resumed, recordedCompletion },
+    ]);
+    expect(resumed).not.toHaveProperty("recordedCompletion");
+  });
+
+  it.each([
+    { nativeTurnId: "child-turn-b", reverse: false, discoverTurn: false },
+    { nativeTurnId: "resumed-turn", reverse: false, discoverTurn: false },
+    { nativeTurnId: "resumed-turn", reverse: true, discoverTurn: false },
+    { nativeTurnId: "child-turn-b", reverse: false, discoverTurn: true },
+  ])(
+    "deduplicates and durably retires only the exact child turn and receipt ($nativeTurnId, reverse=$reverse, discoverTurn=$discoverTurn)",
+    async ({ nativeTurnId, reverse, discoverTurn }) => {
+      const { root, state, store, owner } = await fixture(receipt);
+      const first = {
+        runId: "codex-thread:child-thread:turn:child-turn-b",
+        childThreadId: "child-thread",
+        nativeTurnId,
+        nativeParentThreadId: binding.threadId,
+        owner,
+        ...(nativeTurnId === "child-turn-b" ? { submission: receipt } : {}),
+      };
+      const nextReceipt = { ...receipt, callId: "call-two", submissionId: "child-turn-c" };
+      const second = {
+        ...first,
+        runId: "codex-thread:child-thread:turn:child-turn-c",
+        nativeTurnId: "child-turn-c",
+        ...(first.submission ? { submission: nextReceipt } : {}),
+      };
+      await store.mutate(
+        identity,
+        { kind: "record-native-subagent-submission", owner, receipt: nextReceipt },
+        currentAuthority,
+      );
+      const row = state.lookup(bindingStoreKey(identity));
+      assert(row?.state === "active");
+      const recordedCompletion = {
+        childThreadId: first.childThreadId,
+        status: "succeeded" as const,
+        statusLabel: "recorded_task_result" as const,
+        result: "Preserve the recorded result",
+      };
+      const { submission: _submission, ...unsubmitted } = first;
+      const alias = { ...unsubmitted, runId: "codex-thread:child-thread" };
+      const { nativeTurnId: _nativeTurnId, ...unobserved } = alias;
+      const aliases = [first, { ...(discoverTurn ? unobserved : alias), recordedCompletion }];
+      if (reverse) {
+        aliases.reverse();
+      }
+      state.register(bindingStoreKey(identity), {
+        ...row,
+        nativeSubagentAssignments: { version: 1, assignments: [...aliases, second] },
+      });
+      await store.mutate(
+        identity,
+        { kind: "record-native-subagent-assignment", owner, assignment: first },
+        currentAuthority,
+      );
+      await store.mutate(
+        identity,
+        {
+          kind: "record-native-subagent-assignment",
+          owner,
+          assignment: alias,
+        },
+        currentAuthority,
+      );
+      const pending = await store.readNativeSubagentAssignments?.(identity, owner);
+      expect(pending).toHaveLength(2);
+      expect(pending).toContainEqual({ ...first, recordedCompletion });
+      await expect(
+        store.mutate(
+          identity,
+          {
+            kind: "record-native-subagent-assignment",
+            owner,
+            assignment: {
+              ...first,
+              recordedCompletion: { ...recordedCompletion, result: "Conflicting result" },
+            },
+          },
+          currentAuthority,
+        ),
+      ).rejects.toThrow("Conflicting Codex native pending assignment metadata");
+      const retirement = {
+        kind: "consume-native-subagent-assignment" as const,
+        owner,
+        assignment: alias,
+        undelivered: true as const,
+      };
+      await expect(store.mutate(identity, retirement, currentAuthority)).resolves.toBe(true);
+      await expect(store.mutate(identity, retirement, currentAuthority)).resolves.toBe(true);
+      await expect(
+        store.mutate(
+          identity,
+          { ...retirement, owner: { ...owner, lifecycleRevision: "other-lifecycle" } },
+          currentAuthority,
+        ),
+      ).resolves.toBe(false);
+      await expect(
+        store.mutate(
+          identity,
+          { ...retirement, assignment: { ...alias, runId: second.runId } },
+          currentAuthority,
+        ),
+      ).resolves.toBe(false);
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      const reopened = createLazyCodexAppServerBindingStore(openState(root));
+      expect(await reopened.readNativeSubagentSubmissions(identity, owner)).toEqual([nextReceipt]);
+      await reopened.mutate(identity, {
+        kind: "replace-thread",
+        expectedThreadId: binding.threadId,
+        binding: { ...binding, threadId: "rotated-parent" },
+      });
+      const rotated = { ...owner, parentThreadId: "rotated-parent" };
+      expect(await reopened.readNativeSubagentAssignments?.(identity, rotated)).toEqual([second]);
+    },
+  );
+
   it.each(["receipt", "assignment"] as const)(
     "Stop preserves recovery across a rejected %s acknowledgement and consumes it on retry",
     async (rejectedOwner) => {
@@ -122,6 +274,7 @@ describe("native subagent submission receipts in the binding store", () => {
         nativeTurnId: stopReceipt.submissionId,
         nativeParentThreadId: binding.threadId,
         owner,
+        submission: stopReceipt,
       };
       const assignmentRecorded = createDeferred<boolean>();
       const receiptRecorded = createDeferred<boolean>();
@@ -680,10 +833,13 @@ describe("native subagent submission receipts in the binding store", () => {
     },
   );
 
-  it.each([{ version: 2, future: ["preserve-me"] }])(
-    "preserves unreadable receipt metadata through unrelated writes",
+  it.each([
+    { version: 2, future: ["preserve-me"] },
+    { version: 1, receipts: ["malformed"] },
+  ])(
+    "preserves unreadable receipt metadata through writes and retirement (version $version)",
     async (metadata) => {
-      const { state, store, owner } = await fixture();
+      const { root, state, store, owner } = await fixture();
       state.register(bindingStoreKey(identity), {
         version: 1,
         state: "active",
@@ -714,6 +870,33 @@ describe("native subagent submission receipts in the binding store", () => {
         ).rejects.toThrow(/native subagent submission/i);
       }
       expect(state.lookup(bindingStoreKey(identity))).toEqual(before);
+
+      const assignment = {
+        runId: "codex-thread:child-thread:turn:child-turn-b",
+        childThreadId: receipt.childThreadId,
+        nativeTurnId: receipt.submissionId,
+        nativeParentThreadId: owner.parentThreadId,
+        owner,
+      };
+      await store.mutate(
+        identity,
+        { kind: "record-native-subagent-assignment", owner, assignment },
+        currentAuthority,
+      );
+      const retirement = {
+        kind: "consume-native-subagent-assignment" as const,
+        owner,
+        assignment,
+        undelivered: true as const,
+      };
+      await expect(store.mutate(identity, retirement, currentAuthority)).resolves.toBe(true);
+      await expect(store.mutate(identity, retirement, currentAuthority)).resolves.toBe(true);
+      await closeOpenClawStateDatabaseAsync();
+      resetPluginStateStoreForTests();
+      const reopenedState = openState(root);
+      const reopened = createLazyCodexAppServerBindingStore(reopenedState);
+      expect(await reopened.readNativeSubagentAssignments?.(identity, owner)).toEqual([]);
+      expect(reopenedState.lookup(bindingStoreKey(identity))).toEqual(before);
     },
   );
 });

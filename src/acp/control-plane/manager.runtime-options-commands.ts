@@ -82,7 +82,7 @@ export async function runSetManagerSessionRuntimeOption(
   assertCurrentAcpActor(params.isCurrentActor(), params.sessionKey);
   let result: AcpRuntimeConfigOptionResult | void = undefined;
   if ("runtimeMode" in update) {
-    if (!capabilities.controls.includes("session/set_mode") || !runtime.setMode) {
+    if (!runtime.setMode) {
       throw createUnsupportedControlError({
         backend: handle.backend || meta.backend,
         control: "session/set_mode",
@@ -98,7 +98,7 @@ export async function runSetManagerSessionRuntimeOption(
       fallbackMessage: "Could not update ACP runtime mode.",
     });
   } else {
-    if (!capabilities.controls.includes("session/set_config_option") || !runtime.setConfigOption) {
+    if (!runtime.setConfigOption) {
       throw createUnsupportedControlError({
         backend: handle.backend || meta.backend,
         control: "session/set_config_option",

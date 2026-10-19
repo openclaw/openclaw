@@ -47,7 +47,7 @@ export function targetKey(cdpUrl: string, targetId: string) {
 }
 
 export function bindRoleRefsTarget(page: Page, cdpUrl: string, targetId?: string | null): void {
-  const normalizedTargetId = normalizeOptionalString(targetId ?? undefined);
+  const normalizedTargetId = normalizeOptionalString(targetId);
   if (!normalizedTargetId) {
     return;
   }

@@ -10,7 +10,7 @@ import { createApplicationGateway } from "../test-helpers/application-context.ts
 import { installDialogPolyfill } from "../test-helpers/modal-dialog.ts";
 import { waitForSolid } from "../test-helpers/solid-settle.ts";
 import { mountPalette } from "./command-palette.test-support.ts";
-import "./command-palette.ts";
+import "./command-palette.tsx";
 
 const people: UsersMentionableResult = {
   users: [
@@ -272,10 +272,14 @@ describe("command palette people mentions", () => {
 
   it("keeps name selections but closes when the selection leaves the invocation", async () => {
     const f = await mount();
+    const searchSessions = vi.mocked(f.context.sessions.list);
+    searchSessions.mockClear();
     await f.append("Review @");
     await f.search("Al");
     expect(f.directoryParams()).toEqual([{ agentId: "main", query: "Al" }]);
     expect(f.menu()).not.toBeNull();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(searchSessions).not.toHaveBeenCalled();
     f.input.setSelectionRange(8, 10);
     f.input.dispatchEvent(new Event("select", { bubbles: true }));
     await f.palette.updateComplete;
@@ -284,6 +288,10 @@ describe("command palette people mentions", () => {
     f.input.dispatchEvent(new Event("select", { bubbles: true }));
     await f.palette.updateComplete;
     expect(f.menu()).toBeNull();
+    await vi.advanceTimersByTimeAsync(200);
+    expect(searchSessions).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ search: "Review @Al" }),
+    );
     await f.replace("Review @Jo");
     await vi.advanceTimersByTimeAsync(150);
     expect(f.menu()).not.toBeNull();

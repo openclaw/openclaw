@@ -11,6 +11,7 @@ export type DreamingToggleConfirmationProps = {
   // stops the sweep for every agent, not just the one this panel is showing.
   enabling: boolean;
   loading: boolean;
+  disabled: boolean;
   onConfirm: () => void;
   onCancel: () => void;
   hasError: boolean;
@@ -57,10 +58,10 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
           {props.hasError ? (
             <div class="exec-approval-error">{t("dreaming.toggleConfirmation.failed")}</div>
           ) : undefined}
-          <div class="exec-approval-actions">
+          <openclaw-modal-actions class="exec-approval-actions">
             <button
               class={["btn", { primary: props.enabling, danger: !props.enabling }]}
-              disabled={props.loading}
+              disabled={props.disabled || props.loading}
               onClick={() => props.onConfirm()}
             >
               {props.loading ? t("dreaming.toggleConfirmation.saving") : confirmLabel()}
@@ -68,7 +69,7 @@ export function renderDreamingToggleConfirmation(props: DreamingToggleConfirmati
             <button class="btn" disabled={props.loading} onClick={() => props.onCancel()}>
               {t("common.cancel")}
             </button>
-          </div>
+          </openclaw-modal-actions>
         </div>
       </openclaw-modal-dialog>
     </Show>

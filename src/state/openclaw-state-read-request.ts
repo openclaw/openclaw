@@ -30,6 +30,7 @@ function commandBytes(value: unknown): number {
 export function requestBytes(request: OpenClawStateReadRequest): number {
   return (
     commandBytes(request.command) +
+    commandBytes(request.context.databaseEngineSelection) +
     stringBytes([
       ...Object.entries(request.context.environment).flatMap(([key, value]) => [key, value]),
       request.context.existingSchemaPath,
@@ -37,6 +38,7 @@ export function requestBytes(request: OpenClawStateReadRequest): number {
       request.location,
       request.expectedIdentity,
       request.snapshotRoot,
+      request.postgresSnapshot,
     ])
   );
 }

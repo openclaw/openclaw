@@ -342,7 +342,13 @@ export function createProjectSetupScript(
 ): string {
   const setupEnv =
     input.setupEnv === undefined ? undefined : PreparedSetupEnvironment.parse(input.setupEnv);
-  return `${DEFAULT_NODE_TOOLCHAIN_SETUP_SH}
+  // Inspection also bootstraps Node before its canonical directory checks can run.
+  return `set -eu
+if [ -n "\${HOME:-}" ] && [ -L "$HOME/.openclaw-worker" ]; then
+  echo 'Prepared project directory escaped its owner' >&2
+  exit 1
+fi
+${DEFAULT_NODE_TOOLCHAIN_SETUP_SH}
 node <<'PROJECT_SETUP_SCRIPT'
 (${PREPARE_PROJECT_WORKSPACE_JS})(${JSON.stringify({ ...input, ...(setupEnv ? { setupEnv } : {}) })}, ${inspectOnly})
   .then((result) => {

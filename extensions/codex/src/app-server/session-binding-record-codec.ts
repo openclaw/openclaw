@@ -161,6 +161,8 @@ const threadBindingSchema = z
     ringZeroClientInstanceId: optionalStringSchema,
     /** Durable fact preventing a later unrestricted turn from widening this thread. */
     nativeToolPolicyRestricted: z.literal(true).optional().catch(undefined),
+    // Optional creation-policy attestation; legacy bindings remain readable.
+    restrictedThreadConfigFingerprint: optionalNonBlankStringSchema,
     nativeHookRelayGeneration: optionalNonBlankStringSchema,
     appServerRuntimeFingerprint: optionalStringSchema,
     pluginAppsFingerprint: optionalStringSchema,

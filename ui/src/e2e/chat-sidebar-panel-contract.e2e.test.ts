@@ -1002,7 +1002,7 @@ suite.define(() => {
     await selectChatLayoutAction(page, "Show discussion");
     await openChatLayoutMenu(page);
     const discussionAction = contentActions.locator(
-      ':scope > a.rail-header__action[target="_blank"]',
+      ':scope > [role="menu"] a.rail-header__action[target="_blank"]',
     );
     await discussionAction.waitFor();
     expect(await discussionAction.getAttribute("href")).toBe("https://discussion.example/session");

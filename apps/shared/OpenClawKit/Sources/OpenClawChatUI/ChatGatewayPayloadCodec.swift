@@ -173,6 +173,15 @@ public enum OpenClawChatGatewayPayloadCodec {
         return card
     }
 
+    public static func decodeProgressCardRefresh(_ data: Data) throws -> OpenClawChatProgressCardRefreshResult {
+        let result = try JSONDecoder().decode(OpenClawChatProgressCardRefreshResult.self, from: data)
+        guard !result.runId.isEmpty, result.revision >= 1 else {
+            throw DecodingError.dataCorrupted(.init(
+                codingPath: [], debugDescription: "Progress refresh receipt was invalid"))
+        }
+        return result
+    }
+
     public static func decodeQuestionAnswer(_ data: Data) throws -> QuestionAnswers {
         struct AnsweredQuestion: Decodable {
             enum Status: String, Decodable { case answered }

@@ -1,5 +1,5 @@
-import type { DatabaseSync } from "node:sqlite";
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
+import { isPostgresSqlConnection, type EngineConnection } from "../infra/sql-connection.js";
 import { runWithSqliteBusyTimeout } from "../infra/sqlite-busy-timeout.js";
 import { runSqliteSingleStatementSync } from "../infra/sqlite-transaction.js";
 import type { DB } from "./openclaw-state-db.generated.js";
@@ -19,7 +19,7 @@ function identityKey(identity: OpenClawStateLeaseIdentity): string {
 }
 
 /** One deadline and one conditional write serve the physical database's due leases. */
-export function createStateLeaseRenewalScheduler(db: DatabaseSync) {
+export function createStateLeaseRenewalScheduler(db: EngineConnection) {
   const pending = new Map<StateLeaseRenewal, number>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let running = false;
@@ -87,12 +87,11 @@ export function createStateLeaseRenewalScheduler(db: DatabaseSync) {
             ),
           )
           .returning(["scope", "lease_key", "owner", "expires_at"]);
-        const rows = runWithSqliteBusyTimeout(
-          db,
-          0,
-          () => runSqliteSingleStatementSync(db, () => executeSqliteQuerySync(db, query).rows),
-          { lockFailureReporting: "suppress" },
-        );
+        const renew = () =>
+          runSqliteSingleStatementSync(db, () => executeSqliteQuerySync(db, query).rows);
+        const rows = isPostgresSqlConnection(db)
+          ? renew()
+          : runWithSqliteBusyTimeout(db, 0, renew, { lockFailureReporting: "suppress" });
         const expiries = new Map(
           rows.map((row) => [
             identityKey({ scope: row.scope, key: row.lease_key, owner: row.owner }),

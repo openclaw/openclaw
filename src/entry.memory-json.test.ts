@@ -89,32 +89,30 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
       process.exitCode = 0;
       // Retain JSON routing around the root catch as normal runCli does; the outer
       // scope restores it when this in-process test invocation finishes.
-      await withConsoleLogsRoutedToStderrForJson(argv, () =>
-        runMainOrRootHelp(argv, {
-          loadRunCli: async () => ({
-            runCli: async (commandArgv) => {
-              const program = new Command().name("openclaw").exitOverride();
-              const resources = new CliPluginInvocationResources();
-              const session = createPluginCliLoadSession(cache, { resources });
-              try {
-                await session.withCache(async () => {
-                  await registerPluginCliCommandsFromValidatedConfig(
-                    program,
-                    fixtureEnv,
-                    { pluginSdkResolution: "src" },
-                    { primary: "memory", session },
-                  );
-                  session.close();
-                  await resources.run(() => program.parseAsync(commandArgv));
-                });
-              } finally {
-                session.close();
-                await resources.release();
-              }
-            },
-          }),
-        }),
-      );
+      // mock-isolation: Run the real memory command on the fixture program, not the CLI bootstrap.
+      vi.doMock("./cli/run-main.js", async () => ({
+        runCli: async (commandArgv: string[]) => {
+          const program = new Command().name("openclaw").exitOverride();
+          const resources = new CliPluginInvocationResources();
+          const session = createPluginCliLoadSession(cache, { resources });
+          try {
+            await session.withCache(async () => {
+              await registerPluginCliCommandsFromValidatedConfig(
+                program,
+                fixtureEnv,
+                { pluginSdkResolution: "src" },
+                { primary: "memory", session },
+              );
+              session.close();
+              await resources.run(() => program.parseAsync(commandArgv));
+            });
+          } finally {
+            session.close();
+            await resources.release();
+          }
+        },
+      }));
+      await withConsoleLogsRoutedToStderrForJson(argv, () => runMainOrRootHelp(argv));
     };
     await run({
       workspaceDir,
@@ -137,6 +135,7 @@ async function withMemoryRoot(run: (fixture: MemoryRootFixture) => Promise<void>
     } finally {
       clearRuntimeConfigSnapshot();
       resetLogger();
+      vi.doUnmock("./cli/run-main.js");
       vi.restoreAllMocks();
       vi.unstubAllEnvs();
       process.exitCode = previousExitCode;

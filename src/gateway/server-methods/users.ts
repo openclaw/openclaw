@@ -23,8 +23,8 @@ import { profileCatalogPath } from "../../state/user-profile-identity.read.js";
 import {
   projectUserProfileDisplay,
   readResidentUserProfileRevision,
+  readUserProfileSnapshot,
 } from "../../state/user-profile-list.js";
-import { readUserProfileSnapshot } from "../../state/user-profile-reads.js";
 import {
   linkCanonicalUserProfileEmail,
   mergeCanonicalUserProfiles,
@@ -130,7 +130,7 @@ export const usersHandlers: GatewayRequestHandlers = {
             canonical.id,
             canonical.role ?? null,
             cfg,
-            canonical.githubIdentity?.login ?? null,
+            canonical.githubIdentity?.host ? null : (canonical.githubIdentity?.login ?? null),
           ),
         );
       }),
@@ -222,6 +222,7 @@ export const usersHandlers: GatewayRequestHandlers = {
         : undefined;
       const assertCurrent = () => {
         assertPersonal();
+        options.sessionMutationAuthorization?.assertCurrent();
         backgroundAction?.assertCurrent();
       };
       const result = await setCanonicalUserPreferences(profileId, params.entries, {

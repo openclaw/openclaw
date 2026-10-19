@@ -1,18 +1,22 @@
 // Simple completion runtime tests cover model resolution, provider auth, and
 // one-shot completion wiring before requests reach the shared LLM stream path.
 import { createApiRegistry } from "@openclaw/ai";
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { createPluginMetadataSnapshotFixture } from "../plugins/plugin-metadata.test-support.js";
 import { looksLikeSecretSentinel, resolveSecretSentinel } from "../secrets/sentinel.js";
 import { OAuthRefreshFailureError } from "./auth-profiles/oauth-refresh-failure.js";
+import * as authProfileRecords from "./auth-profiles/profiles.js";
+import type { AuthProfileStore } from "./auth-profiles/types.js";
 import {
   fingerprintAuthProfileCredential,
   fingerprintResolvedProviderAuth,
 } from "./execution-auth-binding.js";
 import type { PreparedModelRuntimeSnapshot } from "./prepared-model-runtime.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
+import { completeWithAuthProfileFailover } from "./simple-completion-profile-failover.js";
 import type { SimpleCompletionModelResolver } from "./simple-completion-scope.js";
+import { makeAssistantMessageFixture } from "./test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "./test-helpers/provider-model-fixture.js";
 
 // Hoisted mocks keep Vitest module replacement stable while the implementation
@@ -26,6 +30,10 @@ const hoisted = vi.hoisted(() => ({
   setRuntimeApiKeyMock: vi.fn(),
   prepareProviderRuntimeAuthMock: vi.fn(),
   ensureAuthProfileStoreMock: vi.fn(),
+  markAuthProfileFailureMock:
+    vi.fn<typeof import("./auth-profiles/usage.js").markAuthProfileFailure>(),
+  markAuthProfileSuccessMock:
+    vi.fn<typeof import("./auth-profiles/profiles.js").markAuthProfileSuccess>(),
   getCurrentPluginMetadataSnapshotMock:
     vi.fn<
       typeof import("../plugins/current-plugin-metadata-snapshot.js").getCurrentPluginMetadataSnapshot
@@ -69,8 +77,10 @@ vi.mock("./auth-profiles/store-runtime.js", () => ({
   ensureAuthProfileStoreAsync: hoisted.ensureAuthProfileStoreMock,
 }));
 
+// mock-isolation: Keep quota probes and credential-health writes out of the model-preparation fixture.
 vi.mock("./auth-profiles/usage.js", () => ({
   reconcileAuthProfileQuotaBlocks: vi.fn(async () => {}),
+  markAuthProfileFailure: hoisted.markAuthProfileFailureMock,
 }));
 
 vi.mock("../plugins/current-plugin-metadata-snapshot.js", async (importOriginal) => ({
@@ -110,6 +120,8 @@ beforeEach(() => {
   hoisted.prepareProviderRuntimeAuthMock.mockReset();
   hoisted.ensureAuthProfileStoreMock.mockReset();
   hoisted.ensureAuthProfileStoreMock.mockReturnValue({ version: 1, profiles: {} });
+  hoisted.markAuthProfileFailureMock.mockReset().mockResolvedValue(undefined);
+  hoisted.markAuthProfileSuccessMock.mockReset().mockResolvedValue(undefined);
   hoisted.getCurrentPluginMetadataSnapshotMock.mockReset();
   const authStorage = AuthStorage.inMemory({});
   const modelRegistry = ModelRegistry.inMemory(authStorage);
@@ -227,7 +239,7 @@ function createOpenAIRouteModelResolver(params: {
 }
 
 describe("prepareSimpleCompletionModel", () => {
-  it.each([undefined, {}])(
+  it.each([{}])(
     "blocks helper inference under the admitted required policy with caller config %j",
     async (cfg) => {
       preparedModelRuntime = {
@@ -682,5 +694,190 @@ describe("acquireSimpleCompletionModelForAgent", () => {
         await result[Symbol.asyncDispose]();
       }
     }
+  });
+});
+
+describe("acquired simple completion profile failover", () => {
+  // Mock health writes; exercise real planning, classification, and advancement.
+  beforeEach(() => {
+    vi.spyOn(authProfileRecords, "markAuthProfileSuccess").mockImplementation(
+      hoisted.markAuthProfileSuccessMock,
+    );
+  });
+  afterEach(() => {
+    vi.mocked(authProfileRecords.markAuthProfileSuccess).mockRestore();
+  });
+
+  async function acquireProfiles(pinned = false) {
+    const store: AuthProfileStore = {
+      version: 1,
+      profiles: {
+        "openai:p1": { type: "api_key", provider: "openai", key: "fixture-p1" },
+        "openai:p2": { type: "api_key", provider: "openai", key: "fixture-p2" },
+      },
+    };
+    const cfg: OpenClawConfig = {
+      agents: { defaults: { model: "openai/gpt-5.5" } },
+      auth: { order: { openai: ["openai:p1", "openai:p2"] } },
+    };
+    hoisted.ensureAuthProfileStoreMock.mockReturnValue(store);
+    hoisted.getApiKeyForModelMock.mockImplementation(({ profileId }: { profileId?: string }) => {
+      const credential = profileId ? store.profiles[profileId] : undefined;
+      if (!profileId || credential?.type !== "api_key") {
+        throw new Error("The auth planner must select a configured fixture profile.");
+      }
+      return {
+        apiKey: credential.key,
+        profileId,
+        source: `profile:${profileId}`,
+        mode: "api-key",
+      };
+    });
+    const prepared = await acquireSimpleCompletionModelForAgent({
+      cfg,
+      agentId: "main",
+      profileFailover: true,
+      preferredProfile: "openai:p1",
+      ...(pinned ? { modelRef: "openai/gpt-5.5@openai:p1", bindAuthOwner: true } : {}),
+      modelResolver: createOpenAIRouteModelResolver({
+        api: "openai-responses",
+        baseUrl: "https://api.openai.com/v1",
+      }),
+    });
+    expectPreparedModelResult(prepared);
+    return { cfg, store, prepared };
+  }
+
+  it.each([
+    ["rate_limit", "429: rate limit exceeded", "rate_limit_exceeded"],
+    ["auth", "401: invalid API key", "invalid_api_key"],
+    ["billing", "402: account balance exhausted", "insufficient_quota"],
+  ])(
+    "rotates and records %s failures before completing on the backup",
+    async (reason, errorMessage, errorCode) => {
+      const fixture = await acquireProfiles();
+      await using prepared = fixture.prepared;
+      const failure = makeAssistantMessageFixture({ errorMessage, errorCode, content: [] });
+      const success = makeAssistantMessageFixture({
+        stopReason: "stop",
+        errorMessage: undefined,
+        content: [{ type: "text", text: "backup reply" }],
+      });
+      const complete = vi.fn<Parameters<typeof completeWithAuthProfileFailover>[0]["complete"]>(
+        async ({ auth }) => (auth.profileId === "openai:p1" ? failure : success),
+      );
+
+      const result = await completeWithAuthProfileFailover({
+        prepared,
+        cfg: fixture.cfg,
+        agentDir: prepared.selection.agentDir,
+        assertCurrent: () => {},
+        complete,
+        warn: vi.fn(),
+      });
+
+      expect(result).toBe(success);
+      expect(complete.mock.calls.map(([{ auth }]) => auth.profileId)).toEqual([
+        "openai:p1",
+        "openai:p2",
+      ]);
+      expect(hoisted.markAuthProfileFailureMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          store: fixture.store,
+          profileId: "openai:p1",
+          modelId: "gpt-5.5",
+          reason,
+        }),
+      );
+      expect(hoisted.markAuthProfileSuccessMock).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          store: fixture.store,
+          profileId: "openai:p2",
+          modelId: "gpt-5.5",
+        }),
+      );
+      expect(hoisted.acquireRuntimeLeaseMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    {
+      pinned: false,
+      aborted: false,
+      name: "exhausted pool despite failed bookkeeping",
+      attempted: ["openai:p1", "openai:p2"],
+    },
+    { pinned: true, aborted: false, name: "explicitly pinned profile", attempted: ["openai:p1"] },
+    { pinned: false, aborted: true, name: "aborted request", attempted: ["openai:p1"] },
+  ])("returns the provider failure for an $name", async ({ pinned, aborted, attempted }) => {
+    const fixture = await acquireProfiles(pinned);
+    await using prepared = fixture.prepared;
+    const bookkeepingFails = !pinned && !aborted;
+    if (bookkeepingFails) {
+      hoisted.markAuthProfileFailureMock.mockRejectedValue(new Error("Fixture write rejected"));
+    }
+    const failure = makeAssistantMessageFixture({
+      errorMessage: "429: rate limit exceeded",
+      content: [],
+    });
+    const controller = new AbortController();
+    const complete = vi.fn<Parameters<typeof completeWithAuthProfileFailover>[0]["complete"]>(
+      async () => {
+        if (aborted) {
+          controller.abort();
+        }
+        return failure;
+      },
+    );
+    const warn = vi.fn();
+
+    const result = await completeWithAuthProfileFailover({
+      prepared,
+      cfg: fixture.cfg,
+      agentDir: prepared.selection.agentDir,
+      signal: controller.signal,
+      assertCurrent: () => {},
+      complete,
+      warn,
+    });
+
+    expect(result).toBe(failure);
+    expect(complete.mock.calls.map(([{ auth }]) => auth.profileId)).toEqual(attempted);
+    expect(hoisted.markAuthProfileFailureMock.mock.calls.map(([input]) => input.profileId)).toEqual(
+      aborted ? [] : attempted,
+    );
+    expect(hoisted.markAuthProfileSuccessMock).not.toHaveBeenCalled();
+    expect(warn).toHaveBeenCalledTimes(bookkeepingFails ? 2 : 0);
+  });
+
+  it("stops before preparing a backup when authority expires during bookkeeping", async () => {
+    const fixture = await acquireProfiles();
+    await using prepared = fixture.prepared;
+    let current = true;
+    hoisted.markAuthProfileFailureMock.mockImplementation(async () => {
+      current = false;
+    });
+    const complete = vi.fn(async () =>
+      makeAssistantMessageFixture({ errorMessage: "429: rate limit exceeded", content: [] }),
+    );
+
+    await expect(
+      completeWithAuthProfileFailover({
+        prepared,
+        cfg: fixture.cfg,
+        agentDir: prepared.selection.agentDir,
+        assertCurrent: () => {
+          if (!current) {
+            throw new Error("Fixture completion authority expired");
+          }
+        },
+        complete,
+        warn: vi.fn(),
+      }),
+    ).rejects.toThrow("Fixture completion authority expired");
+
+    expect(complete).toHaveBeenCalledOnce();
+    expect(hoisted.getApiKeyForModelMock).toHaveBeenCalledOnce();
+    expect(hoisted.markAuthProfileSuccessMock).not.toHaveBeenCalled();
   });
 });

@@ -17,12 +17,61 @@ import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { prepareAgentRequestRouting } from "./agent-request-routing.js";
 
+it.each([false, true])(
+  "creates a missing session-ID target only when requested (createSessionIfMissing=%s)",
+  async (createSessionIfMissing) => {
+    await withOpenClawTestState({ label: "session-id-creation" }, async (state) => {
+      const storePath = state.statePath("sessions.json");
+      const cfg: OpenClawConfig = {
+        agents: { entries: { main: {} } },
+        session: { store: storePath },
+      };
+      await state.writeConfig(cfg);
+      setRuntimeConfigSnapshot(cfg);
+      await sessionAccessor.replaceSessionEntry(
+        { agentId: "main", storePath, sessionKey: "agent:main:existing" },
+        { sessionId: "existing-id", updatedAt: 1 },
+      );
+      const respond = vi.fn();
+      try {
+        const routing = await prepareAgentRequestRouting({
+          cfg,
+          request: {
+            message: "start a named session",
+            agentId: "main",
+            sessionId: "new-id",
+            createSessionIfMissing,
+            idempotencyKey: "creation",
+          },
+          runId: "creation",
+          context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
+          respond,
+          isRawModelRun: false,
+          agentDedupeKeys: ["agent:creation"],
+          reserveDedupe: vi.fn(),
+          bindDedupeSessionTarget: vi.fn(),
+          clearDedupe: vi.fn(),
+        });
+        expect(respond).not.toHaveBeenCalled();
+        expect(routing).toMatchObject({
+          agentId: "main",
+          requestedSessionId: "new-id",
+          requestedSessionKey: createSessionIfMissing ? "agent:main:explicit:new-id" : undefined,
+        });
+      } finally {
+        clearRuntimeConfigSnapshot();
+      }
+    });
+  },
+);
+
 it.each([
-  { caller: "Gateway", sessionKey: "global" },
-  { caller: "embedded", sessionKey: "unknown" },
+  { caller: "Gateway", sessionKey: "global", createSessionIfMissing: false },
+  { caller: "Gateway", sessionKey: "global", createSessionIfMissing: true },
+  { caller: "embedded", sessionKey: "unknown", createSessionIfMissing: false },
 ])(
-  "resolves cold $sessionKey ownership off the main thread in $caller",
-  async ({ caller, sessionKey }) => {
+  "resolves cold $sessionKey ownership off the main thread in $caller (createSessionIfMissing=$createSessionIfMissing)",
+  async ({ caller, sessionKey, createSessionIfMissing }) => {
     await withOpenClawTestState({ label: "session-id-cold-inspection" }, async (state) => {
       const storePath = state.statePath("sessions.json");
       const cfg: OpenClawConfig = {
@@ -48,7 +97,12 @@ it.each([
           const respond = vi.fn();
           const routing = await prepareAgentRequestRouting({
             cfg,
-            request: { message: "resume", sessionId: "ops-session", idempotencyKey: "lookup" },
+            request: {
+              message: "resume",
+              sessionId: "ops-session",
+              createSessionIfMissing,
+              idempotencyKey: "lookup",
+            },
             runId: "lookup",
             context: createDirectChatContext({ getRuntimeConfig: () => cfg }),
             respond,

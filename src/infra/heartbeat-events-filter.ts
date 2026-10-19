@@ -86,8 +86,8 @@ export function buildCronEventPrompt(
     const completionInstruction = useHeartbeatResponseTool
       ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
       : deliverToUser
-        ? `Reply ${SILENT_REPLY_TOKEN}.`
-        : `Handle this internally and reply ${SILENT_REPLY_TOKEN} when nothing needs user-facing follow-up.`;
+        ? `Reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`
+        : `Handle this internally. If nothing needs user-facing follow-up, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
     return `A scheduled cron event was triggered, but no event content was found. ${completionInstruction}`;
   }
   const instruction = deliverToUser
@@ -115,7 +115,7 @@ export function buildExecEventPrompt(
   if (!deliverToUser) {
     const completionInstruction = useHeartbeatResponseTool
       ? `Handle the result internally. ${HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS}`
-      : `Handle the result internally and reply ${SILENT_REPLY_TOKEN} only.`;
+      : `Handle the result internally and reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
     return (
       "An async command completion event was triggered, but user delivery is disabled for this run. " +
       `${completionInstruction} Do not mention, summarize, or reuse command output.`
@@ -124,7 +124,7 @@ export function buildExecEventPrompt(
   // Delivery eligibility permits an update; it does not make every completion news.
   const completionInstruction = useHeartbeatResponseTool
     ? HEARTBEAT_RESPONSE_TOOL_INSTRUCTIONS
-    : `If no user-facing update is needed, reply ${SILENT_REPLY_TOKEN} only.`;
+    : `If no user-facing update is needed, reply with exactly ${SILENT_REPLY_TOKEN} as the entire final answer. ${SILENT_REPLY_TOKEN} discards anything written this turn that was not sent, so send confirmations before ending silently.`;
   const missingOutputInstruction = hasMissingOutput
     ? " If reporting a failure without captured output, include the exit status or signal. " +
       "Do not ask the user to provide missing logs, and do not try to retrieve logs from an exec/session id."

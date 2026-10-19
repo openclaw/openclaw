@@ -23,7 +23,7 @@ import {
 } from "./deletion-participant.js";
 
 /**
- * @deprecated Use createNativeSessionBindingLifecycleV2; removal follows a stable deprecation period.
+ * @deprecated Use createNativeSessionBindingLifecycleV2. Supported through 2026-12-31. Removal in the first January 2027 stable release.
  */
 export function createNativeSessionBindingLifecycle<TRecord extends NativeSessionBindingRecord>(
   state: NativeSessionBindingStateStore<TRecord>,

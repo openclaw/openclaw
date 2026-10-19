@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { expectDefined } from "openclaw/plugin-sdk/expect-runtime";
+import { sha256Hex as digestText } from "openclaw/plugin-sdk/node-crypto-runtime";
 import { formatIMessageChatTarget } from "../targets.js";
 
 type SelfChatCacheKeyParts = {
@@ -16,6 +15,7 @@ type SelfChatLookup = SelfChatCacheKeyParts & {
 };
 
 type SelfChatCacheEntry = {
+  key: string;
   createdAt: number;
   createdAtSkewToleranceMs: number;
   rememberedAt: number;
@@ -43,10 +43,6 @@ function isUsableTimestamp(createdAt: number | undefined): createdAt is number {
   return typeof createdAt === "number" && Number.isFinite(createdAt);
 }
 
-function digestText(text: string): string {
-  return createHash("sha256").update(text).digest("hex");
-}
-
 function buildScope(parts: SelfChatCacheKeyParts): string {
   if (!parts.isGroup) {
     return `${parts.accountId}:imessage:${parts.sender}`;
@@ -56,8 +52,7 @@ function buildScope(parts: SelfChatCacheKeyParts): string {
 }
 
 class DefaultSelfChatCache implements SelfChatCache {
-  private cache = new Map<string, Set<SelfChatCacheEntry>>();
-  private insertionOrder = new Map<SelfChatCacheEntry, string>();
+  private entries: SelfChatCacheEntry[] = [];
   private lastCleanupAt = 0;
 
   private buildBucketKey(lookup: SelfChatLookup): string | null {
@@ -73,15 +68,12 @@ class DefaultSelfChatCache implements SelfChatCache {
     if (!key || !isUsableTimestamp(lookup.createdAt)) {
       return;
     }
-    const entries = this.cache.get(key) ?? new Set<SelfChatCacheEntry>();
-    const entry = {
+    this.entries.push({
+      key,
       createdAt: lookup.createdAt,
       createdAtSkewToleranceMs: lookup.allowCreatedAtSkew ? SELF_CHAT_CREATED_AT_TOLERANCE_MS : 0,
       rememberedAt: Date.now(),
-    };
-    entries.add(entry);
-    this.cache.set(key, entries);
-    this.insertionOrder.set(entry, key);
+    });
     this.maybeCleanup();
   }
 
@@ -91,28 +83,16 @@ class DefaultSelfChatCache implements SelfChatCache {
     if (!key || !isUsableTimestamp(lookup.createdAt)) {
       return false;
     }
-    const entries = this.cache.get(key);
-    if (!entries) {
-      return false;
-    }
     const now = Date.now();
     const createdAt = lookup.createdAt;
-    return [...entries.values()].some((entry) => {
+    return this.entries.some((entry) => {
       const createdAtDelta = Math.abs(entry.createdAt - createdAt);
       return (
+        entry.key === key &&
         now - entry.rememberedAt <= SELF_CHAT_TTL_MS &&
         (createdAtDelta === 0 || createdAtDelta < entry.createdAtSkewToleranceMs)
       );
     });
-  }
-
-  private removeEntry(entry: SelfChatCacheEntry, key: string): void {
-    this.insertionOrder.delete(entry);
-    const entries = this.cache.get(key);
-    entries?.delete(entry);
-    if (entries?.size === 0) {
-      this.cache.delete(key);
-    }
   }
 
   private maybeCleanup(): void {
@@ -121,18 +101,9 @@ class DefaultSelfChatCache implements SelfChatCache {
       return;
     }
     this.lastCleanupAt = now;
-    for (const [entry, key] of this.insertionOrder) {
-      if (now - entry.rememberedAt > SELF_CHAT_TTL_MS) {
-        this.removeEntry(entry, key);
-      }
-    }
-    while (this.insertionOrder.size > MAX_SELF_CHAT_CACHE_ENTRIES) {
-      const [entry, key] = expectDefined(
-        this.insertionOrder.entries().next().value,
-        "oldest iMessage self-chat cache entry",
-      );
-      this.removeEntry(entry, key);
-    }
+    this.entries = this.entries
+      .filter((entry) => now - entry.rememberedAt <= SELF_CHAT_TTL_MS)
+      .slice(-MAX_SELF_CHAT_CACHE_ENTRIES);
   }
 }
 

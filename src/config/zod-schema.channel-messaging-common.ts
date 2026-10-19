@@ -20,6 +20,15 @@ import {
 export { ChannelBotLoopProtectionSchema } from "./zod-schema.channel-bot-loop.js";
 
 export const UnifiedStreamingModeSchema = z.enum(["off", "partial", "block", "progress"]);
+/** Shared DM switches; channels can specialize their group identifier validator. */
+export const ChannelGroupDmSchema = z.strictObject({
+  /** If false, ignore incoming DMs. Default: true. */
+  enabled: z.boolean().optional(),
+  /** Allow group DMs. Default: false. */
+  groupEnabled: z.boolean().optional(),
+  /** Optional allowlist for group DM channels (ids or slugs). */
+  groupChannels: z.array(z.union([z.string(), z.number()])).optional(),
+});
 export const ChannelThreadBindingsSchema = z.strictObject({
   enabled: z.boolean().optional(),
   idleHours: z.number().nonnegative().optional(),
@@ -132,7 +141,11 @@ export function buildChannelAccountSchemaParts<
   const accountShape = Object.fromEntries(
     Object.entries(shape).filter(([key]) => !omitted.has(key as CommonChannelAccountField)),
   ) as Omit<typeof shape, TOmit[number]>;
-  return { accountShape, rootPolicyShape: ChannelAccountPolicyDefaults };
+  return {
+    accountShape,
+    rootPolicyShape: ChannelAccountPolicyDefaults,
+    groupDmShape: ChannelGroupDmSchema.shape,
+  };
 }
 
 export const ChannelDangerouslyAllowNameMatchingSchema = z.boolean().optional();
@@ -155,6 +168,7 @@ export function buildChannelAllowBotsSchema<
 }
 
 /** Build native exec-approval routing with channel-specific approver ids and extras. */
+// oxlint-disable-next-line typescript/no-generated-empty-object-type -- A keyless Zod shape preserves named fields without a string index signature.
 export function buildChannelExecApprovalsSchema<T extends ZodRawShape = Record<never, never>>(
   approverSchema: ZodTypeAny,
   extraShape?: T,
@@ -186,16 +200,14 @@ type EnumSchema<TValues extends StringEnumValues> = z.ZodEnum<{
 
 type EnumShape<TValues, TKey extends string> = TValues extends StringEnumValues
   ? { [TResultKey in TKey]: z.ZodOptional<EnumSchema<TValues>> }
-  : Record<never, never>;
+  : object;
 type ChannelReactionShape<TOptions extends ChannelReactionShapeOptions> = ZodRawShape &
   EnumShape<TOptions["notificationModes"], "reactionNotifications"> &
   EnumShape<TOptions["reactionLevels"], "reactionLevel"> &
   (TOptions["reactionAllowlist"] extends true
     ? { reactionAllowlist: z.ZodOptional<z.ZodArray<z.ZodUnion<[z.ZodString, z.ZodNumber]>>> }
-    : Record<never, never>) &
-  (TOptions["ackReaction"] extends ZodTypeAny
-    ? { ackReaction: TOptions["ackReaction"] }
-    : Record<never, never>);
+    : object) &
+  (TOptions["ackReaction"] extends ZodTypeAny ? { ackReaction: TOptions["ackReaction"] } : object);
 
 /** Build the repeated reaction leaves while retaining each channel's exact enum. */
 export function buildChannelReactionShape<const TOptions extends ChannelReactionShapeOptions>(

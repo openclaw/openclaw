@@ -103,6 +103,7 @@ export async function attachChatHistoryReplyMessages(
       const projected = original.message
         ? projectChatDisplayMessage(original.message, {
             maxChars: 500,
+            includePluginSteering: params.includePluginSteering,
             subagentCoordination: options.readers.subagentCoordination,
             resolveCronJobName: options.resolveCronJobName,
             ...(options.deferProfileDisplay

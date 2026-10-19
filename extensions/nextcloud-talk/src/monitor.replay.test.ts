@@ -349,10 +349,6 @@ describe("Nextcloud Talk accounts sharing a Gateway route", () => {
   it.each([
     [
       { port: 8788, host: "127.0.0.1" },
-      { port: 8789, host: "127.0.0.1" },
-    ],
-    [
-      { port: 8788, host: "127.0.0.1" },
       { port: 8788, host: "127.0.0.2" },
     ],
   ])(

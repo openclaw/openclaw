@@ -1,10 +1,13 @@
 import type { LookupOptions } from "node:dns";
 import { lookup as dnsLookup } from "node:dns/promises";
 import {
-  getCachedLiveProviderModelRows,
+  fetchLiveProviderModelRows,
   readLiveModelCatalogStringField,
 } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
-import { buildManifestModelProviderConfig } from "openclaw/plugin-sdk/provider-catalog-shared";
+import {
+  buildManifestModelProviderConfig,
+  getCachedLiveCatalogValue,
+} from "openclaw/plugin-sdk/provider-catalog-shared";
 import type {
   ModelDefinitionConfig,
   ModelProviderConfig,
@@ -82,18 +85,28 @@ async function loadNvidiaLiveModels(
   bundledModels: ModelDefinitionConfig[],
 ): Promise<ModelDefinitionConfig[]> {
   const [inventory, featured] = await Promise.allSettled([
-    getCachedLiveProviderModelRows({
-      providerId: "nvidia",
-      endpoint: NVIDIA_MODELS_URL,
-      requireHttps: true,
-      readRows: (payload) => {
-        if (!isRecord(payload) || !Array.isArray(payload.data)) {
-          throw new Error("NVIDIA model inventory must contain data[]");
-        }
-        if (payload.data.some((row) => !readLiveModelCatalogStringField(row, "id"))) {
-          throw new Error("NVIDIA model inventory contains a row without an id");
-        }
-        return payload.data;
+    getCachedLiveCatalogValue({
+      keyParts: ["nvidia", "model-ids", NVIDIA_MODELS_URL],
+      load: async (signal) => {
+        const rows = await fetchLiveProviderModelRows({
+          providerId: "nvidia",
+          endpoint: NVIDIA_MODELS_URL,
+          requireHttps: true,
+          signal,
+          readRows: (payload) => {
+            if (!isRecord(payload) || !Array.isArray(payload.data)) {
+              throw new Error("NVIDIA model inventory must contain data[]");
+            }
+            return payload.data;
+          },
+        });
+        return rows.map((row) => {
+          const id = readLiveModelCatalogStringField(row, "id");
+          if (!id) {
+            throw new Error("NVIDIA model inventory contains a row without an id");
+          }
+          return id;
+        });
       },
     }),
     loadNvidiaFeaturedModels(),
@@ -108,9 +121,7 @@ async function loadNvidiaLiveModels(
   if (featured.status === "rejected") {
     throw featured.reason;
   }
-  const available = new Set(
-    inventory.value.map((row) => readLiveModelCatalogStringField(row, "id")),
-  );
+  const available = new Set(inventory.value);
   const known = new Map(bundledModels.map((model) => [model.id, model]));
   // /models includes embeddings and other non-chat endpoints without capabilities.
   // Only exact known chat metadata or the vendor's featured chat rows are selectable.
@@ -141,31 +152,34 @@ async function loadNvidiaLiveModels(
 }
 
 async function loadNvidiaFeaturedModels(): Promise<ModelDefinitionConfig[]> {
-  const rows = await getCachedLiveProviderModelRows({
-    providerId: "nvidia",
-    endpoint: NVIDIA_FEATURED_MODELS_URL,
-    timeoutMs: FEATURED_MODEL_FETCH_TIMEOUT_MS,
+  return await getCachedLiveCatalogValue({
+    keyParts: ["nvidia", "featured-models", NVIDIA_FEATURED_MODELS_URL],
     ttlMs: FEATURED_MODEL_CACHE_TTL_MS,
-    requireHttps: true,
-    policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
-    // The featured catalog is an NVIDIA-owned CloudFront URL. Some resolvers
-    // stall for seconds on the default all-family lookup; IPv4 pinning keeps
-    // the guarded fixed-host fetch on the fast path.
-    lookupFn: lookupNvidiaFeaturedModelHostname,
-    auditContext: "nvidia-featured-model-catalog",
-    shouldCacheRows: (modelRows) => parseNvidiaFeaturedModels(modelRows) !== null,
-    readRows: (payload) => {
-      if (!isRecord(payload) || !Array.isArray(payload["featured-models"])) {
-        throw new Error("NVIDIA featured catalog must contain featured-models[]");
+    load: async (signal) => {
+      const rows = await fetchLiveProviderModelRows({
+        providerId: "nvidia",
+        endpoint: NVIDIA_FEATURED_MODELS_URL,
+        timeoutMs: FEATURED_MODEL_FETCH_TIMEOUT_MS,
+        requireHttps: true,
+        signal,
+        policy: ssrfPolicyFromHttpBaseUrlAllowedHostname(NVIDIA_FEATURED_MODELS_URL),
+        // The NVIDIA-owned CloudFront catalog can stall on all-family DNS lookup.
+        lookupFn: lookupNvidiaFeaturedModelHostname,
+        auditContext: "nvidia-featured-model-catalog",
+        readRows: (payload) => {
+          if (!isRecord(payload) || !Array.isArray(payload["featured-models"])) {
+            throw new Error("NVIDIA featured catalog must contain featured-models[]");
+          }
+          return payload["featured-models"];
+        },
+      });
+      const models = parseNvidiaFeaturedModels(rows);
+      if (!models) {
+        throw new Error("NVIDIA featured catalog contains no usable model metadata");
       }
-      return payload["featured-models"];
+      return models;
     },
   });
-  const models = parseNvidiaFeaturedModels(rows);
-  if (!models) {
-    throw new Error("NVIDIA featured catalog contains no usable model metadata");
-  }
-  return models;
 }
 
 function parseNvidiaFeaturedModels(rows: readonly unknown[]): ModelDefinitionConfig[] | null {

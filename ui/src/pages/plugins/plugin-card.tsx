@@ -14,15 +14,12 @@ const INSTALLED_PLUGIN_STATUS = {
   error: ["pluginsPage.needsAttention", "danger"],
 } as const satisfies Record<InstalledPluginState, readonly [string, string]>;
 
-export function renderPluginStateStatus(
-  state: InstalledPluginState,
-  className: string,
-): JSX.Element {
+export function renderPluginStateStatus(state: InstalledPluginState, className: string) {
   const [labelKey, tone] = INSTALLED_PLUGIN_STATUS[state];
   const label = t(labelKey);
   return (
     <span
-      class={`${className} settings-status settings-status--${tone}`}
+      class={[className, "settings-status", `settings-status--${tone}`]}
       data-plugin-state={state}
       role="img"
       aria-label={label}
@@ -67,10 +64,6 @@ export function renderPluginAuthor(
   ) : (
     <span class="plugin-card-author">{label}</span>
   );
-}
-
-export function renderPluginCardSummary(summary: string): JSX.Element {
-  return <PluginCardSummary summary={summary} />;
 }
 
 export function PluginCardSummary(props: { summary: string }): JSX.Element {

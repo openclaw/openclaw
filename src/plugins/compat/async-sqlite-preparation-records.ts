@@ -1,19 +1,35 @@
 import type { PluginCompatRecord } from "./types.js";
 
-// Dates mark this registry/diagnostic preparation, not a shipped stable removal window.
+// The final compatibility day precedes removal in the first January 2027 stable release.
 const PREPARATION = {
   status: "deprecated",
   owner: "sdk",
   introduced: "2026-10-13",
   deprecated: "2026-10-13",
   warningStarts: "2026-10-13",
-  removalGate: "stable-deprecation-period",
+  removeAfter: "2026-12-31",
   diagnostics: [
     "TypeScript @deprecated annotations and actionable once-per-plugin-and-capability-family warnings per process on legacy use",
   ],
 } as const;
 
 export const ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS = [
+  {
+    ...PREPARATION,
+    code: "provider-model-capabilities-sync-read",
+    introduced: "2026-09-08",
+    replacement:
+      "Await loadOpenRouterModelCapabilities(modelId), then read getLoadedOpenRouterModelCapabilities(modelId). The synchronous getter remains compatible through 2026-12-31; removal ships in the first January 2027 stable release.",
+    docsPath: "/plugins/sdk-migration/sqlite-async",
+    surfaces: [
+      "openclaw/plugin-sdk/provider-stream.getOpenRouterModelCapabilities",
+      "openclaw/plugin-sdk/provider-stream-family.getOpenRouterModelCapabilities",
+    ],
+    tests: [
+      "src/agents/embedded-agent-runner/openrouter-model-capabilities.test.ts",
+      "src/plugins/compat/registry.test.ts",
+    ],
+  },
   {
     ...PREPARATION,
     code: "session-store-sync-readers",
@@ -49,7 +65,7 @@ export const ASYNC_SQLITE_PREPARATION_COMPAT_RECORDS = [
     ...PREPARATION,
     code: "pending-input-sync-completion",
     replacement:
-      "Await SessionPendingInputReceipt.completeAsync or UserTurnTranscriptRecorder.completeProcessingAsync before publishing completion. Await waitForPendingInputSettlement when supplied before releasing session admission. Older host recorders without an async companion retain their named compatibility adapter; do not retry async failures through it.",
+      "Await SessionPendingInputReceipt.completeAsync or UserTurnTranscriptRecorder.completeProcessingAsync before publishing completion. Await waitForPendingInputSettlement when supplied before releasing session admission. Bundled plugins target the current host and use the async companions directly; do not retry async failures synchronously.",
     docsPath: "/plugins/sdk-migration/how-to-migrate#await-session-transcript-persistence",
     surfaces: [
       "SessionPendingInputReceipt.complete",

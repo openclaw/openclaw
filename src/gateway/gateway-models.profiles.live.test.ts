@@ -23,13 +23,13 @@ import {
 } from "../agents/auth-profiles/store-runtime.js";
 import type { AuthProfileStore } from "../agents/auth-profiles/types.js";
 import {
-  ACTIVE_EMBEDDED_RUNS,
+  getActiveNativeAttempt,
   ACTIVE_EMBEDDED_RUNS_BY_RUN_ID,
 } from "../agents/embedded-agent-runner/run-state.js";
 import {
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import { collectProviderApiKeys } from "../agents/live-auth-keys.js";
 import { isModelNotFoundErrorMessage } from "../agents/live-model-errors.js";
 import {
@@ -82,7 +82,6 @@ import {
 } from "../config/sessions/transcript-write-context.js";
 import type { ModelsConfig, ModelProviderConfig, OpenClawConfig } from "../config/types.js";
 import { OpenClawSchema } from "../config/zod-schema.js";
-import { ModelCompatSchema } from "../config/zod-schema.model-compat.js";
 import {
   captureAgentRunLifecycleGeneration,
   withAgentRunLifecycleGeneration,
@@ -112,6 +111,7 @@ import {
 } from "../infra/diagnostic-trace-context.js";
 import { formatPropagatedDiagnosticTraceparent } from "../infra/diagnostic-trace-propagation.js";
 import { isTruthyEnvValue } from "../infra/env.js";
+import { startProxy, type ProxyHandle } from "../infra/net/proxy/proxy-lifecycle.js";
 import type { ModelRegistry } from "../llm/model-registry.js";
 import {
   closeDiagnosticEmbeddedRunOwner,
@@ -132,6 +132,7 @@ import { cleanupSessionStateForTest } from "../test-utils/session-state-cleanup.
 import { GATEWAY_CLIENT_MODES, GATEWAY_CLIENT_NAMES } from "../utils/message-channel.js";
 import { GatewayClient } from "./client.js";
 import { enterIsolatedGatewayLiveDiscoveryState } from "./gateway-models.profiles.live.discovery.test-helpers.js";
+import { toLiveModelConfig } from "./gateway-models.profiles.live.model-config.test-helpers.js";
 import {
   createExplicitLiveFallbackModel,
   createGatewayLiveTestModel,
@@ -1673,9 +1674,8 @@ describe("providerScopedModelRegistryProviders", () => {
         useSmall: false,
       }),
     ).toEqual([
-      { provider: "openrouter", id: "openai/gpt-5.2-chat" },
+      { provider: "openrouter", id: "openai/gpt-5.6-luna" },
       { provider: "openrouter", id: "minimax/minimax-m2.7" },
-      { provider: "openrouter", id: "ai21/jamba-large-1.7" },
     ]);
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
@@ -1690,12 +1690,12 @@ describe("providerScopedModelRegistryProviders", () => {
   it("loads explicit gateway model refs through dynamic discovery", () => {
     expect(
       resolvePrioritizedGatewayLiveModelRefs({
-        explicitRefs: [{ provider: "openrouter", id: "openai/gpt-5.2-chat" }],
+        explicitRefs: [{ provider: "openrouter", id: "openai/gpt-5.6-luna" }],
         providerFilter: new Set(["openrouter"]),
         useExplicit: true,
         useSmall: false,
       }),
-    ).toEqual([{ provider: "openrouter", id: "openai/gpt-5.2-chat" }]);
+    ).toEqual([{ provider: "openrouter", id: "openai/gpt-5.6-luna" }]);
   });
 
   it("does not count small models outside a provider-scoped gateway sweep", () => {
@@ -4492,7 +4492,8 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
             // Queued diagnostics may outlive cleanup or a same-id replacement.
             const fence = getOwnedSessionTranscriptWriterFence();
             const runId = fence?.expectedWriterRunId;
-            const handle = runId ? ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) : undefined;
+            const attachment = runId ? ACTIVE_EMBEDDED_RUNS_BY_RUN_ID.get(runId) : undefined;
+            const handle = attachment?.handle;
             const diagnostic = handle?.diagnosticOwner;
             const context = runId ? getAgentRunContext(runId) : undefined;
             const authority = context?.delegatedAuthority;
@@ -4502,7 +4503,7 @@ function startOpenAIUltraWireCapture(upstreamBaseUrls: readonly string[]): OpenA
               context &&
               authority &&
               diagnostic.runId === runId &&
-              ACTIVE_EMBEDDED_RUNS.get(diagnostic.sessionId) === handle &&
+              getActiveNativeAttempt(diagnostic.sessionId) === handle &&
               !isDiagnosticEmbeddedRunOwnerClosed(diagnostic) &&
               handle?.isAborted?.() !== true &&
               context.sessionId === diagnostic.sessionId &&
@@ -5207,7 +5208,9 @@ async function loadAuthBackedLiveModelRegistry(params: {
     "[all-models] load auth storage",
   );
   logProgress("[all-models] loading model registry");
-  const modelRegistry = await discoverModelsAsync(authStorage, params.agentDir);
+  const modelRegistry = await discoverModelsAsync(authStorage, params.agentDir, {
+    config: params.cfg,
+  });
   const all = await withGatewayLiveSetupTimeout(
     Promise.resolve().then(() => modelRegistry.getAll()),
     "[all-models] load model registry",
@@ -5215,44 +5218,58 @@ async function loadAuthBackedLiveModelRegistry(params: {
   return { authProfileStore, authStorage, modelRegistry, all };
 }
 
-function toLiveModelConfig(model: Model): NonNullable<ModelProviderConfig["models"]>[number] {
-  return {
-    id: model.id,
-    name: model.name,
-    api: model.api as ModelProviderConfig["api"],
-    baseUrl: model.baseUrl,
-    input: model.input ?? ["text"],
-    reasoning: model.reasoning,
-    ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
-    cost: {
-      ...model.cost,
-      ...(model.cost.tieredPricing
-        ? {
-            tieredPricing: model.cost.tieredPricing.map((tier) => ({
-              ...tier,
-              range:
-                tier.range.length === 2 && tier.range[1] === Number.POSITIVE_INFINITY
-                  ? [tier.range[0]]
-                  : [...tier.range],
-            })),
-          }
-        : {}),
-    },
-    contextWindow: model.contextWindow,
-    maxTokens: model.maxTokens,
-    ...(model.compat ? { compat: pickConfigModelCompat(model.compat) } : {}),
-  };
-}
-
-// Runtime normalization can add plugin-internal compat flags (Xiaomi's omitEmptyArrayItems)
-// that the config schema rejects; the plugin re-applies them when it resolves the configured model.
-const CONFIG_MODEL_COMPAT_KEYS = new Set(Object.keys(ModelCompatSchema.unwrap().shape));
-
-function pickConfigModelCompat(compat: NonNullable<Model["compat"]>) {
-  return Object.fromEntries(
-    Object.entries(compat).filter(([key]) => CONFIG_MODEL_COMPAT_KEYS.has(key)),
-  );
-}
+describe("loadAuthBackedLiveModelRegistry", () => {
+  it("keeps effective configured models in focused live discovery", async () => {
+    const stateDir = await fs.mkdtemp(path.join(os.tmpdir(), "openclaw-live-registry-"));
+    await withEnvAsync(
+      {
+        OPENCLAW_STATE_DIR: stateDir,
+        OPENCLAW_CONFIG_PATH: path.join(stateDir, "openclaw.json"),
+      },
+      async () => {
+        clearRuntimeConfigSnapshot();
+        try {
+          const provider = "configured-live-fixture";
+          const cfg: OpenClawConfig = {
+            plugins: { enabled: false },
+            models: {
+              providers: {
+                [provider]: {
+                  api: "openai-completions",
+                  baseUrl: "https://example.test/v1",
+                  models: [
+                    {
+                      id: "configured-model",
+                      name: "Configured Model",
+                      reasoning: false,
+                      input: ["text"],
+                      cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+                      contextWindow: 128000,
+                      maxTokens: 8192,
+                    },
+                  ],
+                },
+              },
+            },
+          };
+          const { modelRegistry } = await loadAuthBackedLiveModelRegistry({
+            agentDir: resolveDefaultAgentDir({}),
+            cfg,
+            providerList: [provider],
+          });
+          expect(modelRegistry.find(provider, "configured-model")).toMatchObject({
+            api: "openai-completions",
+            baseUrl: "https://example.test/v1",
+          });
+        } finally {
+          await cleanupSessionStateForTest({ stateDir });
+          clearRuntimeConfigSnapshot();
+          await fs.rm(stateDir, { recursive: true, force: true });
+        }
+      },
+    );
+  });
+});
 
 function mergeLiveProviderConfig(params: {
   provider: string;
@@ -5351,16 +5368,19 @@ async function resolveGatewayLiveRequestedModels(): Promise<string | undefined> 
     throw new Error("OPENCLAW_LIVE_GATEWAY_OPENAI_API_DEFAULT requires OPENAI_API_KEY");
   }
   const { detectInferenceBackends } = await import("../commands/onboard-inference.js");
-  const candidates = await detectInferenceBackends({
-    config: {},
-    env: { OPENAI_API_KEY: apiKey },
-    platform: "linux",
-    deps: {
-      probeLocalCommand: async (command) => ({ command, found: false }),
-      hasCodexCliAuthFile: () => false,
-      readGeminiCliCredentials: () => null,
-    },
-  });
+  const probes = await import("../system-agent/probes.js");
+  const cliCredentials = await import("../agents/cli-credentials.js");
+  const probe = vi
+    .spyOn(probes, "probeLocalCommand")
+    .mockImplementation(async (command) => ({ command, found: false }));
+  const login = vi.spyOn(cliCredentials, "hasCodexCliAuthFile").mockReturnValue(false);
+  let candidates: Awaited<ReturnType<typeof detectInferenceBackends>>;
+  try {
+    candidates = await detectInferenceBackends({ config: {} });
+  } finally {
+    probe.mockRestore();
+    login.mockRestore();
+  }
   const selected = candidates.find((candidate) => candidate.kind === "openai-api-key");
   if (!selected) {
     throw new Error("fresh OpenAI API-key inference selection returned no candidate");
@@ -5578,9 +5598,11 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
     const workspaceDir = path.join(tempStateDir, "workspace-dev");
     await prepareLiveGatewayWorkspace(workspaceDir);
     // Prefix the random values so provider safety heuristics do not mistake the
-    // harmless readback proof for secret material.
-    const nonceA = `tool-read-alpha-${randomUUID()}`;
-    const nonceB = `tool-read-beta-${randomUUID()}`;
+    // harmless readback proof for secret material. Keep the random part short: the
+    // probe proves the file was read, not 36-character UUID copy fidelity, which
+    // GPT-5.6 variants occasionally garble.
+    const nonceA = `tool-read-alpha-${randomBytes(4).toString("hex")}`;
+    const nonceB = `tool-read-beta-${randomBytes(4).toString("hex")}`;
     // Keep probe values out of the path: weak tool callers may echo the filename
     // instead of reading the file, turning nonceA into a false duplicate answer.
     const toolProbePath = path.join(workspaceDir, ".openclaw-live-tool-probe.txt");
@@ -5959,7 +5981,7 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
               if (params.extraToolProbes) {
                 phase = "tool-exec";
                 logProgress(`${progressLabel}: tool-exec`);
-                const nonceC = randomUUID();
+                const nonceC = `exec-read-${randomBytes(4).toString("hex")}`;
                 // Timeout wrappers do not cancel late tool runs, so keep provider-key attempts
                 // isolated without putting a nonce-shaped UUID in the model-visible path.
                 const toolWritePath = path.join(
@@ -6469,18 +6491,26 @@ async function runGatewayModelSuite(params: GatewayModelSuiteParams) {
 
 describeLive("gateway live (dev agent, profile keys)", () => {
   let leaveDiscoveryState: (() => Promise<void>) | undefined;
+  let proxyHandle: ProxyHandle | null = null;
 
   beforeEach(async () => {
+    const config = await readLiveTestConfig();
+    proxyHandle = await startProxy(config.proxy);
     leaveDiscoveryState = await enterIsolatedGatewayLiveDiscoveryState({
-      config: await readLiveTestConfig(),
+      config,
       providers: PROVIDERS ?? undefined,
       logProgress,
     });
   });
 
   afterEach(async () => {
-    await leaveDiscoveryState?.();
-    leaveDiscoveryState = undefined;
+    try {
+      await leaveDiscoveryState?.();
+    } finally {
+      leaveDiscoveryState = undefined;
+      await proxyHandle?.stop();
+      proxyHandle = null;
+    }
   });
 
   it(
@@ -6542,6 +6572,10 @@ describeLive("gateway live (dev agent, profile keys)", () => {
           ensureOpenClawModelsJson(cfg, discoveryAgentDir, {
             workspaceDir,
             ...(providerList ? { providerDiscoveryProviderIds: providerList } : {}),
+            onProviderCatalogOutcome: ({ provider, status, rejectionScope }) =>
+              logProgress(
+                `[all-models] provider catalog outcome ${JSON.stringify({ provider, status, rejectionScope })}`,
+              ),
           }),
           "[all-models] prepare models.json",
         );
@@ -6860,7 +6894,7 @@ describeLive("gateway live (dev agent, profile keys)", () => {
         allowKeychainPrompt: false,
       });
       const { authStorage } = await discoverAuthStorageFacts(agentDir);
-      const modelRegistry = await discoverModelsAsync(authStorage, agentDir);
+      const modelRegistry = await discoverModelsAsync(authStorage, agentDir, { config: cfg });
       const anthropic = modelRegistry.find("anthropic", "claude-opus-4-6") as Model | null;
       const zai = modelRegistry.find("zai", "glm-5.1") as Model | null;
 

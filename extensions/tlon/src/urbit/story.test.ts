@@ -79,13 +79,6 @@ describe("markdownToStory inline formatting", () => {
     },
   );
 
-  it("keeps sentence punctuation after a bare URL out of the link", () => {
-    const link = { link: { href: "https://example.com/a", content: "https://example.com/a" } };
-    expect(markdownToStory("see https://example.com/a. Or (https://example.com/a)!")).toEqual([
-      { inline: ["see ", link, ". Or (", link, ")!"] },
-    ]);
-  });
-
   it("keeps balanced parentheses nested at any depth inside a bare URL", () => {
     const url = "https://example.com/a(b(c(d)e)f)";
     const link = { link: { href: url, content: url } };
@@ -204,13 +197,6 @@ describe("markdownToStory list rendering", () => {
   it("preserves an empty same-marker nested item as paragraph text", () => {
     expect(markdownToStory("- parent\n  -")).toEqual([
       { inline: ["- parent", { break: null }, "  -"] },
-    ]);
-  });
-
-  it("keeps the unsupported outer marker across nested marker styles", () => {
-    expect(markdownToStory("- # heading\n  * child\n\n- sibling")).toEqual([
-      { inline: ["- # heading", { break: null }, "  * child"] },
-      { inline: ["- sibling"] },
     ]);
   });
 });

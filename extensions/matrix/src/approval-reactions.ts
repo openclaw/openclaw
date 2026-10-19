@@ -27,12 +27,9 @@ type MatrixApprovalReactionResolution = {
   decision: ExecApprovalReplyDecision;
 };
 
-type MatrixApprovalReactionTarget = {
-  accountId: string;
+type MatrixApprovalReactionTarget = MatrixApprovalReactionTargetRef & {
   approvalId: string;
   approvalKind: ChannelApprovalKind;
-  roomId: string;
-  eventId: string;
   allowedDecisions: readonly ExecApprovalReplyDecision[];
 };
 
@@ -163,15 +160,9 @@ function resolveMatrixApprovalReactionDecision(
   );
 }
 
-export async function registerMatrixApprovalReactionTarget(params: {
-  accountId: string;
-  roomId: string;
-  eventId: string;
-  approvalId: string;
-  approvalKind: ChannelApprovalKind;
-  allowedDecisions: readonly ExecApprovalReplyDecision[];
-  ttlMs?: number;
-}): Promise<void> {
+export async function registerMatrixApprovalReactionTarget(
+  params: MatrixApprovalReactionTarget & { ttlMs?: number },
+): Promise<void> {
   const accountId = normalizeAccountId(params.accountId);
   const key = buildReactionTargetKey(accountId, params.roomId, params.eventId);
   const approvalId = params.approvalId.trim();
@@ -211,11 +202,9 @@ export async function registerMatrixApprovalReactionTarget(params: {
   await matrixApprovalReactionTargets.register(key, target, { ttlMs });
 }
 
-export async function unregisterMatrixApprovalReactionTarget(params: {
-  accountId: string;
-  roomId: string;
-  eventId: string;
-}): Promise<void> {
+export async function unregisterMatrixApprovalReactionTarget(
+  params: MatrixApprovalReactionTargetRef,
+): Promise<void> {
   const key = buildReactionTargetKey(params.accountId, params.roomId, params.eventId);
   if (!key) {
     return;
@@ -306,12 +295,9 @@ function resolveTarget(params: {
   };
 }
 
-export async function resolveMatrixApprovalReactionTargetWithPersistence(params: {
-  accountId: string;
-  roomId: string;
-  eventId: string;
-  reactionKey: string;
-}): Promise<MatrixApprovalReactionResolution | null> {
+export async function resolveMatrixApprovalReactionTargetWithPersistence(
+  params: MatrixApprovalReactionTargetRef & { reactionKey: string },
+): Promise<MatrixApprovalReactionResolution | null> {
   const accountId = normalizeAccountId(params.accountId);
   const key = buildReactionTargetKey(accountId, params.roomId, params.eventId);
   if (!key) {

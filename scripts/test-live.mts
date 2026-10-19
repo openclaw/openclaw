@@ -1,6 +1,7 @@
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { terminateManagedChild } from "./lib/managed-child-process.mts";
+import { resolveTestRuntime } from "./lib/test-runtime.mts";
 import { resolveVitestCliEntry } from "./lib/vitest-build-prerequisites.mts";
 import { resolveVitestHomeSelection } from "./lib/vitest-home-selection.mts";
 import { resolveVitestNoOutputTimeoutMs } from "./lib/vitest-process-env.mts";
@@ -110,7 +111,10 @@ export async function main(argv = process.argv.slice(2), baseEnv = process.env) 
     return;
   }
 
-  const env = buildTestLiveEnv(args, baseEnv);
+  const env = {
+    ...buildTestLiveEnv(args, baseEnv),
+    OPENCLAW_VITEST_RUNTIME: resolveTestRuntime(baseEnv),
+  };
   const heartbeatMs = resolveTestLiveHeartbeatMs(baseEnv);
   const noOutputTimeoutMs = resolveVitestNoOutputTimeoutMs(baseEnv);
   const startedAt = Date.now();

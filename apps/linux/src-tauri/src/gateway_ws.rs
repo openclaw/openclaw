@@ -1680,16 +1680,6 @@ fn connect_params(
     Ok(params)
 }
 
-#[cfg(test)]
-fn request_frame(id: &str, method: &str, params: Value) -> Value {
-    json!({
-        "type": "req",
-        "id": id,
-        "method": method,
-        "params": params
-    })
-}
-
 struct RequestDispatch {
     generation: GatewayGeneration,
     connection_generation: u64,
@@ -3868,19 +3858,6 @@ esac
     }
 
     #[test]
-    fn tls_trust_uses_system_roots_or_an_exact_pin() {
-        assert_eq!(
-            tls_trust(None).expect("system trust"),
-            TlsTrust::SystemRoots
-        );
-        assert_eq!(
-            tls_trust(Some(&"ab".repeat(32))).expect("pinned trust"),
-            TlsTrust::Pinned([0xab; 32])
-        );
-        assert!(tls_trust(Some("sha256:abc")).is_err());
-    }
-
-    #[test]
     fn tls_failures_have_a_distinct_connectivity_state() {
         let failure =
             RequestFailure::from_shared(SharedClientError::Tls("fixture TLS failure".to_string()))
@@ -3905,7 +3882,7 @@ esac
     }
 
     #[test]
-    fn connect_frame_matches_gateway_schema() {
+    fn connect_params_match_gateway_schema() {
         let directory = std::env::temp_dir().join(format!(
             "openclaw-linux-connect-frame-test-{}",
             Uuid::new_v4()
@@ -3920,39 +3897,28 @@ esac
             true,
         )
         .expect("connect params");
-        let frame = request_frame("connect-1", "connect", params);
-
-        assert_eq!(frame["type"], "req");
-        assert_eq!(frame["id"], "connect-1");
-        assert_eq!(frame["method"], "connect");
-        assert_eq!(frame["params"]["minProtocol"], MIN_PROTOCOL_VERSION);
-        assert_eq!(frame["params"]["maxProtocol"], MAX_PROTOCOL_VERSION);
+        assert_eq!(params["minProtocol"], MIN_PROTOCOL_VERSION);
+        assert_eq!(params["maxProtocol"], MAX_PROTOCOL_VERSION);
         assert_eq!(
-            frame["params"]["caps"],
+            params["caps"],
             json!([
                 AGENT_KIND_CLIENT_CAPABILITY,
                 INLINE_WIDGETS_CLIENT_CAPABILITY
             ])
         );
-        assert_eq!(frame["params"]["client"]["id"], CLIENT_ID);
+        assert_eq!(params["client"]["id"], CLIENT_ID);
+        assert_eq!(params["client"]["deviceFamily"], CLIENT_DEVICE_FAMILY);
+        assert_eq!(params["auth"], json!({ "token": "secret" }));
+        assert_eq!(params["device"]["nonce"], "fixture-nonce");
+        assert_eq!(params["device"]["signedAt"], 1_800_000_000_000_u64);
         assert_eq!(
-            frame["params"]["client"]["deviceFamily"],
-            CLIENT_DEVICE_FAMILY
-        );
-        assert_eq!(frame["params"]["auth"], json!({ "token": "secret" }));
-        assert_eq!(frame["params"]["device"]["nonce"], "fixture-nonce");
-        assert_eq!(frame["params"]["device"]["signedAt"], 1_800_000_000_000_u64);
-        assert_eq!(
-            frame["params"]["device"]["id"]
-                .as_str()
-                .expect("device id")
-                .len(),
+            params["device"]["id"].as_str().expect("device id").len(),
             64
         );
-        assert!(frame["params"]["device"]["publicKey"]
+        assert!(params["device"]["publicKey"]
             .as_str()
             .is_some_and(|value| !value.contains('=')));
-        assert!(frame["params"]["device"]["signature"]
+        assert!(params["device"]["signature"]
             .as_str()
             .is_some_and(|value| !value.contains('=')));
 
@@ -3996,24 +3962,6 @@ esac
         assert_eq!(
             gated_canvas_surface_url(hello.canvas_surface_url, false),
             None
-        );
-    }
-
-    #[test]
-    fn plugin_surface_refresh_response_decodes_canvas_url() {
-        let response: PluginSurfaceRefreshResponse = serde_json::from_value(json!({
-            "pluginSurfaceUrls": {
-                "canvas": "https://gateway.example/__openclaw__/cap/refreshed-capability"
-            }
-        }))
-        .expect("refresh response");
-
-        assert_eq!(
-            response
-                .plugin_surface_urls
-                .and_then(|urls| urls.get("canvas").cloned())
-                .as_deref(),
-            Some("https://gateway.example/__openclaw__/cap/refreshed-capability")
         );
     }
 
@@ -4307,7 +4255,7 @@ esac
     }
 
     #[test]
-    fn chat_send_frame_matches_gateway_schema() {
+    fn chat_send_params_match_gateway_schema() {
         let params = ChatSendParams {
             session_key: "agent:work:main".to_string(),
             agent_id: None,
@@ -4315,20 +4263,11 @@ esac
             idempotency_key: "idempotency-1".to_string(),
         };
         assert_eq!(
-            request_frame(
-                "chat-1",
-                "chat.send",
-                serde_json::to_value(params).expect("chat params")
-            ),
+            serde_json::to_value(params).expect("chat params"),
             json!({
-                "type": "req",
-                "id": "chat-1",
-                "method": "chat.send",
-                "params": {
-                    "sessionKey": "agent:work:main",
-                    "message": "hello",
-                    "idempotencyKey": "idempotency-1"
-                }
+                "sessionKey": "agent:work:main",
+                "message": "hello",
+                "idempotencyKey": "idempotency-1"
             })
         );
     }

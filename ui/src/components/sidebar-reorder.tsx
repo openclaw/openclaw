@@ -7,22 +7,24 @@ import { Menu, type MenuHandle, type MenuItem } from "./solid/menu.tsx";
 type ReorderPosition = "before" | "after";
 export function renderSidebarReorderMenu(params: {
   label: string;
+  sectionId: string;
+  sections: ReadonlyMap<string, HTMLElement>;
   onMove: (target: string, position: ReorderPosition) => void | Promise<void>;
 }) {
   let handle: MenuHandle | undefined;
   const [revision, refresh] = createSignal(0);
-  const attribute = "data-session-section";
   const adjacent = (position: ReorderPosition): string | null => {
-    const row = handle?.overlay.trigger?.closest(`[${attribute}]`);
-    const siblings = [...(row?.parentElement?.children ?? [])].filter(
-      (element) =>
-        element.hasAttribute(attribute) &&
-        element.querySelector('.sidebar-recent-sessions__head[draggable="true"]'),
-    );
-    const index = row ? siblings.indexOf(row) : -1;
-    return index < 0
-      ? null
-      : (siblings[index + (position === "before" ? -1 : 1)]?.getAttribute(attribute) ?? null);
+    const row = params.sections.get(params.sectionId)?.parentElement;
+    const siblings = [...params.sections]
+      .filter(
+        ([, header]) =>
+          header.draggable && header.parentElement?.parentElement === row?.parentElement,
+      )
+      .toSorted(([, left], [, right]) =>
+        left.compareDocumentPosition(right) & Node.DOCUMENT_POSITION_FOLLOWING ? -1 : 1,
+      );
+    const index = siblings.findIndex(([id]) => id === params.sectionId);
+    return index < 0 ? null : (siblings[index + (position === "before" ? -1 : 1)]?.[0] ?? null);
   };
   const items: MenuItem[] = (["before", "after"] as const).map((position) => ({
     id: position,

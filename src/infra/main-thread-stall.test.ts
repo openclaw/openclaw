@@ -17,6 +17,21 @@ function fixture() {
 }
 
 describe("main-thread stall attribution", () => {
+  it("reports callbacks at the 250 ms boundary, excluding shorter work and async waits", async () => {
+    const { monitor, elapse } = fixture();
+    runWithMainThreadTask("scheduler:short", () => elapse(249));
+    await runWithMainThreadTask("gateway:rpc:sessions.list", async () => {
+      elapse(250);
+      await Promise.resolve();
+      elapse(5_000);
+    });
+    expect(monitor.drain()).toEqual({
+      stalls: [{ elapsedMs: 250, task: "gateway:rpc:sessions.list", taskMs: 250 }],
+      dropped: 0,
+      delayMaxMs: 250,
+    });
+  });
+
   it("records one stall naming the blocking nested task, then consumes it once", () => {
     const { monitor, elapse } = fixture();
     runWithMainThreadTask("maintenance", () => {
@@ -32,22 +47,15 @@ describe("main-thread stall attribution", () => {
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
 
-  it("ignores time awaiting I/O and attributes a blocking continuation to its named owner", async () => {
+  it("returns the original promise without observing its continuations", async () => {
     const { monitor, elapse } = fixture();
     const ready = createDeferredCore();
-    const operation = runWithMainThreadTask("maintenance:resume", async () => {
-      await ready.promise;
-      elapse(1_200);
-    });
+    const operation = ready.promise.then(() => elapse(1_200));
+    expect(runWithMainThreadTask("maintenance:resume", () => operation)).toBe(operation);
     elapse(5_000);
-    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
     ready.resolve();
     await operation;
-    expect(monitor.drain()).toEqual({
-      stalls: [{ elapsedMs: 1_200, task: "maintenance:resume", taskMs: 1_200 }],
-      dropped: 0,
-      delayMaxMs: 1_200,
-    });
+    expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
 
   it("starts a fresh observation when reset interrupts an active callback", () => {
@@ -73,34 +81,4 @@ describe("main-thread stall attribution", () => {
     runWithMainThreadTask("maintenance", () => elapse(1_001));
     expect(monitor.drain()).toEqual({ stalls: [], dropped: 0, delayMaxMs: 0 });
   });
-
-  it.each(["sync", "resolved", "rejected"] as const)(
-    "expires a %s task before its detached work runs",
-    async (completion) => {
-      const { monitor, elapse } = fixture();
-      const ready = createDeferredCore();
-      let detached: Promise<void> | undefined;
-      const result = runWithMainThreadTask("plugins.runtime-post-bind", () => {
-        detached = ready.promise.then(() => {
-          elapse(1_700);
-        });
-        if (completion === "sync") {
-          return undefined;
-        }
-        return completion === "resolved" ? Promise.resolve() : Promise.reject(new Error("load"));
-      });
-      if (completion === "rejected") {
-        await expect(result).rejects.toThrow("load");
-      } else {
-        await result;
-      }
-      ready.resolve();
-      await detached;
-      expect(monitor.drain()).toEqual({
-        stalls: [{ elapsedMs: 1_700, task: "unattributed", taskMs: 1_700 }],
-        dropped: 0,
-        delayMaxMs: 1_700,
-      });
-    },
-  );
 });

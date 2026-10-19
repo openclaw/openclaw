@@ -1,10 +1,7 @@
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { t } from "../../i18n/index.ts";
 import { registerNewSessionSetupEnglish } from "../../i18n/locales/en-new-session-setup.ts";
-import {
-  requestDevicePairJoinSetup,
-  type DevicePairJoinSetup,
-} from "../../lib/device-pair-setup.ts";
+import type { DevicePairJoinSetup } from "../../lib/device-pair-setup.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 
 registerNewSessionSetupEnglish();
@@ -20,7 +17,7 @@ export class ConnectMachineSetupState {
 
   constructor(
     private readonly gateway: () => { client: GatewayBrowserClient | null; connected: boolean },
-    private readonly requestUpdate: () => void,
+    private readonly changed: () => void,
   ) {}
 
   get open(): boolean {
@@ -31,7 +28,7 @@ export class ConnectMachineSetupState {
     this.openValue = true;
     this.errorValue = null;
     this.setupValue = null;
-    this.requestUpdate();
+    this.changed();
     void this.refresh();
   }
 
@@ -51,7 +48,7 @@ export class ConnectMachineSetupState {
       setup: this.setupValue,
       onClose: () => {
         this.close();
-        this.requestUpdate();
+        this.changed();
       },
       onRefresh: () => void this.refresh(),
       onManageDevices,
@@ -65,14 +62,18 @@ export class ConnectMachineSetupState {
     const { client, connected } = this.gateway();
     if (!connected || !client) {
       this.errorValue = t("newSession.connectMachineUnavailable");
-      this.requestUpdate();
+      this.changed();
       return;
     }
     const requestId = ++this.requestId;
     this.loadingValue = true;
     this.errorValue = null;
-    this.requestUpdate();
+    this.changed();
     try {
+      const { requestDevicePairJoinSetup } = await import("../../lib/device-pair-setup.ts");
+      if (!this.stillCurrent(requestId, client)) {
+        return;
+      }
       const setup = await requestDevicePairJoinSetup(client);
       if (!this.stillCurrent(requestId, client)) {
         return;
@@ -90,7 +91,7 @@ export class ConnectMachineSetupState {
     } finally {
       if (requestId === this.requestId) {
         this.loadingValue = false;
-        this.requestUpdate();
+        this.changed();
       }
     }
   }

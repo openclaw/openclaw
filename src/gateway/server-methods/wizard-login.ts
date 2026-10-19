@@ -19,6 +19,7 @@ export async function startWizardLogin(params: {
 }): Promise<void> {
   const { respond } = params;
   const session = await createAdmittedWizardSession(() => {
+    params.client.connectionSignal?.throwIfAborted();
     params.assertCurrent();
     return params.createSession();
   });
@@ -39,6 +40,7 @@ export async function publishWizardLoginSession(params: {
 }): Promise<void> {
   const { client, context, sessionId, respond, session } = params;
   try {
+    client.connectionSignal?.throwIfAborted();
     params.assertCurrent();
   } catch {
     session.close(new Error("Login is no longer available on this connection."));

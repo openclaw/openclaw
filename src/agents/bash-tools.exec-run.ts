@@ -1,6 +1,3 @@
-/**
- * Exec tool policy, host dispatch, and process lifecycle pipeline.
- */
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import { resolveStateDir } from "../config/paths.js";
 import { createAbortError } from "../infra/abort-signal.js";
@@ -9,7 +6,6 @@ import {
   maxAsk,
   minSecurity,
   normalizeExecAsk,
-  requireValidExecTarget,
   resolveExecApprovalsFromFile,
   resolveExecModePolicy,
 } from "../infra/exec-approvals.js";
@@ -49,7 +45,6 @@ import {
   type ExecProcessHandle,
   normalizePathPrepend,
   resolveApprovalRunningNoticeMs,
-  resolveExecTarget,
   runExecProcess,
 } from "./bash-tools.exec-runtime.js";
 import {
@@ -70,7 +65,7 @@ import type {
 } from "./bash-tools.exec-types.js";
 import { formatUnavailableWorkdirFailure, resolveExecWorkdir } from "./bash-tools.exec-workdir.js";
 import { createExecSchema, execSchema } from "./bash-tools.schemas.js";
-import { clampWithDefault, readEnvInt, truncateMiddle } from "./bash-tools.shared.js";
+import { clampWithDefault, readEnvInt } from "./bash-tools.shared.js";
 import {
   createExecToolExecutionTimeoutResolver,
   resolveExecDefaultTimeoutSec,
@@ -86,7 +81,6 @@ type GatewayApprovalResult = Awaited<ReturnType<typeof processGatewayAllowlist>>
 const BACKGROUND_EXEC_FOLLOW_UP =
   "Use process (list/poll/log/write/send-keys/submit/paste/kill/clear/remove) for follow-up.";
 
-/** Creates an exec tool instance with runtime defaults and approval policy wiring. */
 export function createExecTool(defaults?: ExecToolDefaults) {
   const secretEgressEnabled = isSecretEgressProxyActive();
   const cleanupMs = defaults?.cleanupMs;
@@ -99,6 +93,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   const preparedRunEnvironment = resolveExecPreparedRunEnvironment(defaults);
   let subagentExecutionPromise: Promise<boolean> | undefined;
   const resolveSubagentExecution = () =>
+    defaults?.preparedSubagentExecution ??
     (subagentExecutionPromise ??= withPreparedSessionCapabilityRead(
       () =>
         resolveStoredSubagentCapabilities(defaults?.runSessionKey ?? defaults?.sessionKey, {
@@ -291,14 +286,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
             .join("\n"),
         );
       }
-      const target = resolveExecTarget({
-        configuredTarget: defaults?.host,
-        requestedTarget: requireValidExecTarget(params.host),
-        elevatedRequested,
-        sandboxAvailable: Boolean(defaults?.sandbox),
-        sandboxRequired: defaults?.sandboxRequired,
-      });
-      const host = target.effectiveHost;
+      const host = resolveHostForParams(params);
       const foregroundFallbackWarning =
         (host === "node" || !backgroundAvailable) &&
         (params.background === true || typeof params.yieldMs === "number")
@@ -355,7 +343,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const autoReview = modePolicy.autoReview && ask === modePolicy.ask && !bypassApprovals;
 
       const sandbox = host === "sandbox" ? defaults?.sandbox : undefined;
-      if (target.selectedTarget === "sandbox" && !sandbox) {
+      if (host === "sandbox" && !sandbox) {
         throw new Error(
           [
             "exec host=sandbox requires a sandbox runtime for this session.",
@@ -415,7 +403,7 @@ export function createExecTool(defaults?: ExecToolDefaults) {
       const effectiveTimeout = params.timeoutSeconds ?? defaultTimeoutSec;
       try {
         if (elevatedRequested) {
-          logInfo(`exec: elevated command ${truncateMiddle(params.command, 120)}`);
+          logInfo("exec: elevated command");
         }
         if (!resolveExecEnvPrepared) {
           params = await requestPreparation.prepareParamsWithResolvedExecEnv(params, {
@@ -677,7 +665,16 @@ export function createExecTool(defaults?: ExecToolDefaults) {
         yielded = true;
         run.disableUpdates();
         markBackgrounded(run.session);
-        backgrounded.resolve({ status: "backgrounded" });
+        void Promise.resolve(run.session.exitNotificationPersistence).then(
+          () => backgrounded.resolve({ status: "backgrounded" }),
+          (error: unknown) =>
+            backgrounded.reject(
+              new Error(
+                `Process ${run.session.id} started, but its restart notification could not be saved. Use process poll before retrying.`,
+                { cause: error },
+              ),
+            ),
+        );
       };
 
       try {
@@ -740,5 +737,4 @@ export function createExecTool(defaults?: ExecToolDefaults) {
   });
 }
 
-/** Default exec tool instance used by agent tool registries. */
 export const execTool = createExecTool();

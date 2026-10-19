@@ -1,8 +1,7 @@
 // Plugin MCP cancellation tests cover cancellation of in-flight plugin tool calls.
 import { DatabaseSync } from "node:sqlite";
 import { setImmediate as nextTurn } from "node:timers/promises";
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Type } from "typebox";
 import { describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
@@ -242,7 +241,7 @@ describe("plugin tools MCP cancellation", () => {
       try {
         await Promise.all([server.connect(inbound), client.connect(outbound)]);
         const controller = new AbortController();
-        call = client.callTool({ name: tool.name }, undefined, { signal: controller.signal }).then(
+        call = client.callTool({ name: tool.name }, { signal: controller.signal }).then(
           (result) => ({ result }),
           (error: unknown) => ({ error }),
         );

@@ -26,6 +26,13 @@ server's loopback origin, such as `http://127.0.0.1:8009`, omit `apiKey`, and se
 Start the server separately with your chosen checkpoint; the decision-model
 selection labels requests and does not download or load a model.
 
+For a separate inference host or HTTPS reverse proxy, use the standard
+`models.providers.typesafe` configuration with `baseUrl`, optional `apiKey`,
+`models: []`, and the shared `request` settings for auth, private-network policy,
+proxy, and TLS. This route never inherits the legacy hosted plugin credential.
+Evaluations send user content to the configured server; use HTTPS and select
+a server you trust. Set the server's routing model ID as `decisionModel`.
+
 See the [TypeSafe AI setup guide](https://docs.openclaw.ai/plugins/typesafe) and
 [decision-model documentation](https://docs.openclaw.ai/concepts/decision-models)
 for configuration, rubrics, and API semantics.

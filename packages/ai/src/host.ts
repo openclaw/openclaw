@@ -181,8 +181,8 @@ export interface AiTransportHost {
   }): Record<string, string> | undefined;
   /** Returns the host-configured request timeout attached to a model. */
   resolveModelRequestTimeoutMs(model: Model): number | undefined;
-  /** Reports whether the model carries host-managed proxy, TLS, or local-service state. */
-  requiresManagedTransport(model: Model): boolean;
+  /** With scope "fetch", requires guarded fetch dispatch; native WebSockets must also exclude it. */
+  requiresManagedTransport(model: Model, scope?: "fetch"): boolean;
   /** Copies host-owned managed-transport state onto a projected model. */
   inheritManagedTransport(source: Model, target: Model): Model;
   /** Applies host-owned transcript replay and pairing rules. */

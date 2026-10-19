@@ -25,7 +25,7 @@ import { withSqliteMutationWorkerLifetime } from "./session-accessor.sqlite-work
 import { captureSessionActorStorageOwner } from "./session-actor-storage-binding.js";
 import {
   ARCHIVE_RETENTION_BATCH_SIZE,
-  type PublishedSessionTranscriptArchive,
+  type SessionArchivePruningSnapshot,
   type SessionArchivePruningOperations,
 } from "./session-history-archive-pruning.types.js";
 import { maintenanceLane } from "./session-transcript-worker-resources.js";
@@ -37,7 +37,7 @@ export type SqliteSessionPageReclaimer = (maxPages?: number) => Promise<SqliteWa
 /** Preview reads share the history reader without waiting for archive or writer admission. */
 export async function readSqliteSessionArchivePruning(
   input: OpenClawAgentDatabaseOptions,
-): Promise<PublishedSessionTranscriptArchive | null> {
+): Promise<SessionArchivePruningSnapshot | null> {
   if (
     captureSessionActorStorageOwner(
       { ...input, storePath: input.path },
@@ -50,9 +50,8 @@ export async function readSqliteSessionArchivePruning(
   if (!supportsOpenClawAgentDatabaseExecution(options)) {
     const { readSessionArchivePruningInDatabase } =
       await import("./session-history-archive-pruning.worker.js");
-    return withSqliteSessionDatabase(
-      options,
-      (database) => readSessionArchivePruningInDatabase(database)[0] ?? null,
+    return withSqliteSessionDatabase(options, (database) =>
+      readSessionArchivePruningInDatabase(database),
     );
   }
   const physical = readDatabasePathIdentitySync(options.path);
@@ -76,7 +75,7 @@ export async function readSqliteSessionArchivePruning(
       });
       reader.assertCurrent();
       assertExistingDatabaseIdentity(options.path, physical.key);
-      return result[0] ?? null;
+      return result;
     },
   );
 }
@@ -170,7 +169,7 @@ export async function withSqliteSessionPageReclamation<T>(
               databaseOptions,
               (database) => {
                 assertNativeCurrent();
-                return readSessionArchivePruningInDatabase(database)[0] ?? null;
+                return readSessionArchivePruningInDatabase(database).archives[0] ?? null;
               },
               assertNativeCurrent,
             ),
@@ -178,7 +177,8 @@ export async function withSqliteSessionPageReclamation<T>(
             withSqliteSessionDatabase(
               databaseOptions,
               (database) =>
-                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE),
+                readSessionArchivePruningInDatabase(database, ARCHIVE_RETENTION_BATCH_SIZE)
+                  .archives,
               assertNativeCurrent,
             ),
           pruneRetention: async (retention) =>
@@ -310,7 +310,7 @@ export async function withSqliteSessionPageReclamation<T>(
                   expectedIdentity,
                 });
                 assertPruningCurrent();
-                return result[0] ?? null;
+                return result.archives[0] ?? null;
               },
               readRetentionCandidates: async () => {
                 assertPruningCurrent();
@@ -320,7 +320,7 @@ export async function withSqliteSessionPageReclamation<T>(
                   limit: ARCHIVE_RETENTION_BATCH_SIZE,
                 });
                 assertPruningCurrent();
-                return result;
+                return result.archives;
               },
               pruneRetention: (retention) =>
                 write(

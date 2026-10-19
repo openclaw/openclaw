@@ -12,6 +12,7 @@ export const {
   resolvePersistedAuthProfileOwnerAgentDirAsync,
   loadAuthProfileStoreForSecretsRuntimeAsync,
   loadAuthProfileStoreWithoutExternalProfilesAsync,
+  loadAuthProfileStoreForCatalogAsync,
   ensureAuthProfileStoreAsync,
   ensureAuthProfileStoreWithoutExternalProfilesAsync,
   ensureAuthProfileStoreForLocalUpdateAsync,
@@ -21,30 +22,29 @@ export const {
 
 /**
  * @deprecated Await loadAuthProfileStoreForRuntimeAsync from openclaw/plugin-sdk/agent-runtime
- * with readOnly: true and allowKeychainPrompt: false. Retained until removal in a later stable
- * release after deprecation ships.
+ * with readOnly: true and allowKeychainPrompt: false. Supported through 2026-12-31. Removal in the first January 2027 stable release.
  */
 export const loadAuthProfileStoreForSecretsRuntime =
   nativePluginBindings.authStore.loadAuthProfileStoreForSecretsRuntime;
 
 /**
  * @deprecated Use updateAuthProfileStoreWithLock from openclaw/plugin-sdk/provider-auth.
- * Retained until removal in a later stable release after deprecation ships.
+ * Supported through 2026-12-31. Removal in the first January 2027 stable release.
  */
 export const saveAuthProfileStore = nativePluginBindings.authStore.saveAuthProfileStore;
 
-/** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Retained until an announced stable removal window. */
+/** @deprecated Use loadAuthProfileStoreForRuntimeAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export const loadAuthProfileStoreForRuntime =
   nativePluginBindings.authStore.loadAuthProfileStoreForRuntime;
 
-/** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Retained until an announced stable removal window. */
+/** @deprecated Use loadAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export const loadAuthProfileStoreWithoutExternalProfiles =
   nativePluginBindings.authStore.loadAuthProfileStoreWithoutExternalProfiles;
-/** @deprecated Use ensureAuthProfileStoreAsync. Retained until an announced stable removal window. */
+/** @deprecated Use ensureAuthProfileStoreAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export const ensureAuthProfileStore = nativePluginBindings.authStore.ensureAuthProfileStore;
-/** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Retained until an announced stable removal window. */
+/** @deprecated Use ensureAuthProfileStoreWithoutExternalProfilesAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export const ensureAuthProfileStoreWithoutExternalProfiles =
   nativePluginBindings.authStore.ensureAuthProfileStoreWithoutExternalProfiles;
-/** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Retained until an announced stable removal window. */
+/** @deprecated Use ensureAuthProfileStoreForLocalUpdateAsync. Supported through 2026-12-31. Removal in the first January 2027 stable release. */
 export const ensureAuthProfileStoreForLocalUpdate =
   nativePluginBindings.authStore.ensureAuthProfileStoreForLocalUpdate;

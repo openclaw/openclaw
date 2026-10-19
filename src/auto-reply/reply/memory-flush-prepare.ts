@@ -15,7 +15,10 @@ import {
 import { getMemoryProviderRuntime } from "../../plugins/memory-state.js";
 import type { UserTurnTranscriptAdmissionReceipt } from "../../sessions/user-turn-transcript.types.js";
 import { resolveModelFallbackOptions } from "./agent-runner-utils.js";
-import { isToolsMemoryFlushPlan, resolveMemoryFlushPlanForRun } from "./memory-flush-plan.js";
+import {
+  isToolsMemoryFlushPlan,
+  type MemoryFlushPlanForRunResolution,
+} from "./memory-flush-plan.js";
 import {
   deriveMemoryFlushId,
   ensureMemoryFlushTargetFile,
@@ -58,25 +61,14 @@ export async function prepareMemoryFlushAttempt(params: {
   storePath?: string;
   preflightAdmission?: UserTurnTranscriptAdmissionReceipt;
   flushRunId: string;
-  contextWindowTokens: number;
-  memoryFlushWritable: boolean;
+  resolution: MemoryFlushPlanForRunResolution;
   abortSignal?: AbortSignal;
   assertCurrent: () => void;
   recordPersistenceToolSuccess: () => void;
 }) {
   params.assertCurrent();
-  const resolution = resolveMemoryFlushPlanForRun({
-    cfg: params.cfg,
-    nowMs: Date.now(),
-    contextWindowTokens: params.contextWindowTokens,
-  });
-  if (!resolution) {
-    return null;
-  }
-  const plan = resolution.plan;
-  if (!isToolsMemoryFlushPlan(plan) && !params.memoryFlushWritable) {
-    return null;
-  }
+  const { resolution } = params;
+  const { plan } = resolution;
   const { sessionKey, sessionEntry, followupRun } = params;
   if (!sessionKey || !sessionEntry) {
     throw new Error("Memory flush has no current transcript target.");
@@ -195,7 +187,6 @@ export async function prepareMemoryFlushAttempt(params: {
       followupRun.operatorAuthority,
     );
     return {
-      plan,
       writePath: isToolsMemoryFlushPlan(plan) ? undefined : plan.relativePath,
       systemPrompt,
       selection,

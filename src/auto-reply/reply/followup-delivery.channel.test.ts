@@ -2,25 +2,33 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
 import type { OpenClawConfig } from "../../config/config.js";
+import { OutboundDeliveryError } from "../../infra/outbound/deliver-types.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
+import { loadBundledPluginFacade } from "../../test-utils/bundled-plugin-public-surface.js";
 import {
   createChannelTestPluginBase,
   createTestRegistry,
 } from "../../test-utils/channel-plugins.js";
 import { setReplyPayloadMetadata } from "../reply-payload.js";
 import type { ReplyPayload } from "../types.js";
+import { setBlockReplyDelivery } from "./block-reply-delivery.js";
 import { resolveFollowupDeliveryPayloads } from "./followup-delivery-payloads.js";
 import { deliverFollowupDecision, resolveFollowupDeliveryDecision } from "./followup-delivery.js";
-import type { AdmittedFollowupTurn } from "./followup-turn-admission.js";
+import type { AdmittedFollowupTurn } from "./reply-agent-turn-preparation.js";
+
+const { a2aChannelPlugin } = await loadBundledPluginFacade<{ a2aChannelPlugin: ChannelPlugin }>({
+  pluginId: "a2a",
+  artifactBasename: "channel-plugin-api.js",
+});
 
 const channelState = vi.hoisted(() => ({
-  outcomes: [] as Array<"delivered" | "failed">,
+  outcomes: [] as Array<"delivered" | "failed" | "held" | "ambiguous">,
   deliver: vi.fn(),
 }));
 
+// mock-isolation: channel custody tests provide the follow-up route without loading model or auth plans.
 vi.mock("../../agents/runtime-plan/build.js", () => ({
   buildAgentRuntimeDeliveryPlan: () => ({
-    isSilentPayload: () => false,
     resolveFollowupRoute: () => undefined,
   }),
 }));
@@ -87,7 +95,6 @@ function createTurn(params: {
       key: "main",
       current: () => undefined,
       publish: () => undefined,
-      adopt: () => undefined,
     },
     sendPolicy: "allow",
     preflightCompactionApplied: false,
@@ -115,19 +122,32 @@ function createDefaults(onBlockReply: (payload: ReplyPayload) => Promise<void>) 
 async function deliverBatch(params: {
   messageProvider: string;
   originatingChannel: string;
-  outcomes: Array<"delivered" | "failed">;
+  outcomes: typeof channelState.outcomes;
   payloads: ReplyPayload[];
+  fallbackOutcome?: "delivered" | "failed-before-deliver" | "channel-transform" | "recovery-owned";
+  fallbackPending?: boolean;
+  onObservedReplyDelivery?: () => void;
+  correlations?: AdmittedFollowupTurn["queued"]["deliveryCorrelations"];
 }) {
   channelState.outcomes = [...params.outcomes];
-  const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {});
-  await deliverFollowupDecision({
+  const onBlockReply = vi.fn(async (_payload: ReplyPayload) => {
+    if (params.fallbackOutcome) {
+      setBlockReplyDelivery(
+        Promise.resolve({ outcome: params.fallbackOutcome, pending: params.fallbackPending }),
+      );
+    }
+  });
+  const turn = createTurn(params);
+  turn.queued.deliveryCorrelations = params.correlations;
+  const result = await deliverFollowupDecision({
     decision: { kind: "deliver", payloads: params.payloads },
-    turn: createTurn(params),
+    turn,
     defaults: createDefaults(onBlockReply),
     runId: "run-1",
     runFollowup: vi.fn(async () => {}),
+    onObservedReplyDelivery: params.onObservedReplyDelivery,
   });
-  return onBlockReply;
+  return { onBlockReply, result };
 }
 
 beforeEach(() => {
@@ -147,6 +167,14 @@ beforeEach(() => {
     if (outcome === "delivered") {
       return [{ channel: params.channel, messageId: `message-${channelState.outcomes.length}` }];
     }
+    if (outcome === "held" || outcome === "ambiguous") {
+      const error = new OutboundDeliveryError("delivery still owned by transport", {
+        cause: new Error("transport unavailable"),
+        sentBeforeError: outcome === "ambiguous",
+      });
+      error.queueCustody = outcome === "held" ? "held" : "released";
+      throw error;
+    }
     throw new Error("simulated channel delivery failure");
   });
 });
@@ -156,14 +184,137 @@ afterEach(() => {
 });
 
 describe("follow-up delivery channel boundary", () => {
+  it("suppresses repeated source failures before transport without falling back to another dispatcher", async () => {
+    const delivered = vi.fn();
+    const { onBlockReply, result } = await deliverBatch({
+      messageProvider: "slack",
+      originatingChannel: "slack",
+      outcomes: ["delivered"],
+      payloads: [{ text: "Request timed out", isError: true }],
+      correlations: [{ begin() {}, shouldSuppressReply: () => true, onReplyDelivered: delivered }],
+    });
+    expect(channelState.deliver).not.toHaveBeenCalled();
+    expect(onBlockReply).not.toHaveBeenCalled();
+    expect(delivered).not.toHaveBeenCalled();
+    expect(result.kind).toBe("completed");
+  });
+
+  it.each(["delivered", "failed", "held", "ambiguous"] as const)(
+    "keeps a collected explicit request visible and records only confirmed origin delivery (%s)",
+    async (outcome) => {
+      const passive = vi.fn();
+      const explicit = vi.fn();
+      await deliverBatch({
+        messageProvider: "slack",
+        originatingChannel: "slack",
+        outcomes: [outcome],
+        payloads: [{ text: "Request timed out", isError: true }],
+        correlations: [
+          { begin() {}, shouldSuppressReply: () => true, onReplyDelivered: passive },
+          { begin() {}, shouldSuppressReply: () => false, onReplyDelivered: explicit },
+        ],
+      });
+      expect(channelState.deliver).toHaveBeenCalledTimes(1);
+      expect(passive).toHaveBeenCalledTimes(outcome === "delivered" ? 1 : 0);
+      expect(explicit).toHaveBeenCalledTimes(outcome === "delivered" ? 1 : 0);
+    },
+  );
+
+  it.each([
+    { route: "held", fallback: "delivered", pending: false },
+    { route: "ambiguous", fallback: "delivered", pending: false },
+    { route: "failed", fallback: "delivered", pending: true },
+    { route: "failed", fallback: "recovery-owned", pending: false },
+  ] as const)(
+    "retains pending transport ownership for $route / $fallback",
+    async ({ route, fallback, pending }) => {
+      const observed = vi.fn();
+      const { result, onBlockReply } = await deliverBatch({
+        messageProvider: "discord",
+        originatingChannel: "discord",
+        outcomes: [route],
+        payloads: [{ text: "queued reply" }],
+        fallbackOutcome: fallback,
+        fallbackPending: pending,
+        onObservedReplyDelivery: observed,
+      });
+      expect(result).toEqual({ kind: "pending", payloads: [] });
+      expect(observed).not.toHaveBeenCalled();
+      expect(onBlockReply).toHaveBeenCalledTimes(route === "failed" ? 1 : 0);
+    },
+  );
+  it.each([
+    { route: "delivered", fallback: "failed-before-deliver", origin: "discord", visible: true },
+    { route: "failed", fallback: "failed-before-deliver", origin: "discord", visible: false },
+    { route: "failed", fallback: "channel-transform", origin: "discord", visible: false },
+    { route: "failed", fallback: "delivered", origin: "discord", visible: true },
+    { route: "failed", fallback: "delivered", origin: "slack", visible: false },
+  ] as const)(
+    "reports settled source visibility for $origin: $route / $fallback",
+    async ({ route, fallback, origin, visible }) => {
+      const observed = vi.fn();
+      await deliverBatch({
+        messageProvider: "discord",
+        originatingChannel: origin,
+        outcomes: [route],
+        payloads: [{ text: "queued reply" }],
+        fallbackOutcome: fallback,
+        onObservedReplyDelivery: observed,
+      });
+      expect(observed).toHaveBeenCalledTimes(visible ? 1 : 0);
+    },
+  );
+  it.each(["a2a", "slack"])(
+    "delivers queued terminal content and keeps host notices specific to human channels: %s",
+    async (channel) => {
+      setActivePluginRegistry(
+        createTestRegistry([
+          { pluginId: "a2a", plugin: a2aChannelPlugin, source: "test" },
+          { pluginId: "slack", plugin: createChannelPlugin("slack"), source: "test" },
+        ]),
+      );
+      const turn = createTurn({ messageProvider: channel, originatingChannel: channel });
+      turn.queued.originatingTo = channel === "a2a" ? "a2a:hermes" : "channel:C1";
+      const payloads = [
+        { text: "thinking level clamped", isStatusNotice: true },
+        { text: "run failed", isError: true },
+        setReplyPayloadMetadata({ text: "Gateway restarting" }, { hostNotice: true }),
+        { text: "agent answer" },
+      ];
+      channelState.outcomes = ["delivered", "delivered", "delivered", "delivered"];
+      const onBlockReply = vi.fn(async () => {});
+
+      await deliverFollowupDecision({
+        decision: { kind: "deliver", payloads },
+        turn,
+        defaults: createDefaults(onBlockReply),
+        runId: "run-1",
+        runFollowup: vi.fn(async () => {}),
+      });
+
+      expect(channelState.deliver.mock.calls.map(([send]) => send.payloads)).toEqual(
+        channel === "a2a" ? [[{ text: "agent answer" }]] : payloads.map((payload) => [payload]),
+      );
+      expect(onBlockReply).not.toHaveBeenCalled();
+    },
+  );
+
   it.each([
     {
-      name: "optional group generic silence",
+      name: "optional group control-looking failure",
+      expectation: "optional",
+      channel: "discord",
+      recipient: "channel:C1",
+      text: "NO_REPLY.",
+      delivered: true,
+    },
+    {
+      name: "optional group literal control-looking failure",
       expectation: "optional",
       channel: "discord",
       recipient: "channel:C1",
       text: "NO_REPLY",
-      delivered: false,
+      delivered: true,
     },
     {
       name: "optional work without a recipient",
@@ -437,7 +588,7 @@ describe("follow-up delivery channel boundary", () => {
   });
 
   it("emits one safe cross-channel error when a terminal payload fails after status delivery", async () => {
-    const onBlockReply = await deliverBatch({
+    const { onBlockReply } = await deliverBatch({
       messageProvider: "discord",
       originatingChannel: "slack",
       outcomes: ["delivered", "failed"],
@@ -457,7 +608,7 @@ describe("follow-up delivery channel boundary", () => {
   });
 
   it("keeps a delivered terminal valid when a later TTS supplement fails", async () => {
-    const onBlockReply = await deliverBatch({
+    const { onBlockReply } = await deliverBatch({
       messageProvider: "discord",
       originatingChannel: "slack",
       outcomes: ["delivered", "failed"],
@@ -474,7 +625,7 @@ describe("follow-up delivery channel boundary", () => {
   });
 
   it("emits one safe error when every supplemental origin delivery fails", async () => {
-    const onBlockReply = await deliverBatch({
+    const { onBlockReply } = await deliverBatch({
       messageProvider: "discord",
       originatingChannel: "slack",
       outcomes: ["failed", "failed"],
@@ -490,7 +641,7 @@ describe("follow-up delivery channel boundary", () => {
 
   it("returns only the failed payload through same-channel recovery", async () => {
     const failedFinal = { text: "same-channel final" };
-    const onBlockReply = await deliverBatch({
+    const { onBlockReply } = await deliverBatch({
       messageProvider: "slack",
       originatingChannel: "slack",
       outcomes: ["delivered", "failed"],
@@ -503,7 +654,7 @@ describe("follow-up delivery channel boundary", () => {
 
   it("keeps alias-equivalent built-in channels on same-channel recovery", async () => {
     const failedFinal = { text: "alias same-channel final" };
-    const onBlockReply = await deliverBatch({
+    const { onBlockReply } = await deliverBatch({
       messageProvider: "imessage",
       originatingChannel: "imsg",
       outcomes: ["failed"],

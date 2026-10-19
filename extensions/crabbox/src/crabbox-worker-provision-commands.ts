@@ -1,3 +1,4 @@
+import { setTimeout as delay } from "node:timers/promises";
 import {
   WorkerProviderError,
   type WorkerDesktopEndpoint,
@@ -11,7 +12,7 @@ import {
   leaseRunArgs,
   runCrabboxCommand,
   runCrabboxCommandWithCoordinatorRetry,
-  type CrabboxCommandRunner,
+  sanitizeCrabboxNotice,
   type LeaseCommandContext,
 } from "./crabbox-worker-command.js";
 import {
@@ -54,16 +55,15 @@ type ProvisionInspectContext = Omit<LeaseCommandContext, "id"> & {
   deadline: number;
   inspect: ParsedInspect;
   profile: ReturnType<typeof parseCrabboxProfile>;
-  runCommand: CrabboxCommandRunner;
   stopLease: (context: LeaseCommandContext) => Promise<void>;
   signal?: AbortSignal;
-  sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
 };
 
 // Crabbox states describe lease usability, not proven cleanup: released leases can retain
 // resources, and Machine0 maps both DELETING and DELETED to `deleted`. Always stop explicitly.
 const NON_RUNNABLE_STATES = new Set([
   "archived",
+  "cleanup",
   "deleted",
   "deleting",
   "destroyed",
@@ -78,11 +78,9 @@ const NON_RUNNABLE_STATES = new Set([
 
 export async function inspectWithContext(
   params: LeaseCommandContext & {
-    runCommand: CrabboxCommandRunner;
     timeoutMs?: number;
     waitForReady?: boolean;
     signal?: AbortSignal;
-    sleep?: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   },
 ): Promise<ParsedInspect | undefined> {
   const action = params.waitForReady ? "status" : "inspect";
@@ -102,9 +100,7 @@ export async function inspectWithContext(
       "--json",
     ],
     binary: params.binary,
-    runCommand: params.runCommand,
     signal: params.signal,
-    sleep: params.sleep,
     timeoutMs: params.timeoutMs ?? resolveCrabboxLifecycleTimeoutMs(params.provider),
   });
   if (result.termination === "exit" && result.code === 0) {
@@ -113,6 +109,10 @@ export async function inspectWithContext(
     let inspect: ParsedInspect;
     try {
       inspect = parseInspectJson(result.stdout);
+      const notice = sanitizeCrabboxNotice(result.stderr);
+      if (notice) {
+        inspect.lifetime = { ...inspect.lifetime, policyNotice: notice };
+      }
     } catch (error) {
       throw new WorkerProviderError(
         error instanceof Error ? error.message : "Crabbox inspect returned invalid output",
@@ -123,10 +123,26 @@ export async function inspectWithContext(
     }
     return inspect;
   }
-  if (isUnrecognizedLease(result, params.id, "inspect")) {
+  // Crabbox emits only text for these exact-ID lookups. Treat them as unknown, not
+  // stop proof: Gateway teardown still calls stop, which verifies complete absence.
+  const unavailableResource =
+    result.termination === "exit" &&
+    result.stdout.trim() === "" &&
+    ((params.provider === "digitalocean" &&
+      result.code === 4 &&
+      result.stderr.trim() === "DigitalOcean fixed lease is terminal") ||
+      (params.provider === "ascii-box" &&
+        result.code === 1 &&
+        /^ascii-box bx_[A-Za-z0-9_-]+ not found \(404\)$/u.test(result.stderr.trim())));
+  if (unavailableResource || isUnrecognizedLease(result, params.id, "inspect")) {
     return undefined;
   }
-  throw crabboxCommandError(action, result);
+  // An inspect response may contain connection material, even on a failed
+  // command. Diagnostics must never echo that JSON back to the caller.
+  throw crabboxCommandError(action, {
+    ...result,
+    stdout: /^\s*[[{]/u.test(result.stdout) ? "" : result.stdout,
+  });
 }
 
 export function remainingProvisionTimeout(deadline: number, maximum: number): number {
@@ -143,7 +159,6 @@ export async function runProvisionWarmup(
   params: LeaseCommandContext & {
     profile: ReturnType<typeof parseCrabboxProfile>;
     slug: string;
-    runCommand: CrabboxCommandRunner;
     timeoutMs: () => number;
     signal?: AbortSignal;
   },
@@ -197,7 +212,6 @@ function assertProvisionSecurityPolicy(params: { inspect: ParsedInspect; provide
 export async function waitForProvisionReady(
   params: ProvisionInspectContext & {
     refresh?: boolean;
-    sleep: (milliseconds: number, signal?: AbortSignal) => Promise<void>;
   },
 ): Promise<ParsedInspect> {
   let inspect = params.inspect;
@@ -226,9 +240,10 @@ export async function waitForProvisionReady(
     while (inspect.ready !== true && !isNonRunnableState(inspect.state)) {
       params.signal?.throwIfAborted();
       const remaining = remainingProvisionTimeout(params.deadline, CRABBOX_LIFECYCLE_TIMEOUT_MS);
-      await params.sleep(
+      await delay(
         Math.min(resolveCrabboxReadyPollIntervalMs(params.provider), remaining),
-        params.signal,
+        undefined,
+        { signal: params.signal },
       );
       params.signal?.throwIfAborted();
       inspect = await inspectAgain();
@@ -294,9 +309,7 @@ export async function runProvisionSetup(
               binary: params.binary,
               env: childEnv,
               input: params.setup,
-              runCommand: params.runCommand,
               signal: params.signal,
-              sleep: params.sleep,
               timeoutMs: remainingProvisionTimeout(
                 params.deadline,
                 params.timeoutMs ?? CRABBOX_SETUP_TIMEOUT_MS,

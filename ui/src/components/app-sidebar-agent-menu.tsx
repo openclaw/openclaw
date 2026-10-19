@@ -15,7 +15,7 @@ import {
   type SidebarAgentMenuSwitcherParams,
 } from "./sidebar-agent-menu-switcher.tsx";
 import { Icon } from "./solid/icon.tsx";
-import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
+import type { MenuEntry, MenuHandle, MenuItem } from "./solid/menu.tsx";
 
 // External rows of the footer identity menu. Docs-first: public docs pages over
 // raw GitHub, matching the ClawSweeper docs-link policy for user-facing copy.
@@ -48,8 +48,7 @@ type SidebarAgentMenuParams = Omit<SidebarAgentMenuSwitcherParams, "allAgentsSco
   rosterMode: boolean;
   activeName: string;
   connected: boolean;
-  onQueryChange: (query: string) => void;
-  onToggleRoster: () => void;
+  onShowAllAgents: () => void;
   onPointerEnter: () => void;
   onPointerLeave: () => void;
   onAfterShow: () => void;
@@ -57,6 +56,7 @@ type SidebarAgentMenuParams = Omit<SidebarAgentMenuSwitcherParams, "allAgentsSco
   onAskCapabilities: (agentId: string) => void;
   onClose: (restoreFocus?: boolean) => void;
   onNavigate: (routeId: NavigationRouteId, options?: ApplicationNavigationOptions) => void;
+  ref?: (handle: MenuHandle) => void;
 };
 
 export function renderSidebarHelpMenu(): MenuItem | undefined {
@@ -105,6 +105,7 @@ export function selectSidebarHelpLink(value: string): boolean {
 }
 
 export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Element {
+  const pinButtons = new Map<string, HTMLButtonElement>();
   const position = params.position;
   const activeId = () => params.activeId;
   const activeName = () => params.activeName;
@@ -124,35 +125,14 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
           },
         ]
       : []),
-    ...(params.agents.length > 6
-      ? [
-          {
-            id: "search",
-            label: t("agentChip.search"),
-            closeOnSelect: false,
-            render: () => (
-              <input
-                class="sidebar-agent-menu__filter"
-                data-search
-                type="search"
-                role="searchbox"
-                aria-label={t("agentChip.search")}
-                placeholder={t("agentChip.search")}
-                value={params.query}
-                onInput={(event) => params.onQueryChange(event.currentTarget.value)}
-              />
-            ),
-          },
-        ]
-      : []),
     {
       kind: "group",
       id: "agents",
       class: "sidebar-agent-menu__agent-list",
-      items: renderSidebarAgentMenuSwitcher({
-        ...params,
-        allAgentsScope: params.rosterMode && params.agents.length > 1,
-      }),
+      items: renderSidebarAgentMenuSwitcher(
+        { ...params, allAgentsScope: params.rosterMode && params.agents.length > 1 },
+        pinButtons,
+      ),
     },
     ...(params.agents.length > 0
       ? [
@@ -197,15 +177,13 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
       tabFocusTarget={params.tabFocusTarget}
       label={menuLabel()}
       focusOnOpen={params.openMode !== "hover"}
+      ref={params.ref}
       items={items()}
       onPointerEnter={params.onPointerEnter}
       onPointerLeave={params.onPointerLeave}
       onAfterShow={params.onAfterShow}
       onClose={params.onClose}
       onSelect={(value) => {
-        if (value === "search") {
-          return;
-        }
         params.onClose(value === "scope:all" && params.rosterMode);
         if (value.startsWith(AGENT_VALUE_PREFIX)) {
           params.onSwitchAgent(decodeURIComponent(value.slice(AGENT_VALUE_PREFIX.length)));
@@ -213,9 +191,7 @@ export function renderSidebarAgentMenu(params: SidebarAgentMenuParams): JSX.Elem
         }
         switch (value) {
           case "scope:all":
-            if (!params.rosterMode) {
-              params.onToggleRoster();
-            }
+            params.onShowAllAgents();
             break;
           case `${COMMAND_VALUE_PREFIX}agents-directory`:
             params.onNavigate("agents-home");

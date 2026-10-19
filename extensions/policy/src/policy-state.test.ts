@@ -16,6 +16,34 @@ const scanPolicyExecApprovals = (raw: string) =>
   collectPolicyEvidence({}, { execApprovalsRaw: raw }).execApprovals ?? [];
 
 describe("configured agent scanning", () => {
+  it.each([
+    {
+      agents: { entries: { malformed: null, guest: { sandbox: { mode: "all" } } } },
+      source: "oc://openclaw.config/agents/entries/guest/sandbox/mode",
+    },
+    {
+      agents: { list: [null, { id: "guest", sandbox: { mode: "all" } }] },
+      source: "oc://openclaw.config/agents/list/#1/sandbox/mode",
+    },
+  ])(
+    "ignores malformed agents without renumbering their sources ($source)",
+    ({ agents, source }) => {
+      const evidence = collectPolicyEvidence({ agents });
+      expect(evidence.sandboxPosture?.filter((entry) => entry.scope === "agent")).toEqual(
+        expect.arrayContaining([
+          expect.objectContaining({ agentId: "guest", kind: "mode", value: "all", source }),
+        ]),
+      );
+      expect(
+        new Set(
+          evidence.agentWorkspace
+            ?.filter((entry) => entry.scope === "agent")
+            .map((entry) => entry.agentId),
+        ),
+      ).toEqual(new Set(["guest"]));
+    },
+  );
+
   const keyedConfig = {
     tools: { elevated: { enabled: true } },
     agents: {

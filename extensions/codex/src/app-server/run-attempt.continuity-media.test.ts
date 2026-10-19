@@ -18,12 +18,114 @@ import {
   setupRunAttemptTestHooks,
   tempDir,
 } from "./run-attempt-test-harness.js";
+import {
+  createContextEngine,
+  createStartedThreadHarness,
+} from "./run-attempt.context-engine.test-support.js";
 import { writeCodexAppServerBinding } from "./session-binding.test-helpers.js";
 import { attachSqliteSessionTarget } from "./sqlite-session.test-helpers.js";
 
 setupRunAttemptTestHooks();
 
 describe("Codex attachment continuity", () => {
+  it("rejects real restored-document overage before native effects instead of clipping it", async () => {
+    const sessionId = "session-selected-document";
+    const workspaceDir = path.join(tempDir, "selected-document");
+    await fs.mkdir(workspaceDir, { recursive: true });
+    const params = createParams(`agent:main:${sessionId}`, workspaceDir);
+    params.authoredContextTokenCap = 8_192;
+    params.contextTokenBudget = 8_192;
+    params.contextWindowInfo = {
+      tokens: 8_192,
+      referenceTokens: 8_192,
+      source: "agentContextTokens",
+    };
+    params.model = { ...params.model, maxTokens: 256 };
+    await attachSqliteSessionTarget(
+      params,
+      path.join(tempDir, "selected-document.sqlite"),
+      sessionId,
+    );
+    const target = {
+      agentId: "main",
+      sessionId,
+      sessionKey: params.sessionKey!,
+      storePath: params.sessionTarget!.storePath!,
+    };
+    const saved = await saveMediaBuffer(
+      Buffer.from(`SAVED_DOCUMENT_PREFIX\n${"d".repeat(100_000)}\nSAVED_DOCUMENT_TAIL`),
+      "text/plain",
+      "inbound",
+      undefined,
+      "oversized.txt",
+    );
+    const timestamp = Date.now();
+    const sourceMessage = {
+      role: "user" as const,
+      content: "",
+      timestamp,
+      idempotencyKey: "selected-document:user",
+      __openclaw: {
+        media: [
+          {
+            url: `media://inbound/${saved.id}`,
+            contentType: "text/plain",
+            fileName: "oversized.txt",
+            hydrationSuppressed: true,
+          },
+        ],
+      },
+    };
+    await appendSessionTranscriptMessageByIdentity({
+      ...target,
+      message: sourceMessage,
+      now: timestamp,
+    });
+    params.contextEngine = createContextEngine({
+      assemble: async ({ messages }) => ({
+        messages: messages.filter(
+          (message) => asOptionalRecord(message)?.idempotencyKey === sourceMessage.idempotencyKey,
+        ),
+        estimatedTokens: 42,
+      }),
+    });
+    const abort = new AbortController();
+    params.abortSignal = abort.signal;
+    const closeHost = await bindProductionHarnessHostCapabilitiesForTest(params);
+    vi.useFakeTimers();
+    const harness = createStartedThreadHarness(undefined, { persistedThreads: [] });
+    const run = runCodexAppServerAttempt(params);
+    let started = false;
+    try {
+      const outcome = await Promise.race([
+        run.then(
+          () => ({ kind: "completed" as const }),
+          (error: unknown) => ({ kind: "rejected" as const, error }),
+        ),
+        harness.waitForMethod("turn/start").then(() => ({ kind: "started" as const })),
+      ]);
+      started = outcome.kind === "started";
+      expect(outcome.kind).toBe("rejected");
+      if (outcome.kind === "rejected") {
+        expect(String(outcome.error)).toMatch(/budget|allowance|exceed|restor|attachment/i);
+        expect(String(outcome.error)).toMatch(/new conversation.*smaller attachment/i);
+      }
+      expect(
+        harness.requests.filter(({ method }) =>
+          ["thread/start", "thread/inject_items", "turn/start"].includes(method),
+        ),
+      ).toEqual([]);
+    } finally {
+      if (started) {
+        await run.waitForTurnAccepted();
+        await harness.completeTurn();
+      }
+      abort.abort("test cleanup");
+      await run.catch(() => undefined);
+      closeHost();
+    }
+  });
+
   it("restores captionless managed documents in order without changing their transcript", async () => {
     const sessionId = "session-continuity-attachments";
     const params = createParams(`agent:main:${sessionId}`, path.join(tempDir, "workspace"));

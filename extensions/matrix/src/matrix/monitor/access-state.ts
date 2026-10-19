@@ -28,13 +28,10 @@ const matrixIngressIdentity = defineStableChannelIngressIdentity({
   normalize: normalizeMatrixEntry,
   matchEntry({ subject, entry }) {
     const senderId = subject.identifiers[0]?.value;
-    return (
-      entry.value === "*" ||
-      resolveMatrixAllowListMatch({
-        allowList: [entry.value],
-        userId: senderId ?? "",
-      }).allowed
-    );
+    return resolveMatrixAllowListMatch({
+      allowList: [entry.value],
+      userId: senderId ?? "",
+    }).allowed;
   },
 });
 

@@ -1,5 +1,6 @@
 import { isAcpRuntimeSpawnAvailable } from "../../acp/runtime/availability.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { getCurrentPluginMetadataSnapshotRuntime } from "../../plugins/plugin-metadata-snapshot.runtime.js";
 import type { PluginMetadataSnapshot } from "../../plugins/plugin-metadata-snapshot.types.js";
 import { capturePluginSkillContributions } from "../loading/plugin-skills.js";
 import type { WorkspaceSkillSourcePlanOptions } from "../loading/workspace-skill-sources.js";
@@ -14,7 +15,14 @@ export function captureSkillsSourcePlanInput(
   workspaceDir: string,
   options: WorkspaceSkillSourcePlanOptions,
 ): SkillsSourcePlanInput {
-  const { pluginMetadataSnapshot } = options;
+  const pluginMetadataSnapshot =
+    options.pluginMetadataSnapshot ??
+    getCurrentPluginMetadataSnapshotRuntime({
+      config: options.config,
+      workspaceDir,
+      allowWorkspaceScopedSnapshot: true,
+      allowSynchronousPolicyRead: false,
+    });
   const acpRuntimeAvailable = isAcpRuntimeSpawnAvailable({ config: options.config });
   return {
     workspaceDir,

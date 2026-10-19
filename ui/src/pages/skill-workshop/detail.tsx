@@ -3,11 +3,11 @@ import { createMemo, For, Show } from "solid-js";
 import { Icon } from "../../components/solid/icon.tsx";
 import { MarkdownHtml } from "../../components/solid/markdown-html.tsx";
 import { SettingsEmpty, SettingsStatus } from "../../components/solid/settings-ui.tsx";
+import { visitTextDiff } from "../../lib/chat/tool-call-diff.ts";
 import { formatRelativeTimestamp } from "../../lib/format.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { undoMutationFor } from "./api.ts";
 import {
-  latestChanges,
   MutationButton,
   renderUses,
   WorkshopChangeText,
@@ -21,10 +21,15 @@ export function Detail(props: { view: WorkshopView }) {
   const viewer = () => props.view().viewer!;
   const target = () => viewer().target;
   const snapshot = () => props.view().snapshot!;
-  const skill = () => snapshot().list.skills.find((entry) => entry.name === target().name);
-  const versions = () =>
-    snapshot().list.archived.find((entry) => entry.name === target().name)?.versions ?? [];
-  const history = () => snapshot().changes.filter((change) => change.skillName === target().name);
+  const skill = createMemo(() =>
+    snapshot().list.skills.find((entry) => entry.name === target().name),
+  );
+  const versions = createMemo(
+    () => snapshot().list.archived.find((entry) => entry.name === target().name)?.versions ?? [],
+  );
+  const history = createMemo(() =>
+    snapshot().changes.filter((change) => change.skillName === target().name),
+  );
   const files = () => {
     const current = viewer();
     return target().versionId && current.status === "ready"
@@ -33,14 +38,14 @@ export function Detail(props: { view: WorkshopView }) {
           (current.status === "ready" ? current.result.files : [target().filePath]));
   };
   const supportFiles = createMemo(() => files().filter((file) => file !== "SKILL.md"));
-  const description = () => {
+  const description = createMemo(() => {
     const current = viewer();
     const own =
       current.status === "ready" && current.target.filePath === "SKILL.md"
         ? splitFrontmatter(current.result.content).description
         : undefined;
     return target().versionId ? own : skill()?.description || own;
-  };
+  });
   const meta = () => {
     const current = skill();
     const created = history().findLast((entry) => entry.action === "create");
@@ -67,9 +72,7 @@ export function Detail(props: { view: WorkshopView }) {
   };
   const unused = () => {
     const current = skill();
-    return current
-      ? unusedDays(current, latestChanges(snapshot().changes).get(target().name), props.view().mode)
-      : null;
+    return current ? unusedDays(current, history()[0], props.view().mode) : null;
   };
   const tabs = () => {
     const listed = new Set(
@@ -325,9 +328,10 @@ function History(props: { view: WorkshopView }) {
   const history = createMemo(() =>
     snapshot().changes.filter((change) => change.skillName === name()),
   );
-  const versions = () =>
-    snapshot().list.archived.find((entry) => entry.name === name())?.versions ?? [];
-  const retained = () => new Set(versions().map((version) => version.id));
+  const versions = createMemo(
+    () => snapshot().list.archived.find((entry) => entry.name === name())?.versions ?? [],
+  );
+  const retained = createMemo(() => new Set(versions().map((version) => version.id)));
   const older = createMemo(() => {
     const listed = new Set(
       history()
@@ -461,7 +465,7 @@ function Diff(props: { current: string; version: string }) {
         <div class="sw-diff__lines" role="table">
           <For each={lines() ?? []}>
             {(line) => (
-              <div class={`sw-diff__line sw-diff__line--${line.kind}`} role="row">
+              <div class={["sw-diff__line", `sw-diff__line--${line.kind}`]} role="row">
                 <span class="sw-diff__sign" aria-hidden="true">
                   {line.kind === "add" ? "+" : line.kind === "remove" ? "−" : ""}
                 </span>
@@ -508,33 +512,10 @@ function diffLines(before: string, after: string): DiffLine[] | null {
   if ((midA.length + 1) * (midB.length + 1) > MAX_DIFF_CELLS) {
     return null;
   }
-  const table = Array.from({ length: midA.length + 1 }, () =>
-    Array.from({ length: midB.length + 1 }, () => 0),
-  );
-  for (let i = midA.length - 1; i >= 0; i -= 1) {
-    for (let j = midB.length - 1; j >= 0; j -= 1) {
-      table[i]![j] =
-        midA[i] === midB[j]
-          ? table[i + 1]![j + 1]! + 1
-          : Math.max(table[i + 1]![j]!, table[i]![j + 1]!);
-    }
-  }
   const lines: DiffLine[] = a.slice(0, start).map((text) => ({ kind: "same", text }));
-  let i = 0;
-  let j = 0;
-  while (i < midA.length || j < midB.length) {
-    if (i < midA.length && j < midB.length && midA[i] === midB[j]) {
-      lines.push({ kind: "same", text: midA[i]! });
-      i += 1;
-      j += 1;
-    } else if (i < midA.length && (j >= midB.length || table[i + 1]![j]! >= table[i]![j + 1]!)) {
-      lines.push({ kind: "remove", text: midA[i]! });
-      i += 1;
-    } else {
-      lines.push({ kind: "add", text: midB[j]! });
-      j += 1;
-    }
-  }
+  visitTextDiff(midA, midB, (kind, text) => {
+    lines.push({ kind: kind === "ctx" ? "same" : kind === "del" ? "remove" : "add", text });
+  });
   for (const text of a.slice(endA)) {
     lines.push({ kind: "same", text });
   }

@@ -56,10 +56,6 @@ const commandsLightEntries = [
     test: "src/commands/status-json-command.test.ts",
   },
   {
-    source: "src/commands/status-json-payload.ts",
-    test: "src/commands/status-json-payload.test.ts",
-  },
-  {
     source: "src/commands/status-json-runtime.ts",
     test: "src/commands/status-json-runtime.test.ts",
   },

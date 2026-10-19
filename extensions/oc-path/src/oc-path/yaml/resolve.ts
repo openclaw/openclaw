@@ -5,6 +5,7 @@ import {
   parseArrayIndexSegment,
   resolvePositionalSeg,
   splitOcPathSlots,
+  unquoteSeg,
 } from "../oc-path.js";
 import type { YamlAst } from "./ast.js";
 
@@ -36,9 +37,9 @@ function walkNode(
   if (node === null) {
     return null;
   }
-  let seg = segments[i];
+  const rawSeg = segments[i];
 
-  if (seg === undefined) {
+  if (rawSeg === undefined) {
     if (isMap(node)) {
       return { kind: "map", node, path: walked };
     }
@@ -50,12 +51,13 @@ function walkNode(
     }
     return null;
   }
+  let seg = unquoteSeg(rawSeg);
   if (seg.length === 0) {
     return null;
   }
 
-  if (isPositionalSeg(seg)) {
-    const concrete = resolveYamlPositionalSegment(node, seg);
+  if (isPositionalSeg(rawSeg)) {
+    const concrete = resolveYamlPositionalSegment(node, rawSeg);
     if (concrete !== null) {
       seg = concrete;
     }

@@ -1,5 +1,5 @@
 import { setImmediate } from "node:timers/promises";
-import * as ssrfRuntime from "openclaw/plugin-sdk/ssrf-runtime";
+import * as providerHttp from "openclaw/plugin-sdk/provider-http";
 import { afterEach, expect, it, vi } from "vitest";
 import { MAX_JSON_BYTES } from "./schema.js";
 import { requestEvaluation } from "./transport.js";
@@ -157,7 +157,7 @@ it.each([
       await releaseGate;
     });
     const controller = new AbortController();
-    vi.spyOn(ssrfRuntime, "fetchWithSsrFGuard").mockImplementationOnce(async () => {
+    vi.spyOn(providerHttp, "fetchWithProviderHttpGuard").mockImplementationOnce(async () => {
       if (trigger === "abort-at-headers") {
         controller.abort("synthetic-private-abort");
       }
@@ -209,3 +209,16 @@ it.each([
     }
   },
 );
+
+it("binds standard provider credentials to the provider's own API origin", async () => {
+  const fetch = mockFetch(async () => new Response("{}"));
+  await requestEvaluation({
+    ...request,
+    baseUrl: "https://unrelated.example",
+    providerConfig: { baseUrl: "https://decision.example.com/v1", models: [] },
+  });
+  expect(fetch.mock.calls[0]?.[0]).toBe("https://decision.example.com/v1/systemone");
+  expect(new Headers(fetch.mock.calls[0]?.[1]?.headers).get("authorization")).toBe(
+    "Bearer synthetic-key",
+  );
+});

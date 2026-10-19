@@ -1,4 +1,3 @@
-// Shared meeting bot realtime engines own provider and audio-transport orchestration.
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import type { PluginRuntime, RuntimeLogger } from "../plugins/runtime/types.js";
@@ -21,7 +20,6 @@ import type {
 import {
   buildMeetingSpeakExactUserMessage,
   createMeetingRealtimeHarness,
-  formatMeetingTranscriptSummaryLog,
   formatMeetingRealtimeVoiceModelLog,
   meetingOutputBytesPerMs,
   resolveMeetingRealtimeProvider,
@@ -444,24 +442,10 @@ export async function startMeetingRealtimeEngine(params: {
         if (!isFinal) {
           return;
         }
-        params.logger.info(
-          formatMeetingTranscriptSummaryLog(
-            params.platform.logScope,
-            `${realtimeLogScope} ${role}`,
-            text,
-          ),
-        );
         if (role !== "user" || strategy !== "agent") {
           return;
         }
         if (harness.isLikelyAssistantEchoTranscript(text)) {
-          params.logger.info(
-            formatMeetingTranscriptSummaryLog(
-              params.platform.logScope,
-              `${realtimeLogScope} ignored assistant echo transcript`,
-              text,
-            ),
-          );
           return;
         }
         if (!stopped) {
@@ -524,10 +508,6 @@ export async function startMeetingRealtimeEngine(params: {
         }
         if (
           event.type === "error" ||
-          event.type === "response.done" ||
-          event.type === "input_audio_buffer.speech_started" ||
-          event.type === "input_audio_buffer.speech_stopped" ||
-          event.type === "conversation.item.input_audio_transcription.completed" ||
           event.type === "conversation.item.input_audio_transcription.failed"
         ) {
           const detail = event.detail ? ` ${event.detail}` : "";

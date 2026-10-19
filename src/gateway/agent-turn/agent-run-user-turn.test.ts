@@ -163,50 +163,54 @@ describe("prepareAgentRunUserTurn", () => {
     },
   );
 
-  it("does not stage the user turn when delegated runtime authority closes at commit", async () => {
-    const sessionKey = "agent:main:worker-child";
-    const admittedSessionId = "worker-child-session";
-    const sessionEntry: SessionEntry = { sessionId: admittedSessionId, updatedAt: 1 };
-    mocks.loadSessionEntry.mockResolvedValue({
-      cfg: {},
-      storePath: "/tmp/sessions.json",
-      canonicalKey: sessionKey,
-      entry: sessionEntry,
-      store: { [sessionKey]: sessionEntry },
-    });
-    let authorityActive = true;
-    mocks.beforeTranscriptCommit = () => {
-      authorityActive = false;
-    };
-
-    await expect(
-      prepareAgentRunUserTurn({
-        onUserTurnMediaPersisted: vi.fn(),
-        request: { message: "must not outlive the worker turn", idempotencyKey: "closed-run" },
+  it.each([false, true])(
+    "does not stage input after authority closes (fresh child=%s)",
+    async (freshChild) => {
+      const sessionKey = "agent:main:worker-child";
+      const admittedSessionId = "worker-child-session";
+      const sessionEntry: SessionEntry = { sessionId: admittedSessionId, updatedAt: 1 };
+      mocks.loadSessionEntry.mockResolvedValue({
         cfg: {},
-        sessionEntry,
-        resolvedSessionKey: sessionKey,
-        admittedSessionId,
-        activeSessionAgentId: "main",
-        suppressVisibleSessionEffects: false,
-        requestedPromptPersistenceSuppression: false,
-        canUseInternalRuntimeHandoff: false,
-        message: "must not outlive the worker turn",
-        effectiveTranscriptInputText: "must not outlive the worker turn",
-        images: [],
-        offloadedRefs: [],
-        runId: "closed-run",
-        client: null,
-        context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
-        assertCurrent: () => {
-          if (!authorityActive) {
-            throw new TypeError("agent runtime authority is no longer active");
-          }
-        },
-      }),
-    ).rejects.toThrow("agent runtime authority is no longer active");
-    expect(mocks.persistedMessages).toEqual([]);
-  });
+        storePath: "/tmp/sessions.json",
+        canonicalKey: sessionKey,
+        entry: sessionEntry,
+        store: { [sessionKey]: sessionEntry },
+      });
+      let authorityActive = true;
+      mocks.beforeTranscriptCommit = () => {
+        authorityActive = false;
+      };
+
+      await expect(
+        prepareAgentRunUserTurn({
+          onUserTurnMediaPersisted: vi.fn(),
+          request: { message: "must not outlive the worker turn", idempotencyKey: "closed-run" },
+          cfg: {},
+          sessionEntry,
+          freshChildStorePath: freshChild ? "/tmp/sessions.json" : undefined,
+          resolvedSessionKey: sessionKey,
+          admittedSessionId,
+          activeSessionAgentId: "main",
+          suppressVisibleSessionEffects: false,
+          requestedPromptPersistenceSuppression: false,
+          canUseInternalRuntimeHandoff: false,
+          message: "must not outlive the worker turn",
+          effectiveTranscriptInputText: "must not outlive the worker turn",
+          images: [],
+          offloadedRefs: [],
+          runId: "closed-run",
+          client: null,
+          context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+          assertCurrent: () => {
+            if (!authorityActive) {
+              throw new TypeError("agent runtime authority is no longer active");
+            }
+          },
+        }),
+      ).rejects.toThrow("agent runtime authority is no longer active");
+      expect(mocks.persistedMessages).toEqual([]);
+    },
+  );
 
   it("deletes persisted media when delegated runtime authority closes during persistence", async () => {
     const sessionKey = "agent:main:worker-child";
@@ -257,9 +261,16 @@ describe("prepareAgentRunUserTurn", () => {
     expect(mocks.persistedMessages).toEqual([]);
   });
 
-  it.each(["committed", "unknown", "unretained"] as const)(
-    "transfers failed preparation cleanup exactly once for %s input custody",
-    async (custody) => {
+  it.each([
+    ["committed", undefined],
+    ["unknown", undefined],
+    ["unretained", undefined],
+    ["settlement-failed", undefined],
+    ["committed", "restart"],
+    ["committed", "rpc"],
+  ] as const)(
+    "transfers failed preparation cleanup exactly once for %s input custody (stop=%s)",
+    async (custody, stopReason) => {
       const sessionKey = "agent:main:worker-child";
       const sessionEntry: SessionEntry = { sessionId: "media-custody-session", updatedAt: 1 };
       mocks.loadSessionEntry.mockResolvedValue({
@@ -276,19 +287,30 @@ describe("prepareAgentRunUserTurn", () => {
         custody === "unknown"
           ? new SqliteWorkerError("input settlement unavailable", "outcome-unknown")
           : new Error("input preparation failed");
+      const settlementFailure = new Error("input settlement failed");
+      const finish = vi.fn();
+      const abort = new AbortController();
       mocks.stageSessionPendingInput.mockImplementationOnce(
         async (
           _scope: Parameters<typeof stageSessionPendingInput>[0],
           options: Parameters<typeof stageSessionPendingInput>[1],
         ) => {
-          if (custody === "committed") {
+          if (custody === "committed" || custody === "settlement-failed") {
             options.onCommitted?.({
               state: "queued",
               inputId: "committed-media-input",
               message: options.message,
               run: (operation) => operation(),
-              finish: vi.fn(),
+              finish,
+              settled: async () => {
+                if (custody === "settlement-failed") {
+                  throw settlementFailure;
+                }
+              },
             });
+          }
+          if (stopReason) {
+            abort.abort();
           }
           throw failure;
         },
@@ -302,28 +324,38 @@ describe("prepareAgentRunUserTurn", () => {
           return release(params);
         });
       try {
-        await expect(
-          prepareAgentRunUserTurn({
-            onUserTurnMediaPersisted,
-            assertCurrent: () => {},
-            request: { message: "retained input", idempotencyKey: "media-custody-run" },
-            cfg: {},
-            sessionEntry,
-            resolvedSessionKey: sessionKey,
-            admittedSessionId: sessionEntry.sessionId,
-            activeSessionAgentId: "main",
-            suppressVisibleSessionEffects: false,
-            requestedPromptPersistenceSuppression: false,
-            canUseInternalRuntimeHandoff: false,
-            message: "retained input",
-            effectiveTranscriptInputText: "retained input",
-            images: [],
-            offloadedRefs: [],
-            runId: "media-custody-run",
-            client: null,
-            context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
-          }),
-        ).rejects.toBe(failure);
+        const preparation = prepareAgentRunUserTurn({
+          onUserTurnMediaPersisted,
+          abortSignal: abort.signal,
+          getAbortStopReason: () => stopReason ?? "rpc",
+          assertCurrent: () => {},
+          request: { message: "retained input", idempotencyKey: "media-custody-run" },
+          cfg: {},
+          sessionEntry,
+          resolvedSessionKey: sessionKey,
+          admittedSessionId: sessionEntry.sessionId,
+          activeSessionAgentId: "main",
+          suppressVisibleSessionEffects: false,
+          requestedPromptPersistenceSuppression: false,
+          canUseInternalRuntimeHandoff: false,
+          message: "retained input",
+          effectiveTranscriptInputText: "retained input",
+          images: [],
+          offloadedRefs: [],
+          runId: "media-custody-run",
+          client: null,
+          context: { logGateway: { warn: vi.fn() } } as unknown as AgentTurnContext,
+        });
+        if (custody === "settlement-failed") {
+          await expect(preparation).rejects.toMatchObject({ errors: [failure, settlementFailure] });
+        } else {
+          await expect(preparation).rejects.toBe(failure);
+        }
+        if (custody === "committed" || custody === "settlement-failed") {
+          expect(finish).toHaveBeenCalledExactlyOnceWith(
+            stopReason === "rpc" ? "cancelled" : "interrupted",
+          );
+        }
         expect(cleanup).toHaveBeenCalledTimes(1);
         expect(mocks.stageSessionPendingInput).toHaveBeenCalledTimes(1);
         expect(onUserTurnMediaPersisted).toHaveBeenCalledTimes(custody === "unretained" ? 0 : 1);

@@ -72,7 +72,7 @@ describe("browser state option collisions", () => {
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "70000" }),
+      expect.objectContaining({ timeout: "190000" }),
       expect.objectContaining({ path, timeoutMs: 60000 }),
       expect.objectContaining({ scopes: ["operator.admin"] }),
     );
@@ -112,7 +112,7 @@ describe("browser state option collisions", () => {
 
     expect(gatewayMock).toHaveBeenLastCalledWith(
       "browser.request",
-      expect.objectContaining({ timeout: "70000" }),
+      expect.objectContaining({ timeout: "190000" }),
       expect.objectContaining({
         path: "/act",
         query: { profile: "work" },

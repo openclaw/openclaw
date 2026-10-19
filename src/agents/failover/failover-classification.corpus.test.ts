@@ -43,6 +43,7 @@ const representativeCorpusIds = new Set([
   "billing-periodic-limit-402",
   "billing-custom-proxy",
   "billing-zhipu-periodic-limit",
+  "billing-minimax-chinese-usage-limit",
   "billing-subscription-quota-refresh",
   "billing-org-period",
   "retry-429-insufficient-quota-short",

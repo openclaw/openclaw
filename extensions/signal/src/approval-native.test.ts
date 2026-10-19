@@ -11,10 +11,13 @@ import {
 const fixture = createNativeApprovalTestFixture({
   channel: "signal",
   capability: signalApprovalCapability,
-  buildConfig: ({ channel, approvals } = {}) => ({
-    channels: { signal: { enabled: true, ...channel } },
-    approvals,
-  }),
+  buildConfig: (options = {}) => {
+    const { channel, approvals } = options;
+    return {
+      channels: { signal: { enabled: true, ...channel } },
+      approvals,
+    };
+  },
 });
 const { buildConfig, buildExecRequest, buildTargetModeConfig, checks } = fixture;
 const { suppressLocalSessionPrompt } = createLocalApprovalPromptTestFixture({

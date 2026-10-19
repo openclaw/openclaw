@@ -70,11 +70,7 @@ type PendingApprovalContent = {
     [MATRIX_APPROVAL_METADATA_KEY]: ReturnType<typeof buildMatrixApprovalMetadata>;
   };
 };
-type ReactionTargetRef = {
-  accountId: string;
-  roomId: string;
-  eventId: string;
-};
+type ReactionTargetRef = Parameters<typeof unregisterMatrixApprovalReactionTarget>[0];
 const MATRIX_APPROVAL_DELIVERY_ATTEMPTS = 3;
 const MATRIX_APPROVAL_DELIVERY_RETRY_DELAY_MS = 250;
 

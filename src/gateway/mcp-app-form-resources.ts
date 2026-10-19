@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { ReadResourceResultSchema } from "@modelcontextprotocol/sdk/types.js";
+import { ReadResourceResultSchema } from "@modelcontextprotocol/core";
 import { z } from "zod";
 import type { QuestionResourceActionResult } from "../../packages/gateway-protocol/src/question-resource.js";
 import { captureAgentQuestionAnswerAuthority } from "../agents/harness/host-private-capabilities.js";

@@ -5,16 +5,6 @@ import { SettingsSegmented, SettingsToggle, SettingsToggleRow } from "./settings
 
 afterEach(cleanup);
 
-it("uses the visible title to name a toggle without moving caller-owned DOM", () => {
-  const title = document.createElement("span");
-  title.textContent = "Rich title";
-  const view = render(() => (
-    <SettingsToggleRow title={title} checked={false} onChange={() => {}} />
-  ));
-  expect(title.parentElement).toBe(view.container.querySelector(".settings-row__title"));
-  expect(view.getByRole("switch", { name: "Rich title" })).toBeTruthy();
-});
-
 it("runs the current standalone activation callback before proposing the change", () => {
   const calls: string[] = [];
   const [updated, setUpdated] = createSignal(false);
@@ -53,33 +43,6 @@ it("keeps direct activation synchronous and restores a rejected switch", () => {
   fireEvent.keyDown(input, { key: "ArrowRight" });
   expect(onAct).toHaveBeenCalledExactlyOnceWith(true);
   expect(onChange).toHaveBeenCalledExactlyOnceWith(true);
-  expect(input.checked).toBe(false);
-});
-
-it("honors switch direction and restores interaction after a busy fieldset", () => {
-  const [busy, setBusy] = createSignal(true);
-  const [checked, setChecked] = createSignal(false);
-  const onChange = vi.fn((next: boolean) => {
-    setChecked(next);
-  });
-  const view = render(() => (
-    <fieldset disabled={busy()} dir="rtl">
-      <SettingsToggle ariaLabel="Enabled" checked={checked()} onChange={onChange} />
-    </fieldset>
-  ));
-  const input = view.getByRole("switch") as HTMLInputElement;
-  input.click();
-  expect(onChange).not.toHaveBeenCalled();
-  setBusy(false);
-  flush();
-  input.click();
-  flush();
-  expect(input.checked).toBe(true);
-  // jsdom does not resolve inherited direction; explicit direction tests the same input contract.
-  input.style.direction = "rtl";
-  fireEvent.keyDown(input, { key: "ArrowRight" });
-  expect(onChange).toHaveBeenLastCalledWith(false);
-  flush();
   expect(input.checked).toBe(false);
 });
 

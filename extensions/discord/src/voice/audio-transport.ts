@@ -284,11 +284,7 @@ export class DiscordAudioTransport extends EventEmitter<{
       case "capture-frame": {
         const capture = this.captures.get(event.id);
         if (capture && !capture.destroyed) {
-          capture.push({
-            ...event.frame,
-            pcm: Buffer.from(event.frame.pcm),
-            packet: Buffer.from(event.frame.packet),
-          });
+          capture.push(event.frame);
         }
         break;
       }
@@ -328,7 +324,7 @@ export class DiscordAudioTransport extends EventEmitter<{
       }
       case "error":
         this.readiness.reject(restoreDiscordAudioError(event.error));
-        logger.warn("discord voice: " + event.error.message);
+        logger.warn("discord voice: audio worker failed", { code: event.error.code });
         break;
       case "log":
         if (event.level === "warn") {

@@ -12,6 +12,7 @@ import {
 } from "openclaw/plugin-sdk/memory-host-search";
 import { normalizePluginsConfig } from "openclaw/plugin-sdk/plugin-config-runtime";
 import { truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { racePromiseWithAbortSignal } from "openclaw/plugin-sdk/time-runtime";
 import { buildPromptPrefix } from "./prompt.js";
 import { buildMemoryAudienceCacheIdentity } from "./recall-state.js";
 
@@ -170,7 +171,7 @@ async function loadNativeTriggerRecallCandidates(
 ) {
   const activeProjectKeys = params.activeProjectKeys ?? [];
   context.assertCurrent();
-  const lookup = await waitForTriggerLookup(
+  const lookup = await racePromiseWithAbortSignal(
     getActiveMemoryProvider({
       cfg: params.cfg,
       agentId: params.agentId,
@@ -183,6 +184,7 @@ async function loadNativeTriggerRecallCandidates(
       },
     }),
     params.signal,
+    (signal) => signal.reason,
   );
   if (!lookup.provider) {
     params.debug?.(
@@ -205,7 +207,7 @@ async function loadNativeTriggerRecallCandidates(
     const projectFilter = lookup.provider.capabilities.projectFilter
       ? { activeProjectKeys: [...activeProjectKeys] }
       : {};
-    const [retrieved, triggerCandidates] = await waitForTriggerLookup(
+    const [retrieved, triggerCandidates] = await racePromiseWithAbortSignal(
       Promise.all([
         lookup.provider
           .search({
@@ -233,6 +235,7 @@ async function loadNativeTriggerRecallCandidates(
           }),
       ]),
       params.signal,
+      (signal) => signal.reason,
     );
     context.assertCurrent();
     const entries = new Map<string, MemorySearchHit>();
@@ -291,17 +294,19 @@ function toLegacyTriggerRecallHit(entry: MemorySearchResult, providerId: string)
 // replaces its unscored trigger candidate.
 async function loadLegacyTriggerRecallCandidates(params: TriggerLookupParams) {
   const activeProjectKeys = params.activeProjectKeys ?? [];
-  const lookup = await waitForTriggerLookup(
+  const lookup = await racePromiseWithAbortSignal(
     getActiveMemorySearchManager({
       cfg: params.cfg,
       agentId: params.agentId,
     }),
     params.signal,
+    (signal) => signal.reason,
   );
   if (!lookup.manager?.listTriggerCandidates) {
     return [];
   }
   const lookupWork = Promise.all([
+    // Either optional source can supply trigger recall when the other is unavailable.
     lookup.manager
       .search(params.query, {
         maxResults: TRIGGER_CANDIDATE_LIMIT,
@@ -318,7 +323,11 @@ async function loadLegacyTriggerRecallCandidates(params: TriggerLookupParams) {
       .listTriggerCandidates({ activeProjectKeys: [...activeProjectKeys] })
       .catch(() => []),
   ]);
-  const [retrieved, triggerCandidates] = await waitForTriggerLookup(lookupWork, params.signal);
+  const [retrieved, triggerCandidates] = await racePromiseWithAbortSignal(
+    lookupWork,
+    params.signal,
+    (signal) => signal.reason,
+  );
   const providerId = normalizePluginsConfig(params.cfg.plugins).slots.memory ?? "memory";
   return [
     ...new Map(
@@ -385,9 +394,10 @@ export async function resolveTriggerRecall(
   params.signal?.throwIfAborted();
   assertTriggerSourceCurrent(params.source);
   const activeProjectKeys = params.activeProjectKeys ?? [];
-  const candidates = await waitForTriggerLookup(
+  const candidates = await racePromiseWithAbortSignal(
     resolveTriggerRecallCandidates(params),
     params.signal,
+    (signal) => signal.reason,
   );
   assertTriggerSourceCurrent(params.source);
   const matches = selectStrongTriggerMatches(params.message, candidates, activeProjectKeys);
@@ -411,32 +421,6 @@ export function forgetTriggerRecallRun(runId: string | undefined): void {
 
 export function resetTriggerRecallRunsForTests(): void {
   triggerRecallRuns.clear();
-}
-
-function waitForTriggerLookup<T>(work: Promise<T>, signal?: AbortSignal): Promise<T> {
-  if (!signal) {
-    return work;
-  }
-  signal.throwIfAborted();
-  return new Promise<T>((resolve, reject) => {
-    const onAbort = () =>
-      reject(
-        signal.reason instanceof Error
-          ? signal.reason
-          : new Error("active-memory trigger recall aborted", { cause: signal.reason }),
-      );
-    signal.addEventListener("abort", onAbort, { once: true });
-    void work.then(
-      (value) => {
-        signal.removeEventListener("abort", onAbort);
-        resolve(value);
-      },
-      (error: unknown) => {
-        signal.removeEventListener("abort", onAbort);
-        reject(error instanceof Error ? error : new Error(String(error)));
-      },
-    );
-  });
 }
 
 export { MAX_TRIGGER_CONTEXT_CHARS };

@@ -1,4 +1,3 @@
-import type { DatabaseSync } from "node:sqlite";
 import { serialize } from "node:v8";
 import { runWithCliHistoryWriter } from "../../config/sessions/cli-history-boundary.js";
 import { persistCompactionBoundaryWithSessionEntryInWorker } from "../../config/sessions/session-accessor.sqlite-compaction.js";
@@ -23,12 +22,16 @@ import {
   parseTranscriptAppendRefusal,
   SessionTranscriptWriterClaimReboundError,
 } from "../../config/sessions/session-transcript-writer-claim-error.js";
+import type { EngineConnection } from "../../infra/sql-connection.js";
 import {
   sqliteSessionIdWriteScope,
   withoutSqliteDatabaseWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { assertTransactionUsable } from "../../infra/sqlite-transaction.js";
+import {
+  bindSqliteWorkerDatabase,
+  type SqliteWorkerDatabaseBinding,
+} from "../../infra/sqlite-worker-binding.js";
 import type {
   SqliteWorkerBackend,
   SqliteWorkerCommand,
@@ -65,7 +68,7 @@ export function bindSqliteWorkerBackend(
   _input: undefined,
   nativeContext: {
     databasePath: string;
-    database: DatabaseSync;
+    database: EngineConnection;
     admit(stage: "transaction" | "commit", restriction?: AgentDatabaseAdmissionRestriction): void;
   },
 ): Omit<SqliteWorkerBackend<SessionMetadataWorkerOperations>, "close"> & { close(): undefined } {
@@ -109,17 +112,9 @@ export function bindSqliteWorkerBackend(
       );
     },
   };
-  let closed = false;
-  const assertOpen = () => {
-    if (closed || !context.database.isOpen) {
-      throw new Error("Session metadata domain is closed");
-    }
-    assertTransactionUsable(context.database);
-  };
   const execute = (
     command: SqliteWorkerCommand<SessionMetadataOperations>,
   ): SessionMetadataWorkerOperations[keyof SessionMetadataWorkerOperations]["output"] => {
-    assertOpen();
     // Database execution already carries the captured host environment. Command payloads
     // must not transport process.env or its non-cloneable Windows semantics proxy.
     const scope = { ...command.input.scope, env: getSqliteWorkerStateContext().environment };
@@ -175,9 +170,6 @@ export function bindSqliteWorkerBackend(
           SessionMetadataWorkerOperations["session.transcript.appendMessage"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session message lost its borrowed canonical connection");
-            }
             admit("transaction");
             const value = applySessionDirectMessageInTransaction(database, {
               ...command.input,
@@ -212,9 +204,6 @@ export function bindSqliteWorkerBackend(
             | "session.metadata.append"]["output"]
         >(
           (database) => {
-            if (database.db !== context.database) {
-              throw new Error("Session metadata lost its borrowed canonical connection");
-            }
             admit("transaction");
             if (command.type === "session.metadata.initialize") {
               const initialized = ensureSessionEntryInTransaction(
@@ -278,60 +267,53 @@ export function bindSqliteWorkerBackend(
     }
     return outcome;
   };
-  return {
-    execute(command) {
-      try {
-        const cliWriter =
-          command.type === "session.transcript.appendMessage" ||
-          command.type === "session.metadata.append"
-            ? command.input.cliWriter
-            : undefined;
-        return runWithCliHistoryWriter(
-          cliWriter
-            ? {
-                ...cliWriter,
-                target: { ...command.input.scope, storePath: context.databasePath },
-                // Host liveness is composed into both transaction and commit grants.
-                assertCurrent: assertOpen,
-                assertReadable: assertOpen,
-              }
-            : undefined,
-          () =>
-            captureSessionRowChanges(context.database, (changes) => {
-              entryChanges = changes;
-              try {
-                return withSqliteDatabaseWriteScope(
-                  context.database,
-                  [
-                    command.input.scope.sessionKey,
-                    sqliteSessionIdWriteScope(command.input.scope.sessionId),
-                  ],
-                  () => execute(command),
-                );
-              } finally {
-                entryChanges = [];
-              }
-            }).result,
-        );
-      } catch (error) {
-        if (error instanceof SessionTranscriptWriterClaimReboundError) {
-          const refusal = parseTranscriptAppendRefusal(error.cause);
-          if (error.cause !== undefined && !refusal) {
-            throw new Error("Session metadata refusal has an invalid identity", { cause: error });
+  const backend: SqliteWorkerDatabaseBinding<SessionMetadataWorkerOperations> =
+    bindSqliteWorkerDatabase<SessionMetadataWorkerOperations>(context.database, {
+      execute(command) {
+        try {
+          const cliWriter =
+            command.type === "session.transcript.appendMessage" ||
+            command.type === "session.metadata.append"
+              ? command.input.cliWriter
+              : undefined;
+          return runWithCliHistoryWriter(
+            cliWriter
+              ? {
+                  ...cliWriter,
+                  target: { ...command.input.scope, storePath: context.databasePath },
+                  // Host liveness is composed into both transaction and commit grants.
+                  assertCurrent: backend.assertOpen,
+                  assertReadable: backend.assertOpen,
+                }
+              : undefined,
+            () =>
+              captureSessionRowChanges(context.database, (changes) => {
+                entryChanges = changes;
+                try {
+                  return withSqliteDatabaseWriteScope(
+                    context.database,
+                    [
+                      command.input.scope.sessionKey,
+                      sqliteSessionIdWriteScope(command.input.scope.sessionId),
+                    ],
+                    () => execute(command),
+                  );
+                } finally {
+                  entryChanges = [];
+                }
+              }).result,
+          );
+        } catch (error) {
+          if (error instanceof SessionTranscriptWriterClaimReboundError) {
+            const refusal = parseTranscriptAppendRefusal(error.cause);
+            if (error.cause !== undefined && !refusal) {
+              throw new Error("Session metadata refusal has an invalid identity", { cause: error });
+            }
+            return { ok: false, refusal };
           }
-          return { ok: false, refusal };
+          throw error;
         }
-        throw error;
-      }
-    },
-    assertSettled() {
-      assertOpen();
-      if (context.database.isTransaction) {
-        throw new Error("Session metadata command left a transaction open");
-      }
-    },
-    close(): undefined {
-      closed = true;
-    },
-  };
+      },
+    });
+  return backend;
 }

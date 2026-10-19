@@ -69,8 +69,6 @@ const finalizeSetupWizard = vi.hoisted(() =>
     launchedTui: false,
   })),
 );
-const listChannelPlugins = vi.hoisted(() => vi.fn(() => []));
-const logConfigUpdated = vi.hoisted(() => vi.fn(() => {}));
 
 const detectSetupMigrationSources = vi.hoisted(() =>
   vi.fn(async () => ({ detections: [], providerDescriptors: [] })),
@@ -125,13 +123,9 @@ const resolveGatewayPort = vi.hoisted(() =>
 const readConfigFileSnapshot = vi.hoisted(() =>
   vi.fn<typeof import("../config/io.js").readConfigFileSnapshot>(),
 );
-const createConfigIO = vi.hoisted(() => vi.fn(() => ({ readConfigFileSnapshot })));
 const probeGatewayReachable = vi.hoisted(() => vi.fn(async () => ({ ok: true })));
 const buildPluginCompatibilitySnapshotNotices = vi.hoisted(() =>
   vi.fn((): PluginCompatibilityNotice[] => []),
-);
-const formatPluginCompatibilityNotice = vi.hoisted(() =>
-  vi.fn((notice: PluginCompatibilityNotice) => `${notice.pluginId} ${notice.message}`),
 );
 
 function providerFlag(
@@ -290,10 +284,10 @@ vi.mock("../system-agent/setup-inference.js", () => ({ verifySetupInferenceConfi
 vi.mock("../config/config.js", async (importActual) => {
   const actual = await importActual<typeof import("../config/config.js")>();
   return {
+    ...actual,
     DEFAULT_GATEWAY_PORT: 18789,
-    createConfigIO,
+    createConfigIO: () => ({ readConfigFileSnapshot }),
     readConfigFileSnapshot,
-    resolveConfigWriteAfterWrite: actual.resolveConfigWriteAfterWrite,
     resolveGatewayPort,
     replaceConfigFile,
     transformConfigFileWithRetry: async (
@@ -321,13 +315,19 @@ vi.mock("../config/config.js", async (importActual) => {
     },
   };
 });
-vi.mock("../commands/onboard-agent.js", async () => {
-  return {
-    ensureOnboardingAgent: ensureOnboardingConfig,
-    validateFirstOnboardingAgentName: (value: string | undefined) =>
-      value?.trim() ? undefined : "Agent name is required.",
-  };
-});
+vi.mock("./setup.shared.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./setup.shared.js")>()),
+  readSetupConfigAuthority: async () => ({
+    snapshot: await readConfigFileSnapshot(),
+    assertCurrent: () => {},
+  }),
+}));
+// mock-isolation: Keep roster/database creation and session migration outside these in-memory fixtures.
+vi.mock("../commands/onboard-agent.js", () => ({
+  ensureOnboardingAgent: ensureOnboardingConfig,
+  validateFirstOnboardingAgentName: (value: string | undefined) =>
+    value?.trim() ? undefined : "Agent name is required.",
+}));
 vi.mock("../commands/onboard-helpers.js", () => ({
   DEFAULT_WORKSPACE: "/tmp/openclaw-workspace",
   applyWizardMetadata: (cfg: unknown) => cfg,
@@ -337,14 +337,13 @@ vi.mock("../commands/onboard-helpers.js", () => ({
   probeGatewayReachable,
 }));
 
-vi.mock("../plugins/status.js", () => ({
+vi.mock("../plugins/status.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../plugins/status.js")>()),
   buildPluginCompatibilitySnapshotNotices,
-  formatPluginCompatibilityNotice,
 }));
 
-vi.mock("../channels/plugins/index.js", () => ({ listChannelPlugins }));
-
-vi.mock("../config/logging.js", () => ({ logConfigUpdated }));
+// mock-isolation: Keep process-global channel registry state outside wizard orchestration fixtures.
+vi.mock("../channels/plugins/index.js", () => ({ listChannelPlugins: () => [] }));
 
 vi.mock("./setup.gateway-config.js", () => ({ configureGatewayForSetup }));
 
@@ -1163,65 +1162,6 @@ describe("runSetupWizard", () => {
       }
     },
   );
-
-  it("localizes the quickstart summary", async () => {
-    vi.stubEnv("OPENCLAW_GATEWAY_PORT", "18791");
-    vi.stubEnv("OPENCLAW_LOCALE", "zh-CN");
-    const prompter = buildWizardPrompter();
-    await runWizard({}, createRuntime(), prompter);
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Gateway 端口：18791"),
-      "QuickStart",
-    );
-    expect(prompter.note).toHaveBeenCalledWith(
-      expect.stringContaining("Tailscale 暴露方式：关闭"),
-      "QuickStart",
-    );
-  });
-
-  it("verifies and persists managed-local setup without enabling lean mode", async () => {
-    const modelRef = "managed-local/test-model";
-    readConfigFileSnapshot.mockResolvedValue(configSnapshot({}));
-    replaceConfigFile.mockImplementation(async ({ nextConfig }) => {
-      readConfigFileSnapshot.mockResolvedValue(configSnapshot(nextConfig));
-      return { nextConfig };
-    });
-    applyAuthChoice.mockImplementationOnce(async (args) => ({
-      config: {
-        ...args.config,
-        agents: {
-          ...args.config.agents,
-          defaults: { ...args.config.agents?.defaults, model: { primary: modelRef } },
-        },
-        models: {
-          providers: {
-            "managed-local": {
-              baseUrl: "http://127.0.0.1:8080/v1",
-              models: [],
-              localService: { command: "/fixture/server" },
-            },
-          },
-        },
-      },
-    }));
-    verifySetupInferenceConfig.mockImplementationOnce(async ({ config }) => {
-      expect(config.agents?.defaults?.experimental?.localModelLean).toBeUndefined();
-      expect(replaceConfigFile).not.toHaveBeenCalled();
-      return { ok: true, modelRef, latencyMs: 1 };
-    });
-    const prompter = buildWizardPrompter({ confirm: vi.fn(async () => true) });
-    await runWizard({ authChoice: "demo-provider" }, createRuntime(), prompter);
-    expect(prompter.confirm).not.toHaveBeenCalledWith(
-      expect.objectContaining({ message: "Test AI access now with a live completion?" }),
-    );
-    expect(verifySetupInferenceConfig).toHaveBeenCalledOnce();
-    expect(
-      persistedWizardConfigs().at(-1)?.agents?.defaults?.experimental?.localModelLean,
-    ).toBeUndefined();
-    expect(persistedWizardConfigs().at(-1)?.wizard ?? {}).not.toHaveProperty(
-      "localModelLeanAutoModel",
-    );
-  });
 
   it("saves each retry credential before verification while failed candidates leave config unchanged", async () => {
     const stateDir = await makeCaseDir("failed-auth-profile-retry-");

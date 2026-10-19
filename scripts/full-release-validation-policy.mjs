@@ -732,7 +732,7 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       attempt.jobs.filter((job) => job?.status === "completed").map((job) => job.name),
     );
     const runningNames = new Set(
-      expected.effectiveRunStatus === "in_progress" &&
+      ["queued", "in_progress"].includes(expected.effectiveRunStatus) &&
         expectedAttempt === effectiveRunAttempt &&
         effectiveRunAttempt > plannedRunAttempt
         ? attempt.jobs
@@ -744,8 +744,9 @@ export function composeReleaseAttemptJobs(attempts, expected = {}) {
       const job = normalizedAttemptJob(rawJob, expectedAttempt);
       // GitHub's runnerless queued copies can outlive the real rerun job. While
       // the latest rerun is active, retain its running job so collection stays
-      // pending; terminal evidence still requires the completed sibling. Mirrored
-      // steps do not identify a real runner.
+      // pending even when the aggregate run status still says queued. Terminal
+      // evidence still requires the completed sibling. Mirrored steps do not
+      // identify a real runner.
       const ghost = job.status === "queued" && !rawJob.runner_id && !rawJob.runner_name;
       const skipped = job.status === "completed" && job.conclusion === "skipped";
       if (skipped || (ghost && (completedNames.has(job.name) || runningNames.has(job.name)))) {

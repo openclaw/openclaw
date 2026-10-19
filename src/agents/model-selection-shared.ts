@@ -1,3 +1,4 @@
+import { stripSelfProviderModelPrefix } from "@openclaw/model-catalog-core/provider-model-id-normalization";
 /**
  * Shared model-selection resolution, alias, allowlist, and visibility logic.
  */
@@ -26,7 +27,7 @@ import { DEFAULT_PROVIDER } from "./defaults.js";
 import { findModelCatalogEntry } from "./model-catalog-lookup.js";
 import { overlayCatalogMetadata } from "./model-catalog-metadata.js";
 import type { ModelCatalogEntry } from "./model-catalog.types.js";
-import { isVllmQwenThinkingCompat } from "./model-compat-catalog.js";
+import { isVllmQwenThinkingCompat, modelTransportRoutesMatch } from "./model-compat-catalog.js";
 import type { ModelFallbackRouteResolution } from "./model-fallback.types.js";
 import { splitTrailingAuthProfile } from "./model-ref-profile.js";
 import {
@@ -323,10 +324,7 @@ export function inferUniqueProviderFromConfiguredModels(
   const matcher = collectModelMapProviders(params.cfg.agents?.defaults?.models);
   const normalizeModelId = createConfiguredProviderCatalogModelIdNormalizer(params);
   for (const [providerId, providerConfig] of Object.entries(params.cfg.models?.providers ?? {})) {
-    if (!Array.isArray(providerConfig?.models)) {
-      continue;
-    }
-    for (const entry of providerConfig.models) {
+    for (const entry of providerConfig.models ?? []) {
       const modelId = entry?.id?.trim();
       if (modelId) {
         matcher.add(providerId, modelId, normalizeModelId(providerId, modelId));
@@ -585,6 +583,40 @@ export function resolveModelRefFromString(
     raw: model,
   });
   return parsed ? { ref: parsed } : null;
+}
+
+/**
+ * Keep discovery and activation labels aligned: resolve aliases, but preserve
+ * literal catalog namespaces that the completion resolver strips.
+ */
+export function resolveConfiguredRouteModelLabel(params: {
+  /** The authored primary/utility ref, or undefined when none is configured. */
+  configuredRef: string | undefined;
+  /** The resolved selection for the same config (provider + model id). */
+  resolved: ModelRef;
+  /**
+   * The auth profile the selection already separated. Only a suffix matching
+   * this exact profile is dropped, so a literal catalog `@` suffix (e.g.
+   * `local-utility/tiny@experimental`) is preserved.
+   */
+  profileId?: string;
+}): string {
+  const configuredRef = params.configuredRef?.trim();
+  const configuredModel =
+    configuredRef && params.profileId && configuredRef.endsWith(`@${params.profileId}`)
+      ? configuredRef.slice(0, configuredRef.length - params.profileId.length - 1)
+      : (configuredRef ?? "");
+  // Preserve an authored namespace only when it resolves to the same model.
+  // Otherwise the concrete selection, rather than a mutable alias, owns identity.
+  const strippedConfiguredModel = stripSelfProviderModelPrefix(
+    params.resolved.provider,
+    configuredModel,
+  );
+  const model =
+    configuredModel && strippedConfiguredModel === params.resolved.model
+      ? configuredModel
+      : params.resolved.model;
+  return modelKey(params.resolved.provider, model);
 }
 
 /** Prepare implicit provider selection without promoting the agent's utility route. */
@@ -878,10 +910,11 @@ function buildAllowedModelSetFromPrepared(
     visibility,
     policyAliasIndex,
     metadata,
-    catalog,
+    catalog: inventory,
     defaultRef,
   }: ReturnType<typeof prepareModelPolicy>,
 ): AllowedModelSet {
+  const catalog = inventory.filter((entry) => entry.inference?.chat !== false);
   const wildcardModelKeys = visibility.wildcardModelKeys;
   const allowAny = !visibility.hasEntries;
   const defaultKey = defaultRef ? modelKey(defaultRef.provider, defaultRef.model) : undefined;
@@ -1081,7 +1114,7 @@ function hasConfiguredProviderModelRows(
   }
   return Object.entries(providers).some(
     ([providerRaw, provider]) =>
-      Array.isArray(provider?.models) &&
+      provider.models !== undefined &&
       (scope === "all" || normalizeProviderId(providerRaw) !== "openai"),
   );
 }
@@ -1143,10 +1176,10 @@ export function buildConfiguredModelCatalog(params: {
   const catalog: ModelCatalogEntry[] = [];
   for (const [providerRaw, provider] of Object.entries(providers)) {
     const providerId = normalizeProviderId(providerRaw);
-    if (!providerId || !Array.isArray(provider?.models)) {
+    if (!providerId) {
       continue;
     }
-    for (const model of provider.models) {
+    for (const model of provider.models ?? []) {
       const rawId = normalizeOptionalString(model?.id) ?? "";
       const id = rawId ? normalizeModelId(providerId, rawId) : "";
       if (!id) {
@@ -1158,6 +1191,11 @@ export function buildConfiguredModelCatalog(params: {
       );
       const api = model.api ?? accepted?.api ?? provider.api;
       const baseUrl = model.baseUrl ?? accepted?.baseUrl ?? provider.baseUrl;
+      const parameterCount =
+        model.parameterCount ??
+        (accepted && modelTransportRoutesMatch(accepted, { api, baseUrl })
+          ? accepted.parameterCount
+          : undefined);
       const name = normalizeOptionalString(model?.name) || id;
       const contextWindow =
         typeof model?.contextWindow === "number" && model.contextWindow > 0
@@ -1167,16 +1205,9 @@ export function buildConfiguredModelCatalog(params: {
         typeof model?.contextTokens === "number" && model.contextTokens > 0
           ? model.contextTokens
           : undefined;
-      const input = Array.isArray(model?.input) ? model.input : undefined;
-      const modelParams =
-        model?.params && typeof model.params === "object" ? model.params : undefined;
-      const compat = model?.compat && typeof model.compat === "object" ? model.compat : undefined;
+      const input = model.input;
       const reasoning =
-        typeof model?.reasoning === "boolean"
-          ? model.reasoning
-          : isVllmQwenThinkingCompat(providerId, compat)
-            ? true
-            : undefined;
+        model.reasoning ?? (isVllmQwenThinkingCompat(providerId, model.compat) ? true : undefined);
       catalog.push({
         provider: providerId,
         id,
@@ -1185,12 +1216,13 @@ export function buildConfiguredModelCatalog(params: {
         ...(baseUrl ? { baseUrl } : {}),
         contextWindow,
         contextTokens,
+        ...(parameterCount !== undefined ? { parameterCount } : {}),
         reasoning,
         ...(typeof model?.reasoning === "boolean" ? { configuredReasoning: model.reasoning } : {}),
         ...(model.thinkingLevelMap ? { thinkingLevelMap: model.thinkingLevelMap } : {}),
         input,
-        ...(modelParams ? { params: modelParams } : {}),
-        compat,
+        ...(model.params ? { params: model.params } : {}),
+        compat: model.compat,
       });
     }
   }

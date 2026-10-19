@@ -95,6 +95,11 @@ export class GatewayProtocolClient<TPlan> {
     return this.connectSent && !this.helloReceived;
   }
 
+  /** A transport upgrade is in flight; the socket adapter bounds how long it may stay open. */
+  get opening(): boolean {
+    return this.socket !== null && !this.socketOpened;
+  }
+
   get hasUnboundedPendingRequests(): boolean {
     return this.requests.hasUnboundedPending;
   }

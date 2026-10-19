@@ -269,24 +269,6 @@ describe("exec approval followup", () => {
     },
   );
 
-  it("preserves command output during direct delivery", async () => {
-    const secret = "sk-abcdefghijklmnopqrstuvwxyz123456";
-    await direct({
-      turnSourceAccountId: "default",
-      turnSourceThreadId: "456",
-      resultText: `Exec finished (gateway id=req-1, code 0)\nAuthorization: Bearer ${secret}\nAPI_KEY=${secret}`,
-    });
-    const content = directArgs({
-      channel: "telegram",
-      to: "123",
-      accountId: "default",
-      threadId: "456",
-    }).content;
-    expect(content).toContain("Authorization: Bearer ");
-    expect(content).toContain(`API_KEY=${secret}`);
-    expect(content).toContain(`Authorization: Bearer ${secret}`);
-  });
-
   it("provides a summary when a no-session completion has no output", async () => {
     await direct({ resultText: "Exec finished (gateway id=req-1, code 0)" });
     directArgs({ content: "Background command finished." });

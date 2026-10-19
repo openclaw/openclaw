@@ -12,32 +12,19 @@ import {
 } from "./proxy-env.js";
 
 describe("hasProxyEnvConfigured", () => {
-  it.each([
-    {
-      name: "ignores blank proxy values",
-      env: { HTTP_PROXY: "   ", all_proxy: "" } as NodeJS.ProcessEnv,
-      expected: false,
-    },
-  ])("$name", ({ env, expected }) => {
-    expect(hasProxyEnvConfigured(env)).toBe(expected);
+  it("ignores blank proxy values", () => {
+    expect(hasProxyEnvConfigured({ HTTP_PROXY: "   ", all_proxy: "" })).toBe(false);
   });
 });
 
 describe("resolveEnvHttpProxyUrl", () => {
-  it.each([
-    {
-      name: "treats empty lower-case https_proxy as authoritative over upper-case HTTPS_PROXY",
-      protocol: "https" as const,
-      env: {
-        https_proxy: "",
-        HTTPS_PROXY: "http://upper.test:8080",
-      } as NodeJS.ProcessEnv,
-      expectedUrl: undefined,
-      expectedConfigured: false,
-    },
-  ])("$name", ({ protocol, env, expectedUrl, expectedConfigured }) => {
-    expect(resolveEnvHttpProxyUrl(protocol, env)).toBe(expectedUrl);
-    expect(hasEnvHttpProxyConfigured(protocol, env)).toBe(expectedConfigured);
+  it("treats empty lower-case https_proxy as authoritative over upper-case HTTPS_PROXY", () => {
+    const env = {
+      https_proxy: "",
+      HTTPS_PROXY: "http://upper.test:8080",
+    };
+    expect(resolveEnvHttpProxyUrl("https", env)).toBeUndefined();
+    expect(hasEnvHttpProxyConfigured("https", env)).toBe(false);
   });
 });
 

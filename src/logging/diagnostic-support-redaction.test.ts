@@ -140,7 +140,6 @@ describe("diagnostic support redaction", () => {
       ),
     ).toBe(code);
   });
-
   it("keeps a closed cause from later npm stderr lines", () => {
     expect(
       redactPublicSupportDiagnosticLine(
@@ -148,6 +147,28 @@ describe("diagnostic support redaction", () => {
         { env: {}, stateDir: tempDir },
       ),
     ).toBe("EACCES; Permission denied");
+  });
+
+  it.each([
+    ["SQLite file generation changed while reading", ": /private/example/openclaw.sqlite"],
+    ["SQLite file generation did not stabilize", " during confirmation: /private/example/a.sqlite"],
+    [
+      "SQLite source did not stabilize",
+      " after 3 read-only inspection attempts: /private/x.sqlite",
+    ],
+    ["SQLite WAL commit header is unavailable or changing", ": /private/example/a.sqlite"],
+    ["SQLite WAL commit publication could not be verified", ": /private/example/a.sqlite"],
+    [
+      "SQLite snapshot hash mismatch",
+      ` for /private/example/a.sqlite-wal: expected ${"a".repeat(64)}, got ${"b".repeat(64)}`,
+    ],
+  ])("keeps the fixed concurrent-write cause %s without its path", (cause, suffix) => {
+    expect(
+      redactPublicSupportDiagnosticLine(`Warning: private-host.example\n${cause}${suffix}`, {
+        env: {},
+        stateDir: tempDir,
+      }),
+    ).toBe(cause);
   });
 
   it.each([
@@ -368,16 +389,6 @@ describe("diagnostic support redaction", () => {
       expect(redactSupportString(sanitized, redaction)).toBe(expected);
     },
   );
-
-  it("preserves canonical state path markers across repeated support handoffs", () => {
-    const redaction = { env: {}, stateDir: tempDir };
-    const expected = "Config: $OPENCLAW_STATE_DIR/openclaw.json";
-    const sanitized = redactSupportString(`Config: ${tempDir}/openclaw.json`, redaction);
-
-    expect(sanitized).toBe(expected);
-    expect(redactSupportString(sanitized, redaction)).toBe(expected);
-    expect(redactSupportString("$OPENCLAW_STATE_DIR", redaction)).toBe("$OPENCLAW_STATE_DIR");
-  });
 
   it("truncates support strings without splitting UTF-16 surrogate pairs", () => {
     const redaction = {

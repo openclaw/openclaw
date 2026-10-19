@@ -12,10 +12,12 @@ import { isRecord as record } from "@openclaw/normalization-core/record-coerce";
 import { parse } from "acorn";
 import type { CodeModeExecutorId } from "../../src/agents/code-mode-executor-types.js";
 import { resolveCodeModeConfig } from "../../src/agents/code-mode-runtime.js";
+import { normalizeUsage } from "../../src/agents/usage.js";
 import type { OpenClawConfig } from "../../src/config/types.openclaw.js";
 import { readResponseWithLimit } from "../../src/infra/http-response-body.js";
 import type { ManagedRun } from "../../src/process/supervisor/types.js";
 import type { CodeModeMatrixCellResult, RunCellParams } from "../code-mode-model-matrix.ts";
+import { createBuildSmokeEnv } from "./build-smoke-env.mts";
 import { createGatewayMatrixConfig } from "./code-mode-matrix-config.ts";
 import {
   createGatewayMatrixFixture,
@@ -332,17 +334,17 @@ export function collectGatewayMatrixTrace(events: readonly unknown[]) {
       if (typeof message.provider === "string" && typeof message.model === "string") {
         models.add(`${message.provider}/${message.model}`);
       }
-      const usage = record(message.usage) ? message.usage : {};
-      const inputTokens = asFiniteNumber(usage.input);
-      const outputTokens = asFiniteNumber(usage.output);
+      const usage = normalizeUsage(record(message.usage) ? message.usage : undefined);
+      const inputTokens = usage?.input;
+      const outputTokens = usage?.output;
       if (inputTokens !== undefined && outputTokens !== undefined) {
         usageSamples += 1;
         input += inputTokens;
         output += outputTokens;
-        total = addObservedNumber(total, usage.totalTokens);
-        cacheRead = addObservedNumber(cacheRead, usage.cacheRead);
-        cacheWrite = addObservedNumber(cacheWrite, usage.cacheWrite);
-        costUsd = addObservedNumber(costUsd, record(usage.cost) ? usage.cost.total : undefined);
+        total = addObservedNumber(total, usage?.total);
+        cacheRead = addObservedNumber(cacheRead, usage?.cacheRead);
+        cacheWrite = addObservedNumber(cacheWrite, usage?.cacheWrite);
+        costUsd = addObservedNumber(costUsd, usage?.cost?.total);
       }
       for (const block of Array.isArray(message.content) ? message.content : []) {
         if (
@@ -1435,9 +1437,7 @@ export async function runGatewayMatrixCell(
   const env: NodeJS.ProcessEnv = {
     PATH: process.env.PATH,
     SystemRoot: process.env.SystemRoot,
-    HOME: path.join(root, "home"),
-    USERPROFILE: path.join(root, "home"),
-    OPENCLAW_HOME: path.join(root, "home"),
+    ...createBuildSmokeEnv(path.join(root, "home"), {}),
     TMPDIR: path.join(root, "tmp"),
     TEMP: path.join(root, "tmp"),
     TMP: path.join(root, "tmp"),

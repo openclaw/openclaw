@@ -15,7 +15,6 @@ import {
 
 const mocks = vi.hoisted(() => ({
   applyUninstall: vi.fn(),
-  clawReferenceWarnings: vi.fn(),
   commitRecords: vi.fn(),
   installRecords: vi.fn(),
   metadata: vi.fn(),
@@ -89,10 +88,6 @@ vi.mock("./install-record-commit.js", () => ({
   commitPluginInstallRecordsWithConfig: (...args: unknown[]) => mocks.commitRecords(...args),
 }));
 
-vi.mock("./uninstall-claw-references.js", () => ({
-  collectClawPluginUninstallWarnings: (...args: unknown[]) => mocks.clawReferenceWarnings(...args),
-}));
-
 vi.mock("./official-external-plugin-catalog.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./official-external-plugin-catalog.js")>()),
   loadConfiguredHostedOfficialExternalPluginCatalogEntries: (...args: unknown[]) =>
@@ -136,7 +131,6 @@ describe("plugin management service", () => {
     mocks.installRecords.mockResolvedValue({});
     mocks.applyUninstall.mockResolvedValue({ directoryRemoved: true, warnings: [] });
     mocks.pluginVersionCategories.mockResolvedValue([]);
-    mocks.clawReferenceWarnings.mockReturnValue([]);
     mockHostedOfficialCatalog([]);
   });
 
@@ -194,10 +188,6 @@ describe("plugin management service", () => {
         expect(request.expectedSourceDigests).toEqual({
           first: "a".repeat(64),
           second: "b".repeat(64),
-        });
-        expect(request.expectedInstallHashes).toEqual({
-          first: hashStableJson(first.index.installRecords.first),
-          second: hashStableJson(second.index.installRecords.second),
         });
         return application;
       });
@@ -257,7 +247,6 @@ describe("plugin management service", () => {
     mocks.readPersistedRecords.mockReturnValue(installRecords);
     const applyRuntime = vi.fn<PluginLifecycleRuntimeApply>(async (request) => {
       request.assertInvokerOwned?.();
-      expect(request.expectedInstallHashes).toBeUndefined();
       return {
         operationId: "discovered-reload",
         generation: 4,

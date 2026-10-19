@@ -130,7 +130,7 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Auth: `OPENCODE_API_KEY` (or `OPENCODE_ZEN_API_KEY`)
 - Zen runtime provider: `opencode`
 - Go runtime provider: `opencode-go`
-- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.6`
+- Example models: `opencode/claude-opus-4-6`, `opencode-go/kimi-k2.7-code`
 - CLI: `openclaw onboard --auth-choice opencode-zen` or `openclaw onboard --auth-choice opencode-go`
 
 ```json5
@@ -144,7 +144,8 @@ Claude CLI reuse (`claude -p`) is a sanctioned OpenClaw integration path. Anthro
 - Provider: `google`
 - Auth: `GEMINI_API_KEY`
 - Optional rotation: `GEMINI_API_KEYS`, `GEMINI_API_KEY_1`, `GEMINI_API_KEY_2`, `GOOGLE_API_KEY` fallback, and `OPENCLAW_LIVE_GEMINI_KEY` (single override)
-- Example models: `google/gemini-3.1-pro-preview`, `google/gemini-3.5-flash`
+- Default model: `google/gemini-4-argon`
+- Other bundled models include `google/gemini-3.8-flash` and `google/gemini-3.5-flash-lite`
 - Compatibility: legacy OpenClaw config using `google/gemini-3.1-flash-preview` is normalized to `google/gemini-3-flash-preview`
 - Alias: `google/gemini-3.1-pro` is accepted and normalized to Google's live Gemini API id, `google/gemini-3.1-pro-preview`
 - CLI: `openclaw onboard --auth-choice gemini-api-key`

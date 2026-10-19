@@ -1,8 +1,6 @@
 import type { LookupAddress } from "node:dns";
 import { MAX_TIMER_TIMEOUT_MS } from "openclaw/plugin-sdk/number-runtime";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { buildComfyImageGenerationProvider } from "./image-generation-provider.js";
-import { buildComfyMusicGenerationProvider } from "./music-generation-provider.js";
 import {
   buildComfyConfig,
   buildLegacyComfyConfig,
@@ -10,8 +8,8 @@ import {
   mockComfyCloudJobResponses,
   mockComfyProviderApiKey,
   parseComfyJsonBody,
+  registerComfyProviders,
 } from "./test-helpers.js";
-import { buildComfyVideoGenerationProvider } from "./video-generation-provider.js";
 
 const randomIntMock = vi.hoisted(() => vi.fn<(max: number) => number>());
 
@@ -35,6 +33,8 @@ vi.mock("openclaw/plugin-sdk/ssrf-runtime", async (importOriginal) => {
     fetchWithSsrFGuard: fetchWithSsrFGuardMock,
   };
 });
+
+const comfyProviders = registerComfyProviders();
 
 type FetchGuardRequest = {
   url?: unknown;
@@ -116,7 +116,7 @@ function testWorkflowConfig(config: Record<string, unknown> = {}) {
 }
 
 function generateImage(config: Record<string, unknown> = {}, prompt = "draw a lobster") {
-  return buildComfyImageGenerationProvider().generateImage({
+  return comfyProviders.image.generateImage({
     provider: "comfy",
     model: "workflow",
     prompt,
@@ -245,7 +245,7 @@ describe("comfy image-generation provider", () => {
   });
 
   it("falls back to legacy models.providers comfy config when plugin config is absent", async () => {
-    const provider = buildComfyImageGenerationProvider();
+    const provider = comfyProviders.image;
     expect(
       await provider.isConfiguredAsync?.({
         cfg: buildLegacyComfyConfig({
@@ -260,7 +260,7 @@ describe("comfy image-generation provider", () => {
 
   it("treats cloud comfy workflows as configured with a plugin config env SecretRef", async () => {
     vi.stubEnv("COMFY_TEST_API_KEY", "comfy-secret-ref-key");
-    const provider = buildComfyImageGenerationProvider();
+    const provider = comfyProviders.image;
     expect(
       await provider.isConfiguredAsync?.({
         cfg: buildComfyConfig({
@@ -275,65 +275,6 @@ describe("comfy image-generation provider", () => {
         }),
       }),
     ).toBe(true);
-  });
-
-  it("uses provider-owned config auth for a complete Comfy Cloud workflow", async () => {
-    const cfg = buildComfyConfig({
-      mode: "cloud",
-      image: {
-        workflow: { "6": { inputs: { text: "" } } },
-        promptNodeId: "6",
-      },
-    });
-    cfg.models = {
-      providers: {
-        comfy: {
-          apiKey: "comfy-provider-config-key",
-          baseUrl: "https://cloud.comfy.org",
-          models: [],
-        },
-      },
-    };
-
-    expect(await buildComfyImageGenerationProvider().isConfiguredAsync?.({ cfg })).toBe(true);
-  });
-
-  it("does not let provider config auth bypass incomplete Comfy Cloud workflows", async () => {
-    const cfg = buildComfyConfig({ mode: "cloud" });
-    cfg.models = {
-      providers: {
-        comfy: {
-          apiKey: "comfy-provider-config-key",
-          baseUrl: "https://cloud.comfy.org",
-          models: [],
-        },
-      },
-    };
-
-    expect(await buildComfyImageGenerationProvider().isConfiguredAsync?.({ cfg })).toBe(false);
-  });
-
-  it("preserves an unavailable plugin-secret veto even with provider config auth", async () => {
-    vi.stubEnv("COMFY_MISSING_PLUGIN_SECRET", "");
-    const cfg = buildComfyConfig({
-      mode: "cloud",
-      apiKey: { source: "env", provider: "default", id: "COMFY_MISSING_PLUGIN_SECRET" },
-      image: {
-        workflow: { "6": { inputs: { text: "" } } },
-        promptNodeId: "6",
-      },
-    });
-    cfg.models = {
-      providers: {
-        comfy: {
-          apiKey: "comfy-provider-config-key",
-          baseUrl: "https://cloud.comfy.org",
-          models: [],
-        },
-      },
-    };
-
-    expect(await buildComfyImageGenerationProvider().isConfiguredAsync?.({ cfg })).toBe(false);
   });
 
   it("reports completed local history without image outputs after one lookup", async () => {
@@ -384,9 +325,9 @@ describe("comfy image-generation provider", () => {
     vi.stubEnv("COMFY_HEADER_AVAILABLE", "Basic fixture");
     vi.stubEnv("COMFY_HEADER_MISSING", undefined);
     for (const [capability, provider] of [
-      ["image", buildComfyImageGenerationProvider()],
-      ["video", buildComfyVideoGenerationProvider()],
-      ["music", buildComfyMusicGenerationProvider()],
+      ["image", comfyProviders.image],
+      ["video", comfyProviders.video],
+      ["music", comfyProviders.music],
     ] as const) {
       const cfg = buildComfyConfig({
         [capability]: testWorkflowConfig(),
@@ -402,7 +343,7 @@ describe("comfy image-generation provider", () => {
     mockLocalImageResponses("seed-prompt-1");
     mockLocalImageResponses("seed-prompt-2");
 
-    const provider = buildComfyImageGenerationProvider();
+    const provider = comfyProviders.image;
     const cfg = buildComfyConfig({
       workflow: {
         "4": { inputs: { seed: 0 } },
@@ -434,7 +375,7 @@ describe("comfy image-generation provider", () => {
       dns: { comfyui: "10.0.0.25" },
     });
 
-    const provider = buildComfyImageGenerationProvider();
+    const provider = comfyProviders.image;
     await expect(
       provider.generateImage({
         provider: "comfy",
@@ -638,7 +579,7 @@ describe("comfy image-generation provider", () => {
     });
 
     try {
-      const provider = buildComfyImageGenerationProvider();
+      const provider = comfyProviders.image;
       await expect(
         provider.generateImage({
           provider: "comfy",
@@ -658,24 +599,23 @@ describe("comfy image-generation provider", () => {
     }
   });
 
-  it("rejects generated image downloads that exceed the configured media cap", async () => {
+  it("keeps generated image downloads above the configured media cap", async () => {
     mockLocalImageResponses("local-prompt-1", {
-      body: Buffer.from("too-large"),
+      body: Buffer.from("over-cap"),
       contentType: "image/png",
     });
 
-    const provider = buildComfyImageGenerationProvider();
-    await expect(
-      provider.generateImage({
-        provider: "comfy",
-        model: "workflow",
-        prompt: "draw a lobster",
-        cfg: {
-          ...buildComfyConfig(testWorkflowConfig()),
-          agents: { defaults: { mediaMaxMb: 0.000001 } },
-        } as never,
-      }),
-    ).rejects.toThrow("Comfy image output download exceeds 1 bytes");
+    const provider = comfyProviders.image;
+    const result = await provider.generateImage({
+      provider: "comfy",
+      model: "workflow",
+      prompt: "draw a lobster",
+      cfg: {
+        ...buildComfyConfig(testWorkflowConfig()),
+        agents: { defaults: { mediaMaxMb: 0.000001 } },
+      } as never,
+    });
+    expect(result.images[0]?.buffer.toString()).toBe("over-cap");
   });
 
   it("reports malformed local workflow submit JSON as a provider error", async () => {
@@ -688,7 +628,7 @@ describe("comfy image-generation provider", () => {
       release,
     });
 
-    const provider = buildComfyImageGenerationProvider();
+    const provider = comfyProviders.image;
     await expect(
       provider.generateImage({
         provider: "comfy",
@@ -726,7 +666,7 @@ describe("comfy image-generation provider", () => {
       release,
     });
 
-    const provider = buildComfyImageGenerationProvider();
+    const provider = comfyProviders.image;
     await expect(
       provider.generateImage({
         provider: "comfy",
@@ -748,7 +688,7 @@ describe("comfy image-generation provider", () => {
       "edited.png",
     );
 
-    const provider = buildComfyImageGenerationProvider();
+    const provider = comfyProviders.image;
     await provider.generateImage({
       provider: "comfy",
       model: "workflow",

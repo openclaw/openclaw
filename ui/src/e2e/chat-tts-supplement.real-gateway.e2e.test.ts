@@ -461,10 +461,12 @@ suite.define(() => {
               await send("/tts chat off");
               await page.locator(".chat-bubble").getByText("TTS disabled for this chat.").waitFor();
               await send("Please give a text-only answer.");
-              await answer(replies[2]).waitFor();
+              await expect.poll(() => answer(replies[2]).count()).toBe(1);
               await page
                 .getByRole("button", { name: "Stop generating", exact: true })
                 .waitFor({ state: "detached" });
+              await expect.poll(() => answer(replies[2]).count()).toBe(1);
+              await answer(replies[2]).waitFor();
               expect(await answer(replies[2]).locator("audio").count()).toBe(0);
               expect(await page.locator(".chat-bubble audio").count()).toBe(2);
               expect(provider.speech).toHaveLength(2);

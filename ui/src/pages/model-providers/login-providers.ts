@@ -8,6 +8,7 @@ import { t } from "../../i18n/index.ts";
 
 type LoginChoice = Omit<ProviderLoginOption, "kind"> & {
   kind: ProviderLoginOption["kind"] | "setup-secret";
+  authProvider: string;
 };
 
 type LoginProvider = {
@@ -54,7 +55,7 @@ export function buildLoginProviders({
       group.label ||= option.groupLabel?.trim() ?? "";
       if (!choices.has(option.id)) {
         choices.add(option.id);
-        group.choices.push(option);
+        group.choices.push({ ...option, authProvider: capability.provider });
       }
     }
     // Quick-key support is independent of wizard choices. Keep the exact
@@ -80,6 +81,7 @@ export function buildLoginProviders({
     group.choices.push({
       ...option,
       brandId: id,
+      authProvider: id,
       kind: "setup-secret",
       featured: false,
       ...(duplicateLabel

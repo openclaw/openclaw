@@ -30,6 +30,7 @@ import {
   reconcileChatOutboxProjection,
   type ChatOutboxHostProjection as HostProjection,
 } from "./chat-outbox-owner.projection.ts";
+import { publishChatOutboxQueue, replaceChatOutboxQueue } from "./chat-outbox-queue.ts";
 import type { StoredChatQueueReplacement } from "./composer-persistence-state.ts";
 import {
   admitStoredChatComposerQueueItemResult,
@@ -44,7 +45,7 @@ import {
   failOutboxPayload,
   prepareOutboxPayload,
 } from "./outbox-payloads.ts";
-type Host = Composer & { chatQueue: ChatQueueItem[]; sessionKey: string; requestUpdate?(): void };
+type Host = Composer & { chatQueue: ChatQueueItem[]; sessionKey: string };
 type LiveProjection = {
   item: ChatQueueItem;
   owner: Host;
@@ -211,17 +212,18 @@ class ChatOutboxGatewayOwner {
       .filter((item) => outboxPayloadMatchesOwner(host, item))
       .toSorted(compareChatQueueOrder);
   }
-  syncHost(host: Host, options: { requestUpdate?: boolean } = {}): void {
+  syncHost(host: Host, options: { notify?: boolean } = {}): void {
     if (this.ownerGatewayKey !== outboxOwnerKey(host)) {
       chatOutboxOwner(host).syncHost(host, options);
       return;
     }
     readOfflineStorageScope(host);
+    const previousQueue = host.chatQueue;
     const queue = this.snapshot(host, resolveUiConversationIdentity(host, host.sessionKey));
     // Draft persistence also publishes outbox changes; an empty queue must not
     // invalidate the transcript merely because the composer changed.
-    if (queue.length || host.chatQueue.length) {
-      host.chatQueue = queue;
+    if (queue.length || previousQueue.length) {
+      replaceChatOutboxQueue(host, queue, options.notify);
     }
     for (const item of host.chatQueue) {
       const key = item.attachmentPayload?.key;
@@ -290,9 +292,6 @@ class ChatOutboxGatewayOwner {
         })
         .finally(() => this.hydrating.delete(key));
     }
-    if (options.requestUpdate !== false) {
-      host.requestUpdate?.();
-    }
     this.publishAttention();
   }
   publish(origin?: Host, reconcile = false): void {
@@ -313,7 +312,7 @@ class ChatOutboxGatewayOwner {
     if (!previous || previous === this) {
       return;
     }
-    let adopted = false;
+    const adopted: Host[] = [];
     // A shared client's credentials change before pane callbacks run. Move peers
     // together so the first reconnect drain still observes every pane's edit hold.
     for (const pane of previous.panes) {
@@ -327,11 +326,12 @@ class ChatOutboxGatewayOwner {
       pane.chatQueue = [];
       previous.detach(pane);
       this.attach(pane);
-      adopted = true;
+      adopted.push(pane);
     }
-    if (adopted) {
+    if (adopted.length) {
       // Publish only after every peer has moved, preserving shared edit holds.
       this.publish();
+      adopted.filter((pane) => !pane.chatQueue.length).forEach(publishChatOutboxQueue);
     }
   }
   private attach(host: Host): void {
@@ -352,7 +352,7 @@ class ChatOutboxGatewayOwner {
     subscriptions.set(host, subscription);
     this.attach(host);
     this.reconcile(host, this.state(host));
-    this.syncHost(host, { requestUpdate: false });
+    this.syncHost(host, { notify: false });
     return () => {
       if (subscriptions.get(host) !== subscription) {
         return;

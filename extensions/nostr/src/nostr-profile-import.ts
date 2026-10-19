@@ -53,7 +53,7 @@ export async function importProfileFromRelays(opts: ProfileImportOptions) {
   }
 
   const pool = new SimplePool();
-  const relaysQueried = [...relays];
+  const relaysQueried = relays;
   const subscriptions: Array<ReturnType<typeof pool.subscribeMany>> = [];
 
   try {

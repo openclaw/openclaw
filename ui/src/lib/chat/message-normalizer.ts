@@ -274,7 +274,9 @@ function inferAttachmentKind(url: string): {
         const name = parsed.pathname.split("/").pop()?.trim();
         return name || parsed.hostname || url;
       }
-    } catch {}
+    } catch {
+      // Malformed URLs still get a filename label from the original path below.
+    }
     const name = url.split(/[\\/]/).pop()?.trim();
     return name || url;
   })();

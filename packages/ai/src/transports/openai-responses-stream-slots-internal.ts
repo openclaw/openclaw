@@ -10,6 +10,7 @@ import type {
   TextBlockReference,
 } from "./openai-responses-stream-terminal-internal.js";
 import type { OpenAIResponsesStreamEvent } from "./openai-responses-stream-types-internal.js";
+import { detachPartialSnapshot } from "./openai-transport-shared.js";
 
 export type ResponsesStreamOutputSlot<TMessage, TToolCall> =
   | {
@@ -111,7 +112,7 @@ export function createResponsesOutputTracker(params: {
           visibleTextEmitted ||=
             (event.type === "text_delta" && event.delta.length > 0) ||
             (event.type === "text_end" && event.content.length > 0);
-          sink.push(event);
+          sink.push(detachPartialSnapshot(event));
         },
       };
     },

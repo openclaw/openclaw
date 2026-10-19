@@ -17,6 +17,10 @@ const enSessionOrganization = {
     sessionSnoozed: "Snoozed until {time}",
     sessionsArchived: "Archived {count} sessions",
     renameSessionPrompt: "Rename session",
+    renameSessionFailed: "Could not rename the session. Try again.",
+    renameGroupFailed: "Could not rename the group. Try again.",
+    renameSessionStale:
+      "Connection changed before the rename was confirmed. Review the current name before trying again.",
     sessionNameInUse: "A session with this name already exists.",
     newGroupMoveSkipped:
       "Group created, but the move was skipped because the list changed. Move from the row menu.",
@@ -32,12 +36,15 @@ const enSessionOrganization = {
       "Delete 1 session?\n\nStop any attached worker safely, then delete the session entry and archive its transcript.",
     deleteSelectedConfirm:
       "Delete {count} sessions?\n\nStop any attached workers safely, then delete the session entries and archive their transcripts.",
-    archiveSessionTree: "Archive session and children…",
+    archiveSessionTitle: "Archive session?",
+    archiveSessionNestedOne:
+      '"{session}" has a nested session. Archive only this one and it moves to the top level.',
+    archiveSessionNestedOther:
+      '"{session}" has {count} nested sessions. Archive only this one and they move to the top level.',
+    archiveThisSession: "Archive this session",
     moveToTopLevel: "Move to top level",
     archiveTreeRootRequired:
       "Archive a persistent conversation and its children, not a hidden worker run.",
-    archiveSessionTreeConfirm:
-      "Archive {count} sessions, including {session}? Sessions moved to the top level or a group are not included.",
     archiveRunningSessions:
       "This selection contains active work. Archiving stops work in the selected sessions.",
     archiveRunningSessionConfirm:

@@ -11,7 +11,6 @@ import {
   formatInvalidConfigDetails,
 } from "../../config/io.invalid-config.js";
 import type { GatewayRequestFunction } from "../../gateway/call.js";
-import { registerSecretValueForRedaction } from "../../logging/secret-redaction-registry.js";
 import { resolveManifestDeclaredProviderAuthChoices } from "../../plugins/provider-auth-choices.js";
 import {
   formatProviderLoginChoiceRef,
@@ -21,6 +20,7 @@ import { ExitError, type RuntimeEnv } from "../../runtime.js";
 import { sleep } from "../../utils/sleep.js";
 import { createClackPrompter } from "../../wizard/clack-prompter.js";
 import { WizardCancelledError, type WizardPrompter } from "../../wizard/prompts.js";
+import { answerGatewayWizardStep } from "../gateway-wizard-step.js";
 import { readGatewayApiKeyParams } from "./auth-gateway.js";
 import { normalizeManualAuthProvider } from "./auth-manual-input.js";
 
@@ -90,52 +90,17 @@ async function answerLoginStep(
   if (step.deviceCode) {
     await prompter.note(sanitizeTerminalText(step.deviceCode.code), step.title ?? "Device code");
   }
-  switch (step.type) {
-    case "text": {
-      if (!process.stdin.isTTY && step.sensitive) {
-        return (await readGatewayApiKeyParams({ provider: "login" }, signal)).apiKey;
-      }
-      const value = await prompter.text({
-        message,
-        sensitive: step.sensitive,
-        placeholder: step.placeholder,
-        initialValue: typeof step.initialValue === "string" ? step.initialValue : undefined,
-        signal,
-      });
-      if (step.sensitive) {
-        registerSecretValueForRedaction(value);
-      }
-      return value;
-    }
-    case "select":
-      return prompter.select({
-        message,
-        options: step.options ?? [],
-        initialValue: step.initialValue,
-      });
-    case "multiselect":
-      return prompter.multiselect({
-        message,
-        options: step.options ?? [],
-        initialValues: Array.isArray(step.initialValue) ? step.initialValue : undefined,
-      });
-    case "confirm":
-    case "action":
-      if (step.executor === "gateway") {
-        return undefined;
-      }
-      return prompter.confirm({
-        message,
-        initialValue: typeof step.initialValue === "boolean" ? step.initialValue : undefined,
-      });
-    case "note":
-      await prompter.note(message, step.title);
-      return undefined;
-    case "progress":
-      await prompter.note(message, step.title);
-      return undefined;
+  if (step.type === "text" && !process.stdin.isTTY && step.sensitive) {
+    return (await readGatewayApiKeyParams({ provider: "login" }, signal)).apiKey;
   }
-  return undefined;
+  if (step.type === "progress") {
+    await prompter.note(message, step.title);
+    return undefined;
+  }
+  if ((step.type === "confirm" || step.type === "action") && step.executor === "gateway") {
+    return undefined;
+  }
+  return await answerGatewayWizardStep({ ...step, message }, prompter, { signal });
 }
 
 async function answerBrowserStep(

@@ -25,6 +25,21 @@ function parseResult(result: string) {
 }
 
 describe("Claude CLI output validation", () => {
+  it("classifies the native Claude refresh-lock diagnostic as contention", () => {
+    const message =
+      "Failed to refresh OAuth token: another Claude Code process is refreshing it or exited mid-refresh. This is usually transient; retry in a minute, and if it persists close other Claude Code processes or sign in again";
+
+    expect(buildAnthropicCliBackend().classifyErrorCode?.(message)).toBe("refresh_contention");
+  });
+
+  it.each([
+    "Failed to authenticate: OAuth session expired and could not be refreshed",
+    "OAuth refresh token is no longer valid; run /login to re-authenticate",
+    "Failed to refresh OAuth token: request failed",
+  ])("does not classify an authentication or transport failure as contention: %s", (message) => {
+    expect(buildAnthropicCliBackend().classifyErrorCode?.(message)).toBeUndefined();
+  });
+
   it("projects Claude CLI compaction status lifecycle without inferring from the boundary", () => {
     const backend = buildAnthropicCliBackend();
     const parseLifecycle = (event: unknown) =>

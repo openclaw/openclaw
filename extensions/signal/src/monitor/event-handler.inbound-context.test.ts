@@ -1023,12 +1023,14 @@ describe("signal createSignalEventHandler inbound context", () => {
   it("combines raw and command text across failed-media debounce batches", async () => {
     vi.useFakeTimers();
     try {
+      const error = vi.fn();
       const dispatched = captureNextSignalDispatch(dispatchInboundMessageMock);
       const handler = createTestHandler({
         cfg: createDirectConfig({ messages: { inbound: { debounceMs: 10 } } }),
+        runtime: { log: vi.fn(), error, exit: vi.fn() },
         ignoreAttachments: false,
         fetchAttachment: async () => {
-          throw new Error("expired attachment");
+          throw new Error("expired attachment /private/signal/private-attachment-name.jpg");
         },
       });
 
@@ -1046,6 +1048,8 @@ describe("signal createSignalEventHandler inbound context", () => {
       expect(context.BodyForAgent).not.toContain("<media:image>");
       expect(context.media).toEqual([expect.objectContaining({ contentType: "image/jpeg" })]);
       expect(context.media?.[0]?.path).toBeUndefined();
+      expect(error).toHaveBeenCalledWith(expect.stringContaining("attachment fetch failed"));
+      expect(JSON.stringify(error.mock.calls)).not.toContain("private-attachment-name.jpg");
     } finally {
       vi.useRealTimers();
     }
@@ -1103,23 +1107,58 @@ describe("signal createSignalEventHandler inbound context", () => {
   });
 
   it.each([
-    ["CRLF", "line one\r\nline two", "line one\\r\\nline two"],
-    ["literal escape", "line one\\nline two", "line one\\nline two"],
-  ])("keeps %s inbound verbose previews single-line", async (_label, message, expectedPreview) => {
-    shouldLogVerboseMock.mockReturnValue(true);
-    try {
-      const handler = createTestHandler({ cfg: createDirectConfig() });
+    ["invalid JSON", "private malformed receive payload", "failed to parse event: invalid JSON"],
+    [
+      "provider exception",
+      JSON.stringify({ exception: { message: "private provider exception payload" } }),
+      "receive exception",
+    ],
+  ])(
+    "keeps %s diagnostics content-free and processes the next message",
+    async (_label, data, category) => {
+      const error = vi.fn();
+      const handler = createTestHandler({
+        cfg: createDirectConfig(),
+        runtime: { log: vi.fn(), error, exit: vi.fn() },
+      });
 
-      await receiveMessage(handler, { message });
+      await handler({ event: "receive", data });
 
-      // body is formatInboundEnvelope(...) with an envelope prefix, so assert
-      // the escaped tail is present and the logged line stays single-line.
-      expect(logVerboseMock).toHaveBeenCalledWith(expect.stringContaining(expectedPreview));
-      const logged = String(logVerboseMock.mock.calls[0]?.[0] ?? "");
-      expect(logged).not.toMatch(/[\r\n]/);
-    } finally {
-      shouldLogVerboseMock.mockReturnValue(false);
-    }
-  });
+      expect(dispatchInboundMessageMock).not.toHaveBeenCalled();
+      expect(error).toHaveBeenCalledWith(category);
+      expect(JSON.stringify(error.mock.calls)).not.toContain("private");
+
+      await receiveMessage(handler, { message: "next message" });
+
+      expect(requireCapturedContext().BodyForAgent).toBe("next message");
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+    },
+  );
+
+  it.each([
+    ["CRLF", "private line one\r\nprivate line two", "private line one\nprivate line two"],
+    [
+      "literal escape",
+      "private line one\\nprivate line two",
+      "private line one\\nprivate line two",
+    ],
+  ])(
+    "keeps %s inbound content out of verbose logs without changing delivery",
+    async (_label, message, deliveredText) => {
+      shouldLogVerboseMock.mockReturnValue(true);
+      try {
+        const handler = createTestHandler({ cfg: createDirectConfig() });
+
+        await receiveMessage(handler, { message });
+
+        const context = requireCapturedContext();
+        expect(context.BodyForAgent).toBe(deliveredText);
+        expect(context.Body).toContain(deliveredText);
+        expect(JSON.stringify(logVerboseMock.mock.calls)).not.toContain("private line");
+      } finally {
+        shouldLogVerboseMock.mockReturnValue(false);
+      }
+    },
+  );
 });
 /* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */

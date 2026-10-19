@@ -97,3 +97,52 @@ it("verifies legacy media without accepting changed events or rewriting history"
     expect(loadTranscriptEventsSync(scope)).toEqual(stored);
   });
 });
+
+it.each(["openai", "openai-codex"])(
+  "compares provider spelling against %s rows without changing historical receipt adoption",
+  async (provider) => {
+    await withOpenClawTestState({ label: "verify-provider-retry" }, async (state) => {
+      const sessionId = "provider-retry";
+      const header = { type: "session", id: sessionId, version: 3 };
+      const message = (eventProvider: string) => ({
+        type: "message",
+        id: "m1",
+        parentId: null,
+        message: {
+          role: "assistant",
+          content: [{ type: "text", text: "stored once" }],
+          provider: eventProvider,
+          api: eventProvider === "openai" ? "openai-chatgpt-responses" : "openai-codex-responses",
+        },
+      });
+      const write = (event: unknown) =>
+        state.writeText("source.jsonl", `${JSON.stringify(header)}\n${JSON.stringify(event)}\n`);
+      const filename = await write(message(provider));
+      const scope = {
+        agentId: "main",
+        env: state.env,
+        sessionId,
+        sessionKey: "agent:main:main",
+        storePath: path.join(state.sessionsDir(), "sessions.json"),
+      };
+      await importSqliteSessionRows({
+        ...scope,
+        entry: { sessionId, updatedAt: 1 },
+        readTranscriptEvents: createTranscriptEventReader(filename, sessionId),
+      });
+      const stored = loadTranscriptEventsSync(scope);
+      await write(message(provider === "openai" ? "openai-codex" : "openai"));
+      const database = openOpenClawAgentDatabase({ agentId: "main", env: state.env });
+      const source = { path: filename, sessionId, originalPath: filename };
+      expect(verifyTranscriptEvents(database.db, source, "ordered")).toBeUndefined();
+      for (const mode of ["contained", "appendable"] as const) {
+        expect(verifyTranscriptEvents(database.db, source, mode)).toEqual({
+          events: 2,
+          missingEvents: 0,
+          sqliteEvents: 2,
+        });
+      }
+      expect(loadTranscriptEventsSync(scope)).toEqual(stored);
+    });
+  },
+);

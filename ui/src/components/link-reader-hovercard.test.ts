@@ -65,7 +65,7 @@ function connect(
   provider: LinkReaderHovercardProvider,
   request = vi.fn().mockResolvedValue(preview()),
 ) {
-  provider.client = { request } as unknown as GatewayBrowserClient;
+  provider.client = { request, connected: true } as unknown as GatewayBrowserClient;
   return request;
 }
 function card() {
@@ -235,10 +235,15 @@ describe("openclaw-link-reader-hovercard-provider", () => {
   });
 
   it.each([
-    { url: href + "#issuecomment-123", label: "PR #99816", reader: github, branded: true },
+    {
+      url: href + "#issuecomment-123",
+      label: "PR openclaw/openclaw#99816",
+      reader: github,
+      branded: true,
+    },
     {
       url: "https://github.com/openclaw/openclaw/issues/99815",
-      label: "Issue #99815",
+      label: "Issue openclaw/openclaw#99815",
       reader: github,
       branded: true,
     },
@@ -361,7 +366,7 @@ describe("openclaw-link-reader-hovercard-provider", () => {
       vi
         .fn()
         .mockImplementation((_method: string, params: { url: string }) =>
-          Promise.resolve(preview(params.url)),
+          Promise.resolve({ url: params.url, title: "Cached preview" }),
         ),
     );
     await hover(anchor);
@@ -372,7 +377,6 @@ describe("openclaw-link-reader-hovercard-provider", () => {
     leave(anchor);
     await vi.advanceTimersByTimeAsync(250);
     expect(card()).toBeNull();
-    Object.assign(provider.client!, { connected: true });
     const signal = new AbortController().signal;
     // Fill the same cache without creating 100 disposable hovercard portals.
     for (let index = 1; index <= 100; index++) {

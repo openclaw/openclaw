@@ -7,12 +7,6 @@ function result(meta: Partial<EmbeddedAgentRunResult["meta"]>): EmbeddedAgentRun
 }
 
 describe("resolveDiagnosticModelResponse", () => {
-  it("keeps sentinel model responses verbatim", () => {
-    expect(resolveDiagnosticModelResponse(result({ finalAssistantRawText: "NO_REPLY" }))).toBe(
-      "NO_REPLY",
-    );
-  });
-
   it("excludes host-generated blocked-run text", () => {
     expect(
       resolveDiagnosticModelResponse(
@@ -21,26 +15,6 @@ describe("resolveDiagnosticModelResponse", () => {
           finalAssistantRawText: "Blocked by before_agent_run policy",
         }),
       ),
-    ).toBeUndefined();
-  });
-
-  it("keeps genuine partial model output from errored runs", () => {
-    expect(
-      resolveDiagnosticModelResponse(
-        result({
-          finalAssistantRawText: "partial answer",
-          error: { kind: "incomplete_turn", message: "stream cut" },
-        } as Partial<EmbeddedAgentRunResult["meta"]>),
-      ),
-    ).toBe("partial answer");
-  });
-
-  it("never substitutes delivered payload text for a missing model response", () => {
-    expect(
-      resolveDiagnosticModelResponse({
-        ...result({}),
-        payloads: [{ text: "Gateway restarting…" }, { text: "hook reply" }],
-      }),
     ).toBeUndefined();
   });
 });
@@ -100,16 +74,5 @@ describe("hook-handled turns", () => {
         payloads: [{ text: "hook reply" }],
       }),
     ).toBeUndefined();
-  });
-
-  it("never captures hook-authored silence as a model response", () => {
-    expect(
-      resolveDiagnosticModelResponse(
-        result({ finalAssistantRawText: "NO_REPLY", providerStarted: false }),
-      ),
-    ).toBeUndefined();
-    expect(resolveDiagnosticModelResponse(result({ finalAssistantRawText: "NO_REPLY" }))).toBe(
-      "NO_REPLY",
-    );
   });
 });

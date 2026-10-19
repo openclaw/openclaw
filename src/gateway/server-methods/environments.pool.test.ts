@@ -109,7 +109,7 @@ describe("prepared worker pool projection", () => {
         expect(summary).toMatchObject({
           id: "worker-1",
           type: "worker",
-          status: "available",
+          status: listing ? "stopping" : "available",
           trust: "disposable",
           worker: {
             providerId: "static-ssh",

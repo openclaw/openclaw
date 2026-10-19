@@ -1,14 +1,13 @@
-import { runSqliteDeferredTransactionSync } from "../../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../../infra/sqlite-transaction.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   withFreshOpenClawAgentDatabaseReadOnly,
   type OpenClawAgentReadOnlyDatabase,
 } from "../../state/openclaw-agent-db-readonly-open.js";
 import { readSessionBranchSummaries } from "./session-accessor.sqlite-branch-summaries.js";
-import {
-  cloneSessionBranchSummaries,
-  type SessionBranchSummaryReadRequest,
-  type SessionBranchSummaryReadResult,
+import type {
+  SessionBranchSummaryReadRequest,
+  SessionBranchSummaryReadResult,
 } from "./session-accessor.sqlite-branches.js";
 import { readSessionEntryRow } from "./session-accessor.sqlite-entry-read.js";
 import { readSessionTranscriptHotWatermark } from "./session-accessor.sqlite-transcript-watermark-read.js";
@@ -17,7 +16,7 @@ export function readSessionBranchSnapshot(
   database: OpenClawAgentReadOnlyDatabase,
   request: Pick<SessionBranchSummaryReadRequest, "sessionKey" | "previous">,
 ): SessionBranchSummaryReadResult {
-  return runSqliteDeferredTransactionSync<SessionBranchSummaryReadResult>(
+  return runSqliteReadSnapshotSync<SessionBranchSummaryReadResult>(
     database.db,
     () => {
       const databaseIdentity = readOpenClawAgentDatabaseIdentity(database).identity;
@@ -45,13 +44,10 @@ export function readSessionBranchSnapshot(
           : readSessionBranchSummaries(database, entry.sessionId, cached);
       return {
         status: "ok",
-        source:
-          typeof databaseIdentity === "string"
-            ? { sessionId: entry.sessionId, databaseIdentity }
-            : undefined,
+        source: { sessionId: entry.sessionId, databaseIdentity },
         ...watermark,
         appendSafe: summaries.appendSafe,
-        branches: cloneSessionBranchSummaries(summaries.branches),
+        branches: summaries.branches,
       };
     },
     { operationLabel: "session branch summaries read" },

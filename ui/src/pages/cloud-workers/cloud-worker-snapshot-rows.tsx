@@ -209,7 +209,9 @@ export function CloudWorkerEnvironmentSheet(
     props.environment.defaultProfile ??
     selectedImage()?.profileId ??
     props.environment.workers[0]?.worker?.profileId;
-  const profile = () => props.profiles.find((candidate) => candidate.id === profileId());
+  const profile = createMemo(() =>
+    props.profiles.find((candidate) => candidate.id === profileId()),
+  );
   const rebuildReason = () =>
     !selectedImage()?.projectRoot
       ? t("cloudWorkersPage.environments.localOnly")
@@ -225,17 +227,19 @@ export function CloudWorkerEnvironmentSheet(
         (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0),
     );
   });
-  const setup = () =>
-    props.environment.images
-      .toSorted((a, b) => (b.recipePreparationAtMs ?? 0) - (a.recipePreparationAtMs ?? 0))
-      .find((candidate) => candidate.recipePreparation)?.recipePreparation;
+  const setup = createMemo(
+    () =>
+      props.environment.images
+        .toSorted((a, b) => (b.recipePreparationAtMs ?? 0) - (a.recipePreparationAtMs ?? 0))
+        .find((candidate) => candidate.recipePreparation)?.recipePreparation,
+  );
   const phases = createMemo(() => {
     const durations = setup()?.phaseDurationsMs;
     return (["onCreate", "updateContent", "detectedInstall"] as const).flatMap((name) =>
       durations?.[name] !== undefined ? [{ name, durationMs: durations[name] }] : [],
     );
   });
-  const longest = () => Math.max(...phases().map((phase) => phase.durationMs));
+  const longest = createMemo(() => Math.max(...phases().map((phase) => phase.durationMs)));
   return (
     <section class="cloud-environments__sheet" aria-label={props.environment.label}>
       <header class="cloud-environments__header">
@@ -353,17 +357,12 @@ export function CloudWorkerEnvironmentSheet(
         repository={props.environment.label}
         profileId={profileId()}
         defaultProfileId={props.environment.defaultProfile}
-        machineFacts={[
-          selectedImage()?.profileId === profileId()
-            ? (selectedImage()?.backend ?? profile()?.backend)
-            : profile()?.backend,
-          selectedImage()?.profileId === profileId()
-            ? (selectedImage()?.machineClass ?? profile()?.machineClass)
-            : profile()?.machineClass,
-          selectedImage()?.profileId === profileId()
-            ? (selectedImage()?.os ?? profile()?.os)
-            : profile()?.os,
-        ]
+        machineFacts={(["backend", "machineClass", "os"] as const)
+          .map((key) =>
+            selectedImage()?.profileId === profileId()
+              ? (selectedImage()?.[key] ?? profile()?.[key])
+              : profile()?.[key],
+          )
           .filter(Boolean)
           .join(" · ")}
       />

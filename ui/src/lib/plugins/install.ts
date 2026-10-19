@@ -14,6 +14,7 @@ export async function installPlugin(
   onActivity?: (activity: PluginInstallActivity) => void,
 ): Promise<PluginMutationResult> {
   let requestId: string | undefined;
+  // Gateway progress subscription teardown runs in finally, independently of native events.
   const unsubscribe = onActivity
     ? client.addEventListener((event) => {
         if (

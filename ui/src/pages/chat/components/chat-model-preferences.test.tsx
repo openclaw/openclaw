@@ -23,14 +23,13 @@ function controls(overrides: Partial<Props>) {
   const onModelSelect = vi.fn(async () => true);
   const onThinkingSelect = vi.fn(async () => true);
   const onFastModeSelect = vi.fn(async () => true);
-  const container = document.createElement("div");
   const props: Props = {
     activeRunId: null,
-    activeRunSessionKey: "main",
     connected: true,
     gatewayAvailable: true,
     loading: false,
     modelSwitching: false,
+    modelPickerOpen: true,
     modelCatalogState: { hasSnapshot: true, status: "ready" },
     sending: false,
     stream: null,
@@ -50,7 +49,11 @@ function controls(overrides: Partial<Props>) {
     ...overrides,
   };
   const [current, setCurrent] = createSignal(props);
-  mountSolid(() => <ChatModelControls {...current()} />, { container });
+  const { container } = mountSolid(() => <ChatModelControls {...current()} />);
+  const picker = container.querySelector<HTMLDetailsElement>(".chat-controls__effort-picker")!;
+  picker.open = true;
+  picker.dispatchEvent(new Event("toggle"));
+  flush();
   const update = (next: Partial<Props>) => {
     setCurrent({ ...current(), ...next });
     flush();
@@ -85,7 +88,7 @@ it.each([
   { name: "sending", sending: true },
   { name: "preparing", activeRunId: "active-run" },
   { name: "streaming", stream: "A reply in progress" },
-])("edits model and reasoning preferences while $name without enabling speed", (busy) => {
+])("edits model, reasoning, and speed preferences while $name", (busy) => {
   const {
     model,
     option,
@@ -104,9 +107,9 @@ it.each([
   slider.value = "0";
   slider.dispatchEvent(new Event("change", { bubbles: true }));
   expect(onThinkingSelect).toHaveBeenCalledWith("low", "main");
-  expect(speed.disabled).toBe(true);
+  expect(speed.disabled).toBe(false);
   speed.click();
-  expect(onFastModeSelect).not.toHaveBeenCalled();
+  expect(onFastModeSelect).toHaveBeenCalledWith("on", "main");
 });
 
 it.each([

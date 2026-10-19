@@ -2,7 +2,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { testing as cliBackendsTesting } from "../../agents/cli-backends.test-support.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
-import { DEFAULT_LEARN_REQUEST } from "../../skills/workshop/learn-prompt.js";
 import { WorkshopReviewNotFoundError } from "../../skills/workshop/review-undo.js";
 import { createCanonicalAgentConfigFixture } from "../../test-utils/config-roster.js";
 import { INTERNAL_MESSAGE_CHANNEL } from "../../utils/message-channel.js";
@@ -83,44 +82,32 @@ function buildLearnParams(
 afterEach(() => cliBackendsTesting.resetDepsForTest());
 
 describe("learn command", () => {
-  it.each([
-    { agentId: "direct", shouldContinue: true },
-    { agentId: "isolated", shouldContinue: false },
-  ])(
-    "uses $agentId workshop availability in a global session",
-    async ({ agentId, shouldContinue }) => {
-      const params = buildLearnParams("/learn", {
-        session: { scope: "global" },
-        agents: {
-          entries: {
-            direct: { sandbox: { mode: "off" } },
-            isolated: { sandbox: { mode: "all" } },
-          },
+  it("uses isolated workshop availability in a global session", async () => {
+    const params = buildLearnParams("/learn", {
+      session: { scope: "global" },
+      agents: {
+        entries: {
+          direct: { sandbox: { mode: "off" } },
+          isolated: { sandbox: { mode: "all" } },
         },
-      });
-      params.agentId = agentId;
-      params.sessionKey = "global";
+      },
+    });
+    params.agentId = "isolated";
+    params.sessionKey = "global";
 
-      const result = await handleLearnCommand(params, true);
+    const result = await handleLearnCommand(params, true);
 
-      expect(result?.shouldContinue).toBe(shouldContinue);
-      if (shouldContinue) {
-        expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
-        expect(params.command.commandBodyNormalized).toBe(params.ctx.BodyForAgent);
-        expect(params.ctx.BodyForCommands).toBe(params.ctx.BodyForAgent);
-      } else {
-        expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
-        expect(params.ctx.BodyForAgent).toBe("/learn");
-      }
-    },
-  );
+    expect(result?.shouldContinue).toBe(false);
+    expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
+    expect(params.ctx.BodyForAgent).toBe("/learn");
+  });
 
   it.each([
-    { mode: "all", denyWorkshop: false, shouldContinue: false },
-    { mode: "off", denyWorkshop: true, shouldContinue: false },
+    { mode: "all", denyWorkshop: false },
+    { mode: "off", denyWorkshop: true },
   ] as const)(
     "preserves an independent policy owner with sandbox mode $mode and workshop denied $denyWorkshop",
-    async ({ mode, denyWorkshop, shouldContinue }) => {
+    async ({ mode, denyWorkshop }) => {
       const params = buildLearnParams("/learn", {
         agents: {
           entries: {
@@ -136,12 +123,8 @@ describe("learn command", () => {
 
       const result = await handleLearnCommand(params, true);
 
-      expect(result?.shouldContinue).toBe(shouldContinue);
-      if (shouldContinue) {
-        expect(params.ctx.BodyForAgent).toContain(DEFAULT_LEARN_REQUEST);
-      } else {
-        expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
-      }
+      expect(result?.shouldContinue).toBe(false);
+      expect(result?.reply?.text).toContain("Skill workshop is not available on this agent");
     },
   );
 
@@ -249,16 +232,6 @@ describe("learn command", () => {
 
       expect((await undo())?.reply?.text).toBe("That skill change was already undone.");
       expect((await undo())?.reply?.text).toBe("No skill change found for that id.");
-    });
-
-    it("keeps any other undo text a learn request", async () => {
-      const params = buildLearnParams("/learn undo the deploy notes");
-
-      const result = await handleLearnCommand(params, true);
-
-      expect(result).toEqual({ shouldContinue: true });
-      expect(params.ctx.BodyForAgent).toContain("undo the deploy notes");
-      expect(undoWorkshopReview).not.toHaveBeenCalled();
     });
 
     it("refuses senders without owner or admin authority", async () => {

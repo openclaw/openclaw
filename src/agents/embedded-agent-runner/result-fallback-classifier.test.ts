@@ -197,21 +197,11 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   });
 
   it("classifies provider business-denial error payloads as fallback-worthy", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "zai",
-      model: "glm-5.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}',
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload(
+      "zai",
+      "glm-5.1",
+      '{"success":false,"code":"CE-011","message":"当前ak因违规请求被禁止访问该模型"}',
+    );
 
     expect(result).toEqual({
       message:
@@ -486,6 +476,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
         payloads: [],
         meta: {
           durationMs: 42,
+          terminalReply: { disposition: "silent" },
           finalAssistantRawText: "NO_REPLY",
           finalAssistantVisibleText: "NO_REPLY",
         },
@@ -496,21 +487,11 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   });
 
   it("does not retry unclassified non-GPT error payloads", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "the model produced an application-level error",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload(
+      "custom",
+      "llama-3.1",
+      "the model produced an application-level error",
+    );
 
     expect(result).toBeNull();
   });
@@ -520,21 +501,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
     // made `timeout` payloads fallback-eligible, so this payload reached the chain
     // before, but labelled `timeout`; it now carries `server_error`, which is also
     // an allowlisted ProviderErrorPayloadFailoverReason.
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "HTTP 500: internal server error",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload("custom", "llama-3.1", "HTTP 500: internal server error");
 
     expect(result).toEqual({
       message: "custom/llama-3.1 ended with a provider error: HTTP 500: internal server error",
@@ -546,14 +513,7 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
   it("classifies generic 'LLM request failed.' payloads as timeout fallback (#138531)", () => {
     const rawError = "LLM request failed.";
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [{ isError: true, text: rawError }],
-        meta: { durationMs: 42 },
-      },
-    });
+    const result = classifyErrorPayload("custom", "llama-3.1", rawError);
 
     expect(result).toEqual({
       message: `custom/llama-3.1 ended with a provider error: ${rawError}`,
@@ -564,21 +524,11 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
   });
 
   it("does not retry non-business transport error payloads", () => {
-    const result = classifyEmbeddedAgentRunResultForModelFallback({
-      provider: "custom",
-      model: "llama-3.1",
-      result: {
-        payloads: [
-          {
-            isError: true,
-            text: "connection closed before a response arrived",
-          },
-        ],
-        meta: {
-          durationMs: 42,
-        },
-      },
-    });
+    const result = classifyErrorPayload(
+      "custom",
+      "llama-3.1",
+      "connection closed before a response arrived",
+    );
 
     expect(result).toBeNull();
   });
@@ -633,6 +583,13 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
       label: "an exact terminal tool batch intentionally completes the turn",
       meta: { intentionalTerminalCompletion: "tool-batch" as const },
     },
+    {
+      label: "an optional empty result completes without a reply",
+      meta: {
+        terminalReply: { disposition: "empty" as const },
+        terminalReplyExpectation: "optional" as const,
+      },
+    },
   ])("does not fallback after $label", ({ meta }) => {
     const result = classifyEmbeddedAgentRunResultForModelFallback({
       provider: "openai",
@@ -645,6 +602,26 @@ describe("classifyEmbeddedAgentRunResultForModelFallback", () => {
 
     expect(result).toBeNull();
   });
+
+  it.each([undefined, "required", "result-required"] as const)(
+    "keeps a clean empty %s turn fallback-eligible",
+    (terminalReplyExpectation) => {
+      expect(
+        classifyEmbeddedAgentRunResultForModelFallback({
+          provider: "openai",
+          model: "gpt-5.5",
+          result: {
+            payloads: [],
+            meta: {
+              durationMs: 42,
+              terminalReply: { disposition: "empty" },
+              terminalReplyExpectation,
+            },
+          },
+        }),
+      ).toMatchObject({ reason: "format", code: "empty_result" });
+    },
+  );
 
   it.each([
     {

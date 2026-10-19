@@ -8,7 +8,6 @@ import { withEnvAsync } from "../test-utils/env.js";
 import { buildGatewayInstallPlan } from "./daemon-install-helpers.js";
 import {
   createPrompter,
-  doctorSqliteDiagnostic,
   mockDoctorRuntimeFacts,
   registerRunningBunFallbackTest,
   setPlatform,
@@ -21,7 +20,11 @@ import {
 import { resolveGatewayInstallToken } from "./gateway-install-token.js";
 
 const readPin = vi.hoisted(() => vi.fn());
-vi.mock("../daemon/runtime-pin-state.js", () => ({ readDaemonRuntimePinForInstall: readPin }));
+// mock-isolation: Service-planning fixtures replace pin admission without opening stores or native locks.
+vi.mock("../daemon/runtime-pin-state.js", () => ({
+  readDaemonRuntimePinForInstall: readPin,
+  withDaemonRuntimePinMigration: async <T>(_env: NodeJS.ProcessEnv, read: () => T) => read(),
+}));
 const runExec = vi.hoisted(() => vi.fn<typeof import("../process/exec.js").runExec>());
 vi.mock("../process/exec.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../process/exec.js")>()),
@@ -864,7 +867,7 @@ describe("maybeRepairGatewayDaemon", () => {
       { platform: "darwin", env: process.env },
     );
     expect(note).toHaveBeenCalledWith(
-      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.\n${doctorSqliteDiagnostic}`,
+      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.`,
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
@@ -889,7 +892,7 @@ describe("maybeRepairGatewayDaemon", () => {
     expect(service.install).not.toHaveBeenCalled();
     expect(service.restart).not.toHaveBeenCalled();
     expect(note).toHaveBeenCalledWith(
-      `Runtime: unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)\n${doctorSqliteDiagnostic}`,
+      `Runtime: unknown (System LaunchDaemon system/ai.openclaw.gateway owns this gateway label.)`,
       "Gateway",
     );
     expect(note).not.toHaveBeenCalledWith("Gateway service not installed.", "Gateway");
@@ -963,7 +966,7 @@ describe("maybeRepairGatewayDaemon", () => {
       { platform: "darwin", env: process.env },
     );
     expect(note).toHaveBeenCalledWith(
-      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.\n${doctorSqliteDiagnostic}`,
+      `LaunchAgent requires a logged-in macOS GUI session; SSH/headless/sudo shells cannot bootstrap gui/$UID.`,
       "Gateway",
     );
   });

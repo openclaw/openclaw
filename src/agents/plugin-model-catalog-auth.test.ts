@@ -1,3 +1,4 @@
+import { DatabaseSync } from "node:sqlite";
 import { describe, expect, it, vi } from "vitest";
 import * as machineState from "../state/config-machine-state.js";
 import {
@@ -17,6 +18,12 @@ import { writeAuthProfileJsonCell } from "./auth-profiles/sqlite-json-write.js";
 import { resolveAuthProfileDatabasePath } from "./auth-profiles/sqlite.js";
 import type { AuthProfileStore } from "./auth-profiles/types.js";
 import { capturePluginModelCatalogAuth } from "./plugin-model-catalog-auth.js";
+import {
+  encodePluginModelCatalogRelativePath,
+  loadPersistedPluginModelCatalogsReadOnly,
+  PLUGIN_MODEL_CATALOG_GENERATED_BY,
+  replacePersistedPluginModelCatalogs,
+} from "./plugin-model-catalog.js";
 
 const sharedStore = {
   version: 1,
@@ -117,6 +124,79 @@ describe("plugin model catalog auth capture", () => {
         action: "openclaw doctor --fix",
         databasePath: localPath,
       });
+    });
+  });
+  it("returns committed rows when credential stripping skips invalid planned catalogs", async () => {
+    await withOpenClawTestState({ label: "catalog-auth-receipt" }, async (state) => {
+      const agentDir = state.agentDir("helper");
+      const catalogContents = (provider: string, apiKey?: string) =>
+        JSON.stringify({
+          generatedBy: PLUGIN_MODEL_CATALOG_GENERATED_BY,
+          providers: {
+            [provider]: {
+              api: "openai-completions",
+              baseUrl: `https://${provider}.example/v1`,
+              ...(apiKey ? { apiKey } : {}),
+              models: [{ id: `${provider}-model`, name: `${provider} model` }],
+            },
+          },
+        });
+      const keep = catalogContents("keep");
+      await replacePersistedPluginModelCatalogs({
+        agentDir,
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath("keep")]: keep,
+          [encodePluginModelCatalogRelativePath("null-row")]: catalogContents("null-row"),
+          [encodePluginModelCatalogRelativePath("stale")]: catalogContents("stale"),
+        },
+      });
+      await closeOpenClawAgentDatabasesAsync();
+      const database = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir));
+      try {
+        database
+          .prepare("UPDATE cache_entries SET value_json = NULL WHERE scope = ? AND key = ?")
+          .run("plugin-model-catalog-v1", "null-row");
+      } finally {
+        database.close();
+      }
+
+      const publication = await replacePersistedPluginModelCatalogs({
+        agentDir,
+        authSnapshot: [
+          {
+            databasePath: resolveAuthProfileDatabasePath(agentDir),
+            kind: "agent",
+            credentials: { removed: ["synthetic-removed"] },
+          },
+        ],
+        pluginCatalogWrites: {
+          [encodePluginModelCatalogRelativePath("keep")]: "{",
+          [encodePluginModelCatalogRelativePath("absent")]: "{",
+          [encodePluginModelCatalogRelativePath("null-row")]: "{",
+          [encodePluginModelCatalogRelativePath("next")]: catalogContents(
+            "next",
+            "synthetic-removed",
+          ),
+        },
+      });
+      const expected = [
+        { pluginId: "keep", contents: keep },
+        { pluginId: "next", contents: catalogContents("next") },
+      ];
+      expect(publication).toEqual({ changed: true, catalogs: expected });
+      expect(loadPersistedPluginModelCatalogsReadOnly(agentDir)).toEqual(expected);
+      const snapshot = new DatabaseSync(resolveAuthProfileDatabasePath(agentDir), {
+        readOnly: true,
+      });
+      try {
+        expect(
+          snapshot
+            .prepare("SELECT value_json FROM cache_entries WHERE scope = ? AND key = ?")
+            .get("plugin-model-catalog-v1", "null-row"),
+        ).toEqual({ value_json: null });
+      } finally {
+        snapshot.close();
+      }
     });
   });
 });

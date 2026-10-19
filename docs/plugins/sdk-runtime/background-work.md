@@ -152,6 +152,24 @@ Start agent work in the background: hook-dispatched turns for external content a
   </Accordion>
 </AccordionGroup>
 
+## Native harness continuation retry settings
+
+`AgentHarnessHostCapabilities.prepareContinuationRetryCount?.({ cwd })` prepares
+the host's continuation retry count from the native owner's admitted **Gateway-local**
+execution directory. Call it after permission and workspace resolution, before tools
+or inference, inside the attempt's cleanup owner. Do not pass a remote or container
+path, infer a Gateway mirror, or call it from isolated finalization.
+
+The host freezes `retry.provider.maxRetries`, including absence, and applies an
+explicit count over the harness result's `providerRetryMaxRetries`. Repeated calls
+with the same cwd reuse that prepared value; changing cwd throws. Retained callbacks
+reject after their host or admission closes. Native request retries, delay policy,
+and timeouts remain harness-owned.
+
+The capability is additive and optional. Harnesses that do not participate retain
+their result budget/default. Local Codex, Copilot, and Muse participate; ACP and
+remote/provider-hosted settings projection require a separate owner contract.
+
 ## Native harness completion delivery
 
 Bundled harnesses use `openclaw/plugin-sdk/agent-harness-completion` to route

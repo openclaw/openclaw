@@ -5,18 +5,15 @@ import { parse } from "yaml";
 
 const transport = vi.hoisted(() => ({ read: vi.fn(), sleep: vi.fn() }));
 vi.mock("node:child_process", async (importOriginal) => {
-  const { promisify } = await import("node:util");
   return {
     ...(await importOriginal<typeof import("node:child_process")>()),
     execFileSync: (...args: unknown[]) => transport.read(...args),
-    execFile: Object.assign(vi.fn(), {
-      [promisify.custom]: async (...args: unknown[]) => ({
-        stdout: transport.read(...args),
-        stderr: "",
-      }),
-    }),
   };
 });
+vi.mock("../../scripts/lib/plain-gh.mjs", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../scripts/lib/plain-gh.mjs")>()),
+  execGhReadAsync: async (...args: unknown[]) => transport.read("gh", ...args),
+}));
 vi.mock("node:timers/promises", () => ({ setTimeout: transport.sleep }));
 
 import {

@@ -76,7 +76,7 @@ export async function resolveDeepInfraVideoModelCapabilities(
   ctx: VideoGenerationModelCapabilitiesContext,
 ): Promise<VideoGenerationProviderCapabilities | undefined> {
   // Model id may arrive bare or `deepinfra/`-prefixed.
-  const rawId = typeof ctx.model === "string" ? ctx.model : "";
+  const rawId = ctx.model;
   const normalized = rawId.startsWith(`${PROVIDER_ID}/`)
     ? rawId.slice(PROVIDER_ID.length + 1)
     : rawId;

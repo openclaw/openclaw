@@ -1,9 +1,11 @@
 import { createSignal } from "@solidjs/signals";
+import type { GatewayStatusProps } from "../components/gateway-status.ts";
 import type { ShellRouteState } from "./app-host-route-state.ts";
-import { readNativeHistoryState, type NativeHistoryState } from "./native-web-chrome.ts";
+import { readNativeHistoryState } from "./native-web-chrome.ts";
 
 /** Synchronous shell state publishes revisions; Solid commits settle its DOM waiters. */
 export class ShellPresentation {
+  mobileGatewayStatus: GatewayStatusProps | null = null;
   private readonly readRevision: () => number;
   private readonly writeRevision: (next: (revision: number) => number) => number;
   readonly shellRevision = () => this.readRevision();
@@ -25,17 +27,6 @@ export class ShellPresentation {
       return;
     }
     this.currentNavDrawerOpen = value;
-    this.invalidate();
-  }
-  private currentNavResizing = false;
-  get navResizing(): boolean {
-    return this.currentNavResizing;
-  }
-  set navResizing(value: boolean) {
-    if (Object.is(this.currentNavResizing, value)) {
-      return;
-    }
-    this.currentNavResizing = value;
     this.invalidate();
   }
   private currentDesktopNavigationExpanded = false;
@@ -82,17 +73,9 @@ export class ShellPresentation {
     this.currentRouteState = value;
     this.invalidate();
   }
-  private currentNativeHistoryState: NativeHistoryState = readNativeHistoryState();
-  get nativeHistoryState(): NativeHistoryState {
-    return this.currentNativeHistoryState;
-  }
-  set nativeHistoryState(value: NativeHistoryState) {
-    if (Object.is(this.currentNativeHistoryState, value)) {
-      return;
-    }
-    this.currentNativeHistoryState = value;
-    this.invalidate();
-  }
+  private readonly nativeHistory = createSignal(readNativeHistoryState(), { ownedWrite: true });
+  readonly nativeHistoryState = this.nativeHistory[0];
+  readonly setNativeHistoryState = this.nativeHistory[1];
 
   get updateComplete(): Promise<boolean> {
     return this.commitPromise;

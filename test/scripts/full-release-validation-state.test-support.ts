@@ -13,12 +13,16 @@ import {
   buildReleaseExecutionPlan,
   buildReleaseExecutionPlanArtifact,
 } from "../../scripts/full-release-validation-policy.mjs";
-import { fullReleaseCandidateBindingFixture } from "../helpers/full-release-candidate.js";
+import {
+  fullReleaseCandidateBindingFixture,
+  fullReleaseCandidateRequestInput,
+} from "../helpers/full-release-candidate.js";
 
 export const SCRIPT = resolve("scripts/full-release-validation-state.mjs");
 export const SHA = "a".repeat(40);
 export const TARGET_SHA = "b".repeat(40);
 export const TRUSTED_MAIN = { fullRef: "refs/heads/main", ref: "main", sha: SHA };
+const WORKFLOW = { workflowRef: "release-ci/tooling", workflowSha: SHA };
 
 export function collectorEnv(overrides: NodeJS.ProcessEnv) {
   return {
@@ -44,21 +48,12 @@ export function runCollector(mode: string, overrides: NodeJS.ProcessEnv) {
 }
 
 export function candidateRequestInput(overrides: Record<string, unknown> = {}) {
-  return {
-    repository: "openclaw/openclaw",
+  return fullReleaseCandidateRequestInput({
     targetSha: TARGET_SHA,
     toolingSha: SHA,
-    releaseProfile: "stable",
-    releaseSoak: true,
     upgradeSurvivorBaseline: "openclaw@latest",
-    upgradeSurvivorBaselines: "",
-    upgradeSurvivorScenarios: "reported-issues",
-    allowFrozenTargetScenarioOmissions: false,
-    allowUnreleasedChangelog: false,
-    packagePublished: false,
-    sharedImagePolicy: "no-push-artifact",
     ...overrides,
-  };
+  });
 }
 
 export function canonicalCandidateRequest(overrides: Record<string, unknown> = {}) {
@@ -66,10 +61,7 @@ export function canonicalCandidateRequest(overrides: Record<string, unknown> = {
 }
 
 export function candidateBinding(requestOverrides: Record<string, unknown> = {}) {
-  return fullReleaseCandidateBindingFixture({
-    ...candidateRequestInput(requestOverrides),
-    ...requestOverrides,
-  });
+  return fullReleaseCandidateBindingFixture(candidateRequestInput(requestOverrides));
 }
 
 export function evidenceManifest() {
@@ -103,9 +95,8 @@ export function generatedManifest(planArtifact: Record<string, any>): Record<str
     version: 3,
     workflowFullRef: "refs/heads/release-ci/tooling",
     workflowName: "Full Release Validation",
-    workflowRef: "release-ci/tooling",
+    ...WORKFLOW,
     workflowRefType: "branch",
-    workflowSha: SHA,
   };
 }
 
@@ -126,8 +117,7 @@ export function child(key: string, overrides: Record<string, unknown> = {}) {
     status: "in_progress",
     url: "https://example.invalid/runs/101",
     workflow: "ci.yml",
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
+    ...WORKFLOW,
     ...overrides,
   };
 }
@@ -168,8 +158,7 @@ export function plan(overrides: Record<string, unknown> = {}) {
     candidateBindingResult: "success",
     rerunGroup: "all",
     resolveTargetResult: "success",
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
+    ...WORKFLOW,
     ...overrides,
   });
 }
@@ -188,8 +177,7 @@ export function executionPlan(
     parentRunId: "77",
     repository: "openclaw/openclaw",
     targetSha: TARGET_SHA,
-    workflowRef: "release-ci/tooling",
-    workflowSha: SHA,
+    ...WORKFLOW,
     ...(candidateRequest === undefined ? {} : { candidateRequest }),
     ...(expectedOverrides as Record<string, unknown> | undefined),
   };

@@ -258,7 +258,7 @@ function generateZshCommandGroup(
   local -a commands
   local -a options
   
-  _arguments -C \\
+  _arguments -s -C \\
     ${generateZshArgs(command)} \\
     ${generateZshSubcmdList(command)} \\
     "*::arg:->args"
@@ -283,7 +283,7 @@ function generateZshSubcommands(program: Command, prefix: string): string {
           ? `\n${generateZshCommandGroup(cmd, funcName)}\n`
           : `
 ${funcName}() {
-  _arguments -C \\
+  _arguments -s -C \\
     ${generateZshArgs(cmd)}
 }
 `;
@@ -385,6 +385,10 @@ Register-ArgumentCompleter -Native -CommandName ${rootCmd} -ScriptBlock {
     $previousElement = if ($previousElementIndex -ge 1) { $commandElements[$previousElementIndex].Extent.Text } else { '' }
     $choiceFlag = $previousElement
     $choicePrefix = $wordToComplete
+    # PowerShell retains quotes in wordToComplete, even for an unfinished literal.
+    if ($wordToComplete -ne '' -and $commandElements[-1] -is [System.Management.Automation.Language.StringConstantExpressionAst]) {
+        $choicePrefix = $commandElements[-1].Value
+    }
     $choiceCompletionPrefix = ''
     if ($wordToComplete -match '^(--[^=]+)=(.*)$') {
         $choiceFlag = $Matches[1]

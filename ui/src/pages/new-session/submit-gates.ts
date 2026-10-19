@@ -281,6 +281,7 @@ export function resolveNewSessionSubmitBlock(
       gate: "folder",
       reason:
         (place.deviceFolder && place.deviceFolderRuntimeUnsupportedReason) ||
+        place.currentCheckoutUnavailableReason ||
         t(
           place.deviceFolder
             ? place.deviceFolderAvailable

@@ -415,7 +415,7 @@ struct ProfileChatPreferencesTests {
             defaultDefaults.set(true, forKey: toolActivityKey)
 
             try await AppKitTestSupport.startApplication()
-            #expect(AppKitTestSupport.didSetActivationPolicy)
+            #expect(AppKitTestSupport.hasAccessoryActivationPolicy)
             let transport = ProfileModelPickerTransport()
             let controller = WebChatSwiftUIWindowController(
                 sessionKey: ProfileModelPickerTransport.sessionKey,

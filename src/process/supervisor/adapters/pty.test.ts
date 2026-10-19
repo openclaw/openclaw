@@ -272,6 +272,23 @@ describe("createPtyAdapter", () => {
     expect(adapter.stdin?.destroyed).toBe(true);
   });
 
+  it("surfaces a backend EOF write failure", async () => {
+    const stub = createStubPty();
+    const failure = new Error("write EIO");
+    stub.write.mockImplementation(() => {
+      throw failure;
+    });
+    spawnMock.mockReturnValue(stub);
+    const adapter = await createPtyAdapter({ shell: "bash", args: ["-lc", "cat"] });
+
+    try {
+      expect(() => adapter.stdin?.end()).toThrow(failure);
+      expect(adapter.stdin?.writable).toBe(false);
+    } finally {
+      adapter.dispose();
+    }
+  });
+
   it("disposes PTY listeners", async () => {
     const stub = createStubPty();
     spawnMock.mockReturnValue(stub);

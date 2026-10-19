@@ -108,6 +108,50 @@ describe("renderPluginCatalogResults", () => {
     vi.restoreAllMocks();
   });
 
+  it("does not rescan the large catalog for unrelated feedback updates", () => {
+    let categoryReads = 0;
+    const items = Array.from({ length: 300 }, (_, index) => {
+      const entry = plugin(`audit-${index}`);
+      Object.defineProperty(entry.catalog, "categories", {
+        configurable: true,
+        get() {
+          categoryReads += 1;
+          return ["tools"];
+        },
+      });
+      return entry;
+    });
+    const props = baseProps({ result: { items }, featured: [], trending: [] });
+    const container = mount(props);
+    const row = container.querySelector('[data-plugin-id="audit-0"]');
+    const search = container.querySelector<HTMLInputElement>("input")!;
+    search.focus();
+    search.setSelectionRange(0, 0);
+    categoryReads = 0;
+    update(container, { ...props, remoteError: "Registry temporarily unavailable" });
+    expect(container.textContent).toContain("Registry temporarily unavailable");
+    expect(container.querySelector('[data-plugin-id="audit-0"]')).toBe(row);
+    expect(container.querySelector("input")).toBe(search);
+    expect(document.activeElement).toBe(search);
+    expect(categoryReads).toBe(0);
+
+    update(container, {
+      ...props,
+      result: {
+        items: [plugin("audit-0", { catalog: { name: "Refreshed catalog entry" } })],
+      },
+      categories: [
+        { slug: "tools", label: "Refreshed tools", description: "Tools", icon: "wrench", order: 0 },
+      ],
+    });
+    expect(container.querySelector('[data-plugin-id="audit-0"]')).toBe(row);
+    expect(row?.querySelector("h3")?.textContent).toBe("Refreshed catalog entry");
+    expect(container.querySelector('[data-catalog-section="tools"] h2')?.textContent).toBe(
+      "Refreshed tools",
+    );
+    expect(container.querySelectorAll(".plugin-catalog-card")).toHaveLength(1);
+  });
+
   it("keeps built-in filters usable while category placeholders settle", () => {
     const props = baseProps({ categories: [], categoriesLoading: true });
     const container = mount(props);

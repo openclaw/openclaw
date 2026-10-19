@@ -273,7 +273,7 @@ export async function handleDiscordMessageSendAction(ctx: DiscordMessagingAction
         messageId,
         autoArchiveMinutes,
         content,
-        appliedTags: appliedTags ?? undefined,
+        appliedTags,
       };
       try {
         const { initialMessageDelivery, ...thread } =

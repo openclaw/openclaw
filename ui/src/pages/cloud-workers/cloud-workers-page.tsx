@@ -1,5 +1,5 @@
 import type { JSX } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, createStore, Show, For } from "solid-js";
+import { createMemo, createSignal, createStore, onCleanup, onSettled, Show, For } from "solid-js";
 import type { EnvironmentsListResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
 import {
@@ -21,7 +21,6 @@ import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage } from "../../lib/reactive/gateway-page.ts";
 import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
-import { defineSolidBridge } from "../../lit/solid-bridge.ts";
 import { CloudWorkerConfigSave } from "./cloud-worker-config-save.ts";
 import {
   buildCloudWorkerDeletePatch,
@@ -39,7 +38,7 @@ const CLOUD_WORKERS_DOCS_URL = "https://docs.openclaw.ai/gateway/cloud-workers";
 type ProfileSummary = NonNullable<EnvironmentsListResult["profiles"]>[number];
 type EditorState = { kind: "add" } | { kind: "edit"; profileId: string } | null;
 
-function CloudWorkersContent() {
+export function CloudWorkersPage() {
   const context = useApplication();
   const [view, setView] = createStore<{ editor: EditorState; draft: CloudWorkerProfileDraft }>({
     editor: null,
@@ -57,25 +56,50 @@ function CloudWorkersContent() {
     value?: Map<string, ProfileSummary>;
     error?: string;
   }>({ pending: false });
+  let previousCatalogReceipt: ReturnType<typeof catalogReceipt> | undefined;
+  let catalogRequest: AbortController | undefined;
+  function clearPresentation() {
+    setView((state) => {
+      state.editor = null;
+      state.draft = createCloudWorkerDraft();
+    });
+    setCatalog({ pending: false });
+  }
   const gateway = useGatewayPage({
     getGateway: () => context.gateway,
+    onIdentityChange: clearPresentation,
+    onSnapshot: ({ snapshot }) => {
+      if (
+        snapshot.phase === "connected" &&
+        !canCallGatewayMethod(snapshot, "config.patch", "operator.admin")
+      ) {
+        gateway.invalidate();
+        configSave.update({ busy: false, error: null, notice: null });
+        clearPresentation();
+      }
+      refreshCatalog();
+    },
     invalidateRequests: () => configSave.update({ busy: false }),
   });
   void context.runtimeConfig.ensureLoaded();
-  const catalogKey = createMemo(
-    () => {
-      return [
-        gateway.snapshot?.client,
-        gateway.snapshot?.phase,
-        gateway.epoch,
-        configProjection.read().state.configSnapshot?.appliedConfigHash,
-      ] as const;
-    },
-    { equals: (previous, next) => previous.every((value, index) => value === next[index]) },
-  );
-  createEffect(catalogKey, (key) => {
+  function catalogReceipt() {
+    const snapshot = context.gateway.snapshot;
+    return [
+      snapshot.client,
+      snapshot.phase,
+      gateway.readEpoch(),
+      context.runtimeConfig.state.configSnapshot?.appliedConfigHash,
+    ] as const;
+  }
+  function refreshCatalog() {
+    const key = catalogReceipt();
+    if (previousCatalogReceipt?.every((value, index) => value === key[index])) {
+      return;
+    }
+    previousCatalogReceipt = key;
+    catalogRequest?.abort();
     const appliedHash = key[3];
-    const controller = new AbortController();
+    const controller = (catalogRequest = new AbortController());
     // A nested bridge can flush effects while its parent is still rendering.
     queueMicrotask(() => {
       if (controller.signal.aborted) {
@@ -86,10 +110,14 @@ function CloudWorkersContent() {
         !scope ||
         !canCallGatewayMethod(gateway.snapshot, "environments.list", "operator.admin")
       ) {
-        setCatalog({ pending: false });
+        if (gateway.connected) {
+          setCatalog({ pending: false });
+        } else {
+          setCatalog((previous) => ({ ...previous, pending: false }));
+        }
         return;
       }
-      setCatalog({ pending: true });
+      setCatalog((previous) => ({ ...previous, pending: true }));
       void scope.client
         .request<EnvironmentsListResult>(
           "environments.list",
@@ -111,20 +139,27 @@ function CloudWorkersContent() {
           },
           (error: unknown) => {
             if (!controller.signal.aborted && gateway.isCurrent(scope)) {
-              setCatalog({ pending: false, error: formatUiError(error) });
+              setCatalog((previous) => ({
+                ...previous,
+                pending: false,
+                error: formatUiError(error),
+              }));
             }
           },
         );
     });
-    return () => controller.abort();
+  }
+  onSettled(() => {
+    const stop = configProjection.subscribe(refreshCatalog);
+    refreshCatalog();
+    return stop;
   });
+  onCleanup(() => catalogRequest?.abort());
   function editableConfig(): Record<string, unknown> | null {
     return resolveEditableSnapshotConfig(configProjection.read().state.configSnapshot);
   }
 
-  function profiles(): ConfiguredCloudWorkerProfile[] {
-    return readCloudWorkerProfiles(editableConfig());
-  }
+  const profiles = createMemo(() => readCloudWorkerProfiles(editableConfig()));
 
   function hasManageAccess(): boolean {
     return canCallGatewayMethod(gateway.snapshot, "config.patch", "operator.admin");
@@ -181,7 +216,9 @@ function CloudWorkersContent() {
     if (!scope || !view.editor || !config || !canManage()) {
       return;
     }
-    const currentProfiles = Object.fromEntries(profiles().map((profile) => [profile.id, true]));
+    const currentProfiles = Object.fromEntries(
+      readCloudWorkerProfiles(config).map((profile) => [profile.id, true]),
+    );
     const validationError = validateCloudWorkerDraft(draft, currentProfiles, editingId);
     if (validationError) {
       configSave.update({ error: t(`cloudWorkersPage.errors.${validationError}`) });
@@ -278,7 +315,7 @@ function CloudWorkersContent() {
 
   function renderProfile(profile: ConfiguredCloudWorkerProfile) {
     const statusControl = () =>
-      catalog().pending ? (
+      catalog().pending && !catalog().value ? (
         <SettingsStatus kind={"muted"} label={t("common.loading")} />
       ) : catalog().value?.has(profile.id) ? (
         <SettingsStatus kind={"ok"} label={t("cloudWorkersPage.advertised")} />
@@ -520,7 +557,7 @@ function CloudWorkersContent() {
   }
 
   return (
-    <>
+    <openclaw-cloud-workers-page>
       <SettingsPageHeader title={t("tabs.cloudWorkers")} />
       <SettingsWorkspace>
         <CloudWorkerEnvironments
@@ -571,12 +608,6 @@ function CloudWorkersContent() {
           )}
         />
       </SettingsWorkspace>
-    </>
+    </openclaw-cloud-workers-page>
   );
 }
-
-export const CloudWorkersPage = defineSolidBridge(
-  "openclaw-cloud-workers-page",
-  CloudWorkersContent,
-  { properties: {} },
-);

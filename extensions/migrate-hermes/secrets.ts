@@ -1,7 +1,5 @@
-import {
-  loadAuthProfileStoreWithoutExternalProfiles,
-  resolveAuthStorePathForDisplay,
-} from "openclaw/plugin-sdk/agent-runtime";
+import { loadAuthProfileStoreWithoutExternalProfilesAsync } from "openclaw/plugin-sdk/agent-runtime";
+import { AuthStorage } from "openclaw/plugin-sdk/agent-sessions";
 import {
   markMigrationItemConflict,
   markMigrationItemError,
@@ -47,10 +45,6 @@ type SecretCandidate = {
   sourceCredentialId?: string;
   secretField?: string;
 };
-
-function authProfileTarget(agentDir: string, profileId: string): string {
-  return `${resolveAuthStorePathForDisplay(agentDir)}#${profileId}`;
-}
 
 function secretAuthProfileConfig(details: {
   provider: string;
@@ -258,7 +252,10 @@ export async function buildSecretItems(params: {
   if (candidates.length === 0) {
     return [];
   }
-  const store = loadAuthProfileStoreWithoutExternalProfiles(params.targets.agentDir);
+  const [store, authStorePath] = await Promise.all([
+    loadAuthProfileStoreWithoutExternalProfilesAsync(params.targets.agentDir),
+    AuthStorage.resolvePathForDisplayAsync(params.targets.agentDir),
+  ]);
   const seenProfiles = new Set<string>();
   const items: MigrationItem[] = [];
   for (const candidate of candidates) {
@@ -276,7 +273,7 @@ export async function buildSecretItems(params: {
       createHermesSecretItem({
         id: candidate.id,
         source: candidate.source,
-        target: authProfileTarget(params.targets.agentDir, candidate.profileId),
+        target: `${authStorePath}#${candidate.profileId}`,
         includeSecrets: params.ctx.includeSecrets,
         existsAlready: (existsAlready && !params.ctx.overwrite) || configConflict,
         details: {

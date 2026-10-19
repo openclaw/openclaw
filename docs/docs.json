@@ -1385,6 +1385,7 @@
                   "install/node-compatibility",
                   "install/bun",
                   "install/bun-compatibility",
+                  "install/standalone",
                   "install/nix"
                 ]
               },
@@ -1687,6 +1688,7 @@
                   "concepts/main-session",
                   "concepts/multi-user",
                   "concepts/session",
+                  "concepts/session-controller",
                   "concepts/session-attachment",
                   "concepts/session-search",
                   "concepts/session-pruning",
@@ -1769,6 +1771,7 @@
               {
                 "group": "Plugin guides",
                 "pages": [
+                  "plugins/agent-guidance",
                   "plugins/agentsapi",
                   {
                     "group": "Codex",
@@ -1837,6 +1840,7 @@
                       "plugins/memory-lancedb",
                       "plugins/memory-wiki",
                       "plugins/onnx",
+                      "plugins/subq",
                       "plugins/typesafe"
                     ]
                   },
@@ -1943,6 +1947,7 @@
                     ]
                   },
                   "automation/imap",
+                  "automation/mcp-events",
                   "automation/standing-orders",
                   "automation/hooks",
                   {
@@ -2015,6 +2020,7 @@
                           "tools/code-mode/maintainers"
                         ]
                       },
+                      "tools/autoreview",
                       "tools/llm-task",
                       "tools/lobster",
                       "tools/mcp",
@@ -2243,6 +2249,7 @@
                       "providers/opencode",
                       "providers/opencode-go",
                       "providers/perplexity-provider",
+                      "providers/poolside",
                       "providers/qianfan",
                       "providers/qwen",
                       "providers/radius",
@@ -2315,6 +2322,7 @@
                           "providers/ollama/troubleshooting"
                         ]
                       },
+                      "providers/omlx",
                       "providers/sglang",
                       "providers/vllm"
                     ]
@@ -2476,6 +2484,7 @@
                     "group": "Health and diagnostics",
                     "pages": [
                       "gateway/health",
+                      "gateway/postgresql",
                       "gateway/doctor",
                       {
                         "group": "Doctor",
@@ -2523,6 +2532,7 @@
                   {
                     "group": "Scaling and operations",
                     "pages": [
+                      "gateway/postgresql",
                       "gateway/gateway-lock",
                       "gateway/background-process",
                       "gateway/restart-recovery",
@@ -3088,6 +3098,7 @@
                     "group": "Plugin SDK migration",
                     "pages": [
                       "plugins/sdk-migration/how-to-migrate",
+                      "plugins/sdk-migration/sqlite-async",
                       "plugins/sdk-migration/import-paths",
                       "plugins/sdk-migration/removed-surfaces",
                       "plugins/sdk-migration/talk",
@@ -3212,6 +3223,7 @@
                 "group": "Release notes",
                 "pages": [
                   "releases/index",
+                  "releases/2026.10.4",
                   "releases/2026.10.3",
                   "releases/2026.10.2",
                   "releases/2026.10.1",

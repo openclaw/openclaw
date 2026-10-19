@@ -48,6 +48,16 @@ describe("config path own-property traversal", () => {
   it.each([
     { parent: ["agents", "defaults", "model"], member: "fallbacks", value: ["openai/gpt-4o"] },
     {
+      parent: ["agents", "defaults", "utilityModel"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    {
+      parent: ["agents", "entries", "worker", "utilityModel"],
+      member: "fallbacks",
+      value: ["openai/gpt-4o"],
+    },
+    {
       parent: ["agents", "defaults", "subagents", "model"],
       member: "fallbacks",
       value: ["openai/gpt-4o"],
@@ -81,6 +91,19 @@ describe("config path own-property traversal", () => {
     expect(getConfigValueAtPath(root, parent)).toEqual({
       primary: "openai/gpt-4o-mini",
       [member]: value,
+    });
+  });
+
+  it.each([
+    { parent: ["agents", "defaults", "utilityModel"] },
+    { parent: ["agents", "entries", "worker", "utilityModel"] },
+  ])("keeps utility routing disabled when adding fallbacks at $parent", ({ parent }) => {
+    const root: Record<string, unknown> = {};
+    setConfigValueAtPath(root, parent, "");
+    setConfigValueAtPath(root, [...parent, "fallbacks"], ["local/backup"]);
+    expect(getConfigValueAtPath(root, parent)).toEqual({
+      primary: "",
+      fallbacks: ["local/backup"],
     });
   });
 

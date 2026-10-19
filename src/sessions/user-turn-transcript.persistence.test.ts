@@ -31,6 +31,7 @@ import { useSessionStoreTempDirs } from "../test-utils/session-state-cleanup.js"
 import { createUserTurnTranscriptRecorder } from "./user-turn-transcript.js";
 import {
   buildChannelUserTurnSender,
+  preparePersistedUserTurnMessageForTranscriptWrite,
   restorePreparedUserTurnOperationalMetaForRuntime,
 } from "./user-turn-transcript.metadata.js";
 import {
@@ -39,6 +40,23 @@ import {
   readTranscriptMessages,
 } from "./user-turn-transcript.test-support.js";
 import type { UserTurnOriginalInputCommit } from "./user-turn-transcript.types.js";
+
+const acceptedPeerDelivery = {
+  version: 1,
+  runId: "peer-send",
+  source: { agentId: "main", sessionKey: "agent:main:source", sessionId: "source-id" },
+  target: { agentId: "main", sessionKey: "agent:main:target", sessionId: "target-id" },
+  sandboxed: false,
+  message: "hello",
+  operatorSource: {
+    kind: "channel",
+    snapshot: {
+      reference: { version: 1, id: "00000000-0000-4000-8000-000000000001" },
+      profileId: "original",
+      scopes: ["operator.read"],
+    },
+  },
+};
 
 describe("persistUserTurnTranscript", () => {
   const sessionDirs = useSessionStoreTempDirs(
@@ -143,15 +161,39 @@ describe("persistUserTurnTranscript", () => {
     const input = {
       text: "original prompt",
       workContext: { snapshot: { page: "chat" }, text: "original words" },
+      requesterOrigin: { sessionKey: "agent:main:requesters", operatorProfileId: "original" },
     };
     const recorder = createUserTurnTranscriptRecorder({ target, input, updateMode: "none" });
     const prepared = recorder.message!;
+    prepared["__openclaw"] = { ...prepared["__openclaw"], chatRequestIdentity: "original-request" };
     const runtime = restorePreparedUserTurnOperationalMetaForRuntime({
       preparedMessage: prepared,
-      runtimeMessage: { ...prepared, content: "[redacted]" },
+      runtimeMessage: {
+        ...prepared,
+        content: "[redacted]",
+        __openclaw: {
+          ...prepared["__openclaw"],
+          chatRequestIdentity: "forged-request",
+          requesterOrigin: { sessionKey: "agent:main:forged", operatorProfileId: "forged" },
+        },
+      },
     });
     expect(stripEnvelopeFromMessages([runtime])[0]).toMatchObject({ content: "[redacted]" });
     expect(runtime).not.toHaveProperty("__openclaw.workContext");
+    expect(runtime).toHaveProperty("__openclaw.chatRequestIdentity", "original-request");
+    expect(runtime["__openclaw"]?.requesterOrigin).toMatchObject(input.requesterOrigin);
+    const written = preparePersistedUserTurnMessageForTranscriptWrite(runtime, {
+      beforeMessageWrite: ({ message }) => ({ ...message, __openclaw: {} }),
+    });
+    expect(written).toMatchObject({ content: "[redacted]" });
+    expect(written).toHaveProperty("__openclaw.chatRequestIdentity", "original-request");
+    expect(written?.["__openclaw"]?.requesterOrigin).toMatchObject(input.requesterOrigin);
+    const unprepared = restorePreparedUserTurnOperationalMetaForRuntime({
+      runtimeMessage: runtime,
+      preparedMessage: { ...prepared, __openclaw: {} },
+    });
+    expect(unprepared).not.toHaveProperty("__openclaw.requesterOrigin");
+    expect(unprepared).not.toHaveProperty("__openclaw.chatRequestIdentity");
     recorder.replaceTextBeforePersistence?.("approved continuation");
     await recorder.persistApproved();
     const [persisted] = await readTranscriptMessages(target);
@@ -159,6 +201,27 @@ describe("persistUserTurnTranscript", () => {
       content: "approved continuation",
     });
     expect(persisted).not.toHaveProperty("__openclaw.workContext");
+  });
+
+  it("resolves committed hook metadata and redacted content for runtime replay", async () => {
+    const target = createSqliteTranscriptTarget({ dir: sessionDirs.make() });
+    const recorder = createUserTurnTranscriptRecorder({
+      target,
+      input: { text: "original input", timestamp: 123, idempotencyKey: "prepared:user" },
+      beforeMessageWrite: ({ message }) => ({
+        ...message,
+        content: "[redacted]",
+        __openclaw: { chatRequestIdentity: "admitted-request" },
+      }),
+    });
+    await recorder.persistApproved();
+    await expect(recorder.resolveMessage()).resolves.toEqual({
+      role: "user",
+      content: "[redacted]",
+      timestamp: 123,
+      idempotencyKey: "prepared:user",
+      __openclaw: { chatRequestIdentity: "admitted-request" },
+    });
   });
 
   it("round-trips source text and attachments byte-identically despite logging patterns", async () => {
@@ -280,7 +343,13 @@ describe("persistUserTurnTranscript", () => {
         dir: sessionDirs.make(),
       });
       const identity = { type: "profile", id: "original" };
+      const requesterOrigin = {
+        sessionKey: "agent:main:telegram:group:requesters",
+        messageProvider: "telegram",
+        senderId: "original",
+      };
       const recorder = createUserTurnTranscriptRecorder({
+        input: { requesterOrigin: mode === "forge" ? undefined : requesterOrigin },
         message: {
           role: "user",
           content: "hello",
@@ -290,6 +359,9 @@ describe("persistUserTurnTranscript", () => {
             senderName: "Original",
             senderIsOwner: true,
             ...(mode === "forge" ? {} : { senderIdentity: identity }),
+            ...(mode === "forge"
+              ? {}
+              : { sessionSendDelivery: structuredClone(acceptedPeerDelivery) }),
           },
         },
         target,
@@ -298,16 +370,29 @@ describe("persistUserTurnTranscript", () => {
             mode === "in-place" ? message["__openclaw"]! : { ...message["__openclaw"] };
           if (mode === "forge") {
             metadata.senderIdentity = { type: "profile", id: "forged" };
+            metadata.sessionSendDelivery = { ...acceptedPeerDelivery, operatorSource: null };
           }
           if (mode === "in-place") {
             (metadata.senderIdentity as { id: string }).id = "forged";
+            requesterOrigin.senderId = "forged";
+            requesterOrigin.sessionKey = "agent:main:replacement";
+            const delivery = metadata.sessionSendDelivery as typeof acceptedPeerDelivery;
+            delivery.source.sessionKey = "agent:main:forged";
+            delivery.operatorSource.snapshot.profileId = "forged";
+            delivery.operatorSource.snapshot.scopes.push("operator.admin");
           }
           if (mode === "raw-redact") {
             delete metadata.senderId;
+            delete metadata.sessionSendDelivery;
           }
           return {
             ...message,
-            __openclaw: { ...metadata, senderName: "Edited display", senderIsOwner: false },
+            __openclaw: {
+              ...metadata,
+              senderName: "Edited display",
+              senderIsOwner: false,
+              requesterOrigin: { sessionKey: "agent:main:forged", senderId: "forged" },
+            },
           };
         },
       });
@@ -318,6 +403,16 @@ describe("persistUserTurnTranscript", () => {
         senderName: "Edited display",
         senderIsOwner: true,
         ...(mode === "retain" ? { senderIdentity: { type: "profile", id: "original" } } : {}),
+        ...(mode === "forge"
+          ? {}
+          : {
+              requesterOrigin: {
+                sessionKey: "agent:main:telegram:group:requesters",
+                messageProvider: "telegram",
+                senderId: "original",
+              },
+              sessionSendDelivery: acceptedPeerDelivery,
+            }),
       });
     },
   );

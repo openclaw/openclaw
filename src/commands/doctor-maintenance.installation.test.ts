@@ -6,6 +6,7 @@ import { createManagedHandoffTestBinding } from "../../test/helpers/managed-hand
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import { writeOpenClawConfig } from "../config/test-helpers.js";
 import { resolveGatewayTaskScriptPath } from "../daemon/paths.js";
+import { withDaemonRuntimePinStore } from "../daemon/runtime-pin-store.js";
 import type { GatewayServiceCommandConfig } from "../daemon/service-types.js";
 import { GatewayServiceAuthorityError } from "../daemon/service-update-authority.js";
 import type { GatewayService } from "../daemon/service.js";
@@ -19,6 +20,7 @@ import { tryAcquireGatewayStateOwner } from "../infra/gateway-state-owner.js";
 import * as processAncestry from "../infra/restart-stale-pids.js";
 import * as sqliteSnapshotSource from "../infra/sqlite-snapshot-source.js";
 import * as sqliteWorkerStores from "../infra/sqlite-worker-store.js";
+import { migrateDaemonRuntimePins } from "../infra/state-migrations.daemon-runtime-pins.js";
 import { resolveManagedUpdateLeaseDatabasePath } from "../infra/update-managed-service-handoff-lease.js";
 import { readUpdateRunDriver } from "../infra/update-run-driver.js";
 import { createUpdateRun } from "../infra/update-run-ledger.js";
@@ -29,6 +31,7 @@ import {
   closeOpenClawStateDatabaseForTest,
   openOpenClawStateDatabase,
 } from "../state/openclaw-state-db.js";
+import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withEnvAsync } from "../test-utils/env.js";
 import { maybeRepairGatewayServiceConfig } from "./doctor-gateway-services.js";
 import { prepareWriterContext } from "./doctor-gateway-services.writer-order.test-support.js";
@@ -54,7 +57,8 @@ const mocks = vi.hoisted(() => ({
   suspend: vi.fn<typeof import("../daemon/schtasks.js").suspendScheduledTaskAutoStartForUpdate>(),
   resume: vi.fn<typeof import("../daemon/schtasks.js").resumeScheduledTaskAutoStartAfterUpdate>(),
 }));
-vi.mock("../daemon/service-process-membership.js", () => ({
+vi.mock("../daemon/service-process-membership.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service-process-membership.js")>()),
   // This in-memory service places Doctor outside its synthetic process scope.
   inspectServiceProcessMembershipSync: (pid: number) =>
     pid === mocks.gatewayPid ? "outside" : "unknown",
@@ -186,6 +190,7 @@ async function runInstallationCase(params: {
   revoked?: "unchanged" | "restored" | "unclassified";
   initiallyStopped?: boolean;
   releaseStateBeforeFinish?: boolean;
+  pendingRuntimePinMigration?: boolean;
   inspectionFailure?: "lost-before-install";
   restorationInspectionFailure?: "unknown-runtime";
   inspectionScenario?: "slow-admission" | "competing-update";
@@ -210,7 +215,6 @@ async function runInstallationCase(params: {
       configurable: true,
     });
   }
-  mockDoctorServicePlatform(params.platform);
   if (params.tokenRecovery) {
     Object.defineProperty(process.stdin, "isTTY", {
       value: params.tokenRecovery !== "no-consent",
@@ -218,7 +222,6 @@ async function runInstallationCase(params: {
     });
     mocks.confirm.mockResolvedValue(true);
   }
-  mockSystemAccountHome();
   const home = await fs.realpath(tempDirs.make("openclaw-doctor-installation-"));
   mocks.runtimePath =
     params.consent?.mixed === "version-managed-runtime"
@@ -258,6 +261,13 @@ async function runInstallationCase(params: {
       OPENCLAW_UPDATE_PARENT_ALLOWS_GATEWAY_ACTIVATION: undefined,
     },
     async () => {
+      if (params.pendingRuntimePinMigration) {
+        expect(process.platform).toBe("linux");
+      } else {
+        expect((await migrateDaemonRuntimePins(process.env)).warnings).toEqual([]);
+        mockDoctorServicePlatform(params.platform);
+      }
+      mockSystemAccountHome();
       const sourcePath =
         params.platform === "win32" ? resolveGatewayTaskScriptPath(process.env) : undefined;
       if (params.inspectionScenario) {
@@ -355,6 +365,16 @@ async function runInstallationCase(params: {
         },
         install: async (plan) => {
           expect(getOpenClawDatabaseMaintenanceScope()).toBeUndefined();
+          if (params.pendingRuntimePinMigration) {
+            expect(
+              withDaemonRuntimePinStore(process.env, false, (db) =>
+                db.prepare("SELECT source_state, phase FROM daemon_runtime_pin_migration").get(),
+              ),
+            ).toEqual({
+              source_state: resolveOpenClawStateSqlitePath(process.env),
+              phase: "complete",
+            });
+          }
           events.push("install");
           if (params.tokenRecovery) {
             const ref = JSON.parse(await fs.readFile(configPath!, "utf8")).gateway.auth.token;
@@ -549,6 +569,9 @@ async function runInstallationCase(params: {
         if (params.releaseStateBeforeFinish) {
           await maintenance?.releaseState();
         }
+        if (params.pendingRuntimePinMigration) {
+          expect(withDaemonRuntimePinStore(process.env, false, () => true)).toBeUndefined();
+        }
         let finishError: unknown;
         try {
           await maintenance?.finish(
@@ -703,6 +726,16 @@ async function runInstallationCase(params: {
 }
 
 type InstallationCase = Omit<Parameters<typeof runInstallationCase>[0], "mode">;
+
+it.skipIf(process.platform !== "linux")(
+  "migrates pending runtime pins before restoring the service under existing custody",
+  async () =>
+    runInstallationCase({
+      platform: "linux",
+      mode: "maintenance",
+      pendingRuntimePinMigration: true,
+    }),
+);
 
 it.each<InstallationCase>([
   { platform: "linux", tokenRecovery: "success", installFails: false },

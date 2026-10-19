@@ -628,15 +628,19 @@ describe("update-cli", () => {
     expect(commandCalls()[packageInstallCallIndex]?.[0]).toContain("--prefix");
   });
 
-  it.each([{ json: false, handoff: undefined, expectedExitCode: 1 }])(
-    "leaves the stopped Gateway down when Git mutation throws without a recovery verdict (json=$json)",
-    async ({ json, handoff, expectedExitCode }) => {
+  it.each([false, true])(
+    "attempts recovery after Git mutation throws and preserves failed readiness (json=%s)",
+    async (json) => {
       mockStoppedManagedGitGateway();
       setTty(true);
       setStdoutTty(true);
-      const cause = new Error("ENOSPC while replacing runtime files");
+      const cause = new Error(
+        json ? "The pipe is being closed (0x800700e8)" : "ENOSPC while replacing runtime files",
+      );
       const failure = new Error(
-        `updater interrupted after mutation: ${"replacement verification detail; ".repeat(12)}`,
+        json
+          ? `SQLite read-only worker failed to start for state.sqlite: ${cause.message}`
+          : `updater interrupted after mutation: ${"replacement verification detail; ".repeat(12)}`,
         { cause },
       );
       vi.mocked(updateGitCheckout).mockImplementationOnce(async ({ opts }) => {
@@ -653,10 +657,10 @@ describe("update-cli", () => {
       });
 
       await expect(
-        withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: handoff }, () => updateCommand({ json })),
-      ).rejects.toEqual(new ExitError(expectedExitCode));
+        withEnvAsync({ OPENCLAW_UPDATE_RUN_HANDOFF: undefined }, () => updateCommand({ json })),
+      ).rejects.toEqual(new ExitError(1));
       expect(serviceStop).toHaveBeenCalledOnce();
-      expect(freshRestartCalls()).toHaveLength(0);
+      expect(freshRestartCalls()).toHaveLength(1);
       expectNoSideEffects(serviceStart, serviceRestart);
       expect(defaultRuntime.exit).not.toHaveBeenCalled();
       expect(triageCommand).toHaveBeenCalledTimes(json ? 0 : 1);
@@ -676,14 +680,17 @@ describe("update-cli", () => {
             expect.objectContaining({ name: "post-stop-checks", exitCode: 0 }),
             recoveryVerificationStep([
               {
-                check: "settled",
-                code: "timeout",
-                message: "Gateway remains stopped after interrupted mutation.",
+                check: "gateway-recovery",
+                code: "gateway-probe-failed",
+                message:
+                  "Failed to restart managed gateway service after failed update: Error: Service runtime: status=stopped, state=stopped",
               },
             ]),
           ],
         },
       });
+      expect(getLogOutput()).not.toMatch(/keep the gateway stopped/i);
+      expect(getLogOutput()).toContain("openclaw update repair");
       if (!json) {
         const recovery = expectDefined(
           triageCommand.mock.calls[0]?.[1]?.recovery,

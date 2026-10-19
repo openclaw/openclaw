@@ -56,11 +56,11 @@ import { createChannelHistoryWindow } from "openclaw/plugin-sdk/reply-history";
 import { resolveBatchedReplyThreadingPolicy } from "openclaw/plugin-sdk/reply-reference";
 import { resolveAgentRoute, resolveInboundLastRouteSessionKey } from "openclaw/plugin-sdk/routing";
 import { createRuntimeConfigReader } from "openclaw/plugin-sdk/runtime-config-snapshot";
-import { danger, logVerbose, shouldLogVerbose } from "openclaw/plugin-sdk/runtime-env";
+import { danger, logVerbose } from "openclaw/plugin-sdk/runtime-env";
 import { resolvePinnedMainDmOwnerFromAllowlist } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
 import { enqueueSystemEvent } from "openclaw/plugin-sdk/system-event-runtime";
-import { normalizeE164, truncateUtf16Safe } from "openclaw/plugin-sdk/text-utility-runtime";
+import { normalizeE164 } from "openclaw/plugin-sdk/text-utility-runtime";
 import { resolveSignalReplyToMode } from "../accounts.js";
 import {
   maybeResolveSignalApprovalReaction,
@@ -80,7 +80,6 @@ import {
 import { formatSignalMediaText } from "../media-text.js";
 import { createSignalNativeReplyIdPlan } from "../native-reply.js";
 import { normalizeSignalMessagingTarget } from "../normalize.js";
-import { maybeResolveSignalQuestionReaction } from "../question-reactions.js";
 import { resolveSignalReactionLevel } from "../reaction-level.js";
 import { registerSignalReplyContext } from "../reply-authors.js";
 import { sendReactionSignal, type SignalReactionOpts } from "../send-reactions.js";
@@ -295,11 +294,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
         ReplyThreading: replyThreading,
       },
     });
-
-    if (shouldLogVerbose()) {
-      const preview = truncateUtf16Safe(body, 200).replace(/\r/g, "\\r").replace(/\n/g, "\\n");
-      logVerbose(`signal inbound: from=${ctxPayload.From} len=${body.length} preview="${preview}"`);
-    }
 
     const statusReactionTimestamp = resolveSignalStatusReactionTimestamp(entry);
     const statusReactionsConfig = cfg.messages?.statusReactions;
@@ -748,11 +742,10 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       return false;
     }
     if (params.reaction.isRemove) {
-      return true; // Ignore reaction removals
+      return true;
     }
     const emojiLabel = normalizeOptionalString(params.reaction.emoji) ?? "emoji";
     const senderName = params.envelope.sourceName ?? params.senderDisplay;
-    logVerbose(`signal reaction: ${emojiLabel} from ${senderName}`);
     const groupId = params.reaction.groupInfo?.groupId ?? undefined;
     const groupName = params.reaction.groupInfo?.groupName ?? undefined;
     const isGroup = Boolean(groupId);
@@ -782,23 +775,6 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
       logVerbose(
         `Blocked signal reaction sender ${params.senderDisplay} (${params.accessDecision.reasonCode})`,
       );
-      return true;
-    }
-    if (
-      conversationKey &&
-      (await maybeResolveSignalQuestionReaction({
-        cfg: params.cfg,
-        accountId: deps.accountId,
-        conversationKey,
-        messageId,
-        reactionKey: emojiLabel,
-        isRemove: Boolean(params.reaction.isRemove),
-        actorId: formatSignalSenderId(params.sender),
-        targetAuthor: params.reaction.targetAuthor,
-        targetAuthorUuid: params.reaction.targetAuthorUuid,
-        logDebug: logVerbose,
-      }))
-    ) {
       return true;
     }
     const targets = resolveSignalReactionTargets(params.reaction);
@@ -863,13 +839,13 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
     if (!preparedPayload) {
       try {
         payload = JSON.parse(event.data) as SignalReceivePayload;
-      } catch (err) {
-        deps.runtime.error?.(`failed to parse event: ${String(err)}`);
+      } catch {
+        deps.runtime.error?.("failed to parse event: invalid JSON");
         return;
       }
     }
     if (payload?.exception?.message) {
-      deps.runtime.error?.(`receive exception: ${payload.exception.message}`);
+      deps.runtime.error?.("receive exception");
     }
     const envelope = payload?.envelope;
     if (!envelope) {
@@ -1184,9 +1160,9 @@ export function createSignalEventHandler(deps: SignalEventHandlerDeps) {
           } else {
             unavailableAttachmentCount += 1;
           }
-        } catch (err) {
+        } catch {
           unavailableAttachmentCount += 1;
-          deps.runtime.error?.(danger(`attachment fetch failed: ${String(err)}`));
+          deps.runtime.error?.(danger("attachment fetch failed"));
         }
       }
     }

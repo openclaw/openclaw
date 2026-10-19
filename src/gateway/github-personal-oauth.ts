@@ -568,7 +568,7 @@ export function createPersonalGitHubOAuthLifecycle() {
       guard(action);
       return result;
     },
-    /** @deprecated Use cancelAuthorizationAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use cancelAuthorizationAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     cancelAuthorization(action: PersonalGitHubAction, requestId: string): boolean {
       warnGitHubPublicationDeprecation("personal.cancelAuthorization");
       return cancelUserGitHubAuthorizationSync(action.owner, requestId, () => guard(action));
@@ -584,7 +584,7 @@ export function createPersonalGitHubOAuthLifecycle() {
         ),
       );
     },
-    /** @deprecated Use disconnectAsync; removed in the next Plugin SDK major. */
+    /** @deprecated Use disconnectAsync; final compatibility day: 2026-12-31; removal in the first January 2027 stable release. */
     disconnect(action: PersonalGitHubAction): void {
       warnGitHubPublicationDeprecation("personal.disconnect");
       disconnectUserGitHubConnectionSync(action.owner, () => guard(action));

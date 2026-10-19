@@ -112,9 +112,14 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
         current.listeners.clear();
       },
     };
+    let canWrite = host.connection.canWrite;
     const stopHost = host.subscribe(() => {
-      if (current.connected !== host.connection.connected) {
-        current.connected = host.connection.connected;
+      const connection = host.connection;
+      const connectedChanged = current.connected !== connection.connected;
+      const writeChanged = canWrite !== connection.canWrite;
+      canWrite = connection.canWrite;
+      if (connectedChanged) {
+        current.connected = connection.connected;
         load = null;
         pending = null;
         invalidateWorkboardLoads(current.owner);
@@ -123,7 +128,11 @@ export function acquireWidgetRuntime(host: ControlUiHost, listener: () => void) 
           void current.refresh();
         }
       }
-      current.notify();
+      // Roster, selection, and theme updates do not change Workboard data.
+      // Locale has its own reactive binding; mutation checks read live authority.
+      if (connectedChanged || writeChanged) {
+        current.notify();
+      }
     });
     const stopEvents = host.onEvent(WORKBOARD_CHANGED_EVENT, (payload) => {
       if (!hasCurrentWorkboardCards(current.owner, payload)) {
@@ -172,6 +181,26 @@ export class WorkboardWidgetModel {
   }
   get cards() {
     return getWorkboardState(this.runtime.owner).cards.filter(isActiveWorkboardCard);
+  }
+  get hasMore() {
+    return Boolean(getWorkboardState(this.runtime.owner).nextCursor);
+  }
+  get loadedCardCount() {
+    return getWorkboardState(this.runtime.owner).cards.length;
+  }
+  get loading() {
+    return this.runtime.loading;
+  }
+  async loadMore(): Promise<boolean> {
+    if (this.isActive() && this.connected) {
+      return loadWorkboard({
+        host: this.runtime.owner,
+        client: this.host,
+        more: true,
+        requestUpdate: () => this.runtime.notify(),
+      });
+    }
+    return false;
   }
   get statuses() {
     return getWorkboardState(this.runtime.owner).statuses;

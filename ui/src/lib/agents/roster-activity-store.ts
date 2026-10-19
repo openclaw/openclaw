@@ -1,6 +1,8 @@
 import { SESSIONS_LIST_TRANSCRIPT_LIMIT } from "../../../../src/shared/session-list-limits.ts";
 import type { SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
+import { gatewayPresentationScope } from "../../app/gateway-presentation-scope.ts";
+import { hasOperatorSelfReadAccess } from "../../app/operator-access.ts";
 import { t } from "../../i18n/index.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewaySetSyncLifecycle } from "../gateway-set-sync-lifecycle.ts";
@@ -62,8 +64,12 @@ class RosterActivityStore {
   private readonly observation: ReturnType<typeof createGatewaySetSyncLifecycle>;
   private binding: RosterBinding | null = null;
   private involvingMe = false;
+  private client: RosterContext["gateway"]["snapshot"]["client"];
+  private presentationKey: number;
 
   constructor(private readonly context: RosterContext) {
+    this.client = context.gateway.snapshot.client;
+    this.presentationKey = gatewayPresentationScope(context.gateway).key;
     let cleanups: Array<() => void> = [];
     this.observation = createGatewaySetSyncLifecycle(context.gateway, {
       sync: () => this.synchronize(),
@@ -109,9 +115,6 @@ class RosterActivityStore {
   private publish(snapshot: RosterActivitySnapshot) {
     this.current = snapshot;
     for (const listener of Array.from(this.listeners)) {
-      if (this.current !== snapshot) {
-        return;
-      }
       listener();
     }
   }
@@ -119,10 +122,11 @@ class RosterActivityStore {
   private project() {
     const binding = this.binding;
     if (!binding || !this.isCurrent(binding)) {
-      this.publish({ ...emptySnapshot, involvingMe: this.involvingMe });
+      this.publish({ ...this.current, loading: false });
       return;
     }
-    const { result, loading, error } = binding.snapshot;
+    const { loading, error } = binding.snapshot;
+    const result = binding.snapshot.result ?? this.current.result;
     this.publish({
       result,
       involvingMe: this.involvingMe,
@@ -158,6 +162,20 @@ class RosterActivityStore {
     if (this.listeners.size === 0) {
       return;
     }
+    const client = this.context.gateway.snapshot.client;
+    const presentationKey = gatewayPresentationScope(this.context.gateway).key;
+    const accessLost =
+      this.context.gateway.snapshot.phase === "connected" &&
+      !hasOperatorSelfReadAccess(this.context.gateway.snapshot.hello?.auth ?? null);
+    if (client !== this.client || presentationKey !== this.presentationKey || accessLost) {
+      this.client = client;
+      this.presentationKey = presentationKey;
+      this.retire();
+      this.publish({ ...emptySnapshot, involvingMe: this.involvingMe });
+    }
+    if (accessLost) {
+      return;
+    }
     if (this.binding && !this.isCurrent(this.binding)) {
       this.retire();
     }
@@ -171,7 +189,7 @@ class RosterActivityStore {
         connection,
         query: {
           source: "agent-roster",
-          rowMode: "compact",
+          rowMode: "sidebar",
           includeDerivedTitles: true,
           includeLastMessage: true,
           archivedFilter: "all",
@@ -194,10 +212,6 @@ class RosterActivityStore {
           this.project();
         }
       });
-      if (!this.isCurrent(binding)) {
-        binding.observation.dispose();
-        return;
-      }
     }
     if (!this.binding.requested && this.visible()) {
       void this.refreshBinding(this.binding);
@@ -208,7 +222,7 @@ class RosterActivityStore {
     if (this.involvingMe !== involvingMe) {
       this.involvingMe = involvingMe;
       this.retire();
-      this.project();
+      this.publish({ ...emptySnapshot, involvingMe });
       this.synchronize();
     }
   }

@@ -44,7 +44,7 @@ function primeConfiguredContextWindowsFromConfig(cfg: OpenClawConfig): OpenClawC
 
 function primeConfiguredContextWindows(): OpenClawConfig | undefined {
   if (CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig) {
-    return primeConfiguredContextWindowsFromConfig(CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig);
+    return CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig;
   }
   if (Date.now() < CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs) {
     return undefined;
@@ -64,11 +64,7 @@ function primeConfiguredContextWindows(): OpenClawConfig | undefined {
 }
 
 export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Promise<void> {
-  const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
-  if (
-    CONTEXT_WINDOW_RUNTIME_STATE.loadPromise &&
-    CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration === generation
-  ) {
+  if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise) {
     return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
   }
 
@@ -78,7 +74,7 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
   if (!cfg) {
     return Promise.resolve();
   }
-  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = Promise.resolve()
+  const loadPromise = Promise.resolve()
     .then(async () => {
       let stagedTokenCache = new Map<string, number>();
       try {
@@ -94,15 +90,16 @@ export function ensureContextWindowCacheLoaded(cfgOverride?: OpenClawConfig): Pr
         // Static and discovered rows belong to one atomic generation. If its owner fails, keep
         // config overrides only instead of mixing in independently rediscovered static metadata.
       }
-      if (CONTEXT_WINDOW_RUNTIME_STATE.generation === generation) {
+      // A refresh supersedes earlier discovery, including its best-effort failure result.
+      if (CONTEXT_WINDOW_RUNTIME_STATE.loadPromise === loadPromise) {
         replaceDiscoveredContextTokenCache(stagedTokenCache);
       }
     })
     .catch(() => {
       // Keep lookup best-effort.
     });
-  CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = generation;
-  return CONTEXT_WINDOW_RUNTIME_STATE.loadPromise;
+  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = loadPromise;
+  return loadPromise;
 }
 
 /**
@@ -116,56 +113,47 @@ export async function prewarmContextWindowCacheAfterReady(params: {
   // Post-ready warmup owns a published-owner generation. Do not reuse a request-time
   // load that may have completed before Gateway catalog publication.
   beginContextWindowCacheRefresh();
-  const generation = CONTEXT_WINDOW_RUNTIME_STATE.generation;
-  const shouldStop = () =>
-    CONTEXT_WINDOW_RUNTIME_STATE.generation !== generation || params.isCancelled?.() === true;
-  if (shouldStop()) {
+  if (params.isCancelled?.()) {
     return;
   }
   let published = false;
-  const loadPromise = (async () => {
-    const { getPublishedPreparedModelCatalogOwnerSnapshot } =
-      await loadPreparedModelCatalogRuntime();
-    const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
-      config: params.config,
-      allowGatewaySubagentBinding: true,
+  const loadPromise = Promise.resolve()
+    .then(async () => {
+      const { getPublishedPreparedModelCatalogOwnerSnapshot } =
+        await loadPreparedModelCatalogRuntime();
+      const owner = getPublishedPreparedModelCatalogOwnerSnapshot({
+        config: params.config,
+        allowGatewaySubagentBinding: true,
+      });
+      if (!owner) {
+        throw new Error("published Gateway model catalog owner is unavailable");
+      }
+      // Gateway publication intentionally exposes configured/static turn facts. Full catalog
+      // inventory is a separate control-plane load and must not run in post-ready warmup.
+      const caches = await prepareContextWindowCaches({
+        config: owner.config,
+        modelCatalog: owner.modelCatalog,
+      });
+      if (params.isCancelled?.()) {
+        return;
+      }
+      replaceContextWindowCaches(caches);
+      CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = owner.config;
+      CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
+      CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
+      published = true;
+    })
+    .catch(() => {
+      // Optional Gateway warmup is best-effort; failed publication can retry on demand.
+    })
+    .finally(() => {
+      // Overlapping optional warmups may publish older metadata until the next refresh.
+      if (!published) {
+        CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = null;
+      }
     });
-    if (!owner) {
-      throw new Error("published Gateway model catalog owner is unavailable");
-    }
-    // Gateway publication intentionally exposes configured/static turn facts. Full catalog
-    // inventory is a separate control-plane load and must not run in post-ready warmup.
-    const caches = await prepareContextWindowCaches({
-      config: owner.config,
-      modelCatalog: owner.modelCatalog,
-    });
-    // Superseded projections may finish; only publication needs the current generation.
-    if (shouldStop()) {
-      return;
-    }
-    replaceContextWindowCaches(caches);
-    CONTEXT_WINDOW_RUNTIME_STATE.configuredConfig = owner.config;
-    CONTEXT_WINDOW_RUNTIME_STATE.configLoadFailures = 0;
-    CONTEXT_WINDOW_RUNTIME_STATE.nextConfigLoadAttemptAtMs = 0;
-    published = true;
-  })();
-  const trackedLoadPromise = loadPromise.catch(() => {});
-  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = trackedLoadPromise;
-  CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = generation;
-  try {
-    await loadPromise;
-  } catch {
-    // Optional Gateway warmup is best-effort; request-time loading remains exact.
-  } finally {
-    if (
-      !published &&
-      CONTEXT_WINDOW_RUNTIME_STATE.generation === generation &&
-      CONTEXT_WINDOW_RUNTIME_STATE.loadPromise === trackedLoadPromise
-    ) {
-      CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = null;
-      CONTEXT_WINDOW_RUNTIME_STATE.loadGeneration = null;
-    }
-  }
+  CONTEXT_WINDOW_RUNTIME_STATE.loadPromise = loadPromise;
+  await loadPromise;
 }
 
 /** Restore configured context limits without acquiring a model catalog. */

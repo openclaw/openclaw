@@ -9,10 +9,10 @@ import {
   getUpdateRun,
   recordUpdateRunPhase,
 } from "../../infra/update-run-ledger.js";
-import type { UpdateRunResult } from "../../infra/update-runner-types.js";
 import { defaultRuntime } from "../../runtime.js";
 import { closeOpenClawStateDatabaseForTest } from "../../state/openclaw-state-db.js";
 import { resolveOpenClawStateSqliteDir } from "../../state/openclaw-state-db.paths.js";
+import { expectMessages, expectNoCalls } from "./update-boundary.test-support.js";
 import { UpdateCommandRecoveryPendingError } from "./update-command-recovery-error.js";
 import {
   UpdateCommandFailure,
@@ -31,19 +31,48 @@ const mocks = vi.hoisted(() => ({
   repair: vi.fn(),
 }));
 vi.mock("../../commands/triage-failure.js", () => ({ triageAfterFailure: mocks.repair }));
-vi.mock("./update-command-report.js", () => ({
-  runInteractiveUpdateFailureAction: mocks.action,
-}));
+// mock-isolation: Keep interactive failure actions inside the terminal fixture.
+vi.mock("./update-command-report.js", () => ({ runInteractiveUpdateFailureAction: mocks.action }));
 vi.mock("../terminal-interactivity.js", () => ({ isTerminalInteractive: () => true }));
 vi.mock("../../infra/update-triage.js", () => ({
   prepareUpdateFailureTriage: async () => mocks.diagnose,
 }));
 
+import { resultFixture, stepFixture } from "./update-command-fixtures.test-support.js";
+
 const dirs = useAutoCleanupTempDirTracker(afterEach);
+function createRun(target?: Parameters<typeof createUpdateRun>[0]["target"]) {
+  const env = { OPENCLAW_STATE_DIR: dirs.make("update-terminal-") };
+  const options = { env };
+  const recorded = createUpdateRun({ trigger: "cli", target }, options);
+  const run = { runId: recorded.runId, env };
+  const onResult = vi.fn();
+  const read = () => getUpdateRun(run.runId, options);
+  const terminal = (
+    operation: () => Promise<void>,
+    opts: Parameters<typeof withUpdateCommandTerminalResult>[1] = {},
+  ) =>
+    withUpdateFailureTriage({ run, json: opts?.json }, { env }, () =>
+      withUpdateCommandTerminalResult(
+        async (registerRun) => {
+          registerRun(run);
+          await operation();
+        },
+        { onResult, ...opts },
+      ),
+    );
+  const fails = (
+    operation: () => Promise<void>,
+    opts: Parameters<typeof terminal>[1] = {},
+    code = 1,
+  ) => expect(terminal(operation, opts)).rejects.toMatchObject({ code });
+  return { env, options, recorded, run, read, terminal, fails, onResult };
+}
+
 beforeEach(() => {
-  mocks.action.mockReset();
-  mocks.diagnose.mockReset();
-  mocks.repair.mockReset();
+  for (const mock of Object.values(mocks)) {
+    mock.mockReset();
+  }
   vi.spyOn(defaultRuntime, "log").mockImplementation(() => {});
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
 });
@@ -53,27 +82,18 @@ afterEach(() => {
 });
 
 it.each(["new-error", "pending-aggregate"] as const)(
-  "preserves the primary failed result when publication fails with %s",
+  "preserves primary failure after %s publication",
   async (publication) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("update-terminal-primary-failure-") };
-    const recorded = createUpdateRun({ trigger: "cli" }, { env });
-    const run = { runId: recorded.runId, env };
-    const result: UpdateRunResult = {
+    const { recorded, run, read, fails } = createRun();
+    const result = resultFixture(undefined, {
       status: "error",
-      mode: "npm",
       reason: "global-install-failed",
       steps: [
-        {
-          name: "global install",
-          command: "npm install",
-          cwd: env.OPENCLAW_STATE_DIR,
-          durationMs: 1,
-          exitCode: 1,
+        stepFixture("global install", {
           failureFacts: [{ check: "npm", code: "EACCES", message: "Permission denied" }],
-        },
+        }),
       ],
-      durationMs: 1,
-    };
+    });
     const primary = new UpdateCommandFailure(result, 1, "Package installation failed");
     const pending = new UpdateCommandPendingRecoveryFailure(result);
     const settlementFailure = new AggregateError([pending], "Update executor cleanup failed", {
@@ -88,114 +108,76 @@ it.each(["new-error", "pending-aggregate"] as const)(
     });
     const json = publication === "new-error";
     const output = vi.spyOn(defaultRuntime, "writeJson").mockImplementation(() => {});
-    await expect(
-      withUpdateFailureTriage({ run, json }, { env }, () =>
-        withUpdateCommandTerminalResult(
-          async (registerRun) => {
-            registerRun(run);
-            deferUpdateCommandTerminalResult(run, publish);
-            throw publication === "pending-aggregate" ? settlementFailure : primary;
-          },
-          { json },
-        ),
-      ),
-    ).rejects.toMatchObject({ code: 1 });
+    await fails(
+      async () => {
+        deferUpdateCommandTerminalResult(run, publish);
+        throw publication === "pending-aggregate" ? settlementFailure : primary;
+      },
+      { json, onResult: undefined },
+    );
     expect(publish).toHaveBeenCalledOnce();
     if (json) {
       expect(output).toHaveBeenCalledExactlyOnceWith(expect.objectContaining(result));
     } else {
       expect(output).not.toHaveBeenCalled();
-      const summary = vi
-        .mocked(defaultRuntime.log)
-        .mock.calls.map(([line]) => String(line))
-        .join("\n");
-      expect(summary).toContain("EACCES");
-      expect(summary).toContain("Permission denied");
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Update recovery remains pending (global-install-failed)"),
+      expectMessages(defaultRuntime.log, "EACCES", "Permission denied");
+      expectMessages(
+        defaultRuntime.error,
+        "Update recovery remains pending (global-install-failed)",
       );
     }
-    expect(getUpdateRun(run.runId, { env })).toEqual(recorded);
-    expect(mocks.action).not.toHaveBeenCalled();
-    expect(mocks.diagnose).not.toHaveBeenCalled();
-    expect(mocks.repair).not.toHaveBeenCalled();
+    expect(read()).toEqual(recorded);
+    expectNoCalls(mocks.action, mocks.diagnose, mocks.repair);
   },
 );
 
-it.each([false, true])(
-  "preserves the committed outcome when its observer throws (pending=%s)",
-  async (pending) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("update-terminal-observer-") };
-    const recorded = createUpdateRun({ trigger: "cli" }, { env });
-    const run = { runId: recorded.runId, env };
-    const onResult = vi.fn(() => {
-      throw new TypeError("Observer could not finish");
-    });
-    const result: UpdateRunResult = {
-      status: pending ? "error" : "ok",
-      mode: "npm",
-      steps: [],
-      durationMs: 0,
-    };
-    const update = withUpdateFailureTriage({ run }, { env }, () =>
-      withUpdateCommandTerminalResult(
-        async (registerRun) => {
-          registerRun(run);
-          deferUpdateCommandTerminalResult(run, () =>
-            publishUpdateCommandTerminalResult({ opts: { run } }, result, { rolledBack: false }),
-          );
-          if (pending) {
-            throw new UpdateCommandPendingRecoveryFailure(result);
-          }
-        },
-        { onResult },
-      ),
+it.each([false, true])("preserves outcome after observer throws (pending=%s)", async (pending) => {
+  const { run, read, terminal, onResult } = createRun();
+  onResult.mockImplementation(() => {
+    throw new TypeError("Observer could not finish");
+  });
+  const result = resultFixture(undefined, { status: pending ? "error" : "ok" });
+  const update = terminal(async () => {
+    deferUpdateCommandTerminalResult(run, () =>
+      publishUpdateCommandTerminalResult({ opts: { run } }, result, { rolledBack: false }),
     );
     if (pending) {
-      await expect(update).rejects.toMatchObject({ code: 1 });
-    } else {
-      await expect(update).resolves.toBeUndefined();
+      throw new UpdateCommandPendingRecoveryFailure(result);
     }
-    expect(onResult).toHaveBeenCalledExactlyOnceWith(
-      expect.objectContaining({ status: result.status }),
-    );
-    expect(getUpdateRun(run.runId, { env })).toMatchObject({
-      status: pending ? "failed" : "succeeded",
-    });
-    expect(mocks.action).not.toHaveBeenCalled();
-    expect(mocks.diagnose).not.toHaveBeenCalled();
-    expect(defaultRuntime.error).not.toHaveBeenCalledWith(
-      expect.stringContaining("Update recovery remains pending"),
-    );
-    expect(defaultRuntime.error).toHaveBeenCalledWith(
-      expect.stringContaining("Warning: Update result observer failed:"),
-    );
-  },
-);
+  });
+  if (pending) {
+    await expect(update).rejects.toMatchObject({ code: 1 });
+  } else {
+    await expect(update).resolves.toBeUndefined();
+  }
+  expect(onResult).toHaveBeenCalledExactlyOnceWith(
+    expect.objectContaining({ status: result.status }),
+  );
+  expect(read()).toMatchObject({ status: pending ? "failed" : "succeeded" });
+  expectNoCalls(mocks.action, mocks.diagnose);
+  expect(defaultRuntime.error).not.toHaveBeenCalledWith(
+    expect.stringContaining("Update recovery remains pending"),
+  );
+  expectMessages(defaultRuntime.error, "Warning: Update result observer failed:");
+});
 
 it.each([
   { phase: "requested", publisher: false },
   { phase: "verifying", publisher: true },
 ] as const)(
-  "records an unreported $phase exception before offering the interactive report",
+  "records $phase exceptions before interactive reporting",
   async ({ phase, publisher }) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("update-unreported-terminal-") };
-    const options = { env };
-    const recorded = createUpdateRun(
-      {
-        trigger: "cli",
-        target: { kind: "package", installationMethod: "npm-global", version: "2026.9.6" },
-      },
-      options,
-    );
-    const run = { runId: recorded.runId, env };
+    const { options, run, fails, onResult } = createRun({
+      kind: "package",
+      installationMethod: "npm-global",
+      version: "2026.9.6",
+    });
     recordUpdateRunPhase(run.runId, phase, {}, options);
     const failure = new TypeError("Cannot complete update publication");
-    const onResult = vi.fn();
     let reportBody: string | undefined;
     mocks.action.mockImplementation(async ({ result, attemptId }) => {
-      const terminal = getUpdateRun(attemptId, options);
-      expect(terminal).toMatchObject({
+      const recordedRun = getUpdateRun(attemptId, options);
+      expect(recordedRun).toMatchObject({
         status: "failed",
         reason: "update-failed",
         verification: {
@@ -211,30 +193,19 @@ it.each([
         },
       });
       reportBody = (
-        await prepareUpdateFailureReport(
-          { attemptId, result: result!, recordedRun: terminal },
-          options,
-        )
+        await prepareUpdateFailureReport({ attemptId, result: result!, recordedRun }, options)
       ).body;
       return "handled";
     });
-    await expect(
-      withUpdateFailureTriage({ run }, { env }, () =>
-        withUpdateCommandTerminalResult(
-          async (registerRun) => {
-            registerRun(run);
-            if (publisher) {
-              deferUpdateCommandTerminalResult(run, async () => {
-                throw failure;
-              });
-              return;
-            }
-            throw failure;
-          },
-          { onResult },
-        ),
-      ),
-    ).rejects.toMatchObject({ code: 1 });
+    await fails(async () => {
+      if (publisher) {
+        deferUpdateCommandTerminalResult(run, async () => {
+          throw failure;
+        });
+        return;
+      }
+      throw failure;
+    });
     expect(mocks.action).toHaveBeenCalledOnce();
     expect(onResult).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({ runId: run.runId, status: "error", reason: "update-failed" }),
@@ -251,10 +222,9 @@ it.each([
 it.each(["lost-authority", "pending-publication", "completed-publication"] as const)(
   "preserves history and skips interactive triage for %s",
   async (condition) => {
-    const env = { OPENCLAW_STATE_DIR: dirs.make("update-unreported-pending-") };
-    let recorded = createUpdateRun({ trigger: "cli" }, { env });
-    const run = { runId: recorded.runId, env };
-    const onResult = vi.fn();
+    const fixture = createRun();
+    const { env, run, read, fails, onResult } = fixture;
+    let { recorded } = fixture;
     if (condition === "pending-publication") {
       await fs.mkdir(path.join(resolveOpenClawStateSqliteDir(env), ".openclaw-restore-fixture"));
     }
@@ -262,35 +232,29 @@ it.each(["lost-authority", "pending-publication", "completed-publication"] as co
       condition === "lost-authority"
         ? new UpdateCommandRecoveryPendingError("Update executor release could not be confirmed.")
         : new Error("Update publication failed");
-    await expect(
-      withUpdateFailureTriage({ run }, { env }, () =>
-        withUpdateCommandTerminalResult(
-          async (registerRun) => {
-            registerRun(run);
-            if (condition !== "pending-publication") {
-              deferUpdateCommandTerminalResult(run, async () => {
-                if (condition === "completed-publication") {
-                  recorded = finishUpdateRun(run.runId, { status: "succeeded" }, { env });
-                }
-                throw new Error("Update publication failed");
-              });
-            }
+    await fails(
+      async () => {
+        if (condition !== "pending-publication") {
+          deferUpdateCommandTerminalResult(run, async () => {
             if (condition === "completed-publication") {
-              return;
+              recorded = finishUpdateRun(run.runId, { status: "succeeded" }, { env });
             }
-            throw failure;
-          },
-          { onResult },
-        ),
-      ),
-    ).rejects.toMatchObject({ code: condition === "completed-publication" ? 0 : 1 });
-    expect(getUpdateRun(run.runId, { env })).toEqual(recorded);
-    expect(onResult).not.toHaveBeenCalled();
-    expect(mocks.action).not.toHaveBeenCalled();
-    expect(mocks.diagnose).not.toHaveBeenCalled();
+            throw new Error("Update publication failed");
+          });
+        }
+        if (condition !== "completed-publication") {
+          throw failure;
+        }
+      },
+      {},
+      condition === "completed-publication" ? 0 : 1,
+    );
+    expect(read()).toEqual(recorded);
+    expectNoCalls(onResult, mocks.action, mocks.diagnose);
     if (condition === "completed-publication") {
-      expect(defaultRuntime.error).toHaveBeenCalledWith(
-        expect.stringContaining("Warning: Update succeeded, but result publication failed:"),
+      expectMessages(
+        defaultRuntime.error,
+        "Warning: Update succeeded, but result publication failed:",
       );
       expect(defaultRuntime.error).not.toHaveBeenCalledWith(
         expect.stringContaining("Update recovery remains pending"),

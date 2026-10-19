@@ -45,6 +45,12 @@
           - "extensions/typesafe/**"
           - "docs/plugins/typesafe.md"
           - "docs/plugins/reference/typesafe.md"
+"plugin: subq":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/subq/**"
+          - "docs/plugins/subq.md"
+          - "docs/plugins/reference/subq.md"
 "plugin: onnx":
   - changed-files:
       - any-glob-to-any-file:
@@ -161,6 +167,11 @@
           - "extensions/migrate-claude/**"
           - "docs/cli/migrate.md"
           - "docs/install/migrating-claude.md"
+"plugin: mcp-events":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/mcp-events/**"
+          - "docs/automation/mcp-events.md"
 "plugin: mcp-relay":
   - changed-files:
       - any-glob-to-any-file:
@@ -463,6 +474,18 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/llama-cpp/**"
+"extensions: advisor":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/advisor/**"
+"extensions: agent-guidance":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/agent-guidance/**"
+"extensions: autoreview":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/autoreview/**"
 "extensions: active-memory":
   - changed-files:
       - any-glob-to-any-file:
@@ -907,6 +930,10 @@
   - changed-files:
       - any-glob-to-any-file:
           - "extensions/ollama/**"
+"extensions: omlx":
+  - changed-files:
+      - any-glob-to-any-file:
+          - "extensions/omlx/**"
 "extensions: opencode":
   - changed-files:
       - any-glob-to-any-file:

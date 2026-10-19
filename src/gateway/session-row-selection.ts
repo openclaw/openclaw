@@ -1,7 +1,7 @@
 import type { SessionsListParams } from "../../packages/gateway-protocol/src/index.js";
-import { listAgentIds } from "../agents/agent-scope-config.js";
 import { isConfiguredGatewaySessionEntry } from "../config/sessions/combined-store-gateway.js";
 import { canonicalSessionKeyMigrationRequiredError } from "../config/sessions/session-canonical-key.js";
+import { sessionCreatorProfileId } from "../config/sessions/session-entry-provenance.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
 import {
   projectSessionOwner,
@@ -14,11 +14,12 @@ import {
   type SelectionRow as SelectionTarget,
   type SelectionChange,
 } from "./session-row-projection-record.js";
-import type { SessionRowProjection } from "./session-row-projection.js";
+import type { prepareSessionRowScopes } from "./session-row-scope.js";
 import type { SessionListRowContext } from "./session-utils-contracts.js";
+import { matchesSessionArchiveFilter } from "./session-utils-core.js";
 
 const sentinel = (key: string) => key === "global" || key === "unknown";
-type SelectionScope = ReturnType<SessionRowProjection["state"]["scope"]>;
+type SelectionScope = ReturnType<ReturnType<typeof prepareSessionRowScopes>["select"]>;
 const EMPTY_KEYS: ReadonlySet<string> = new Set();
 type IndexedTarget = { row: SelectionTarget; pair: SessionEntryPair; position: number };
 
@@ -27,16 +28,68 @@ export function createSessionRowSelection(
   scope: SelectionScope,
   activeOnly: boolean,
   getContext: () => SessionListRowContext,
+  indexCreators = false,
 ) {
   const groups = new Map<string, Map<string, IndexedTarget>>();
   const winners = new Map<string, IndexedTarget>();
   const duplicates = new Set<string>();
-  const orders = new Map<NonNullable<SessionsListParams["sortBy"]>, SessionEntryPair[]>();
+  const orders = new Map<
+    string,
+    {
+      sortBy: NonNullable<SessionsListParams["sortBy"]>;
+      archived: SessionsListParams["archived"];
+      entries: SessionEntryPair[];
+    }
+  >();
+  // Fixed partitions bound refiltering after exact publications without retaining old rosters.
+  let partitions: Array<{ revision: object; entries: Map<string, SessionEntryPair> }> | undefined;
+  const partitionFor = (key: string) => {
+    let hash = 0;
+    for (let i = 0; i < key.length; i++) {
+      hash = (Math.imul(hash, 31) + key.charCodeAt(i)) | 0;
+    }
+    return partitions?.[hash & 63];
+  };
   const personalInvolvements = new Map<string, Set<string>>();
   const relatedInvolvements = new Map<string, Set<string>>();
   const rowInvolvements = new Map<string, { personal: Set<string>; related: Set<string> }>();
   const changedInvolvements = new Set<string>();
-  let configuredAgentIds = scope.configuredAgentIds;
+  const creators = new Map<string, Map<string, IndexedTarget>>();
+  const creatorOrders = new Map<string, IndexedTarget[]>();
+  const updateCreator = (target: IndexedTarget | undefined, remove = false) => {
+    const profileId = target && sessionCreatorProfileId(target.row.entry.createdActor);
+    if (!indexCreators || !target || !profileId) {
+      return;
+    }
+    const entries = creators.get(profileId) ?? new Map<string, IndexedTarget>();
+    if (remove) {
+      entries.delete(target.row.key);
+    } else {
+      entries.set(target.row.key, target);
+    }
+    if (entries.size) {
+      creators.set(profileId, entries);
+    } else {
+      creators.delete(profileId);
+    }
+    // Retired arrays remain stable for readers awaiting repository facts.
+    creatorOrders.delete(profileId);
+  };
+  const compareCreated = (left: IndexedTarget, right: IndexedTarget) =>
+    (right.row.entry.updatedAt ?? 0) - (left.row.entry.updatedAt ?? 0) ||
+    left.row.key.localeCompare(right.row.key) ||
+    scope.paths.get(left.row.storeTarget.storePath)! -
+      scope.paths.get(right.row.storeTarget.storePath)! ||
+    Buffer.compare(Buffer.from(left.row.key), Buffer.from(right.row.key));
+  const assertCanonical = () => {
+    for (const key of duplicates) {
+      throw canonicalSessionKeyMigrationRequiredError(
+        `duplicate rows resolve to canonical session key ${key}`,
+      );
+    }
+  };
+  // Store-admission scopes also include ACP IDs; owner facets use only the agent roster.
+  const configuredAgentIds = scope.ownerAgentIds;
   let involvementRevision: object | undefined;
   const removeInvolvement = (key: string) => {
     const previous = rowInvolvements.get(key);
@@ -58,7 +111,6 @@ export function createSessionRowSelection(
     rowInvolvements.delete(key);
   };
   const prepareInvolvements = () => {
-    configuredAgentIds ??= new Set(listAgentIds(cfg));
     const context = getContext();
     const revision = context.identityProjection?.revision ?? context.userProfileIdentityById;
     if (involvementRevision !== revision) {
@@ -71,7 +123,6 @@ export function createSessionRowSelection(
       }
       involvementRevision = revision;
     }
-    configuredAgentIds ??= new Set(listAgentIds(cfg));
     const identities = context.userProfileIdentityById;
     for (const key of changedInvolvements) {
       const { entry } = winners.get(key)!.row;
@@ -80,7 +131,7 @@ export function createSessionRowSelection(
         entry,
         identities,
         cfg,
-        (configuredAgentIds ??= new Set(listAgentIds(cfg))),
+        configuredAgentIds,
       )?.actor;
       if (owner?.identity?.type === "profile") {
         related.add(owner.identity.id);
@@ -174,6 +225,17 @@ export function createSessionRowSelection(
     if (winner === oldWinner) {
       return;
     }
+    updateCreator(oldWinner, true);
+    updateCreator(winner);
+    const partition = partitionFor(key);
+    if (partition) {
+      partition.revision = {};
+      if (winner) {
+        partition.entries.set(key, winner.pair);
+      } else {
+        partition.entries.delete(key);
+      }
+    }
     if (involvementRevision) {
       // Publication records only the changed metadata; identity preparation stays in the reader.
       removeInvolvement(key);
@@ -183,7 +245,7 @@ export function createSessionRowSelection(
         changedInvolvements.delete(key);
       }
     }
-    for (const [sortBy, entries] of orders) {
+    for (const { sortBy, archived, entries } of orders.values()) {
       const locate = (pair: SessionEntryPair) => {
         let lo = 0,
           hi = entries.length;
@@ -197,10 +259,10 @@ export function createSessionRowSelection(
         }
         return lo;
       };
-      if (oldWinner) {
+      if (oldWinner && matchesSessionArchiveFilter(oldWinner.row.entry, archived)) {
         entries.splice(locate(oldWinner.pair), 1);
       }
-      if (winner) {
+      if (winner && matchesSessionArchiveFilter(winner.row.entry, archived)) {
         entries.splice(locate(winner.pair), 0, winner.pair);
       }
     }
@@ -212,33 +274,76 @@ export function createSessionRowSelection(
     change(change: Exclude<SelectionChange, { kind: "reset" }>) {
       update(change.id, keyFor(change), change.row);
     },
+    createdEntries(profileIds: ReadonlySet<string>): Iterable<SelectionTarget> {
+      assertCanonical();
+      const profileOrders = Array.from(profileIds, (profileId) => {
+        let entries = creatorOrders.get(profileId);
+        if (!entries) {
+          entries = [...(creators.get(profileId)?.values() ?? [])].toSorted(compareCreated);
+          creatorOrders.set(profileId, entries);
+        }
+        return { entries, offset: 0 };
+      });
+      return (function* () {
+        for (;;) {
+          let selected: (typeof profileOrders)[number] | undefined;
+          for (const order of profileOrders) {
+            const candidate = order.entries[order.offset];
+            if (
+              candidate &&
+              (!selected || compareCreated(candidate, selected.entries[selected.offset]!) < 0)
+            ) {
+              selected = order;
+            }
+          }
+          if (!selected) {
+            return;
+          }
+          yield selected.entries[selected.offset++]!.row;
+        }
+      })();
+    },
     read(
       sortBy?: SessionsListParams["sortBy"],
       candidates?: Iterable<Pick<SelectionTarget, "key" | "agentId">>,
     ) {
-      for (const key of duplicates) {
-        throw canonicalSessionKeyMigrationRequiredError(
-          `duplicate rows resolve to canonical session key ${key}`,
-        );
-      }
-      let entries = !candidates && sortBy && orders.get(sortBy);
-      if (!entries) {
-        const targets = candidates
-          ? [...new Set(Array.from(candidates, keyFor))].flatMap((key) => winners.get(key) ?? [])
-          : [...winners.values()];
-        if (!sortBy) {
-          targets.sort((a, b) => a.position - b.position);
-        }
-        entries = targets.map((target) => target.pair);
-        if (sortBy) {
-          entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));
-          if (!candidates) {
-            orders.set(sortBy, entries);
-          }
+      assertCanonical();
+      if (!candidates && !partitions) {
+        partitions = Array.from({ length: 64 }, () => ({
+          revision: {},
+          entries: new Map<string, SessionEntryPair>(),
+        }));
+        for (const [key, target] of winners) {
+          partitionFor(key)!.entries.set(key, target.pair);
         }
       }
       return {
-        entries,
+        configuredAgentIds,
+        partitions: candidates ? undefined : partitions,
+        entries(this: void, archived: SessionsListParams["archived"]) {
+          const orderKey = `${sortBy}:${archived ?? false}`;
+          let entries = !candidates && sortBy && orders.get(orderKey)?.entries;
+          if (!entries) {
+            const targets = (
+              candidates
+                ? [...new Set(Array.from(candidates, keyFor))].flatMap(
+                    (key) => winners.get(key) ?? [],
+                  )
+                : [...winners.values()]
+            ).filter((target) => matchesSessionArchiveFilter(target.row.entry, archived));
+            if (!sortBy) {
+              targets.sort((a, b) => a.position - b.position);
+            }
+            entries = targets.map((target) => target.pair);
+            if (sortBy) {
+              entries.sort((a, b) => compareSessionEntryPairs(a, b, sortBy));
+              if (!candidates) {
+                orders.set(orderKey, { sortBy, archived, entries });
+              }
+            }
+          }
+          return entries;
+        },
         get: (key: string) => winners.get(key)?.row,
         involvementKeys(this: void, profileId: string, personal: boolean): ReadonlySet<string> {
           prepareInvolvements();

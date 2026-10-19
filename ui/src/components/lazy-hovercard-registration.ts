@@ -1,5 +1,6 @@
 import { ensureCustomElementDefined } from "../app/lazy-custom-element.ts";
 import { composedParent } from "../lib/navigation-click.ts";
+import { listen } from "../lib/reactive/listener.ts";
 
 export type HovercardBootstrapTrigger = "focus" | "pointer";
 
@@ -49,16 +50,11 @@ export class LazyHovercardBootstrap<TElement extends HTMLElement> {
 function installHovercardBootstrapListeners(
   activate: (event: Event, trigger: HovercardBootstrapTrigger) => Promise<void>,
 ): () => void {
-  const listeners = {
-    focus: (event: Event) => void activate(event, "focus"),
-    pointer: (event: Event) => void activate(event, "pointer"),
-  };
-  document.addEventListener("pointerover", listeners.pointer, true);
-  document.addEventListener("focusin", listeners.focus, true);
-  return () => {
-    document.removeEventListener("pointerover", listeners.pointer, true);
-    document.removeEventListener("focusin", listeners.focus, true);
-  };
+  const stop = [
+    listen(document, "pointerover", (event) => void activate(event, "pointer"), true),
+    listen(document, "focusin", (event) => void activate(event, "focus"), true),
+  ];
+  return () => stop.forEach((remove) => remove());
 }
 
 export function hovercardBootstrapIntentActive(

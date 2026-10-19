@@ -1,3 +1,4 @@
+import { classifyDoctorMaintenanceRefusal } from "../commands/doctor-maintenance-inspection.js";
 import { hasCommandProcessCleanupError } from "../process/exec-result.js";
 import { resolveControlUiAssetHealth } from "./control-ui-assets.js";
 import { readPackageVersion } from "./package-json.js";
@@ -610,12 +611,20 @@ export async function updateGitCheckout(params: {
     // Source conversion migrates only after its prepared global exposure is swapped.
     if (!opts.prepareGitExposure) {
       stateMigrationStarted = true;
-      recovery = { serviceRestartSafe: false, reason: "state-migration-started" };
+      recovery = {
+        serviceRestartSafe: false,
+        reason: "state-migration-started",
+        dataAtRisk: "state-migrated-no-rollback",
+      };
       const doctorSteps: UpdateStepResult[] = [];
       let doctorStep: UpdateStepResult | null;
       try {
         doctorStep = await opts.runGitDoctor(gitRoot, doctorSteps);
       } catch (error) {
+        const refusal = classifyDoctorMaintenanceRefusal(error);
+        if (refusal.kind === "data-at-risk") {
+          recovery.dataAtRisk = refusal.reason;
+        }
         steps.push(...doctorSteps);
         throw error;
       }

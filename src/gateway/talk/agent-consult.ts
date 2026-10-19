@@ -10,6 +10,12 @@ import {
   withCommandSenderAuthority,
 } from "../../auto-reply/command-sender-authority.js";
 import { normalizeTalkSection } from "../../config/talk.js";
+import { captureSessionTarget } from "../../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  isRpcSourceRegistered,
+} from "../../sessions/session-controller.rpc-sources.js";
 import {
   REALTIME_VOICE_AGENT_CONSULT_TOOL_NAME,
   buildRealtimeVoiceAgentConsultChatMessage,
@@ -166,7 +172,15 @@ export async function startTalkRealtimeAgentConsult(
       beforeDispatch: async ({ runId, assertCurrent, assertWorkAdmissionCurrent }) => {
         let releaseClient: void | (() => void);
         const hasRelay = Boolean(params.relaySessionId && params.connId);
-        const chat = request.context.chatAbortControllers.get(runId);
+        const chat = getRpcSourceForGateway(
+          runId,
+          request.context.resolveGatewayContext,
+          captureSessionTarget({
+            storeScope: params.sessionTarget.storePath,
+            sessionKey: params.sessionTarget.canonicalKey,
+            agentId: params.sessionTarget.agentId,
+          }),
+        );
         const release = () => {
           releaseClient?.();
           relayRegistration?.release();
@@ -183,7 +197,7 @@ export async function startTalkRealtimeAgentConsult(
               sessionKey: params.sessionTarget.canonicalKey,
               runId,
               callId: params.callId,
-              transcriptSessionId: chat.sessionId,
+              transcriptSessionId: getRpcSourceIdentity(chat).sessionId,
               assertCurrent: assertWorkAdmissionCurrent,
               registerVoice: async (assertRelayCurrent, physicalSource, onRegistered) => {
                 await params.onRunStarted(runId, {
@@ -203,10 +217,11 @@ export async function startTalkRealtimeAgentConsult(
           return release;
         } catch (error) {
           relayRegistration?.abortIfCurrent();
-          if (!hasRelay && chat && request.context.chatAbortControllers.get(runId) === chat) {
+          if (!hasRelay && chat && isRpcSourceRegistered(chat)) {
             abortChatRunById(request.context, {
               runId,
               sessionKey: params.sessionTarget.canonicalKey,
+              expectedEntry: chat,
               stopReason: "voice session binding failed",
             });
           }

@@ -152,18 +152,17 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     await params.context.ensureSessionRowProjection();
   }
   params.markSessionSubscribePhase?.("accessFacts");
+  // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
+  const pluginRegistry = params.methodRegistry.pluginRegistry as PluginRegistry | undefined;
   const authorizeMethod = () =>
-    withPluginRuntimeRegistryScope(
-      // SAFETY: The host-owned method registry carries the PluginRegistry selected for dispatch.
-      params.methodRegistry.pluginRegistry as PluginRegistry | undefined,
-      () =>
-        authorizeGatewayMethod(
-          params.method,
-          params.client,
-          params.requestParams,
-          params.methodRegistry,
-          params.context,
-        ),
+    withPluginRuntimeRegistryScope(pluginRegistry, () =>
+      authorizeGatewayMethod(
+        params.method,
+        params.client,
+        params.requestParams,
+        params.methodRegistry,
+        params.context,
+      ),
     );
   const startupError = () =>
     params.context.unavailableGatewayMethods?.has(params.method)
@@ -215,6 +214,24 @@ export async function authorizeGatewayRequestPreDispatch(params: {
     const unavailableError = startupError();
     if (unavailableError) {
       return { error: unavailableError };
+    }
+    if (
+      params.method === "send" &&
+      !readSessionSharingStringParam(params.requestParams, "sessionKey")
+    ) {
+      const agentId = readSessionSharingStringParam(params.requestParams, "agentId");
+      const selected = resolveRequestedSessionAgentId(
+        params.context.getRuntimeConfig(),
+        agentId ? undefined : "main",
+        agentId,
+      );
+      if (!selected.ok) {
+        const error = selected.error;
+        if (error.retryable) {
+          error.details = { ...gatewayStartupUnavailableDetails(), method: params.method };
+        }
+        return { error };
+      }
     }
     const startup =
       startupReadMethods.has(params.method) &&
@@ -472,6 +489,10 @@ export async function authorizeGatewayRequestPreDispatch(params: {
         try {
           const preparedAccess = await prepareGatewaySessionAccessAuthority({
             policy: sessionPolicy,
+            methodOwner: params.methodRegistry
+              .descriptors()
+              .find((descriptor) => descriptor.name === params.method)?.owner,
+            pluginRegistry,
             requestParams: params.requestParams,
             client: params.client ?? null,
             context: params.context,

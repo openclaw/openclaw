@@ -1,18 +1,14 @@
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { vi } from "vitest";
-import {
-  WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
-  WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-} from "../../../packages/gateway-protocol/src/schema/worker-admission.js";
 import { WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE } from "../../../packages/gateway-protocol/src/schema/worker-gateway-tool.js";
 import {
   createOperationalRunInstanceRef,
   prepareAgentRunAdmission,
 } from "../../agents/admitted-run-context.js";
-import { waitForEmbeddedAgentRunEnd } from "../../agents/embedded-agent-runner/runs.js";
 import type { SessionPlacementTurnParams } from "../../agents/session-placement-admission.js";
 import { SessionManager } from "../../agents/sessions/session-manager.js";
+import { makeAgentAssistantMessage } from "../../agents/test-helpers/agent-message-fixtures.js";
 import { CORE_WORKER_LAUNCH_TOOL_NAMES } from "../../agents/tool-catalog.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/io.js";
 import { captureRuntimeConfigAsyncReader } from "../../config/io.runtime.js";
@@ -24,6 +20,7 @@ import {
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
 import { resetAgentEventsForTest } from "../../infra/agent-events.js";
 import type { SpawnResult } from "../../process/exec.js";
+import { waitForSessionRunEnd } from "../../sessions/session-controller.native-runtime.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -41,8 +38,10 @@ import { resolveGatewaySessionStoreTargetInWorker } from "../session-utils-store
 import { resolveCanonicalSessionEntryFromStoreKeys } from "../session-utils-store.js";
 import type { MintedWorkerCredential } from "./credential.js";
 import { measureNodeWorkerLaunchBytes } from "./node-launch-adapter.js";
+import { createDispatchEnvironmentFixtures } from "./placement-dispatch-test-fixtures.js";
 import type {
   WorkerSessionPlacementDispatchIdentity,
+  WorkerSessionPlacementIdentity,
   WorkerSessionPlacementRecord,
   WorkerSessionTurnClaim,
 } from "./placement-record.js";
@@ -74,7 +73,6 @@ export const ENVIRONMENT_ID = "environment-worker-turn";
 export const OWNER_EPOCH = 3;
 const BUNDLE_HASH = "a".repeat(64);
 export const MANIFEST_REF = `sha256:${"b".repeat(64)}`;
-const HOST_KEY = [["ssh", "ed25519"].join("-"), "AAAA"].join(" ");
 
 export const readLaunchToolNames: WorkerTurnTunnelHandle["readLaunchToolNames"] = async () =>
   CORE_WORKER_LAUNCH_TOOL_NAMES;
@@ -158,12 +156,7 @@ let cleanupAdmissionSink: (() => void) | undefined;
 export let root: string;
 export let placements: WorkerSessionPlacementStore;
 export let sessionFile: string;
-export let sessionTarget: {
-  agentId: string;
-  sessionId: string;
-  sessionKey: string;
-  storePath: string;
-};
+export let sessionTarget: WorkerSessionPlacementIdentity & { storePath: string };
 
 export async function setupWorkerTurnLauncherTest(): Promise<void> {
   testState = await createOpenClawTestState({
@@ -201,7 +194,7 @@ export function cleanupWorkerTurnLauncherTest(options: {
 export async function cleanupWorkerTurnLauncherTest(
   options: { reuseReadWorkers?: boolean } = {},
 ): Promise<void> {
-  await waitForEmbeddedAgentRunEnd(SESSION_ID, null);
+  await waitForSessionRunEnd(SESSION_ID, null);
   cleanupAdmissionSink?.();
   cleanupAdmissionSink = undefined;
   clearRuntimeConfigSnapshot();
@@ -287,6 +280,29 @@ export function createWorkerSessionTurnPlacementProvider(
 
 export async function openSessionManager(): Promise<SessionManager> {
   return await SessionManager.openAsync(sessionTarget);
+}
+
+export async function appendWorkerReply(text: string, timestamp: number) {
+  return (await openSessionManager()).appendMessageAsync(
+    makeAgentAssistantMessage({ content: [{ type: "text", text }], timestamp }),
+  );
+}
+
+export function workerTurnRequest(runId: string) {
+  return { sessionId: SESSION_ID, sessionKey: SESSION_KEY, agentId: "main", runId };
+}
+
+export function workerTurnEnvironments(
+  tunnel: WorkerTurnTunnelHandle,
+  overrides: Partial<WorkerTurnEnvironmentService> = {},
+): WorkerTurnEnvironmentService {
+  return {
+    ...unusedEnvironments(),
+    get: attachedEnvironment,
+    acquireTurnCredential: async () => credential(),
+    startTunnel: async () => tunnel,
+    ...overrides,
+  };
 }
 
 export function readWorkerTurnTranscriptStorageRows() {
@@ -391,48 +407,25 @@ export async function seedReclaimedPlacement() {
 }
 
 export function attachedEnvironment(): WorkerTurnEnvironmentRecord {
+  const { attached } = createDispatchEnvironmentFixtures();
   return {
+    ...attached,
     environmentId: ENVIRONMENT_ID,
-    providerId: "fake",
-    profileId: "development",
-    profileSnapshot: { settings: { region: "test" } },
     provisionOperationId: "provision-worker-turn",
-    nodeSetupId: null,
-    nodeDeviceId: null,
-    sharedHost: false,
+    ownerEpoch: OWNER_EPOCH,
+    attachedSessionIds: [SESSION_ID],
+    leaseId: "lease-worker-turn",
     bootstrapReceipt: {
-      bundleHash: BUNDLE_HASH,
-      openclawVersion: "2026.7.2",
+      ...attached.bootstrapReceipt,
       protocolFeatures: [
-        WORKER_EXECUTION_CONTEXT_PROTOCOL_FEATURE,
-        WORKER_EXECUTION_AUTHORITY_PROTOCOL_FEATURE,
+        ...attached.bootstrapReceipt.protocolFeatures,
         WORKER_GATEWAY_TOOLS_PROTOCOL_FEATURE,
       ],
       installKind: "bundle",
     },
-    ownerEpoch: OWNER_EPOCH,
-    teardownTerminalState: null,
-    attachedSessionIds: [SESSION_ID],
-    lastError: null,
-    createdAtMs: 1,
-    updatedAtMs: 1,
-    stateChangedAtMs: 1,
-    idleSinceAtMs: null,
-    lastActivatedAtMs: null,
-    preparation: null,
-    destroyRequestedAtMs: null,
-    tunnelStatus: "connected",
-    state: "attached",
-    desktop: null,
-    desktopAvailable: false,
-    desktopApps: [],
-    leaseId: "lease-worker-turn",
     sshEndpoint: {
-      host: "worker.example.test",
-      port: 22,
-      user: "worker",
-      hostKey: HOST_KEY,
-      keyRef: { source: "file", provider: "worker-keys", id: "/worker/key" },
+      ...attached.sshEndpoint,
+      keyRef: { ...attached.sshEndpoint.keyRef, id: "/worker/key" },
     },
   };
 }
@@ -485,28 +478,19 @@ export function credential(deliveryId = "c".repeat(43)): MintedWorkerCredential 
 }
 
 export function unusedEnvironments(): WorkerTurnEnvironmentService {
-  const unexpected = () => new Error("unexpected worker environment call");
+  const unexpected = (): never => {
+    throw new Error("unexpected worker environment call");
+  };
+  const unexpectedAsync = async () => unexpected();
   return {
     get: vi.fn(() => undefined),
     createGatewayTools: prepareGatewayTools,
-    resolveSshIdentity: vi.fn(async () => {
-      throw unexpected();
-    }),
-    acquireTurnCredential: vi.fn(async () => {
-      throw unexpected();
-    }),
-    acknowledgeCredentialDelivery: vi.fn(() => {
-      throw unexpected();
-    }),
-    startTunnel: vi.fn(async () => {
-      throw unexpected();
-    }),
-    stopTunnel: vi.fn(async () => {
-      throw unexpected();
-    }),
-    destroy: vi.fn(async () => {
-      throw unexpected();
-    }),
+    resolveSshIdentity: vi.fn(unexpectedAsync),
+    acquireTurnCredential: vi.fn(unexpectedAsync),
+    acknowledgeCredentialDelivery: vi.fn(unexpected),
+    startTunnel: vi.fn(unexpectedAsync),
+    stopTunnel: vi.fn(unexpectedAsync),
+    destroy: vi.fn(unexpectedAsync),
   };
 }
 

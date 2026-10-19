@@ -29,6 +29,7 @@ import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { applyModelRuntimeDirective } from "../../auto-reply/reply/directive-handling.model-runtime.js";
 import { prepareModelSelectionRuntime } from "../../auto-reply/reply/model-runtime-normalization.js";
 import { refreshQueuedFollowupSession } from "../../auto-reply/reply/queue.js";
+import { hasRememberedNativeRuntimeConsent } from "../../config/native-runtime-consent.js";
 import { assertRequiredWorkerSelection } from "../../config/required-worker-profile.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveCollapsedSessionAuthPinSource } from "../../config/sessions/auth-profile-override-provenance.js";
@@ -291,6 +292,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
   callerCanConsent?: boolean;
   expectedEntry?: SessionEntry;
   hydrateThinkingCatalog?: boolean;
+  prepareNativeCatalog?: <T>(operation: () => Promise<T>) => Promise<T>;
   validateModelSelection?: () => ErrorShape | undefined;
 }): Promise<
   | { ok: true; validate?: () => ErrorShape | undefined; release?: () => void }
@@ -341,6 +343,7 @@ export async function prepareSessionPatchRuntimeSelection(params: {
         ...model,
         catalog: params.catalog ?? [],
         hydrateThinkingCatalog: params.hydrateThinkingCatalog,
+        prepareNativeCatalog: params.prepareNativeCatalog,
         rawRuntime:
           typeof params.patch.agentRuntime === "string" ? params.patch.agentRuntime : undefined,
         sessionEntry: {
@@ -354,6 +357,15 @@ export async function prepareSessionPatchRuntimeSelection(params: {
       applyModelRuntimeDirective(params.entry, choice.runtime);
       validateRuntime = choice.validateRuntimeSelection;
       const harness = choice.harness;
+      if (
+        choice.runtime.kind === "set" &&
+        choice.runtime.runtime !== "openclaw" &&
+        params.callerCanConsent === true &&
+        hasRememberedNativeRuntimeConsent(params.cfg, params.agentId, choice.runtime.runtime)
+      ) {
+        params.entry.permissionMode = "full";
+        params.entry.sandboxMode = "off";
+      }
       if (grantingConsent) {
         if (
           !harness ||

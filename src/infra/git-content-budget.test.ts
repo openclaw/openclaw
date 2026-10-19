@@ -21,9 +21,10 @@ function settle<T>(operation: Promise<T>) {
   );
 }
 
-it("bounds content, snapshot, and checkout removal through cancellation while metadata stays responsive", async ({
+it("bounds content/removal through cancellation while metadata stays responsive", async ({
   signal,
 }) => {
+  const wait = <T>(promise: Promise<T>) => withinTest(promise, signal);
   const release = createDeferredCore();
   const firstStarted = createDeferredCore();
   const started: string[] = [];
@@ -77,52 +78,45 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
     return { ok: true, value: undefined };
   });
   const gitCommands = { text: run, buffered: run };
+  const operation = (
+    command: Parameters<typeof runGitWorkerOperation>[0],
+    taskSignal?: AbortSignal,
+  ) => runGitWorkerOperation(command, { git: gitCommands, signal: taskSignal });
+  const task = (...args: Parameters<typeof operation>) => settle(operation(...args));
   const abortRunning = new AbortController();
   const abortQueued = new AbortController();
   const abortRemoval = new AbortController();
-  let firstSettled = false;
-  const first = settle(
-    runGitWorkerOperation(
-      { type: "checkout.diff", input: { cwd: "diff", scope: "uncommitted" } },
-      { git: gitCommands, signal: abortRunning.signal },
-    ),
-  ).then((value) => {
-    firstSettled = true;
-    return value;
-  });
+  const firstSettled = vi.fn();
+  const first = task(
+    { type: "checkout.diff", input: { cwd: "diff", scope: "uncommitted" } },
+    abortRunning.signal,
+  ).finally(firstSettled);
   const pending: Promise<unknown>[] = [first];
   try {
-    await withinTest(firstStarted.promise, signal);
-    const second = settle(
-      runGitWorkerOperation(
-        { type: "checkout.baseline", input: { cwd: "baseline" } },
-        { git: gitCommands },
-      ),
-    );
-    const queued = settle(
-      runGitWorkerOperation(
-        {
-          type: "pull-request.branch-facts",
-          input: { root: "canceled", branch: "main", mergedHeads: [] },
+    await wait(firstStarted.promise);
+    const second = task({ type: "checkout.baseline", input: { cwd: "baseline" } });
+    const queued = task(
+      {
+        type: "pull-request.branch-facts",
+        input: {
+          root: "canceled",
+          branch: "main",
+          mergedHeads: [],
+          comparison: { statsBase: null, creatable: false, equalPushedTips: false, complete: true },
         },
-        { git: gitCommands, signal: abortQueued.signal },
-      ),
+      },
+      abortQueued.signal,
     );
-    const snapshot = settle(
-      runGitWorkerOperation(
-        {
-          type: "worktree.snapshot",
-          input: {
-            worktreeId: "snapshot",
-            repoRoot: "snapshot",
-            checkoutPath: "snapshot",
-            reason: "fixture",
-            provisionedPaths: [],
-          },
-        },
-        { git: gitCommands },
-      ),
-    );
+    const snapshot = task({
+      type: "worktree.snapshot",
+      input: {
+        worktreeId: "snapshot",
+        repoRoot: "snapshot",
+        checkoutPath: "snapshot",
+        reason: "fixture",
+        provisionedPaths: [],
+      },
+    });
     const remove = (name: string, queueSignal?: AbortSignal) =>
       withWorktreeGitConfig(name, false, {}, (git) =>
         removeManagedCheckout(
@@ -156,25 +150,16 @@ it("bounds content, snapshot, and checkout removal through cancellation while me
     const removal = remove("removal");
     const canceledRemoval = settle(remove("canceled-removal", abortRemoval.signal));
     pending.push(second, queued, snapshot, removal, canceledRemoval);
-    await withinTest(
-      runGitWorkerOperation(
-        { type: "repository.branches", input: { repoRoot: "metadata" } },
-        { git: gitCommands },
-      ),
-      signal,
-    );
+    await wait(operation({ type: "repository.branches", input: { repoRoot: "metadata" } }));
     expect(started).toEqual(["diff", "diff"]);
     abortQueued.abort();
-    expect((await withinTest(queued, signal)).rejected).toBe(true);
+    expect((await wait(queued)).rejected).toBe(true);
     const canceled = new Error("removal cancelled while queued");
     abortRemoval.abort(canceled);
-    expect(await withinTest(canceledRemoval, signal)).toEqual({
-      rejected: true,
-      error: canceled,
-    });
+    expect(await wait(canceledRemoval)).toEqual({ rejected: true, error: canceled });
     expect(started).toEqual(["diff", "diff"]);
     abortRunning.abort();
-    expect(firstSettled).toBe(false);
+    expect(firstSettled).not.toHaveBeenCalled();
     expect(active).toBe(2);
     release.resolve();
     await Promise.all(pending);

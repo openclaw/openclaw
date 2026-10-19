@@ -1,6 +1,6 @@
 import { readAcpSessionCommand } from "../acp/runtime/session-meta-read.worker.js";
 import type { EngineConnection } from "../infra/sql-connection.js";
-import { runSqliteDeferredTransactionSync } from "../infra/sqlite-transaction.js";
+import { runSqliteReadSnapshotSync } from "../infra/sqlite-transaction.js";
 import type { OpenClawStateReadCommand } from "./openclaw-state-read.types.js";
 import { findSessionRepositoryWorkspaceInDatabase } from "./session-repository-workspaces.kernel.js";
 
@@ -38,6 +38,6 @@ export function readSessionRowsSharedFacts(
     };
   };
   return command.entries.some((entry) => entry.repositoryWorkspace)
-    ? runSqliteDeferredTransactionSync(db, readSharedFacts)
+    ? runSqliteReadSnapshotSync(db, readSharedFacts)
     : readSharedFacts();
 }

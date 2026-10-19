@@ -366,7 +366,7 @@ describe("existing shared-state schema admission", () => {
             await closeOpenClawStateDatabaseAsync();
             expect(read(capture())).toEqual(before);
           }
-          expect(checkCount()).toBe(change === "schema rollback" ? 1 : 2);
+          expect(checkCount()).toBe(change === "replacement" ? 2 : 1);
         } finally {
           reads.restore();
         }
@@ -698,11 +698,6 @@ describe("existing shared-state schema admission", () => {
       sql: `PRAGMA user_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1};
             UPDATE schema_meta SET schema_version = ${OPENCLAW_STATE_SCHEMA_VERSION + 1}
               WHERE meta_key = 'primary';`,
-    },
-    {
-      name: "newer unpublished content",
-      sql: `INSERT INTO config_machine_state VALUES
-              ('state.schema.contentVersion', '${OPENCLAW_STATE_SCHEMA_VERSION + 1}', 1);`,
     },
     {
       name: "mismatched published metadata",

@@ -135,7 +135,7 @@ If the message tool is unavailable under the active tool policy, OpenClaw falls 
 
 For direct chats and any other source event, `messages.visibleReplies: "message_tool"` applies the same tool-only behavior globally; `messages.groupChat.visibleReplies` remains the more specific override for group/channel rooms. Internal WebChat direct turns default to automatic final-reply delivery so Pi and Codex receive the same visible-reply contract.
 
-Accepted group/channel requests require a reply by default. To permit selective silence for unaddressed requests, explicitly set `agents.defaults.silentReply.group: "allow"` or the appropriate `surfaces.<id>.silentReply.group` override; see [Silent replies](/concepts/messages#silent-replies). In `"automatic"` mode, that opt-in enables `NO_REPLY` guidance. In tool-only mode, optional turns stay quiet by not calling the message tool; merely selecting tool-only delivery does not waive a required answer.
+Accepted group/channel requests normally receive an answer, but an explicit token-only `NO_REPLY` can end them silently in either delivery mode. `NO_REPLY` discards anything written this turn that was not sent, so send confirmations before ending silently. `agents.defaults.silentReply.group: "allow"` or a `surfaces.<id>.silentReply.group` override permits optional handling of unaddressed requests; it is not needed to honor explicit silence. Empty output still needs recovery. See [Silent replies](/concepts/messages#silent-replies).
 
 Plugin-owned conversation bindings are the exception. Once a plugin binds a thread and claims the inbound turn, the plugin's returned reply is the visible binding response; it does not need `message(action=send)`. That reply is plugin runtime output, not private model final text.
 
@@ -538,8 +538,8 @@ Account-level channel configs can set the same policy under `channels.<channel>.
     - Pattern precedence: `agents.entries.*.groupChat.mentionPatterns` (useful when multiple agents share a group) overrides `messages.groupChat.mentionPatterns`; when neither is set, patterns are derived from the routed agent's `identity.name` and `identity.emoji`. An explicit `mentionPatterns: []` at the selected level suppresses this derivation; native mentions remain separate.
     - Mention gating can apply without explicitly configured patterns: identity-derived patterns also enable detection. On channels that require detectable mentions before gating, only the absence of both usable patterns and native mention support prevents enforcement.
     - Allowlisting a group or sender does not disable mention gating; set that group's `requireMention` to `false` when all messages should trigger.
-    - Automatic group chat prompt context includes `NO_REPLY` guidance only when the resolved silence policy explicitly allows it; workspace files should not duplicate these mechanics.
-    - Groups explicitly configured to allow automatic silent replies treat clean empty or reasoning-only model turns as silent, equivalent to `NO_REPLY`. Direct chats never receive `NO_REPLY` guidance, and optional message-tool-only group turns stay quiet by not calling `message(action=send)`.
+    - External group prompt context includes `NO_REPLY` guidance; direct-message prompts omit it. Workspace files should not duplicate these mechanics.
+    - A token-only `NO_REPLY` records intentional silence. Empty or reasoning-only model output is not equivalent to `NO_REPLY` and retains recovery. In message-tool-only mode, visible replies use `message(action=send)`.
     - Always-on group messages use user-request semantics and require replies by default. Set `messages.groupChat.unmentionedInbound: "room_event"` to submit them as quiet context instead. See [Ambient room events](/channels/ambient-room-events) for supported channels and setup examples.
     - Room events are not stored as fake user requests, and private assistant text from no-message-tool room events is not replayed as chat history.
     - Discord defaults live in `channels.discord.guilds."*"` (overridable per guild/channel).
@@ -553,7 +553,7 @@ Account-level channel configs can set the same policy under `channels.<channel>.
 Some channel configs support restricting which tools are available **inside a specific group/room/channel**.
 
 - `tools`: allow/deny tools for the whole group (`allow`, `alsoAllow`, `deny`; deny wins).
-- `toolsBySender`: per-sender overrides within the group. Use explicit key prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, and `"*"` wildcard. Use the primary OpenClaw channel ids; aliases such as `teams` normalize to `msteams`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries before starting the Gateway.
+- `toolsBySender`: per-sender overrides within the group. Use explicit key prefixes: `channel:<channelId>:<senderId>`, `id:<senderId>`, `e164:<phone>`, `username:<handle>`, `name:<displayName>`, and `"*"` wildcard. Use the primary OpenClaw channel ids; aliases such as `teams` normalize to `msteams`. Run `openclaw doctor --fix` to migrate retired unprefixed keys to `id:` entries before starting the Gateway. Because `username:` and `name:` match mutable sender attributes (handles and display names that members can change), prefer `id:` keys for entries that grant extra tools or override group `deny` rules.
 
 When a sender or group policy restricts the turn's tools, that requester can
 create only hidden helpers of the same agent. Visible and cross-agent sessions

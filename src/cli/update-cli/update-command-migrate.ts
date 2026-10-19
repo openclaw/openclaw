@@ -22,6 +22,7 @@ import { acquireGatewayLock } from "../../infra/gateway-lock.js";
 import { readJsonIfExists, writeJsonAtomic, writeTextAtomic } from "../../infra/json-files.js";
 import { removePackageUpdatePath } from "../../infra/package-update-filesystem.js";
 import { hasNodeErrorCode } from "../../infra/path-guards.js";
+import { readExistingStateRootMode } from "../../infra/private-dir-mode.js";
 import {
   createUpdateDatabaseBackup,
   UpdateDatabaseBackupSchema,
@@ -140,7 +141,10 @@ async function readConfigIdentity(configPath: string): Promise<Receipt["configId
 }
 
 /** The external supervisor owns drain/start; the candidate owns backup and schema repair. */
-export async function updateMigrateCommand(backupRoot: string): Promise<void> {
+export async function updateMigrateCommand(
+  backupRoot: string,
+  options: { fullIntegrityCheck?: boolean } = {},
+): Promise<void> {
   const file = receiptPath(backupRoot);
   if ((await readJsonIfExists(file)) !== null) {
     throw new Error(
@@ -250,6 +254,7 @@ export async function updateMigrateCommand(backupRoot: string): Promise<void> {
           repair: true,
           nonInteractive: true,
           workspaceSuggestions: false,
+          fullIntegrityCheck: options.fullIntegrityCheck,
         },
         undefined,
         preflight,
@@ -358,7 +363,11 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
             // Keep the selected config readable until its original is atomically restored.
             const staged = `${target}.pending-${randomUUID()}`;
             try {
-              await writeTextAtomic(staged, current.raw, { mode: 0o600, durable: true });
+              await writeTextAtomic(staged, current.raw, {
+                mode: 0o600,
+                dirMode: readExistingStateRootMode(path.dirname(staged), receipt.stateDir),
+                durable: true,
+              });
               const identity = await fs.lstat(staged);
               assertCurrent();
               await publishFileExclusive({
@@ -383,6 +392,7 @@ export async function updateRestoreCommand(backupRoot: string): Promise<void> {
           if (config.raw !== null) {
             await writeTextAtomic(configPath, config.raw, {
               mode: 0o600,
+              dirMode: readExistingStateRootMode(path.dirname(configPath), receipt.stateDir),
               durable: true,
               beforeRename: async () => assertCurrent(),
             });

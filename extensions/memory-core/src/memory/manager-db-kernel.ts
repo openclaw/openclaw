@@ -16,6 +16,7 @@ import {
   runSqliteImmediateTransactionSync,
   tableExists as admittedTableExists,
 } from "openclaw/plugin-sdk/sqlite-worker-runtime";
+import { advanceMemoryIndexRevision } from "../memory-index-revision.worker.js";
 import { markMemoryVectorIndexClean } from "./manager-vector-rebuild-state.js";
 
 const MEMORY_REINDEX_SCHEMA = "memory_reindex";
@@ -63,7 +64,9 @@ function replaceMemoryVectorTable(db: DatabaseSync): void {
     // rebuild before that table can be queried again.
     try {
       db.exec(`DROP TABLE IF EXISTS main.${tableName}`);
-    } catch {}
+    } catch {
+      // Without sqlite-vec, retaining the unused virtual table is intentional.
+    }
     return;
   }
   db.exec(`DROP TABLE IF EXISTS main.${tableName}`);
@@ -172,6 +175,7 @@ export function publishMemoryDatabaseTables(params: MemoryDatabasePublication): 
         if (params.vectorIndexComplete) {
           markMemoryVectorIndexClean(params.targetDb);
         }
+        advanceMemoryIndexRevision(params.targetDb);
       },
       { withCommit: params.withCommit },
     );

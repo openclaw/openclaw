@@ -26,16 +26,16 @@ import {
   normalizeAgentRunAttemptTerminal,
   projectAgentRunAttemptTerminal,
 } from "../agent-run-terminal-outcome.js";
-import {
-  resolveFinalAssistantRawText,
-  resolveFinalMessageRawText,
-} from "../embedded-agent-runner/run/helpers.js";
+import { resolveFinalMessageRawText } from "../embedded-agent-runner/run/helpers.js";
 import type { EmbeddedRunAttemptResult } from "../embedded-agent-runner/run/types.js";
 import { copyCoreTtsAttemptResultProvenance } from "../tools/tts-tool-result-provenance.js";
 import { subscribeAgentCommentaryDiagnostics } from "./commentary-diagnostics.js";
 import { recordAgentHarnessPreflightOwner } from "./errors.js";
 import { applyAgentHarnessResultClassification } from "./result-classification.js";
-import { EmptySettledTurnFinalizationError } from "./settled-turn-finalization-outcome.js";
+import {
+  EmptySettledTurnFinalizationError,
+  type PreparedSettledTurnFinalizationResult,
+} from "./settled-turn-finalization-outcome.js";
 import { assertSettledTurnFinalizationResult } from "./settled-turn-finalization-result.js";
 import type {
   AgentHarness,
@@ -46,9 +46,10 @@ import type {
   AgentHarnessSettledTurnFinalizationResult,
 } from "./types.js";
 
-type AgentHarnessLifecycleFinalizationOutcome =
-  | { outcome: "answered"; result: AgentHarnessSettledTurnFinalizationResult }
-  | { outcome: "empty"; result: AgentHarnessSettledTurnFinalizationResult };
+type AgentHarnessLifecycleFinalizationOutcome = {
+  outcome: "answered" | "empty";
+  result: PreparedSettledTurnFinalizationResult;
+};
 
 type AgentHarnessLifecyclePhase = DiagnosticHarnessRunErrorEvent["phase"];
 type AgentRunCompletion = {
@@ -248,18 +249,10 @@ function emitAgentHarnessRunCompleted(params: {
   // forward the message so the error span shows more than a bare category.
   const errorMessage =
     outcome === "error" ? diagnosticErrorMessage(terminal.promptError) : undefined;
-  const contentPolicy = resolveDiagnosticModelContentCapturePolicy(getRuntimeConfigSnapshot());
-  const finalAssistantText = contentPolicy.outputMessages
-    ? resolveFinalMessageRawText(
-        result.currentAttemptAssistant ?? result.currentAttemptCompletedAssistant,
-      )
-    : undefined;
-  const finalResponse = finalAssistantText
-    ? joinDiagnosticContent([finalAssistantText])
-    : undefined;
-  const harnessContent: { userPrompt?: string; finalResponse?: string } | undefined = finalResponse
-    ? { finalResponse }
-    : undefined;
+  const harnessContent = agentRunMessageContent(
+    undefined,
+    result.currentAttemptAssistant ?? result.currentAttemptCompletedAssistant,
+  );
   emitTrustedDiagnosticEventWithPrivateData(
     {
       type: "harness.run.completed",
@@ -455,15 +448,7 @@ export async function runAgentHarnessLifecycleFinalization(
       outcome: "completed",
       messageContent: agentRunMessageContent(params.prompt, result.result.assistant),
     });
-    const finalizationContentPolicy = resolveDiagnosticModelContentCapturePolicy(
-      getRuntimeConfigSnapshot(),
-    );
-    const finalizationVisibleText = finalizationContentPolicy.outputMessages
-      ? resolveFinalAssistantRawText(result.result.assistant)
-      : undefined;
-    const finalizationResponseText = finalizationVisibleText
-      ? joinDiagnosticContent([finalizationVisibleText])
-      : undefined;
+    const harnessContent = agentRunMessageContent(undefined, result.result.assistant);
     emitTrustedDiagnosticEventWithPrivateData(
       {
         type: "harness.run.completed",
@@ -476,9 +461,7 @@ export async function runAgentHarnessLifecycleFinalization(
         outcome: "completed",
         itemLifecycle: { startedCount: 0, completedCount: 0, activeCount: 0 },
       },
-      finalizationResponseText
-        ? { harnessContent: { finalResponse: finalizationResponseText } }
-        : undefined,
+      harnessContent ? { harnessContent } : undefined,
     );
     return result;
   } catch (error) {

@@ -90,7 +90,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       logger,
     });
 
-  const account = resolveTlonAccount(cfg, opts.accountId ?? undefined);
+  const account = resolveTlonAccount(cfg, opts.accountId);
   if (!account.enabled) {
     return;
   }
@@ -381,7 +381,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
     const route = core.channel.routing.resolveAgentRoute({
       cfg,
       channel: "tlon",
-      accountId: opts.accountId ?? undefined,
+      accountId: opts.accountId,
       peer: {
         kind: isGroup ? "group" : "direct",
         id: isGroup ? (channelNest ?? senderShip) : senderShip,
@@ -585,7 +585,7 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
             await sendGroupMessage({
               ...groupSendContext,
               text: replyText,
-              replyToId: parentId ?? undefined,
+              replyToId: parentId,
             });
             return { visibleReplySent: true, replyToId: parentId ?? undefined };
           }
@@ -871,26 +871,17 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
           const allowed =
             ownerInvite || (await isDmAllowedWithIngress(ship, settingsState.effectiveDmAllowlist));
           if (ownerInvite || (settingsState.effectiveAutoAcceptDmInvites && allowed)) {
-            try {
-              await api.poke({
-                app: "chat",
-                mark: "chat-dm-rsvp",
-                json: { ship, ok: true },
-              });
-              processedDmInvites.add(ship);
-              runtime.log?.(
-                ownerInvite
-                  ? `[tlon] Auto-accepted DM invite from owner ${ship}`
-                  : `[tlon] Auto-accepted DM invite from ${ship}`,
-              );
-            } catch (err) {
-              runtime.error?.(
-                ownerInvite
-                  ? `[tlon] Failed to auto-accept DM from owner: ${String(err)}`
-                  : `[tlon] Failed to auto-accept DM from ${ship}: ${String(err)}`,
-              );
-              throw err;
-            }
+            await api.poke({
+              app: "chat",
+              mark: "chat-dm-rsvp",
+              json: { ship, ok: true },
+            });
+            processedDmInvites.add(ship);
+            runtime.log?.(
+              ownerInvite
+                ? `[tlon] Auto-accepted DM invite from owner ${ship}`
+                : `[tlon] Auto-accepted DM invite from ${ship}`,
+            );
             continue;
           }
 
@@ -952,12 +943,12 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
       const messageText = rawText;
       const ownerDm = !isClubMessage && isOwner(senderShip);
       if (ownerDm && (await handleApprovalResponse(messageText))) {
-        runtime.log?.(`[tlon] Processed approval response from owner: ${messageText}`);
+        runtime.log?.("[tlon] Processed approval response from owner");
         return;
       }
 
       if (ownerDm && (await handleAdminCommand(messageText))) {
-        runtime.log?.(`[tlon] Processed admin command from owner: ${messageText}`);
+        runtime.log?.("[tlon] Processed admin command from owner");
         return;
       }
 
@@ -1089,16 +1080,14 @@ export async function monitorTlonProvider(opts: MonitorTlonOpts): Promise<void> 
 
     try {
       await settingsManager.startSubscription((newSettings) => {
-        settingsState.currentSettings = newSettings;
-
         // Keep watching during transitions; the authorization check handles removals.
         addWatchedChannels(
           newSettings.groupChannels ?? [],
           "[tlon] Settings: now watching channel ",
         );
 
-        // Recompute effective settings from the latest snapshot so deletions
-        // cleanly fall back to file config and empty arrays remain authoritative.
+        // Install the snapshot and effective overrides together; deleted overrides
+        // fall back to file config while empty arrays remain authoritative.
         Object.assign(
           settingsState,
           applyTlonSettingsOverrides({

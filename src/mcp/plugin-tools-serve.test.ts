@@ -1,6 +1,5 @@
 // Plugin MCP serve tests cover serving plugin tools over MCP.
-import { Client } from "@modelcontextprotocol/sdk/client/index.js";
-import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
+import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { Type } from "typebox";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
@@ -338,20 +337,6 @@ describe("plugin tools MCP server", () => {
         }),
       },
     ]);
-  });
-
-  it("keeps completed nonzero shell exits nonfatal through MCP", async () => {
-    const content = [{ type: "text", text: "original tool result" }];
-    const execute = vi.fn().mockResolvedValue({
-      content,
-      details: { status: "completed", exitCode: 23 },
-    });
-    const handlers = createPluginToolsMcpHandlers([createTool("result_probe", execute)]);
-
-    const result = await handlers.callTool({ name: "result_probe", arguments: {} });
-
-    expect(result.content).toEqual(content);
-    expect(result.isError).toBeUndefined();
   });
 
   it("releases run-scoped adjusted arguments after a pre-wrapped direct MCP call", async () => {

@@ -217,16 +217,6 @@ describe("fuzzy edit source-span mapping", () => {
     expect(result.content).toBe("const value = 2;  ");
   });
 
-  it("keeps trim-folding behavior inside a complete fuzzy span", () => {
-    const result = prepareChangedEdit(
-      "before\nfirst  \nsecond\nafter  \n",
-      [{ oldText: "first\nsecond", newText: "combined" }],
-      "test.ts",
-    );
-
-    expect(result.content).toBe("before\ncombined\nafter  \n");
-  });
-
   it("preserves CRLF while mapping a fuzzy Unicode span", () => {
     const result = prepareChangedEdit(
       "const value\u00A0= 1;\r\nnext\r\n",

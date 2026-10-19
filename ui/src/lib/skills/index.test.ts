@@ -55,14 +55,9 @@ function createState(): { state: SkillsState; request: ReturnType<typeof vi.fn<T
     skillsLoading: false,
     skillsReport: null,
     skillsError: null,
-    skillsFilter: "",
-    skillsStatusFilter: "all",
-    skillsDetailKey: null,
-    skillsDetailTab: "overview",
     skillOperation: null,
     skillEdits: {},
     skillMessages: {},
-    clawhubSearchQuery: "github",
     clawhubSearchResults: [
       {
         score: 0.9,

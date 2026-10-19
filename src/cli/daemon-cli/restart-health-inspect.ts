@@ -29,6 +29,7 @@ export async function inspectGatewayRestart(params: {
   expectedBuildId?: string | null;
   openStateSchemaReadAdmission?: OpenClawStateSchemaReadAdmission;
   requirePluginHealth?: boolean;
+  requireChannelHealth?: boolean;
   probeContext?: GatewayRestartProbeContext;
   configuredProbe?: ConfiguredGatewayLocalProbe;
   probeHosts?: readonly string[];
@@ -77,9 +78,10 @@ export async function inspectGatewayRestart(params: {
     }));
   const expectedVersion = normalizeOptionalString(params.expectedVersion);
   const expectedBuildId = normalizeOptionalString(params.expectedBuildId);
-  const requiresGatewayProbe = Boolean(
-    expectedVersion || expectedBuildId || params.requirePluginHealth === false,
-  );
+  const requiresGatewayProbe =
+    Boolean(expectedVersion || expectedBuildId) ||
+    params.requirePluginHealth === false ||
+    params.requireChannelHealth === false;
   let reachability: GatewayReachability | null = null;
   const loadReachability = () =>
     read("gateway-health", () =>
@@ -88,6 +90,10 @@ export async function inspectGatewayRestart(params: {
         ...params.probeContext,
         ...(params.configuredProbe ? { configuredProbe: params.configuredProbe } : {}),
         env,
+        allowHttpVerification:
+          Boolean(expectedVersion) &&
+          params.requirePluginHealth === false &&
+          params.requireChannelHealth === false,
         timeoutMs: remainingTimeoutMs(params.probeTimeoutMs),
         ...(signal ? { signal } : {}),
       }),
@@ -204,6 +210,7 @@ export async function inspectGatewayRestart(params: {
     gatewayVersion,
     gatewayBuildId,
     probeError,
+    authenticationError,
     staleConnection,
     activatedPluginErrors,
     unavailablePlugins,
@@ -222,6 +229,7 @@ export async function inspectGatewayRestart(params: {
       ...(gatewayBuildId !== undefined ? { gatewayBuildId } : {}),
       ...(startupPhase ? { startupPhase } : {}),
       ...(probeError ? { probeError } : {}),
+      ...(authenticationError ? { authenticationError } : {}),
       ...(staleConnection ? { staleConnection } : {}),
       ...(activatedPluginErrors?.length ? { activatedPluginErrors } : {}),
       ...(unavailablePlugins?.length ? { unavailablePlugins } : {}),
@@ -232,5 +240,6 @@ export async function inspectGatewayRestart(params: {
     expectedVersion,
     expectedBuildId,
     params.requirePluginHealth !== false,
+    params.requireChannelHealth !== false,
   );
 }

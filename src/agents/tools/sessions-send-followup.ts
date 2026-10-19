@@ -1,5 +1,4 @@
 import { formatErrorMessage } from "@openclaw/normalization-core/error-coercion";
-import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { isCronRunSessionKey } from "../../sessions/session-key-utils.js";
 import { registerSessionStateWatch } from "../../sessions/session-state-events.js";
 import {
@@ -56,7 +55,7 @@ export async function startSessionsSendFollowup(
         start: {
           ...start,
           result: jsonResult({
-            ...(isRecord(start.result.details) ? start.result.details : {}),
+            ...start.result.details,
             sentBeforeError: true,
           }),
         },

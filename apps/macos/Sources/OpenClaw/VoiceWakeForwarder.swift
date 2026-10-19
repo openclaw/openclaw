@@ -110,7 +110,6 @@ enum VoiceWakeForwarder {
         let result = await GatewayConnection.shared.sendAgent(invocation)
 
         if result.ok {
-            self.logger.info("voice wake forward ok")
             return .success(())
         }
 

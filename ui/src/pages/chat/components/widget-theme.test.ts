@@ -195,12 +195,17 @@ describe("widget theme bridge", () => {
     const shadowFrame = document.createElement("iframe");
     host.attachShadow({ mode: "open" }).append(shadowFrame);
     const unrelatedFrame = document.createElement("iframe");
+    unrelatedFrame.className = "board-widget__frame";
     document.body.append(chatFrame, boardFrame, host, unrelatedFrame);
     const chatPost = vi.spyOn(chatFrame.contentWindow!, "postMessage");
     const boardPost = vi.spyOn(boardFrame.contentWindow!, "postMessage");
     const shadowPost = vi.spyOn(shadowFrame.contentWindow!, "postMessage");
     const unrelatedPost = vi.spyOn(unrelatedFrame.contentWindow!, "postMessage");
-    const release = registerWidgetThemeFrame(shadowFrame, "https://widget.example");
+    const releases = [
+      registerWidgetThemeFrame(chatFrame, "*"),
+      registerWidgetThemeFrame(boardFrame, "*"),
+      registerWidgetThemeFrame(shadowFrame, "https://widget.example"),
+    ];
 
     for (const frame of [chatFrame, boardFrame, shadowFrame]) {
       postWidgetTheme(frame);
@@ -252,6 +257,18 @@ describe("widget theme bridge", () => {
       "*",
     );
     expect(unrelatedPost).not.toHaveBeenCalled();
-    release();
+
+    boardFrame.remove();
+    document.documentElement.dataset.themeMode = "light";
+    await Promise.resolve();
+    document.body.append(boardFrame);
+    const reattachedPost = vi.spyOn(boardFrame.contentWindow!, "postMessage");
+    document.documentElement.dataset.themeMode = "dark";
+    await Promise.resolve();
+    expect(reattachedPost).toHaveBeenCalledWith(
+      expect.objectContaining({ type: "openclaw:widget-theme", mode: "dark" }),
+      "*",
+    );
+    releases.forEach((release) => release());
   });
 });

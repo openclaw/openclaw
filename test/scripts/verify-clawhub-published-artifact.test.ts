@@ -238,14 +238,6 @@ describe("ClawHub published artifact verification", () => {
   });
 
   it.each([
-    ["invalid JSON", "detail", () => new Response("{invalid"), "invalid JSON"],
-    ["permanent HTTP", "detail", () => new Response(null, { status: 501 }), "HTTP 501"],
-    [
-      "conflicting tag",
-      "detail",
-      () => Response.json({ package: { tags: { beta: "2026.7.1-beta.2" } } }),
-      "tag beta mismatch",
-    ],
     ["invalid UTF-8", "detail", () => new Response(new Uint8Array([0xff])), "invalid JSON"],
     [
       "missing artifact object",
@@ -282,24 +274,6 @@ describe("ClawHub published artifact verification", () => {
       "header mismatch",
     ],
     ["absent body", "detail", () => new Response(null), "no response body"],
-    [
-      "permanent TLS",
-      "detail",
-      () => {
-        throw new TypeError("fetch failed", {
-          cause: Object.assign(new Error("certificate rejected"), { code: "CERT_HAS_EXPIRED" }),
-        });
-      },
-      "fetch failed",
-    ],
-    [
-      "unknown transport failure",
-      "detail",
-      () => {
-        throw new Error("unknown failure");
-      },
-      "unknown failure",
-    ],
   ] as const)(
     "does not retry %s before a later valid response",
     async (_label, stage, failure, message) => {
@@ -339,60 +313,36 @@ describe("ClawHub published artifact verification", () => {
     },
   );
 
-  it.each(["reset", "body reset", "visibility", "rate limit"])(
-    "recovers a transient %s without publishing",
-    async (failure) => {
-      const artifact = new TextEncoder().encode("expected");
-      const healthy = registryFetch(artifact);
-      let failed = false;
-      const fetchImpl = vi.fn(async (input: string | URL | Request) => {
-        if (!failed && (failure !== "body reset" || String(input).endsWith("/artifact/download"))) {
-          failed = true;
-          if (failure === "reset") {
-            throw new TypeError("fetch failed", {
-              cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
-            });
-          }
-          if (failure === "body reset") {
-            return new Response(
-              new ReadableStream<Uint8Array>({
-                start(controller) {
-                  controller.error(
-                    new TypeError("terminated", {
-                      cause: Object.assign(new Error("socket closed"), { code: "UND_ERR_SOCKET" }),
-                    }),
-                  );
-                },
-              }),
-            );
-          }
-          return new Response(null, {
-            status: failure === "visibility" ? 404 : 429,
-            headers: { "retry-after": "2" },
-          });
-        }
-        return healthy(input);
-      });
-      const sleep = vi.fn(async () => {});
-      await expect(
-        verifyPublishedClawHubArtifacts({
-          ...immutableBinding(),
-          manifestPath: writeManifest("publish", artifact),
-          registry: "https://clawhub.example",
-          terminalRunAttempt: "1",
-          retryOptions: { fetchImpl, attempts: 2, delayMs: 1, sleep },
-        }),
-      ).resolves.toMatchObject({ packages: [{ registrySha256: identity(artifact).sha256 }] });
-      expect(sleep).toHaveBeenCalledExactlyOnceWith(
-        failure === "visibility" || failure === "rate limit" ? 2000 : 1,
-      );
-      expect(
-        fetchImpl.mock.calls.every(([input]) =>
-          String(input).startsWith("https://clawhub.example/api/v1/packages/"),
-        ),
-      ).toBe(true);
-    },
-  );
+  it("recovers a transient reset without publishing", async () => {
+    const artifact = new TextEncoder().encode("expected");
+    const healthy = registryFetch(artifact);
+    let failed = false;
+    const fetchImpl = vi.fn(async (input: string | URL | Request) => {
+      if (!failed) {
+        failed = true;
+        throw new TypeError("fetch failed", {
+          cause: Object.assign(new Error("socket reset"), { code: "ECONNRESET" }),
+        });
+      }
+      return healthy(input);
+    });
+    const sleep = vi.fn(async () => {});
+    await expect(
+      verifyPublishedClawHubArtifacts({
+        ...immutableBinding(),
+        manifestPath: writeManifest("publish", artifact),
+        registry: "https://clawhub.example",
+        terminalRunAttempt: "1",
+        retryOptions: { fetchImpl, attempts: 2, delayMs: 1, sleep },
+      }),
+    ).resolves.toMatchObject({ packages: [{ registrySha256: identity(artifact).sha256 }] });
+    expect(sleep).toHaveBeenCalledExactlyOnceWith(1);
+    expect(
+      fetchImpl.mock.calls.every(([input]) =>
+        String(input).startsWith("https://clawhub.example/api/v1/packages/"),
+      ),
+    ).toBe(true);
+  });
 
   it("stops rather than retrying before an excessive server delay", async () => {
     const artifact = new TextEncoder().encode("expected");

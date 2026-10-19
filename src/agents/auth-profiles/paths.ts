@@ -3,11 +3,8 @@
  * Import through this file for canonical SQLite display and lock paths.
  */
 import path from "node:path";
-import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
-import type { Result } from "@openclaw/normalization-core/result";
 import { cloneEnvWithPlatformSemantics } from "../../config/config-env-vars.js";
 import { resolveStateDir } from "../../config/paths.js";
-import { withSqliteWorkerCleanupFailure } from "../../infra/sqlite-worker-broker-reply.js";
 import { warnPluginSdkDeprecation } from "../../plugins/sdk-deprecation.js";
 import { captureOpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.js";
 import { resolveUserPath } from "../../utils.js";
@@ -17,6 +14,7 @@ import {
   resolveSharedAuthStorePath,
 } from "./path-resolve.js";
 import { prepareSharedAuthStoreOwnershipForNative } from "./path-resolve.native.js";
+import { withAuthProfileReaderCleanup } from "./reader-cleanup.js";
 import { prepareAgentAuthProfileRowsRead } from "./sqlite-read.js";
 import {
   inspectPersistedAuthProfileStoreRaw,
@@ -38,19 +36,16 @@ function normalizeDisplayPath(pathname: string, env: NodeJS.ProcessEnv = process
 }
 
 /**
- * @deprecated New SDK displays should use resolveProviderAuthProfileMetadataAsync from
- * openclaw/plugin-sdk/provider-auth-runtime. This selected-path helper remains supported until
- * removal in a later stable release after deprecation ships;
- * resolveAuthStorePathForDisplayAsync is core-internal.
+ * @deprecated Display provider/profile identifiers instead. Public database-path displays are retired;
+ * there is no public async path replacement. Bundled callers use AuthStorage.resolvePathForDisplayAsync.
+ * Supported through 2026-12-31; removal ships in the first January 2027 stable release.
  */
 export function resolveAuthStorePathForDisplay(agentDir?: string): string {
   warnPluginSdkDeprecation({
     family: "auth-profile-sync-operations",
     method: "resolveAuthStorePathForDisplay",
     replacement:
-      "provider metadata from resolveProviderAuthProfileMetadataAsync in openclaw/plugin-sdk/provider-auth-runtime",
-    compatibility:
-      "This selected-path helper remains supported until removal in a later stable release after deprecation ships; its async path replacement is core-internal.",
+      "provider/profile identifiers for displays (there is no public async database-path replacement)",
   });
   prepareSharedAuthStoreOwnershipForNative();
   const localPath = agentDir
@@ -80,37 +75,27 @@ export async function resolveAuthStorePathForDisplayAsync(
         env: capturedEnv,
       })
     : undefined;
-  let result: Result<string, unknown>;
-  try {
-    let selected: string | undefined;
-    if (local) {
-      const rows = await local.read();
-      selected = selectLocalDisplayPath(localPath, rows.store.status);
-    }
-    if (selected === undefined) {
-      await resolveSharedAuthStoreOwnershipAsync(
-        captureOpenClawStateWorkerContext({ env: capturedEnv }),
-      );
-      selected = resolveSharedAuthStorePath(capturedEnv);
-    }
-    result = { ok: true, value: normalizeDisplayPath(selected, capturedEnv) };
-  } catch (error) {
-    result = { ok: false, error };
-  }
-  try {
-    await local?.dispose();
-  } catch (error) {
-    throw result.ok
-      ? error
-      : withSqliteWorkerCleanupFailure(
-          toErrorObject(result.error, "Auth display path read failed"),
-          error,
+  return withAuthProfileReaderCleanup(
+    async () => {
+      let selected: string | undefined;
+      if (local) {
+        const rows = await local.read();
+        selected = selectLocalDisplayPath(localPath, rows.store.status);
+      }
+      if (selected === undefined) {
+        await resolveSharedAuthStoreOwnershipAsync(
+          captureOpenClawStateWorkerContext({ env: capturedEnv }),
         );
-  }
-  if (!result.ok) {
-    throw result.error;
-  }
-  return result.value;
+        selected = resolveSharedAuthStorePath(capturedEnv);
+      }
+      return normalizeDisplayPath(selected, capturedEnv);
+    },
+    local ? [local] : [],
+    {
+      read: "Auth display path read failed",
+      cleanup: "Auth display path reader cleanup failed",
+    },
+  );
 }
 
 /** Private model preparation checks its caller authority once before consuming the label. */

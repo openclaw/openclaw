@@ -109,7 +109,7 @@ describe("ManagedWorktreeService provisioned state", () => {
     env = { ...process.env, OPENCLAW_STATE_DIR: path.join(root, "openclaw-state") };
     setRuntimeConfigSnapshot({}, {});
     now = 1_700_000_000_000;
-    service = new ManagedWorktreeService({ env, now: () => now });
+    service = new ManagedWorktreeService({ env });
   });
 
   afterEach(async () => {

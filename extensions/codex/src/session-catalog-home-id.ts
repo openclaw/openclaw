@@ -7,6 +7,7 @@ function canonicalCodexCatalogHome(value: string): string {
   try {
     return fs.realpathSync.native(resolved);
   } catch {
+    // Homes not created yet use their resolved path until native startup creates them.
     return resolved;
   }
 }

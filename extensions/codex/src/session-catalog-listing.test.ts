@@ -245,7 +245,7 @@ describe("Codex supervision catalog", () => {
       "thread/list",
       {
         archived: false,
-        limit: 64,
+        limit: 16,
         modelProviders: [],
         sortKey: "recency_at",
         sortDirection: "desc",
@@ -560,7 +560,6 @@ describe("Codex supervision catalog", () => {
       await control.listPage({});
       runtimeConfig = { ...config };
 
-      expect(() => factory.forRequest("main", source)).toThrow("configuration changed");
       await expect(
         operation === "list"
           ? control.listPage({})

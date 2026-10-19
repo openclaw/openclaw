@@ -57,7 +57,7 @@ type DiagnosticsTimelineSpanOptions = DiagnosticsTimelineOptions &
     omitErrorMessage?: boolean;
   };
 
-type DiagnosticsTimelineOptions = {
+export type DiagnosticsTimelineOptions = {
   config?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
 };
@@ -186,12 +186,14 @@ export function flushDiagnosticsTimeline(): void {
 /** Returns true when diagnostics flags and a JSONL output path both allow timeline writes. */
 export function isDiagnosticsTimelineEnabled(options: DiagnosticsTimelineOptions = {}): boolean {
   const { config, env = process.env } = options;
+  const path = env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH;
+  if (typeof path !== "string" || path.trim().length === 0) {
+    return false;
+  }
   return (
-    (isDiagnosticFlagEnabled("timeline", config, env) ||
-      isDiagnosticFlagEnabled("diagnostics.timeline", config, env) ||
-      isTruthyEnvValue(env.OPENCLAW_DIAGNOSTICS)) &&
-    typeof env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH === "string" &&
-    env.OPENCLAW_DIAGNOSTICS_TIMELINE_PATH.trim().length > 0
+    isDiagnosticFlagEnabled("timeline", config, env) ||
+    isDiagnosticFlagEnabled("diagnostics.timeline", config, env) ||
+    isTruthyEnvValue(env.OPENCLAW_DIAGNOSTICS)
   );
 }
 

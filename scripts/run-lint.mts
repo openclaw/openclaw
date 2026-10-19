@@ -2,7 +2,7 @@
 import { createRequire } from "node:module";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import { main as runLitRatchet } from "./check-control-ui-lit-ratchet.mts";
+import { main as runControllerGuard } from "./check-control-ui-controllers.mts";
 import { booleanFlag, parseFlagArgs, stringFlag } from "./lib/arg-utils.mts";
 import { runWithFailedTrailer } from "./lib/failed-trailer.mts";
 import { resolveRepoToolBinPath } from "./lib/local-check-runtime.mts";
@@ -22,7 +22,6 @@ await runWithFailedTrailer("lint", async () => {
       },
     },
   );
-  const base = args.base || (!args.staged && process.env.CHECKOUT_BASE_SHA);
   let failure = 0;
   const collect = (status: number) => {
     // Timeouts and cancellation deliberately stop admitting new work.
@@ -31,14 +30,7 @@ await runWithFailedTrailer("lint", async () => {
     process.exitCode = failure;
     return stopped;
   };
-  if (
-    collect(
-      runLitRatchet(process.cwd(), [
-        ...(args.staged ? ["--staged"] : []),
-        ...(base ? ["--base", base] : []),
-      ]),
-    )
-  ) {
+  if (collect(runControllerGuard(process.cwd(), args.staged ? ["--staged"] : []))) {
     return;
   }
   const tsxPath = resolveRepoToolBinPath("tsx");
@@ -66,8 +58,6 @@ await runWithFailedTrailer("lint", async () => {
   if (collect(await runOxlintShards(args.oxlint))) {
     return;
   }
-  // Oxlint cannot see plain stylesheets or css`` templates in Lit components.
-  collect(
-    await runStylelint(["ui/src/**/*.css", "ui/src/**/*.{ts,tsx}", "ui/public/themes/*.css"]),
-  );
+  // Oxlint does not check stylesheets.
+  collect(await runStylelint(["ui/src/**/*.css", "ui/public/themes/*.css"]));
 });

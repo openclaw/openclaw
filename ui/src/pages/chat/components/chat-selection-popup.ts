@@ -278,7 +278,7 @@ export function showChatAnnotationEditor(options: {
       save();
     }
     if (event.key === "Tab") {
-      const focusable = [input, ...Array.from(popup.querySelectorAll("button"))].filter(
+      const focusable = [input, confirm, remove, cancelButton, saveButton].filter(
         (element) => element.getClientRects().length > 0,
       );
       const first = focusable[0];

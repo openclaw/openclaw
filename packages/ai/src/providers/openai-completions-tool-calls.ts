@@ -292,7 +292,6 @@ export function finalizeOpenAICompletionsToolCalls(
       continue;
     }
     delete block.partialJson;
-    delete (block as { streamIndex?: number }).streamIndex;
     options.onConfirmedToolCall?.(block, contentIndex);
   }
 }

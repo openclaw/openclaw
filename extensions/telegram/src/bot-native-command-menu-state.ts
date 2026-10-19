@@ -1,4 +1,3 @@
-// Owns Telegram command-menu identity and durable locale state.
 import type { LanguageCode } from "grammy/types";
 import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime-env";

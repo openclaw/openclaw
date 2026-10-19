@@ -13,8 +13,8 @@ import {
 } from "./session-cold-storage-source-guard.worker.js";
 import { assertSessionTranscriptHot } from "./session-cold-storage-state.js";
 import { transferSessionEntryWorkerCandidate } from "./session-entry-patch.worker.js";
+import { applyManualCompactInTransaction } from "./session-manual-compact-mutation.worker.js";
 import { selectManualCompactTranscriptLines } from "./session-manual-compact-selection.js";
-import { applyManualCompactInTransaction } from "./session-manual-compact.kernel.js";
 import type {
   SessionSourcePredicate,
   SessionSourceValidation,
@@ -117,8 +117,10 @@ export function compactManualTranscript(
         current,
         (stage, publication) => {
           context.admit(stage, publication);
-          // The target transaction pins same-store predicates; foreign owners can change at a host grant.
-          source.assertForeign();
+          if (stage === "commit") {
+            // The target transaction pins same-store predicates; check foreign owners at commit.
+            source.assertForeign();
+          }
         },
         candidate,
       );

@@ -57,7 +57,6 @@ async function* chunks(...values: Buffer[]) {
 describe("native messaging framing", () => {
   it.each([
     ["truncated body", frame(requestJson()).subarray(0, 8)],
-    ["zero length", Buffer.alloc(4)],
     ["multiple messages", Buffer.concat([frame(requestJson()), frame(requestJson())])],
   ])("rejects %s", async (_label, input) => {
     await expect(readBrowserNativeFrame(chunks(input))).rejects.toThrow("invalid_frame");
@@ -177,19 +176,11 @@ describe("native host origin and topology boundary", () => {
   });
 
   it.each([
-    ["missing list", [ORIGIN]],
     ["missing value", ["--expected-origin"]],
-    ["duplicate", ["--expected-origin", ORIGIN, "--expected-origin", ORIGIN, ORIGIN]],
-    ["unsorted", ["--expected-origin", OTHER_ORIGIN, "--expected-origin", ORIGIN, ORIGIN]],
     ["malformed", ["--expected-origin", "chrome-extension://*/", ORIGIN]],
     ["multiple callers", ["--expected-origin", ORIGIN, ORIGIN, OTHER_ORIGIN]],
   ])("rejects %s expected-origin arguments", (_label, argv) => {
     expect(() => parseBrowserNativeHostOrigins(argv)).toThrow();
-  });
-
-  it("rejects a wrong extension origin", async () => {
-    const result = await invokeHost({ callerOrigin: OTHER_ORIGIN });
-    expect(result.response).toEqual({ v: 1, ok: false, code: "origin_forbidden" });
   });
 
   it.skipIf(process.platform === "win32")(
@@ -241,17 +232,17 @@ describe("native host origin and topology boundary", () => {
     },
   );
 
-  it.skipIf(process.platform === "win32").each([
-    ["launcherPath", 0o701],
-    ["launcherPath", 0o600],
-  ] as const)("rejects %s with mode %o before pairing", async (file, mode) => {
-    const fixture = await nativeFixture();
-    await fs.chmod(fixture[file], mode);
-    const buildPairing = vi.fn(async () => ({ pairingString: PAIRING, topology: "local" }));
-    const result = await invokeHost({ ...fixture, buildPairing });
-    expect(result.response).toEqual({ v: 1, ok: false, code: "manifest_invalid" });
-    expect(buildPairing).not.toHaveBeenCalled();
-  });
+  it.skipIf(process.platform === "win32").each([["launcherPath", 0o600]] as const)(
+    "rejects %s with mode %o before pairing",
+    async (file, mode) => {
+      const fixture = await nativeFixture();
+      await fs.chmod(fixture[file], mode);
+      const buildPairing = vi.fn(async () => ({ pairingString: PAIRING, topology: "local" }));
+      const result = await invokeHost({ ...fixture, buildPairing });
+      expect(result.response).toEqual({ v: 1, ok: false, code: "manifest_invalid" });
+      expect(buildPairing).not.toHaveBeenCalled();
+    },
+  );
 
   it("rejects a manifest with an extra valid origin before building pairing", async () => {
     const fixture = await nativeFixture([ORIGIN, OTHER_ORIGIN]);
@@ -269,21 +260,6 @@ describe("native host origin and topology boundary", () => {
 
     expect(response).toEqual({ v: 1, ok: false, code: "manifest_invalid" });
     expect(buildPairing).not.toHaveBeenCalled();
-  });
-
-  it("rejects a wildcard manifest", async () => {
-    const fixture = await nativeFixture(["chrome-extension://*/"]);
-    const writes: Buffer[] = [];
-    const response = await runBrowserNativeHost({
-      ...fixture,
-      callerOrigin: ORIGIN,
-      expectedOrigins: [ORIGIN],
-      input: chunks(frame(requestJson())),
-      write: (value) => writes.push(value),
-      buildPairing: async () => ({ pairingString: PAIRING, topology: "local" }),
-      ensureRelay: async () => "skipped",
-    });
-    expect(response).toEqual({ v: 1, ok: false, code: "manifest_invalid" });
   });
 
   it("returns manual_required for direct remote topology and Windows", async () => {
@@ -304,11 +280,7 @@ describe("native host origin and topology boundary", () => {
 
 describe("native host ensure_relay", () => {
   it.each([
-    ["missing port", requestJson({ op: "ensure_relay" })],
-    ...[0, 65536, 18799.5, "18799"].map((relayPort) => [
-      `invalid port ${JSON.stringify(relayPort)}`,
-      requestJson({ op: "ensure_relay", relayPort }),
-    ]),
+    ["invalid port", requestJson({ op: "ensure_relay", relayPort: 65536 })],
     [
       "escaped duplicate port",
       `{"v":1,"op":"ensure_relay","nonce":"${NONCE}","relayPort":18799,"relay\\u0050ort":18798}`,

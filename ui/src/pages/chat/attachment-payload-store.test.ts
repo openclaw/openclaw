@@ -1,12 +1,14 @@
 /* @vitest-environment jsdom */
 import { createHash } from "node:crypto";
-import { render } from "lit";
+import { createComponent } from "solid-js";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ChatAttachment, ChatQueueItem } from "../../lib/chat/chat-types.ts";
 import { normalizeMessage } from "../../lib/chat/message-normalizer.ts";
 import * as payloadStore from "../../lib/chat/outbox-payload-store.runtime.ts";
 import * as videoPosters from "../../lib/media/video-poster.ts";
+import { mountSolid } from "../../test-helpers/mount-solid.ts";
+import { flush } from "../../test-helpers/solid-settle.ts";
 import { createStorageMock } from "../../test-helpers/storage.ts";
 import {
   cloneChatAttachmentsForIndependentOwner,
@@ -18,7 +20,7 @@ import {
   replaceChatAttachmentsFromEditor,
 } from "./attachment-payload-store.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
-import { renderAssistantAttachments } from "./components/chat-message-attachments.ts";
+import { AssistantAttachments } from "./components/chat-message-attachments-solid.tsx";
 import { projectMessageMedia } from "./components/chat-message-media.ts";
 import { hydrateDurableComposerAttachments } from "./durable-composer-persistence.ts";
 import { installOutboxBrowserStorage } from "./outbox-browser.test-support.ts";
@@ -94,7 +96,12 @@ function card(attachment: ChatAttachment) {
   const { attachments } = projectMessageMedia(message, normalizeMessage(message).content);
   const container = document.body.appendChild(document.createElement("div"));
   const onOpen = vi.fn();
-  render(renderAssistantAttachments(attachments, {}, onOpen), container);
+  mountSolid(
+    () =>
+      createComponent(AssistantAttachments, { attachments, options: {}, onOpenSidebar: onOpen }),
+    { container },
+  );
+  flush();
   return {
     container,
     onOpen,

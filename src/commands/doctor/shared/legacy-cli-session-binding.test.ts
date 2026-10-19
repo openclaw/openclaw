@@ -15,6 +15,28 @@ import { cleanupSessionStateForTest } from "../../../test-utils/session-state-cl
 import { maybeRepairCodexSessionRoutes } from "./codex-route-session-repair.js";
 
 const states: OpenClawTestState[] = [];
+async function fixture(cfg: OpenClawConfig = { plugins: { enabled: false } }) {
+  const state = await createOpenClawTestState({ layout: "home", prefix: "legacy-cli-binding-" });
+  states.push(state);
+  const scope = (key: string) => ({
+    storePath: path.join(state.sessionsDir(), "sessions.json"),
+    sessionKey: `agent:main:${key}`,
+    env: state.env,
+  });
+  return {
+    read: (key: string) => loadSessionEntryReadOnly(scope(key)),
+    write: (key: string, entry: SessionEntry) => replaceSessionEntry(scope(key), entry),
+    repair: (shouldRepair = true) =>
+      maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair }),
+    reopen: () => cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root }),
+  };
+}
+function reuse(entry: SessionEntry | undefined) {
+  return resolveCliSessionReuse({
+    binding: getCliSessionBinding(entry, " CLAUDE-CLI "),
+    authEpochVersion: 4,
+  });
+}
 afterEach(async () => {
   for (const state of states.splice(0)) {
     await state.cleanup();
@@ -23,57 +45,36 @@ afterEach(async () => {
 
 describe("legacy CLI session binding migration", () => {
   it("migrates a legacy-only session without changing resume selection", async () => {
-    const state = await createOpenClawTestState({
-      layout: "home",
-      prefix: "legacy-cli-binding-",
-    });
-    states.push(state);
-    const cfg: OpenClawConfig = {
+    const { read, write, repair, reopen } = await fixture({
       plugins: { enabled: false },
       agents: { entries: { main: {} }, defaults: { model: "openai/current-model" } },
-    };
-    const scope = {
-      storePath: path.join(state.sessionsDir(), "sessions.json"),
-      sessionKey: "agent:main:legacy-binding",
-      env: state.env,
-    };
-    await replaceSessionEntry(scope, {
+    });
+    await write("legacy-binding", {
       sessionId: "local-binding-session",
       updatedAt: 1,
       claudeCliSessionId: "Remote-MixedCase-Session/Alpha",
     });
-    const before = loadSessionEntryReadOnly(scope);
+    const before = read("legacy-binding");
 
-    await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: false });
-    expect(loadSessionEntryReadOnly(scope)).toEqual(before);
-    await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true });
+    await repair(false);
+    expect(read("legacy-binding")).toEqual(before);
+    await repair();
 
-    const saved = loadSessionEntryReadOnly(scope);
+    const saved = read("legacy-binding");
     expect(saved?.cliSessionBindings?.["claude-cli"]).toEqual({
       sessionId: "Remote-MixedCase-Session/Alpha",
     });
     expect(saved).not.toHaveProperty("claudeCliSessionId");
-    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-    const reopened = loadSessionEntryReadOnly(scope);
-    expect(
-      resolveCliSessionReuse({
-        binding: getCliSessionBinding(reopened, " CLAUDE-CLI "),
-        authEpochVersion: 4,
-      }),
-    ).toEqual({ mode: "reuse", sessionId: "Remote-MixedCase-Session/Alpha" });
+    await reopen();
+    const reopened = read("legacy-binding");
+    expect(reuse(reopened)).toEqual({ mode: "reuse", sessionId: "Remote-MixedCase-Session/Alpha" });
     expect(reopened?.sessionId).toBe("local-binding-session");
-    expect(
-      (await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true }))
-        .repairedSessions,
-    ).toBe(0);
-    expect(loadSessionEntryReadOnly(scope)).toEqual(reopened);
+    expect((await repair()).repairedSessions).toBe(0);
+    expect(read("legacy-binding")).toEqual(reopened);
   });
 
   it("preserves canonical metadata and provider-map precedence across reopen", async () => {
-    const state = await createOpenClawTestState({ layout: "home", prefix: "binding-precedence-" });
-    states.push(state);
-    const cfg: OpenClawConfig = { plugins: { enabled: false } };
-    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const { read, write, repair, reopen } = await fixture();
     const canonical: CliSessionBinding = {
       sessionId: "Canonical-Conversation",
       resumeCheckpointId: "Checkpoint-A",
@@ -95,31 +96,25 @@ describe("legacy CLI session binding migration", () => {
         userTurnDisposition: "omitted",
       },
     };
-    const canonicalScope = { storePath, env: state.env, sessionKey: "agent:main:canonical" };
-    const mapScope = { storePath, env: state.env, sessionKey: "agent:main:map" };
-    await replaceSessionEntry(canonicalScope, {
+    await write("canonical", {
       sessionId: "canonical-local",
       updatedAt: 1,
       claudeCliSessionId: "Obsolete-Conversation",
       cliSessionIds: { "claude-cli": "Map-Conversation" },
       cliSessionBindings: { "claude-cli": canonical, "other-cli": { sessionId: "Other-ID" } },
     });
-    await replaceSessionEntry(mapScope, {
+    await write("map", {
       sessionId: "map-local",
       updatedAt: 2,
       claudeCliSessionId: "Obsolete-Map-Conversation",
       cliSessionIds: { "claude-cli": "Map-Conversation", "other-cli": "Other-Map-ID" },
     });
 
-    const repaired = await maybeRepairCodexSessionRoutes({
-      cfg,
-      env: state.env,
-      shouldRepair: true,
-    });
+    const repaired = await repair();
     expect(repaired.repairedSessions).toBe(2);
-    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-    const savedCanonical = loadSessionEntryReadOnly(canonicalScope);
-    const savedMap = loadSessionEntryReadOnly(mapScope);
+    await reopen();
+    const savedCanonical = read("canonical");
+    const savedMap = read("map");
     expect(savedCanonical?.cliSessionBindings).toEqual({
       "claude-cli": canonical,
       "other-cli": { sessionId: "Other-ID" },
@@ -135,10 +130,7 @@ describe("legacy CLI session binding migration", () => {
   });
 
   it("migrates safe rows while preserving unresolved bindings and locked ownership", async () => {
-    const state = await createOpenClawTestState({ layout: "home", prefix: "binding-mixed-" });
-    states.push(state);
-    const cfg: OpenClawConfig = { plugins: { enabled: false } };
-    const storePath = path.join(state.sessionsDir(), "sessions.json");
+    const { read, write, repair, reopen } = await fixture();
     const malformed: SessionEntry = { sessionId: "malformed-local", updatedAt: 4 };
     Object.assign(malformed, { claudeCliSessionId: 17 });
     const rows: Record<string, SessionEntry> = {
@@ -166,32 +158,23 @@ describe("legacy CLI session binding migration", () => {
         claudeCliSessionId: "Locked-Conversation",
       },
     };
-    const scope = (key: string) => ({ storePath, env: state.env, sessionKey: `agent:main:${key}` });
     for (const [key, entry] of Object.entries(rows)) {
-      await replaceSessionEntry(scope(key), entry);
+      await write(key, entry);
     }
-    const before = Object.fromEntries(
-      Object.keys(rows).map((key) => [key, loadSessionEntryReadOnly(scope(key))]),
-    );
-    const preview = await maybeRepairCodexSessionRoutes({
-      cfg,
-      env: state.env,
-      shouldRepair: false,
-    });
+    const before = Object.fromEntries(Object.keys(rows).map((key) => [key, read(key)]));
+    const preview = await repair(false);
     expect(preview.warnings.join("\n")).toContain("manual reconciliation");
-    expect(loadSessionEntryReadOnly(scope("safe"))).toEqual(before.safe);
+    expect(read("safe")).toEqual(before.safe);
 
-    const repair = await maybeRepairCodexSessionRoutes({ cfg, env: state.env, shouldRepair: true });
-    expect(repair.repairedSessions).toBe(2);
-    expect(repair.warnings.join("\n")).toContain("agent:main:ambiguous");
-    expect(repair.warnings.join("\n")).toContain("agent:main:empty");
-    expect(repair.warnings.join("\n")).toContain("agent:main:malformed");
-    await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-    expect(
-      getCliSessionBinding(loadSessionEntryReadOnly(scope("safe")), "claude-cli")?.sessionId,
-    ).toBe("Safe-MixedCase/ID");
-    expect(loadSessionEntryReadOnly(scope("safe"))).not.toHaveProperty("claudeCliSessionId");
-    const locked = loadSessionEntryReadOnly(scope("locked"));
+    const repaired = await repair();
+    expect(repaired.repairedSessions).toBe(2);
+    for (const key of ["ambiguous", "empty", "malformed"]) {
+      expect(repaired.warnings.join("\n")).toContain(`agent:main:${key}`);
+    }
+    await reopen();
+    expect(getCliSessionBinding(read("safe"), "claude-cli")?.sessionId).toBe("Safe-MixedCase/ID");
+    expect(read("safe")).not.toHaveProperty("claudeCliSessionId");
+    const locked = read("locked");
     expect(locked).toMatchObject({
       sessionId: "locked-local",
       updatedAt: 5,
@@ -201,21 +184,12 @@ describe("legacy CLI session binding migration", () => {
       model: "retained-model",
     });
     expect(locked).not.toHaveProperty("claudeCliSessionId");
-    expect(
-      resolveCliSessionReuse({
-        binding: getCliSessionBinding(locked, "claude-cli"),
-        authEpochVersion: 4,
-      }),
-    ).toEqual({ mode: "reuse", sessionId: "Locked-Conversation" });
+    expect(reuse(locked)).toEqual({ mode: "reuse", sessionId: "Locked-Conversation" });
     for (const key of ["ambiguous", "empty", "malformed"]) {
-      expect(loadSessionEntryReadOnly(scope(key))).toEqual(before[key]);
+      expect(read(key)).toEqual(before[key]);
     }
-    const repeated = await maybeRepairCodexSessionRoutes({
-      cfg,
-      env: state.env,
-      shouldRepair: true,
-    });
+    const repeated = await repair();
     expect(repeated.repairedSessions).toBe(0);
-    expect(repeated.warnings).toEqual(repair.warnings);
+    expect(repeated.warnings).toEqual(repaired.warnings);
   });
 });

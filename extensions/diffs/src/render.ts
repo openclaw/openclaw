@@ -24,10 +24,10 @@ const MAX_PATCH_TOTAL_LINES = 120_000;
 const VIEWER_LOADER_DOCUMENT_PATH = "../../assets/viewer.js";
 const LANGUAGE_PACK_VIEWER_LOADER_DOCUMENT_PATH = "../../../diffs-language-pack/assets/viewer.js";
 
-export class DiffRenderInputError extends Error {
+export class DiffInputError extends Error {
   constructor(message: string) {
     super(message);
-    this.name = "DiffRenderInputError";
+    this.name = "ToolInputError";
   }
 }
 
@@ -520,12 +520,10 @@ async function renderPatchDiff(
   const languagePackAvailable = options.languagePackAvailable === true;
   const files = parsePatchFiles(input.patch).flatMap((entry) => entry.files ?? []);
   if (files.length === 0) {
-    throw new DiffRenderInputError("Patch input did not contain any file diffs.");
+    throw new DiffInputError("Patch input did not contain any file diffs.");
   }
   if (files.length > MAX_PATCH_FILE_COUNT) {
-    throw new DiffRenderInputError(
-      `Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`,
-    );
+    throw new DiffInputError(`Patch input contains too many files (max ${MAX_PATCH_FILE_COUNT}).`);
   }
   const totalLines = files.reduce((sum, fileDiff) => {
     const splitLines = Number.isFinite(fileDiff.splitLineCount) ? fileDiff.splitLineCount : 0;
@@ -533,7 +531,7 @@ async function renderPatchDiff(
     return sum + Math.max(splitLines, unifiedLines, 0);
   }, 0);
   if (totalLines > MAX_PATCH_TOTAL_LINES) {
-    throw new DiffRenderInputError(
+    throw new DiffInputError(
       `Patch input is too large to render (max ${MAX_PATCH_TOTAL_LINES} lines).`,
     );
   }

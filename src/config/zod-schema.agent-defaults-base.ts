@@ -44,7 +44,7 @@ export const AgentDefaultsBaseSchema = z.strictObject({
   params: z.record(z.string(), z.unknown()).optional(),
   model: AgentModelSchema.optional(),
   modelSelectionScope: z.enum(["session", "agent", "global"]).optional(),
-  utilityModel: z.string().optional(),
+  utilityModel: AgentModelSchema.optional(),
   decisionModel: DecisionModelSchema.optional(),
   imageModel: AgentToolModelSchema.optional(),
   mediaModels: z

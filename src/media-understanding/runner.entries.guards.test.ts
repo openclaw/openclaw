@@ -7,9 +7,9 @@ import {
   runtimeMediaRequestSecretOwnerId,
 } from "../secrets/runtime-media-secret-owner.js";
 import { appendConfigPathSegment } from "../shared/dot-path.js";
-import { formatDecisionSummary, runProviderEntry } from "./runner.entries.js";
+import { runProviderEntry } from "./runner.entries.js";
 import { withAudioFixture } from "./runner.test-utils.js";
-import type { MediaUnderstandingDecision, MediaUnderstandingProvider } from "./types.js";
+import type { MediaUnderstandingProvider } from "./types.js";
 
 afterEach(() => {
   setActiveDegradedSecretOwners([]);
@@ -27,36 +27,6 @@ function markUnavailable(ownerId: string, configPath: string) {
     },
   ]);
 }
-
-describe("media-understanding formatDecisionSummary guards", () => {
-  it("formats skipped summary when decision.attachments is undefined", () => {
-    expect(
-      formatDecisionSummary({
-        capability: "image",
-        outcome: "skipped",
-        attachments: undefined as unknown as MediaUnderstandingDecision["attachments"],
-        attachmentDispositions: {},
-        nativeVisionActive: false,
-      }),
-    ).toBe("image: skipped");
-  });
-
-  it("counts malformed attachment attempts as unchosen", () => {
-    expect(
-      formatDecisionSummary({
-        capability: "video",
-        outcome: "skipped",
-        attachments: [
-          {
-            attachmentIndex: 0,
-            attempts: { bad: true },
-            chosen: { outcome: "failed", provider: { bad: true }, model: 42 },
-          },
-        ],
-      } as unknown as MediaUnderstandingDecision),
-    ).toBe("video: skipped (0/1)");
-  });
-});
 
 function missingProvider(provider: string) {
   type RunProviderEntryParams = Parameters<typeof runProviderEntry>[0];

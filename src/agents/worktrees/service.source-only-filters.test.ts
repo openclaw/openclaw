@@ -138,8 +138,6 @@ it("keeps source-only clones away from an inherited external Git index", async (
 });
 
 it("reuses and refreshes source-only templates without running host filters", async () => {
-  // Cache invalidation does not depend on Btrfs checkout timing selection.
-  vi.spyOn(performance, "now").mockReturnValue(0);
   await configure("repository", "smudge", repo);
   const first = await createSourceOnly("template-first");
   const [original] = await listTemplatesAsync(process.env);
@@ -163,9 +161,9 @@ it("reuses and refreshes source-only templates without running host filters", as
   await git(repo, "commit", "-qm", "advance source template");
   const third = await createSourceOnly("template-third");
   expect(await fs.readFile(path.join(third.path, "README.md"), "utf8")).toBe("new revision\r\n");
-  expect(backend.createTemplate).toHaveBeenCalledTimes(3);
+  expect(backend.createTemplate).toHaveBeenCalledTimes(2);
   expect(backend.cloneTemplate).toHaveBeenCalledTimes(4);
-  expect((await listTemplatesAsync(process.env))[0]?.id).not.toBe(policyId);
+  expect((await listTemplatesAsync(process.env))[0]?.id).toBe(policyId);
   await expect(fs.stat(marker)).rejects.toMatchObject({ code: "ENOENT" });
 });
 

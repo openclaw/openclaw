@@ -41,8 +41,7 @@ export async function resolveSessionStableReplyMode(params: {
   metadataSnapshot?: PluginMetadataSnapshot;
 }): Promise<SourceReplyDeliveryMode> {
   const { cfg, ctx, sessionEntry } = params;
-  const chatType =
-    normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry?.chatType) ?? undefined;
+  const chatType = normalizeChatType(ctx.ChatType) ?? normalizeChatType(sessionEntry?.chatType);
   // A targetless internal turn uses the session's established reply policy;
   // changing that policy on a wake would invalidate its reusable CLI binding.
   const stableReplyContext = {

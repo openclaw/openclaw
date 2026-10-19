@@ -1,16 +1,21 @@
-import type { CacheRetention, Context, Model } from "@openclaw/llm-core";
+import type { CacheRetention, Model } from "@openclaw/llm-core";
+import {
+  CHARS_PER_TOKEN_ESTIMATE,
+  estimateStringChars,
+} from "@openclaw/normalization-core/cjk-chars";
 import { asPositiveFiniteNumber } from "@openclaw/normalization-core/number-coercion";
 import { getAiTransportHost } from "../host.js";
 import { convertMessages, hasToolCallHistory } from "../openai-completions-messages.js";
 import type { OpenAICompletionsOptions } from "../provider-options.js";
+import {
+  PROVIDER_MODEL_INPUT,
+  type ProviderContext,
+  type ProviderModel,
+} from "../provider-types.js";
 import { resolveCacheRetention } from "../providers/cache-retention.js";
 import { prepareOpenAIFunctionTool } from "../providers/openai-function-tool.js";
 import { resolveOpenAIPromptCacheParams } from "../providers/openai-prompt-cache.js";
-import {
-  isOpenAIGpt54MiniModel,
-  isOpenAIGpt55Model,
-  isOpenAIGpt56Model,
-} from "../providers/openai-reasoning-effort.js";
+import { applyOpenAICompletionsToolReasoning } from "../providers/openai-reasoning-effort.js";
 import {
   resolveOpenAIRequestReasoning,
   resolveOpenAISimpleReasoningEffort,
@@ -26,6 +31,7 @@ import {
 } from "../providers/openai-tool-projection.js";
 import { normalizeOpenAIStrictToolParameters } from "../providers/openai-tool-schema.js";
 import { withPreparedToolSchemaNormalization } from "../providers/tool-schema-normalization-cache.js";
+import { normalizeToolSchema } from "../providers/tool-schema-normalization.js";
 import { shortHash } from "../utils/hash.js";
 import { resolveProviderEndpoint } from "./host-policy.js";
 import { resolveMaxTokensParam } from "./model-max-tokens-params.js";
@@ -59,11 +65,11 @@ import {
   sortTransportToolsByName,
   type OpenAIModeModel,
 } from "./openai-transport-shared.js";
-import {
-  CHARS_PER_TOKEN_ESTIMATE,
-  estimateStringChars,
-  supportsModelTools,
-} from "./transport-utils.js";
+import { supportsModelTools } from "./transport-utils.js";
+
+type OpenAIThinkingProvenanceOptions = OpenAICompletionsOptions & {
+  openclawThinkingExplicit?: boolean;
+};
 
 function isKnownOpenAICompletionsEndpoint(model: Pick<Model, "baseUrl">): boolean {
   if (!model.baseUrl.trim() || isNativeOpenAIEndpoint(model)) {
@@ -93,6 +99,8 @@ function resolveOpenAICompletionsMaxTokens(
 
 const OPENAI_COMPLETIONS_INPUT_TOKEN_SAFETY_MARGIN = 1.25;
 const OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE = 8_000;
+// Video is projected into frames by vision servers; base64 size is not a token count.
+const OPENAI_COMPLETIONS_VIDEO_CHAR_ESTIMATE = 96_000;
 const MIN_USEFUL_OUTPUT_TOKENS = 16;
 
 function estimateJsonChars(value: unknown, fallback: number): number {
@@ -161,6 +169,10 @@ function estimateOpenAICompletionsContentChars(value: unknown): number {
       adjustedChars += OPENAI_COMPLETIONS_IMAGE_CHAR_ESTIMATE;
       continue;
     }
+    if (record.type === "video_url" || record.type === "input_video") {
+      adjustedChars += OPENAI_COMPLETIONS_VIDEO_CHAR_ESTIMATE;
+      continue;
+    }
     const text = record.text;
     if (typeof text === "string") {
       adjustedChars += estimateStringChars(text);
@@ -172,7 +184,7 @@ function estimateOpenAICompletionsContentChars(value: unknown): number {
 }
 
 function convertTools(
-  tools: NonNullable<Context["tools"]>,
+  tools: NonNullable<ProviderContext["tools"]>,
   compat: ResolvedOpenAICompletionsCompat,
   model: OpenAIModeModel,
   mode: "direct" | "managed",
@@ -199,12 +211,15 @@ function convertTools(
     return {
       projection,
       tools: sortTransportToolsByName(projection.tools).map((tool) => {
+        const parameters = compat.requiresTypedUnionBranches
+          ? normalizeToolSchema(tool.parameters, "moonshot")
+          : tool.parameters;
         return prepareOpenAIFunctionTool(
           tool.name,
           tool.description,
           mode === "direct"
-            ? tool.parameters
-            : normalizeOpenAIStrictToolParameters(tool.parameters, strict === true, model.compat),
+            ? parameters
+            : normalizeOpenAIStrictToolParameters(parameters, strict === true, model.compat),
           strict,
         ).completions;
       }),
@@ -215,7 +230,7 @@ function convertTools(
 
 export function buildOpenAICompletionsParams(
   model: OpenAIModeModel,
-  context: Context,
+  context: ProviderContext,
   options: OpenAICompletionsOptions | undefined,
 ) {
   return buildOpenAICompletionsRequest(model, context, options, { mode: "managed" });
@@ -271,8 +286,8 @@ export function resolveCompletionsContextOutputBudget(
 
 export function buildOpenAICompletionsRequest(
   model: OpenAIModeModel,
-  context: Context,
-  options: OpenAICompletionsOptions | undefined,
+  context: ProviderContext,
+  options: OpenAIThinkingProvenanceOptions | undefined,
   policy: CompletionsRequestPolicy,
 ): CompletionsRequest {
   let contextOutputCap: number | undefined;
@@ -298,10 +313,20 @@ export function buildOpenAICompletionsRequest(
     !(endpointClass === "default" && ["modelstudio", "dashscope", "qwen"].includes(model.provider));
   const cacheOptOutIndexes = new Set<number>();
   const supportsTools = policy.mode === "direct" || supportsModelTools(model);
+  const converted =
+    supportsTools && context.tools
+      ? convertTools(context.tools, compat, model, policy.mode)
+      : undefined;
   // The converter needs intact boundaries for Runtime relocation or cache markers.
-  const convertedMessages = convertMessages(model as never, context, compat as never, {
+  const providerModel: ProviderModel = {
+    ...model,
+    input: options?.[PROVIDER_MODEL_INPUT] ?? model.input,
+    compat,
+  };
+  const convertedMessages = convertMessages(providerModel, context, compat, {
     cacheOptOutIndexes,
     supportsTools,
+    declaredToolNames: new Set(converted?.projection.tools.map((tool) => tool.name)),
     preserveSystemPromptCacheBoundary:
       cacheControl !== undefined && !managedCompat?.requiresStringContent,
   });
@@ -368,8 +393,7 @@ export function buildOpenAICompletionsRequest(
   }
   let directToolProjection: ReturnType<typeof projectOpenAITools> | undefined;
   if (supportsTools) {
-    if (context.tools) {
-      const converted = convertTools(context.tools, compat, model, policy.mode);
+    if (converted) {
       if (policy.mode === "direct") {
         directToolProjection = converted.projection;
       }
@@ -419,6 +443,8 @@ export function buildOpenAICompletionsRequest(
       cacheControl ?? null,
       cacheOptOutIndexes,
       markTools,
+      true,
+      compat.cacheControlSystemOnly,
     );
   }
   if (policy.mode === "direct" && options?.toolChoice) {
@@ -448,11 +474,14 @@ export function buildOpenAICompletionsRequest(
               simpleReasoning,
             )) ??
         (usesBinaryOpenRouterThinking ? undefined : "high"));
-  const reasoning = resolveOpenAIRequestReasoning(
-    model,
-    requestedEffort,
-    compat.reasoningEffortForOff,
-  );
+  // Keep raw selection separate from the managed effort fallback.
+  const thinkingExplicit =
+    options?.openclawThinkingExplicit ??
+    (options?.reasoningEffort !== undefined || options?.reasoning !== undefined);
+  const reasoning = {
+    ...resolveOpenAIRequestReasoning(model, requestedEffort, compat.reasoningEffortForOff),
+    thinkingExplicit,
+  };
   const { effort, thinkingEnabled } = reasoning;
   {
     const maxTokenBudget =
@@ -541,16 +570,11 @@ export function buildOpenAICompletionsRequest(
       cacheOptOutIndexes,
       markTools,
       !managedCompat?.requiresStringContent,
+      compat.cacheControlSystemOnly,
     );
   }
   if (params.tools?.length && isKnownOpenAICompletionsEndpoint(model)) {
-    // Native Chat Completions rejects tools with enabled GPT-5.6 reasoning,
-    // and rejects the effort field entirely for GPT-5.4 Mini and GPT-5.5 tools.
-    if (isOpenAIGpt56Model(model)) {
-      params.reasoning_effort = "none";
-    } else if (isOpenAIGpt54MiniModel(model) || isOpenAIGpt55Model(model)) {
-      delete params.reasoning_effort;
-    }
+    applyOpenAICompletionsToolReasoning(params, model);
   }
   if (contextOutputCap !== undefined) {
     contextOutputBudgets.set(params, {

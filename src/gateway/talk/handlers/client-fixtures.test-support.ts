@@ -17,7 +17,6 @@ export function createTrustedInternalChatSendFixture(chatSend: (...args: unknown
       }) => Promise<void | (() => void)>;
     },
   ) => {
-    request.context.chatAbortControllers ??= new Map();
     let registration: Promise<void | (() => void)> | undefined;
     const result = chatSend(
       {
@@ -117,7 +116,6 @@ export function createDelegatedBrowserProviderFixture(
             .filter((candidate) => !filter || filter(candidate))
             .map((candidate) => candidate.connId),
         ),
-      chatAbortControllers: new Map(),
       logGateway: { warn: vi.fn() },
       broadcastToConnIds: vi.fn(),
     },

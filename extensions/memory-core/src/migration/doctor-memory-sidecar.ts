@@ -178,7 +178,12 @@ async function collectLegacyMemorySidecarSources(params: {
         }
       }
     }
-  } catch {}
+  } catch (error) {
+    // A missing directory means no legacy retry sidecars have been written.
+    if (readLegacyObjectRecord(error)?.code !== "ENOENT") {
+      throw error;
+    }
+  }
 
   const migrationEnv = { ...params.env, OPENCLAW_STATE_DIR: params.stateDir };
   const sources: LegacyMemorySidecarSource[] = [];
@@ -332,7 +337,11 @@ async function preserveLegacyMemorySidecarRetryPath(params: {
     for (const targetPath of copied) {
       try {
         await fs.rm(targetPath, { force: true });
-      } catch {}
+      } catch (cleanupError) {
+        params.warnings.push(
+          `Failed removing incomplete Memory Core legacy sidecar retry copy ${targetPath}: ${String(cleanupError)}`,
+        );
+      }
     }
     params.warnings.push(
       `Failed copying Memory Core legacy memory index sidecar retry path ${params.source.legacyPath} -> ${retryPath}: ${String(err)}`,
@@ -492,6 +501,11 @@ async function migrateLegacyMemorySidecarSource(params: {
 export const memorySidecarStateMigration: PluginDoctorStateMigration = {
   id: "memory-core-legacy-sidecar-index-to-agent-sqlite",
   label: "Memory Core legacy memory index sidecar",
+  sqliteOnly: {
+    family: "agent",
+    postgresNote:
+      "The legacy memory sidecar is retained unchanged. Normal reindexing rebuilds the PostgreSQL memory index from authoritative memory sources and may re-embed them.",
+  },
   async collectBackupResources(params) {
     const sources = await collectLegacyMemorySidecarSources(params);
     const resources: Array<{ path: string; kind: "sqlite" | "file" }> = [];

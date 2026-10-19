@@ -907,7 +907,7 @@ private actor TestChatTransportState {
     }
 }
 
-private final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
+final class TestChatTransport: @unchecked Sendable, OpenClawChatTransport {
     private let state = TestChatTransportState()
     private let historyResponses: [OpenClawChatHistoryPayload]
     private let sessionsResponses: [OpenClawChatSessionsListResponse]
@@ -1435,7 +1435,7 @@ private final class TestChatTransport: @unchecked Sendable, OpenClawChatTranspor
         self.continuation.yield(evt)
     }
 
-    func waitForState(_ isSatisfied: @escaping @Sendable (isolated TestChatTransportState) -> Bool) async {
+    fileprivate func waitForState(_ isSatisfied: @escaping @Sendable (isolated TestChatTransportState) -> Bool) async {
         await self.state.wait(until: isSatisfied)
     }
 

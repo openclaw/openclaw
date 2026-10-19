@@ -1,13 +1,16 @@
-import { nothing, render } from "lit";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { page, userEvent } from "vitest/browser";
-import { createComposerContainer, createComposerProps } from "./chat-composer.test-support.ts";
-import "@awesome.me/webawesome/dist/styles/themes/default.css";
+import {
+  createComposerContainer,
+  createComposerProps,
+  disposeComposer,
+  renderComposerInto,
+} from "./chat-composer.test-support.ts";
 import "../../styles.css";
 import "../../styles/chat.ts";
 import "../../styles/chat/composer.css";
 import "../../styles/chat/composer-progress.css";
-import { renderChatComposer } from "./components/chat-composer-render.test-support.ts";
+
 import { resetChatComposerState } from "./components/chat-composer.tsx";
 import { installChatComposerPickerDismissal } from "./components/chat-picker-overlay.ts";
 
@@ -23,7 +26,7 @@ beforeEach(() => {
 });
 
 afterEach(async () => {
-  render(nothing, container);
+  disposeComposer(container);
   container.remove();
   resetChatComposerState();
   releaseDismissal();
@@ -32,30 +35,28 @@ afterEach(async () => {
 });
 
 function drawComposer(attachment = false, goal = false) {
-  render(
-    renderChatComposer(
-      createComposerProps({
-        goalDraftMode: goal ? { action: "start" } : null,
-        attachments: attachment
-          ? [{ id: "context-proof", mimeType: "text/plain", fileName: "proof.txt" }]
-          : [],
-        selectedSession: {
-          key: "main",
-          kind: "direct",
-          updatedAt: 1,
-          totalTokens: 20_300,
-          contextTokens: 200_000,
-          inputTokens: 19_600,
-          outputTokens: 126,
-        },
-      }),
-    ),
+  renderComposerInto(
     container,
+    createComposerProps({
+      goalDraftMode: goal ? { action: "start" } : null,
+      attachments: attachment
+        ? [{ id: "context-proof", mimeType: "text/plain", fileName: "proof.txt" }]
+        : [],
+      selectedSession: {
+        key: "main",
+        kind: "direct",
+        updatedAt: 1,
+        totalTokens: 20_300,
+        contextTokens: 200_000,
+        inputTokens: 19_600,
+        outputTokens: 126,
+      },
+    }),
   );
   return {
     composer: container.querySelector<HTMLElement>(".agent-chat__input")!,
     trigger: container.querySelector<HTMLElement>(".context-ring")!,
-    popover: container.querySelector<HTMLElement>(".context-usage__popover")!,
+    popover: container.querySelector<HTMLElement>(".context-usage [data-anchored-overlay]")!,
   };
 }
 
@@ -90,7 +91,13 @@ describe("context usage popup geometry", () => {
       "Output",
       "126",
     ]);
-    await expect.poll(() => readout.every(isPainted)).toBe(true);
+    const readoutPainted = () => {
+      const current = [
+        ...popover.querySelectorAll<HTMLElement>(".context-usage__title, strong, dt, dd"),
+      ];
+      return current.length === readout.length && current.every(isPainted);
+    };
+    await expect.poll(readoutPainted).toBe(true);
     const box = popover.getBoundingClientRect();
     expect(box.left).toBeGreaterThanOrEqual(0);
     expect(box.right).toBeLessThanOrEqual(1280);
@@ -99,7 +106,7 @@ describe("context usage popup geometry", () => {
     await expect.poll(() => popover.checkVisibility()).toBe(false);
     expect(document.activeElement).toBe(trigger);
     await page.elementLocator(trigger).click();
-    await expect.poll(() => readout.every(isPainted)).toBe(true);
+    await expect.poll(readoutPainted).toBe(true);
     await page
       .elementLocator(container)
       .click({ position: { x: container.clientWidth - 2, y: 2 } });

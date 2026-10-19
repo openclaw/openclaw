@@ -12,7 +12,7 @@ import type {
 import type {
   PluginBlobEntry,
   PluginBlobEntryInfo,
-  PluginBlobStore,
+  PluginBlobStoreWithReceipts,
 } from "openclaw/plugin-sdk/plugin-state-runtime";
 import { createTestPluginApi } from "openclaw/plugin-sdk/plugin-test-api";
 import { asOptionalRecord } from "openclaw/plugin-sdk/string-coerce-runtime";
@@ -525,7 +525,7 @@ describe("diffs plugin registration", () => {
   });
 });
 
-function createMemoryBlobStore<TMetadata>(): PluginBlobStore<TMetadata> {
+function createMemoryBlobStore<TMetadata>(): PluginBlobStoreWithReceipts<TMetadata> {
   const entries = new Map<
     string,
     {
@@ -553,23 +553,34 @@ function createMemoryBlobStore<TMetadata>(): PluginBlobStore<TMetadata> {
       ...(entry.expiresAt !== undefined ? { expiresAt: entry.expiresAt } : {}),
     };
   };
-  const register: PluginBlobStore<TMetadata>["register"] = async (key, bytes, metadata, opts) => {
+  const register = (
+    key: string,
+    bytes: Uint8Array,
+    metadata: TMetadata,
+    opts?: { ttlMs?: number },
+  ) => {
     const createdAt = Date.now();
+    const receipt = { createdAt, ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}) };
     entries.set(key, {
       bytes: bytes.slice(),
       metadata,
-      createdAt,
-      ...(opts?.ttlMs ? { expiresAt: createdAt + opts.ttlMs } : {}),
+      ...receipt,
     });
+    return receipt;
   };
   return {
-    register,
+    async register(key, bytes, metadata, opts) {
+      register(key, bytes, metadata, opts);
+    },
     async registerIfAbsent(key, bytes, metadata, opts) {
       if (read(key)) {
         return false;
       }
-      await register(key, bytes, metadata, opts);
+      register(key, bytes, metadata, opts);
       return true;
+    },
+    async registerIfAbsentWithReceipt(key, bytes, metadata, opts) {
+      return read(key) ? undefined : register(key, bytes, metadata, opts);
     },
     async lookup(key) {
       return read(key);

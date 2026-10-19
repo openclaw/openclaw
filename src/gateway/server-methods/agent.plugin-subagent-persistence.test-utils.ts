@@ -7,6 +7,7 @@ import {
   getSubagentRunByChildSessionKey,
   resetSubagentRegistryForTests,
 } from "../../agents/subagents/registry/subagent-registry.test-helpers.js";
+import { getRpcSource } from "../../sessions/session-controller.rpc-sources.js";
 import {
   seedPersistedSubagentRunForAgentTest,
   withPluginSubagentTestState,
@@ -91,7 +92,7 @@ export function registerPluginSubagentPersistenceFailureTest() {
         expect(mocks.registryWrite).toHaveBeenCalledTimes(1);
         expect(mocks.agentCommand).toHaveBeenCalledTimes(commandCallCount);
         expect(loadSubagentRegistryFromSqlite().has(runId)).toBe(false);
-        expect(context.chatAbortControllers.has(runId)).toBe(false);
+        expect(getRpcSource(runId)).toBeUndefined();
         expectRespondError(respond, {
           code: ErrorCodes.UNAVAILABLE,
           message:

@@ -40,6 +40,7 @@ import {
   attachWorkerTurnExecutionIdentityStore,
   bindWorkerTurnOwner,
   bindWorkerTurnCapabilities,
+  bindWorkerTurnGitHubGrant,
   getWorkerTurnExecutionIdentityCapability,
 } from "./placement-turn-claim-events.js";
 import { createWorkerEnvironmentService, type WorkerEnvironmentService } from "./service.js";
@@ -240,6 +241,7 @@ export function createService(
       | "closeNodeBootstrapArtifacts"
       | "createGatewayTools"
       | "executeComputer"
+      | "closeEnvironmentComputers"
       | "providerCallTimeoutMs"
       | "projectNamespace"
       | "resolveSshIdentity"
@@ -717,6 +719,8 @@ export async function bindPlacementHarness(
     workerService,
     source,
     releaseSource,
+    bindGitHubGrant: (grant: Parameters<typeof bindWorkerTurnGitHubGrant>[2]) =>
+      bindWorkerTurnGitHubGrant(executionStore, claim, grant),
     bindToolSurface: (surface: Parameters<typeof bindWorkerTurnCapabilities>[2]["toolSurface"]) =>
       bindWorkerTurnCapabilities(executionStore, claim, { toolSurface: surface }),
   };

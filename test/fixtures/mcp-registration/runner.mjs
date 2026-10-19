@@ -95,7 +95,7 @@ const serverEntry = sdkHost
 const closeFault =
   mode === "close-failure"
     ? `
-import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { StdioServerTransport } from "@modelcontextprotocol/server/stdio";
 const close = StdioServerTransport.prototype.close;
 StdioServerTransport.prototype.close = async function() {
   await close.call(this);

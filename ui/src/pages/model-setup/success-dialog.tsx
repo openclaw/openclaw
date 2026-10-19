@@ -99,7 +99,7 @@ export function ModelSetupSuccessDialog(props: {
               </>
             )}
           </div>
-          <footer class="model-setup-success__actions">
+          <openclaw-modal-actions class="model-setup-success__actions">
             {props.returnToModels && !utility() ? undefined : (
               <>
                 {" "}
@@ -112,7 +112,7 @@ export function ModelSetupSuccessDialog(props: {
               {props.returnToModels && !utility() ? undefined : <Icon name="messageSquare" />}{" "}
               {actionLabel()}
             </button>
-          </footer>
+          </openclaw-modal-actions>
         </section>
       </openclaw-modal-dialog>
     </>

@@ -201,22 +201,36 @@ it.each(["before", "during"] as const)(
     } else {
       vi.mocked(bridgeApi.stopBrowserBridgeServer).mockImplementationOnce(replace);
     }
-    await expect(h.custody.retire()).rejects.toThrow("bridge generation");
+    await expect(h.custody.retire()).resolves.toBeUndefined();
     expect(BROWSER_BRIDGES.get(entry.sessionKey)).toBe(replacement);
     expect(bridgeApi.stopBrowserBridgeServer).not.toHaveBeenCalledWith(replacement.bridge.server);
-    expect(await h.rows()).toHaveLength(1);
-    expect(h.physical.has(oldId)).toBe(when === "before");
+    expect(bridgeApi.stopBrowserBridgeServer).toHaveBeenCalledTimes(when === "during" ? 1 : 0);
+    if (when === "during") {
+      expect(bridgeApi.stopBrowserBridgeServer).toHaveBeenCalledWith(
+        h.capturedBridge.bridge.server,
+      );
+    }
+    expect(await h.rows()).toEqual([]);
+    expect(h.physical.has(oldId)).toBe(false);
+    expect(
+      h.command.mock.calls.filter(([, args]) => args[0] === "rm").map(([, args]) => args.at(-1)),
+    ).toEqual([oldId]);
   },
 );
 
-it("preserves metadata when only the physical name is rebound during bridge shutdown", async () => {
+it("retires the captured allocation without chasing a rebound physical name", async () => {
   const h = await setup("browser");
   vi.mocked(bridgeApi.stopBrowserBridgeServer).mockImplementationOnce(async () =>
     h.replacePhysical(),
   );
-  await expect(h.custody.retire()).rejects.toThrow("generation");
+  await expect(h.custody.retire()).resolves.toBeUndefined();
   expect(h.physical.has(newId)).toBe(true);
-  expect(await h.rows()).toHaveLength(1);
+  expect(h.physical.has(oldId)).toBe(false);
+  expect(await h.rows()).toEqual([]);
+  expect(BROWSER_BRIDGES.size).toBe(0);
+  expect(
+    h.command.mock.calls.filter(([, args]) => args[0] === "rm").map(([, args]) => args.at(-1)),
+  ).toEqual([oldId]);
 });
 
 it.each(["container", "browser"] as const)(

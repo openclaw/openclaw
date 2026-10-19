@@ -24,6 +24,7 @@ import {
   trajectoryRuntimeRetentionDue,
   trajectoryRuntimeRetentionState,
 } from "./runtime-retention.sqlite.js";
+import { invalidateTrajectoryRuntimeWindowFacts } from "./runtime-window-facts.js";
 
 const log = createSubsystemLogger("trajectory");
 
@@ -165,12 +166,13 @@ export function scheduleSqliteTrajectoryRuntimeRetention(params: {
         );
       for (;;) {
         assertCurrent();
-        const result = await execute((worker) =>
-          worker.execute({
+        const result = await execute((worker) => {
+          invalidateTrajectoryRuntimeWindowFacts(identity);
+          return worker.execute({
             type: "trajectory.retention.delete",
             input: { sweepId, snapshot },
-          }),
-        );
+          });
+        });
         snapshot = undefined;
         if (result.complete || result.refresh) {
           break;

@@ -38,6 +38,7 @@ export function expectSubagentFollowupReactivation(params: {
       agentId: "main",
       dropIfSlow: true,
       sessionKeys: [params.childSessionKey],
+      sessionEventSubscriptionKeys: [params.childSessionKey],
       prepareSessionProjection: expect.any(Function),
     },
   );

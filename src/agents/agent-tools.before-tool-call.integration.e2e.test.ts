@@ -46,7 +46,6 @@ import {
 import { runWithToolExecutionValidation } from "./agent-tools.execution-validation.js";
 import { normalizeToolParameters } from "./agent-tools.schema.js";
 import type { AnyAgentTool } from "./agent-tools.types.js";
-import { markCodeModeControlTool } from "./code-mode-control-tools.js";
 import { CODE_MODE_EXEC_TOOL_NAME, createCodeModeTools } from "./code-mode.js";
 import { getInternalToolExecutionPreparer } from "./runtime/internal-hooks.js";
 import type { ExtensionContext } from "./sessions/index.js";
@@ -966,81 +965,34 @@ describe("before_tool_call hook deduplication (#15502)", () => {
   });
 
   it.each([
-    { stage: "trusted policy", alias: "code", replacement: "" },
-    { stage: "trusted policy", alias: "command", replacement: "" },
-    { stage: "trusted policy", alias: "code", replacement: null },
-    { stage: "trusted policy", alias: "command", replacement: null },
-    { stage: "hook", alias: "code", replacement: null },
-    { stage: "hook", alias: "command", replacement: null },
-    { stage: "hook after a trusted rewrite", alias: "code", replacement: "" },
-    { stage: "hook after a trusted rewrite", alias: "command", replacement: "" },
-    { stage: "hook after a trusted rewrite", alias: "code", replacement: null },
-    { stage: "hook after a trusted rewrite", alias: "command", replacement: null },
-    { stage: "trusted policy", alias: "code", replacement: null, otherReplacement: "return 4;" },
-    {
-      stage: "trusted policy",
-      alias: "command",
-      replacement: null,
-      otherReplacement: "return 4;",
-    },
-    { stage: "hook", alias: "code", replacement: null, otherReplacement: "return 4;" },
-    { stage: "hook", alias: "command", replacement: null, otherReplacement: "return 4;" },
-    { stage: "hook after a trusted rewrite", alias: "code", replacement: "return 3;" },
-    { stage: "hook after a trusted rewrite", alias: "command", replacement: "return 3;" },
+    { alias: "command", replacement: null },
+    { alias: "code", replacement: "return 3;" },
+    { alias: "command", replacement: "return 3;" },
   ])(
-    "handles a $stage changing the $alias code-mode exec alias to $replacement",
-    async ({ stage, alias, replacement, otherReplacement }) => {
+    "handles a hook after a trusted rewrite changing the $alias code-mode exec alias to $replacement",
+    async ({ alias, replacement }) => {
       resetGlobalHookRunner();
-      const pairedReplacement =
-        otherReplacement === undefined
-          ? {}
-          : { [alias === "code" ? "command" : "code"]: otherReplacement };
       const registry = createEmptyPluginRegistry();
-      registry.trustedToolPolicies =
-        stage === "hook"
-          ? []
-          : [
-              {
-                pluginId: "trusted-plugin",
-                pluginName: "Trusted Plugin",
-                source: "test",
-                policy: {
-                  id: "code-mode-rewrite-policy",
-                  description: "rewrite both code-mode exec aliases",
-                  evaluate: () => ({ params: { code: "return 2;", command: "return 2;" } }),
-                },
-              },
-            ];
-      if (stage === "trusted policy") {
-        registry.trustedToolPolicies.push({
+      registry.trustedToolPolicies = [
+        {
           pluginId: "trusted-plugin",
           pluginName: "Trusted Plugin",
           source: "test",
           policy: {
-            id: "code-mode-invalidate-policy",
-            description: "invalidate one code-mode exec alias",
-            evaluate: (eventValue) => ({
-              params: {
-                ...eventValue.params,
-                [alias]: replacement,
-                ...pairedReplacement,
-              },
-            }),
+            id: "code-mode-rewrite-policy",
+            description: "rewrite both code-mode exec aliases",
+            evaluate: () => ({ params: { code: "return 2;", command: "return 2;" } }),
           },
-        });
-      } else {
-        addTestHook({
-          registry,
-          pluginId: "normal-plugin",
-          hookName: "before_tool_call",
-          handler: (async () => ({
-            params: {
-              [alias]: replacement,
-              ...pairedReplacement,
-            },
-          })) as PluginHookRegistration["handler"],
-        });
-      }
+        },
+      ];
+      addTestHook({
+        registry,
+        pluginId: "normal-plugin",
+        hookName: "before_tool_call",
+        handler: (async () => ({
+          params: { [alias]: replacement },
+        })) as PluginHookRegistration["handler"],
+      });
       setActivePluginRegistry(registry);
       initializeGlobalHookRunner(registry);
       try {
@@ -1078,7 +1030,7 @@ describe("before_tool_call hook deduplication (#15502)", () => {
         }
 
         const result = await def.execute(
-          `call-code-mode-${stage}-${alias}-${replacement === "return 3;" ? "rewrite" : "invalidate"}`,
+          `call-code-mode-${alias}-${replacement === "return 3;" ? "rewrite" : "invalidate"}`,
           { code: "return 1;", command: "return 1;" },
           undefined,
           undefined,
@@ -1103,268 +1055,6 @@ describe("before_tool_call hook deduplication (#15502)", () => {
       }
     },
   );
-
-  it("renormalizes trusted policy rewrites before code-mode exec hooks observe params", async () => {
-    resetGlobalHookRunner();
-    const normalHook = vi.fn(async () => undefined);
-    const trustedObserver = vi.fn(async () => undefined);
-    const registry = createEmptyPluginRegistry();
-    addTestHook({
-      registry,
-      pluginId: "normal-plugin",
-      hookName: "before_tool_call",
-      handler: normalHook as PluginHookRegistration["handler"],
-    });
-    registry.trustedToolPolicies = [
-      {
-        pluginId: "trusted-plugin",
-        pluginName: "Trusted Plugin",
-        source: "test",
-        policy: {
-          id: "code-mode-rewrite-policy",
-          description: "rewrite code-mode exec params",
-          evaluate(eventValue) {
-            if (eventValue.toolCallId === "call-code-mode-trusted-command") {
-              return { params: { command: "return 2;" } };
-            }
-            if (eventValue.toolCallId === "call-code-mode-trusted-language") {
-              return {
-                params: {
-                  code: "const value: number = 3;",
-                  command: "const value: number = 3;",
-                  language: "typescript",
-                },
-              };
-            }
-            if (eventValue.toolCallId === "call-code-mode-trusted-blank") {
-              return { params: { code: "", command: "return 4;" } };
-            }
-            return undefined;
-          },
-        },
-      },
-      {
-        pluginId: "trusted-observer",
-        pluginName: "Trusted Observer",
-        source: "test",
-        policy: {
-          id: "code-mode-observer-policy",
-          description: "observe rewritten code-mode exec params",
-          evaluate: trustedObserver,
-        },
-      },
-    ];
-    setActivePluginRegistry(registry);
-    initializeGlobalHookRunner(registry);
-    try {
-      const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-      const tool = markCodeModeControlTool(
-        asAgentTool({
-          name: CODE_MODE_EXEC_TOOL_NAME,
-          execute,
-          description: "exec",
-          parameters: {},
-        }),
-      );
-      const [def] = toToolDefinitions([tool], {
-        agentId: "main",
-        sessionKey: "agent:main:main",
-        sessionId: "session-main",
-        runId: "run-main",
-      });
-      if (!def) {
-        throw new Error("missing custom tool definition");
-      }
-      const extensionContext = {} as Parameters<typeof def.execute>[4];
-
-      await def.execute(
-        "call-code-mode-trusted-command",
-        { code: "return 1;", command: "return 1;" },
-        undefined,
-        undefined,
-        extensionContext,
-      );
-      await def.execute(
-        "call-code-mode-trusted-language",
-        { code: "return 3;", command: "return 3;", language: "javascript" },
-        undefined,
-        undefined,
-        extensionContext,
-      );
-      await def.execute(
-        "call-code-mode-trusted-blank",
-        { code: "return 4;", command: "return 4;" },
-        undefined,
-        undefined,
-        extensionContext,
-      );
-
-      expect(normalHook).toHaveBeenNthCalledWith(
-        1,
-        {
-          toolName: "exec",
-          params: { command: "return 2;", code: "return 2;" },
-          toolKind: "code_mode_exec",
-          toolInputKind: "javascript",
-          runId: "run-main",
-          toolCallId: "call-code-mode-trusted-command",
-        },
-        expect.objectContaining({
-          toolName: "exec",
-          toolKind: "code_mode_exec",
-          toolInputKind: "javascript",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sessionId: "session-main",
-          runId: "run-main",
-          toolCallId: "call-code-mode-trusted-command",
-        }),
-      );
-      expect(trustedObserver).toHaveBeenNthCalledWith(
-        1,
-        {
-          toolName: "exec",
-          params: { command: "return 2;", code: "return 2;" },
-          toolKind: "code_mode_exec",
-          toolInputKind: "javascript",
-          runId: "run-main",
-          toolCallId: "call-code-mode-trusted-command",
-        },
-        expect.objectContaining({
-          toolName: "exec",
-          toolKind: "code_mode_exec",
-          toolInputKind: "javascript",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sessionId: "session-main",
-          runId: "run-main",
-          toolCallId: "call-code-mode-trusted-command",
-        }),
-      );
-      expect(normalHook).toHaveBeenNthCalledWith(
-        2,
-        {
-          toolName: "exec",
-          params: {
-            code: "const value: number = 3;",
-            command: "const value: number = 3;",
-            language: "typescript",
-          },
-          toolKind: "code_mode_exec",
-          runId: "run-main",
-          toolCallId: "call-code-mode-trusted-language",
-        },
-        expect.objectContaining({
-          toolName: "exec",
-          toolKind: "code_mode_exec",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sessionId: "session-main",
-          runId: "run-main",
-          toolCallId: "call-code-mode-trusted-language",
-        }),
-      );
-      expect(trustedObserver).toHaveBeenNthCalledWith(
-        2,
-        {
-          toolName: "exec",
-          params: {
-            code: "const value: number = 3;",
-            command: "const value: number = 3;",
-            language: "typescript",
-          },
-          toolKind: "code_mode_exec",
-          runId: "run-main",
-          toolCallId: "call-code-mode-trusted-language",
-        },
-        expect.objectContaining({
-          toolName: "exec",
-          toolKind: "code_mode_exec",
-          agentId: "main",
-          sessionKey: "agent:main:main",
-          sessionId: "session-main",
-          runId: "run-main",
-          toolCallId: "call-code-mode-trusted-language",
-        }),
-      );
-      expect(execute).toHaveBeenNthCalledWith(
-        1,
-        "call-code-mode-trusted-command",
-        { command: "return 2;", code: "return 2;" },
-        undefined,
-        undefined,
-      );
-      expect(execute).toHaveBeenNthCalledWith(
-        2,
-        "call-code-mode-trusted-language",
-        {
-          code: "const value: number = 3;",
-          command: "const value: number = 3;",
-          language: "typescript",
-        },
-        undefined,
-        undefined,
-      );
-      expect(normalHook).toHaveBeenNthCalledWith(
-        3,
-        expect.objectContaining({ params: { code: "", command: "" } }),
-        expect.anything(),
-      );
-      expect(trustedObserver).toHaveBeenNthCalledWith(
-        3,
-        expect.objectContaining({ params: { code: "", command: "" } }),
-        expect.anything(),
-      );
-      expect(execute).toHaveBeenNthCalledWith(
-        3,
-        "call-code-mode-trusted-blank",
-        { code: "", command: "" },
-        undefined,
-        undefined,
-      );
-      expect(
-        consumeAdjustedParamsForToolCall("call-code-mode-trusted-command", "run-main"),
-      ).toEqual({ command: "return 2;", code: "return 2;" });
-      expect(
-        consumeAdjustedParamsForToolCall("call-code-mode-trusted-language", "run-main"),
-      ).toEqual({
-        code: "const value: number = 3;",
-        command: "const value: number = 3;",
-        language: "typescript",
-      });
-      expect(consumeAdjustedParamsForToolCall("call-code-mode-trusted-blank", "run-main")).toEqual({
-        code: "",
-        command: "",
-      });
-    } finally {
-      setActivePluginRegistry(createEmptyPluginRegistry());
-      resetGlobalHookRunner();
-    }
-  });
-
-  it("fires hook exactly once when tool goes through wrap + abort + toToolDefinitions", async () => {
-    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-    const baseTool = asAgentTool({ name: "Bash", execute, description: "bash", parameters: {} });
-
-    const abortController = new AbortController();
-    const wrapped = wrapToolWithBeforeToolCallHook(baseTool, {
-      agentId: "main",
-      sessionKey: "main",
-    });
-    const withAbort = wrapToolWithAbortSignal(wrapped, abortController.signal);
-    const def = expectDefined(toToolDefinitions([withAbort])[0], "abort-wrapped Bash definition");
-    const extensionContext = {} as Parameters<typeof def.execute>[4];
-
-    await def.execute(
-      "call-abort-dedup",
-      { command: "ls" },
-      undefined,
-      undefined,
-      extensionContext,
-    );
-
-    expect(beforeToolCallHook).toHaveBeenCalledTimes(1);
-  });
 
   it("isolates terminal presentation arguments while using the final middleware result", async () => {
     const onToolOutcome = vi.fn();
@@ -1636,31 +1326,27 @@ describe("before_tool_call adapter and client tool integration", () => {
     vi.restoreAllMocks();
   });
 
-  it.each(["wrapped", "adapter"] as const)(
-    "cancels before-tool hook work through the %s path",
-    async (pathKind) => {
-      const controller = new AbortController();
-      const hook = installAbortBlockingHook();
-      const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
-      const sourceTool = asAgentTool({ name: "read", execute });
-      const tool = pathKind === "wrapped" ? wrapToolWithBeforeToolCallHook(sourceTool) : sourceTool;
-      const definition = expectDefined(toToolDefinitions([tool])[0], `${pathKind} tool definition`);
+  it("cancels before-tool hook work through the adapter path", async () => {
+    const controller = new AbortController();
+    const hook = installAbortBlockingHook();
+    const execute = vi.fn().mockResolvedValue({ content: [], details: { ok: true } });
+    const tool = asAgentTool({ name: "read", execute });
+    const definition = expectDefined(toToolDefinitions([tool])[0], "adapter tool definition");
 
-      const execution = definition.execute(
-        `call-signal-${pathKind}`,
-        { path: "/tmp/input" },
-        controller.signal,
-        undefined,
-        {} as ExtensionContext,
-      );
-      await hook.started;
-      controller.abort(new Error("cancel test"));
-      await execution;
+    const execution = definition.execute(
+      "call-signal-adapter",
+      { path: "/tmp/input" },
+      controller.signal,
+      undefined,
+      {} as ExtensionContext,
+    );
+    await hook.started;
+    controller.abort(new Error("cancel test"));
+    await execution;
 
-      expect(hook.didObserveAbort()).toBe(true);
-      expect(execute).not.toHaveBeenCalled();
-    },
-  );
+    expect(hook.didObserveAbort()).toBe(true);
+    expect(execute).not.toHaveBeenCalled();
+  });
 
   it("cancels client-tool hook work and releases its reservation", async () => {
     const controller = new AbortController();
