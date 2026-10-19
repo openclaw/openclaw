@@ -160,9 +160,19 @@ function resolveChannelsAddOptions(
       return true;
     }),
   );
+  const flagChannel = typeof forwardedOpts.channel === "string" ? forwardedOpts.channel : undefined;
+  if (
+    flagChannel &&
+    channelArg &&
+    flagChannel.trim().toLowerCase() !== channelArg.trim().toLowerCase()
+  ) {
+    throw new Error(
+      `Conflicting channels: positional "${channelArg}" and --channel "${flagChannel}". Pass only one.`,
+    );
+  }
   return {
     ...forwardedOpts,
-    channel: forwardedOpts.channel ?? channelArg,
+    channel: flagChannel ?? channelArg,
   };
 }
 

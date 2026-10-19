@@ -369,6 +369,32 @@ describe("registerChannelsCli", () => {
     expectAddCall(expect.objectContaining({ channel: "telegram", token: "tok", ...expected }));
   });
 
+  it("rejects a positional channel that conflicts with --channel", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValue([telegramChannel]);
+    await runChannelsCli(["channels", "add", "telegram", "--channel", "discord", "--token", "tok"]);
+    expect(channelsAddCommandMock).not.toHaveBeenCalled();
+    expect(runtimeMock.error).toHaveBeenCalledWith(
+      expect.stringContaining(
+        'Conflicting channels: positional "telegram" and --channel "discord"',
+      ),
+    );
+    expect(runtimeMock.exit).toHaveBeenCalledWith(1);
+  });
+
+  it("accepts a positional channel that matches --channel", async () => {
+    listBundledPackageChannelMetadataMock.mockReturnValue([telegramChannel]);
+    await runChannelsCli([
+      "channels",
+      "add",
+      "telegram",
+      "--channel",
+      "Telegram",
+      "--token",
+      "tok",
+    ]);
+    expectAddCall(expect.objectContaining({ channel: "Telegram", token: "tok" }));
+  });
+
   it("keeps conflicting all-channel flag arities before a positional channel ambiguous", async () => {
     listBundledPackageChannelMetadataMock.mockReturnValueOnce([
       setupChannel("chat-a", {
