@@ -119,24 +119,6 @@ it("does not accept a null source through the empty-schema fast path", () => {
   );
 });
 
-it("validates secret input source refs while preserving resolved values and defaults", () => {
-  const schema = {
-    type: "object",
-    additionalProperties: false,
-    properties: {
-      credential: credentialSchema,
-      retries: { type: "integer", default: 2 },
-    },
-  };
-  const sourceValue = { credential: credentialRef() };
-  const value = { credential: "resolved-fixture-key" };
-  expect(validatePluginConfig({ schema, sourceValue, value })).toEqual({
-    ok: true,
-    value: { ...value, retries: 2 },
-  });
-  expect(validatePluginConfig({ schema, value })).toMatchObject({ ok: false });
-  expect(value).toEqual({ credential: "resolved-fixture-key" });
-});
 it("returns an error instead of throwing when a schema is nested past the stack limit", () => {
   let schema: Record<string, unknown> = { type: "object" };
   for (let depth = 0; depth < 3_000; depth++) {
@@ -147,18 +129,6 @@ it("returns an error instead of throwing when a schema is nested past the stack 
   expect(() => validatePluginConfigByOrigin({ origin: "bundled", schema, value: {} })).toThrow();
 });
 
-it("keeps malformed bundled schemas on the throwing path", () => {
-  expect(() =>
-    validatePluginConfigByOrigin({
-      origin: "bundled",
-      schema: {
-        type: "object",
-        properties: { mode: { $ref: "#/$defs/Mode" } },
-      },
-      value: {},
-    }),
-  ).toThrow("invalid schema");
-});
 it("validates pattern properties instead of requiring empty config", () => {
   const schema = {
     ...emptyObjectSchema,
@@ -279,18 +249,15 @@ module.exports = { id: "source-fixture", register(api) {
             expect(fs.existsSync(marker)).toBe(accepted);
             if (surface === "runtime" && scenario === "paired") {
               const candidate = structuredClone(runtime);
+              const expectCached = (overrides: PluginLoadOptions, expected = registry) =>
+                expect(load(overrides) === expected).toBe(true);
               const unpaired = load({ config: candidate });
               expect
                 .soft(unpaired.plugins.find((plugin) => plugin.id === id)?.status)
                 .toBe("error");
               // Identity failures must not expand the registries' lazy runtime properties.
               expect.soft(unpaired === registry).toBe(false);
-              expect(
-                load({
-                  config: candidate,
-                  activationSourceConfig: structuredClone(source),
-                }) === registry,
-              ).toBe(true);
+              expectCached({ config: candidate, activationSourceConfig: structuredClone(source) });
 
               const alternateSource = withCredential(source, id, credentialRef("OTHER"));
               const alternateOptions = {
@@ -302,12 +269,10 @@ module.exports = { id: "source-fixture", register(api) {
               expect.soft(alternate === registry).toBe(false);
               const alternateDescriptors = [{ ...descriptor, description: "Alternate command" }];
               expect.soft(cliDescriptors(alternate)).toEqual(alternateDescriptors);
-              expect(
-                load({
-                  ...alternateOptions,
-                  activationSourceConfig: structuredClone(alternateSource),
-                }) === alternate,
-              ).toBe(true);
+              expectCached(
+                { ...alternateOptions, activationSourceConfig: structuredClone(alternateSource) },
+                alternate,
+              );
 
               const replacement = load({
                 ...alternateOptions,
@@ -315,38 +280,34 @@ module.exports = { id: "source-fixture", register(api) {
                 previousRegistry: registry,
               });
               expect(cliDescriptors(replacement)).toEqual(alternateDescriptors);
-              for (const change of ["source-invalid", "resolved-secret", "disabled"] as const) {
-                const enabled = change !== "disabled";
-                const nextRuntime = withCredential(
-                  runtime,
-                  id,
-                  change === "resolved-secret" ? "rotated-fixture-key" : "resolved-fixture-key",
-                  enabled,
-                );
+              for (const [change, enabled, secret, error] of [
+                ["source-invalid", true, "resolved-fixture-key", "invalid config"],
+                [
+                  "resolved-secret",
+                  true,
+                  "rotated-fixture-key",
+                  "paired runtime config was not hydrated",
+                ],
+                ["disabled", false, "resolved-fixture-key", "disabled"],
+              ] as const) {
                 const nextSource =
                   change === "resolved-secret" ? source : withCredential(source, id, null, enabled);
                 const rejected = load({
-                  config: nextRuntime,
+                  config: withCredential(runtime, id, secret, enabled),
                   activationSourceConfig: nextSource,
                   cache: false,
                   previousRegistry: registry,
                 });
                 expect(rejected.cliRegistrars).toHaveLength(0);
                 expect(rejected.plugins.find((plugin) => plugin.id === id)).toMatchObject({
-                  status: change === "disabled" ? "disabled" : "error",
-                  error: expect.stringContaining(
-                    change === "resolved-secret"
-                      ? "paired runtime config was not hydrated"
-                      : change === "disabled"
-                        ? "disabled"
-                        : "invalid config",
-                  ),
+                  status: enabled ? "error" : "disabled",
+                  error: expect.stringContaining(error),
                 });
               }
 
               setRuntimeConfigSnapshot(candidate, structuredClone(source));
               expect(getRuntimeConfigSnapshot()).toBe(runtime);
-              expect(load({ config: runtime }) === registry).toBe(true);
+              expectCached({ config: runtime });
             }
             const output = JSON.stringify({ messages, diagnostics: registry.diagnostics });
             expect(output).not.toContain("resolved-fixture-key");

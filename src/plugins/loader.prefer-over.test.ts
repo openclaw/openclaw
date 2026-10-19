@@ -59,9 +59,7 @@ function writeChannelToolPlugin({
   return pluginDir;
 }
 
-afterEach(() => {
-  clearPluginLoaderCache();
-});
+afterEach(clearPluginLoaderCache);
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 function channelPair(preferOver?: string[], canonicalAliasesRequireOwnField?: string) {

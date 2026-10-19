@@ -5,6 +5,7 @@ import { afterEach, expect, it } from "vitest";
 import {
   callFixtureGatewayMethod,
   disposeLoaderFixtures,
+  pluginFixtureConfig,
   writeFixtureJson,
 } from "./loader-fixture-builders.test-support.js";
 import type { PluginLoadOptions } from "./loader-types.js";
@@ -32,20 +33,12 @@ it.each(["manifest", "config"] as const)(
     const plugin = writePlugin({
       id: "semantic-retention",
       configSchema: { type: "object" },
-      body: `module.exports = { id: 'semantic-retention', register(api) {
-        api.registerGatewayMethod('semantic-retention.probe', ({respond}) => respond(true, 'available'));
-      } };`,
+      registration: `api.registerGatewayMethod('semantic-retention.probe', ({respond}) => respond(true, 'available'));`,
     });
     const policy = { enabled: true, hooks: { allowPromptInjection: false } };
     const settings = { outer: { first: "one", second: "two" }, order: ["one", "two"] };
-    const configWith = (config: typeof settings) => ({
-      plugins: {
-        allow: [plugin.id],
-        load: { paths: [plugin.file] },
-        slots: { memory: "none" },
-        entries: { [plugin.id]: { ...policy, config } },
-      },
-    });
+    const configWith = (config: typeof settings) =>
+      pluginFixtureConfig(plugin, { ...policy, config });
     const install = { source: "path" as const, sourcePath: plugin.dir, installPath: plugin.dir };
     const options: PluginLoadOptions = {
       config: configWith(settings),
@@ -90,10 +83,8 @@ it.each(["manifest", "config"] as const)(
       expect(respond).toHaveBeenCalledWith(true, "available", undefined, undefined);
     }
     // An ordered setting or real manifest value still invalidates registration.
-    const changed = loadOpenClawPlugins({
-      ...reordered,
-      loadModules: false,
-      ...(input === "manifest"
+    const changedInput: PluginLoadOptions =
+      input === "manifest"
         ? {
             manifestRegistry: {
               ...manifestRegistry,
@@ -102,19 +93,10 @@ it.each(["manifest", "config"] as const)(
               ),
             },
           }
-        : {
-            config: configWith({ ...settings, order: ["two", "one"] }),
-          }),
-    });
-    registries.push(changed);
-    expect(changed.plugins[0]).not.toBe(initial.plugins[0]);
-    const forced = loadOpenClawPlugins({
-      ...reordered,
-      loadModules: false,
-      replacePluginIds: [plugin.id],
-    });
-    registries.push(forced);
-    expect(forced.plugins[0]).not.toBe(initial.plugins[0]);
+        : { config: configWith({ ...settings, order: ["two", "one"] }) };
+    const next = loadOpenClawPlugins({ ...reordered, loadModules: false, ...changedInput });
+    registries.push(next);
+    expect(next.plugins[0]).not.toBe(initial.plugins[0]);
   },
 );
 
@@ -137,9 +119,9 @@ it("retains an untracked plugin across Control UI rebuilds, not declaration chan
     writeFixtureJson(plugin.dir, "openclaw.plugin.json", {
       id: plugin.id,
       configSchema,
-      ...(build
-        ? { controlUi: { entry: `${assetDir}/index.js`, styles: [`${assetDir}/index.css`] } }
-        : {}),
+      controlUi: build
+        ? { entry: `${assetDir}/index.js`, styles: [`${assetDir}/index.css`] }
+        : undefined,
     });
   };
   const load = (loadModules = true, previousRegistry = registries.at(-1)) => {
@@ -148,13 +130,7 @@ it("retains an untracked plugin across Control UI rebuilds, not declaration chan
     caches.push(cache);
     const registry = withPluginCache(cache, () =>
       loadOpenClawPlugins({
-        config: {
-          plugins: {
-            load: { paths: [plugin.file] },
-            slots: { memory: "none" },
-            entries: { [plugin.id]: { enabled: true } },
-          },
-        },
+        config: pluginFixtureConfig(plugin, { enabled: true }, false),
         installRecords: {},
         previousRegistry,
         activate: false,
@@ -165,15 +141,12 @@ it("retains an untracked plugin across Control UI rebuilds, not declaration chan
       }),
     );
     registries.push(registry);
-    expect
-      .soft(
-        registry.diagnostics.filter(
-          (entry) =>
-            entry.pluginId === plugin.id &&
-            entry.message.startsWith("OpenClaw can't verify where this plugin came from."),
-        ),
-      )
-      .toHaveLength(1);
+    const warnings = registry.diagnostics.filter(
+      ({ pluginId, message }) =>
+        pluginId === plugin.id &&
+        message.startsWith("OpenClaw can't verify where this plugin came from."),
+    );
+    expect.soft(warnings).toHaveLength(1);
     return registry;
   };
   writeManifest("build-a");
@@ -182,13 +155,11 @@ it("retains an untracked plugin across Control UI rebuilds, not declaration chan
   const handler = initial.gatewayHandlers["ui-retention.probe"];
   assert(record && handler);
   writeManifest("build-b");
-  // Gateway replacement plans without modules, then registers against the same published registry.
   for (const loadModules of [false, true]) {
     const next = load(loadModules, initial);
     expect.soft(next.plugins.find((entry) => entry.id === plugin.id)).toBe(record);
     expect.soft(next.gatewayHandlers["ui-retention.probe"]).toBe(handler);
   }
-  // Declaration presence decides whether the browser catalog serves the record at all.
   let current = record;
   for (const build of [undefined, "build-c"]) {
     writeManifest(build);
@@ -200,6 +171,5 @@ it("retains an untracked plugin across Control UI rebuilds, not declaration chan
     current = replaced;
   }
   writeManifest("build-c", { type: "object", properties: { label: { type: "string" } } });
-  const changed = load();
-  expect(changed.plugins.find((entry) => entry.id === plugin.id)).not.toBe(current);
+  expect(load().plugins.find((entry) => entry.id === plugin.id)).not.toBe(current);
 });

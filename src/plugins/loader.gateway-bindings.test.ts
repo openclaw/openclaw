@@ -14,7 +14,7 @@ import { prepareUserProfileCatalog } from "../state/user-profile-list.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { writeFixtureJson } from "./loader-fixture-builders.test-support.js";
+import { pluginFixtureConfig, writeFixtureJson } from "./loader-fixture-builders.test-support.js";
 import { createLazyPluginRuntime } from "./loader-module-runtime.js";
 import {
   loadAndActivateRootPluginRegistry,
@@ -121,13 +121,7 @@ it.each([
   };
   const supplied = createFacets("explicit");
   const options = {
-    config: {
-      plugins: {
-        allow: [plugin.id],
-        load: { paths: [plugin.file] },
-        slots: { memory: "none" },
-      },
-    },
+    config: pluginFixtureConfig(plugin),
     runtimeOptions: {
       allowGatewaySubagentBinding: true,
       ...(explicit.nodes ? { nodes: supplied.nodes } : {}),

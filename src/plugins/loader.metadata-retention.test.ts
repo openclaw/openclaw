@@ -86,14 +86,15 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
       });
     } };`,
     );
-    const config: OpenClawConfig = {
-      agents: { entries: { main: { workspace: workspaceDir } } },
+    const configFor = (workspace: string): OpenClawConfig => ({
+      agents: { entries: { main: { workspace } } },
       plugins: {
         allow: [id],
         entries: { [id]: { enabled: true } },
         slots: { memory: "none" },
       },
-    };
+    });
+    const config = configFor(workspaceDir);
     const registries: PluginRegistry[] = [];
     const caches: ReturnType<typeof createPluginCache>[] = [];
     try {
@@ -121,11 +122,7 @@ it.each(["global", "bundled", "bundled without package.json"] as const)(
         const load = (preferPersisted: boolean, nextWorkspace = workspaceDir) => {
           const cache = createPluginCache();
           caches.push(cache);
-          const nextConfig: OpenClawConfig = {
-            ...config,
-            agents: { entries: { main: { workspace: nextWorkspace } } },
-          };
-          const context = { config: nextConfig, env, workspaceDir: nextWorkspace };
+          const context = { config: configFor(nextWorkspace), env, workspaceDir: nextWorkspace };
           return withPluginCache(cache, () => {
             // Read the same committed installation facts through both real metadata producers.
             const snapshot = loadPluginMetadataSnapshot({

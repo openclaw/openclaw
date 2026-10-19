@@ -16,11 +16,9 @@ import {
 } from "./managed-npm-retention.js";
 
 const retentionTempDirs = useAutoCleanupTempDirTracker(afterEach);
+const makeNpmDir = () => path.join(retentionTempDirs.make("openclaw-retention-"), "npm");
 
-function makePackage(
-  projectRoot = path.join(retentionTempDirs.make("openclaw-retention-"), "npm"),
-  name = "retained-plugin",
-) {
+function makePackage(projectRoot = makeNpmDir(), name = "retained-plugin") {
   const packageDir = path.join(projectRoot, "node_modules", name);
   fs.mkdirSync(packageDir, { recursive: true });
   return packageDir;
@@ -123,8 +121,7 @@ it.each(["before", "after"])("preserves a one-shot refusal %s marker removal", a
 it.each(["ordinary", "generation", "legacy"] as const)(
   "cleans a retired %s project while preserving the active install root",
   async (layout) => {
-    const stateDir = retentionTempDirs.make("openclaw-retention-");
-    const npmDir = path.join(stateDir, "npm");
+    const npmDir = makeNpmDir();
     const packageName = "@openclaw/codex";
     const oldProjectRoot =
       layout === "legacy"
@@ -176,8 +173,7 @@ it.each(["ordinary", "generation", "legacy"] as const)(
 it.each(["noncanonical", "symlink"])(
   "preserves retained packages under a %s projects root",
   async (layout) => {
-    const stateDir = retentionTempDirs.make("openclaw-retention-");
-    const npmDir = path.join(stateDir, "npm");
+    const npmDir = makeNpmDir();
     fs.mkdirSync(npmDir, { recursive: true });
     if (layout === "symlink") {
       const outside = retentionTempDirs.make("openclaw-retention-outside-");
@@ -200,8 +196,7 @@ it.each(["noncanonical", "symlink"])(
 it.each(["project", "legacy"] as const)(
   "preserves %s packages retained by an explicit keep-files uninstall",
   async (layout) => {
-    const stateDir = retentionTempDirs.make("openclaw-retention-");
-    const npmDir = path.join(stateDir, "npm");
+    const npmDir = makeNpmDir();
     const projectRoot =
       layout === "legacy" ? npmDir : generation(npmDir, "kept-plugin-v1", "@openclaw/kept-plugin");
     const packageDir = makePackage(projectRoot, "@openclaw/kept-plugin");
