@@ -1,3 +1,4 @@
+import { isSqliteLockError, sqliteErrorCode } from "../infra/sqlite-error-diagnostics.js";
 import { SqliteReadOnlyInspectionContentionError } from "../infra/sqlite-readonly-worker-protocol.js";
 import {
   describeRunningOpenClawBuild,
@@ -71,6 +72,22 @@ export function formatIndeterminateDatabaseReadiness(
         ? "Gateway refused startup"
         : "Gateway refused restart";
   return `${action} because persisted database readiness could not be verified:\n${shown.join("\n")}${operation === "doctor" ? "" : "\nStop the Gateway and other OpenClaw processes, run openclaw doctor --fix, then retry."}`;
+}
+
+// Startup refuses on its first failed read. Native SQLite errors do not name their file, so
+// report the inspected database; typed refusals and transient lock errors keep their owners.
+export function nameStartupDatabaseFailure(
+  error: unknown,
+  database: IndeterminateOpenClawDatabase,
+): unknown {
+  const code = sqliteErrorCode(error);
+  if ((code !== "ERR_SQLITE_ERROR" && !code?.startsWith("SQLITE_")) || isSqliteLockError(error)) {
+    return error;
+  }
+  return new Error(
+    formatIndeterminateDatabaseReadiness([database], "gateway-startup", new WeakMap()),
+    { cause: error },
+  );
 }
 
 export function describeDeferredStateSchemaPublication(

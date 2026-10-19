@@ -46,6 +46,7 @@ import {
 } from "./openclaw-database-preflight-targets.js";
 import {
   formatIndeterminateDatabaseReadiness,
+  nameStartupDatabaseFailure,
   OpenClawDatabaseSchemaPreflightError,
 } from "./openclaw-database-preflight.messages.js";
 import type {
@@ -175,9 +176,7 @@ export async function assertOpenClawDatabasesReady(
               options.operation,
               indeterminateCauses,
             ),
-            {
-              cause: new AggregateError(causes),
-            },
+            { cause: new AggregateError(causes) },
           ),
     );
   }
@@ -376,14 +375,14 @@ export async function preflightOpenClawDatabaseSchemas(
     // warn-and-continue result that launches the remaining startup runtime.
     const failure = normalizeOpenClawStateSchemaReadError(error, statePath);
     stateInspectionErrors.push(failure);
-    if (options.signal?.aborted || options.requireStartupMigrationReadiness) {
-      throw failure;
-    }
     const row: IndeterminateOpenClawDatabase = {
       kind: "state",
       path: statePath,
       reason: formatErrorMessage(failure),
     };
+    if (options.signal?.aborted || options.requireStartupMigrationReadiness) {
+      throw options.signal?.aborted ? failure : nameStartupDatabaseFailure(failure, row);
+    }
     indeterminateCauses.set(row, failure);
     result.indeterminate.push(row);
     return result;
@@ -675,14 +674,14 @@ export async function preflightOpenClawDatabaseSchemas(
         if (recordInspectionFailure(row, inspection, error)) {
           return undefined;
         }
-        if (options.requireStartupMigrationReadiness) {
-          throw error;
-        }
         const failure: IndeterminateOpenClawDatabase = {
           kind: "agent",
           path: agentPath,
           reason: formatErrorMessage(error),
         };
+        if (options.requireStartupMigrationReadiness) {
+          throw nameStartupDatabaseFailure(error, failure);
+        }
         indeterminateCauses.set(failure, error);
         inspection.indeterminate.push(failure);
       } finally {
