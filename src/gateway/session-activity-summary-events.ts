@@ -60,9 +60,10 @@ export async function broadcastSessionActivitySummary(
   if (projection) {
     const publications = sessionEventPublicationRows(projection);
     const work = publications.track(
-      Promise.resolve().then(() =>
-        publications.withReadyRows(() => [query], publish, { includeAncestors: true }),
-      ),
+      // Keep a fixed deadline: a busy session publishes its latest recap every second.
+      new Promise<void>((resolve) => {
+        setTimeout(resolve, 1_000);
+      }).then(() => publications.withReadyRows(() => [query], publish, { includeAncestors: true })),
     );
     if (captured && key) {
       const owner = pendingSummaries.get(projection) ?? new Map<string, PendingSummary>();

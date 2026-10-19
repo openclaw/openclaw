@@ -29,6 +29,7 @@ import { registerAgentRunContext, clearAgentRunContext } from "../infra/agent-ru
 import { executeSqliteQuerySync, getNodeSqliteKysely } from "../infra/kysely-sync.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import { runSessionMutation } from "../sessions/session-controller.lifecycle.js";
+import { AsyncWorkScope } from "../shared/async-work-scope.js";
 import type { DB } from "../state/openclaw-agent-db.generated.js";
 import {
   openOpenClawAgentDatabase,
@@ -519,15 +520,21 @@ describe("Activity recap lifecycle with the canonical session store", () => {
       );
     };
     await messages(2);
-    await awaitPublication(() => terminal(service));
+    const initialWork = new AsyncWorkScope();
+    await initialWork.track(() => ensureRecap(target));
+    await initialWork.drain();
     await patchSessionEntryCore(scope, () => ({ archivedAt: Date.now(), label: "Archived work" }));
-    await awaitPublication(() =>
+    changed.mockReset();
+    const archiveWork = new AsyncWorkScope();
+    await archiveWork.track(() =>
       service.handleLifecycle({
         sessionKey: target.key,
         agentId: target.agentId,
         reason: "archive",
       }),
     );
+    await archiveWork.drain();
+    expect(changed).not.toHaveBeenCalled();
     expectProgress("current", 1);
     await messages(2, 2);
     notifyTranscriptFromTurn();

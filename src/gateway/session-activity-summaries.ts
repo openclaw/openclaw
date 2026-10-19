@@ -303,7 +303,9 @@ export function createSessionActivitySummaries(deps: {
       state.immediate ? 0 : state.lastStartedAt + REFRESH_MS,
       state.calls >= MAX_CALLS_PER_HOUR ? state.windowStart + HOUR_MS : 0,
     );
-    publish(state, "updating");
+    if (!readSessionActivitySummary(state.entry) || state.readyAt > now()) {
+      publish(state, "updating");
+    }
     // The tracked-session bound also bounds the queue, with at most one entry per session.
     if (!queue.includes(state)) {
       queue.push(state);
@@ -331,9 +333,8 @@ export function createSessionActivitySummaries(deps: {
       }
       assertCurrentOwner(state, ref);
       const entry = state.entry;
-      const transcriptScope = { ...scope(state), sessionId: state.sessionId };
       const source = await readActivitySummarySource({
-        scope: transcriptScope,
+        scope: { ...scope(state), sessionId: state.sessionId },
         previous: readSessionActivitySummary(entry),
         assertCurrent: () => assertCurrentOwner(state, ref),
       });
@@ -355,6 +356,8 @@ export function createSessionActivitySummaries(deps: {
         publish(state, "current");
         return;
       }
+      // An immediate ensure of a current recap has no visible transition to publish.
+      publish(state, "updating");
       let text = previous?.text ?? "";
       if (text.endsWith(OMISSION_NOTICE)) {
         text = text.slice(0, -OMISSION_NOTICE.length).trimEnd();

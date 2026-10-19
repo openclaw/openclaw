@@ -460,6 +460,33 @@ bodies. Recap mode creates ordinary shared sessions, since recaps exclude
 subagents, and requests `sessions.activitySummary.ensure` after each completed
 turn cohort. Measured rounds must observe both recap model requests and recap
 change events; the model fixture serves the recaps without external inference.
+Add `--recap-burst-repeats 20 --recap-burst-interval-ms 50` to replay repeated
+Activity ensure requests after that cohort's recap reaches every socket. These
+are real `sessions.activitySummary.ensure` RPCs against unchanged transcripts;
+the driver does not invoke publishers or invent state transitions. Each repeat
+sweeps the same sessions in batches of 20, sequentially, with a minimum 50 ms
+start-to-start interval between sweeps. Repeats default to zero and are capped
+at 100; the interval defaults to 50 ms and is capped at 1000 ms. Use identical
+parameters for both revisions. No extra agent turns occur inside this phase.
+
+`recapPhase` separates the turn and initial recap fanout from repeated ensures,
+including frame/byte counts by audience, recap model request counts, RPC response
+states, timestamps, and repeated-ensure main-thread/process CPU. A zero model
+request count during repeated ensures establishes unchanged-source churn rather
+than additional inference. CPU includes RPC admission, source checks, and the
+one-second event drain. With `--cpu-profile`, the repeated-ensure phase also saves
+a main-isolate profile and reports `broadcastSampledMs`: inclusive sampled time
+under `broadcastInternal`, including recipient projection, encoding, and sends.
+This is a sampling estimate, not a precise socket-only timer. The driver uses
+the Control UI's row decoder with negotiated patches/field references, requires
+the latest cohort's distinct recap text and `current` state on every socket, and
+compares its timestamp with a final `sessions.describe` read. `recapReceipts`
+records observed recap transitions. `latestValueDelivery.committedToReceivedMs`
+measures the first current receipt minus the summary's `updatedAt` clock, including
+commit/publication/transport delay; compare its maximum with the desired one-second
+budget. `finalReceiptAfterLastEnsureMs` reports trailing delivery after the last
+repeat response, or zero when the already-correct recap remains unchanged. These
+prove delivery into the same decoder as the UI, not browser rendering latency.
 `--list-interval-ms 1000` adds concurrent compact `sessions.list` polling, one
 request at a time per client, and reports successful latency samples and
 p50/p95/p99. Invalid or failed list responses reject the run.
