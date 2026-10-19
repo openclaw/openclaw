@@ -41,7 +41,8 @@ it.each([
         inheritEnvironment: false,
       });
     const list = run("list", "--json");
-    expect(list, list.stderr).toMatchObject({ error: undefined, signal: null, status: 0 });
+    expect(list.error, list.stderr).toBeUndefined();
+    expect(list, list.stderr).toMatchObject({ signal: null, status: 0 });
     const inventory = JSON.parse(list.stdout);
     expect(inventory.workspaceScope).toBe(ownerSelected ? "selected" : "omitted");
     const workspaceDiagnostic = inventory.diagnostics.find(
@@ -60,8 +61,8 @@ it.each([
     const doctorJson = run("doctor", "--json");
     const doctorText = run("doctor");
     for (const result of [doctorJson, doctorText]) {
+      expect(result.error, result.stderr).toBeUndefined();
       expect(result, result.stderr).toMatchObject({
-        error: undefined,
         signal: null,
         status: ownerSelected ? 0 : 1,
       });

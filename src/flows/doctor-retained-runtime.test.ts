@@ -76,19 +76,6 @@ function projection(suffix: string, root = parent): string {
   return directory;
 }
 
-function movePackageRoot(destination: string) {
-  fs.mkdirSync(path.dirname(destination), { recursive: true });
-  fs.renameSync(packageRoot, destination);
-  packageRoot = destination;
-  mocks.packageRoots.mockReturnValue([packageRoot]);
-}
-
-function linkProjection(directory: string, source: string) {
-  const target = projectedPath(directory, source);
-  fs.mkdirSync(path.dirname(target), { recursive: true });
-  fs.linkSync(source, target);
-}
-
 async function runDoctor(repair: boolean, maintenance = true): Promise<string> {
   const contributions = resolveDoctorHealthContributions().filter(
     (entry) => entry.id === "doctor:retained-update-runtimes",
@@ -153,9 +140,11 @@ it.each(["checkout", "command TMPDIR", "managed TEMP", "service unavailable", "m
       fs.unlinkSync(path.join(packageRoot, "package.json"));
     }
     const manifest = path.join(packageRoot, "extensions/discord/openclaw.plugin.json");
+    const retainedManifest = projectedPath(abandoned, manifest);
     fs.mkdirSync(path.dirname(manifest), { recursive: true });
+    fs.mkdirSync(path.dirname(retainedManifest), { recursive: true });
     fs.writeFileSync(manifest, JSON.stringify({ id: "discord" }));
-    linkProjection(abandoned, manifest);
+    fs.linkSync(manifest, retainedManifest);
     const preview = await runDoctor(false);
     expect(fs.existsSync(abandoned)).toBe(true);
     expect(fs.statSync(manifest).nlink).toBe(2);
@@ -175,7 +164,11 @@ it.each(["checkout", "command TMPDIR", "managed TEMP", "service unavailable", "m
 );
 
 it("Doctor does not search unrelated checkout ancestors", async () => {
-  movePackageRoot(path.join(parent, "group/inner/checkout"));
+  const original = packageRoot;
+  packageRoot = path.join(parent, "group/inner/checkout");
+  fs.mkdirSync(path.dirname(packageRoot), { recursive: true });
+  fs.renameSync(original, packageRoot);
+  mocks.packageRoots.mockReturnValue([packageRoot]);
   const directory = projection("Else01", path.join(parent, "group"));
   const output = await runDoctor(true);
   expect(fs.existsSync(directory)).toBe(true);
@@ -183,12 +176,18 @@ it("Doctor does not search unrelated checkout ancestors", async () => {
 });
 
 it("Doctor reclaims an npm-prefix runtime and releases its activation journal hardlink", async () => {
-  movePackageRoot(path.join(parent, "prefix/lib/node_modules/openclaw"));
+  const installed = path.join(parent, "prefix/lib/node_modules/openclaw");
+  fs.mkdirSync(path.dirname(installed), { recursive: true });
+  fs.renameSync(packageRoot, installed);
+  packageRoot = installed;
+  mocks.packageRoots.mockReturnValue([packageRoot]);
   const abandoned = projection("Npm001", path.join(parent, "prefix/lib"));
   const journal = resolvePackageActivationJournalPath(resolvePackageActivationAnchor(packageRoot));
   fs.mkdirSync(path.dirname(journal), { mode: 0o700 });
   fs.writeFileSync(journal, "activation recovery evidence", { mode: 0o600 });
-  linkProjection(abandoned, journal);
+  const retainedJournal = projectedPath(abandoned, journal);
+  fs.mkdirSync(path.dirname(retainedJournal), { recursive: true });
+  fs.linkSync(journal, retainedJournal);
   expect(fs.statSync(journal).nlink).toBe(2);
   expect(await runDoctor(false)).toContain(`Runtime retained at ${abandoned}:`);
   expect(fs.statSync(journal).nlink).toBe(2);
@@ -260,9 +259,12 @@ it.each(["abandoned", "symlink", "bounded"])(
   "Doctor recognizes a legacy pnpm projection after the installed version changes (%s)",
   async (condition) => {
     const store = path.join(parent, "node_modules/.pnpm");
-    movePackageRoot(path.join(store, "openclaw@2026.9.5/node_modules/openclaw"));
+    const oldRoot = path.join(store, "openclaw@2026.9.5/node_modules/openclaw");
+    fs.mkdirSync(path.dirname(oldRoot), { recursive: true });
+    fs.renameSync(packageRoot, oldRoot);
+    packageRoot = oldRoot;
     const directory = projection("Pnpm01");
-    fs.rmSync(packageRoot, { recursive: true });
+    fs.rmSync(oldRoot, { recursive: true });
     packageRoot = path.join(store, "openclaw@2026.9.7/node_modules/openclaw");
     fs.mkdirSync(packageRoot, { recursive: true });
     fs.writeFileSync(path.join(packageRoot, "package.json"), '{"name":"openclaw"}');

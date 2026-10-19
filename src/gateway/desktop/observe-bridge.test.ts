@@ -104,7 +104,9 @@ async function createProxyHarness(
       registry: params.registry ?? {
         claimStream: () => params.stream,
         attachObserver: (_environmentId, observer) => {
-          closeObserver.mockImplementation(observer.close);
+          closeObserver.mockImplementation((code: number, reason: string) =>
+            observer.close(code, reason),
+          );
           return { release };
         },
       },
@@ -380,8 +382,8 @@ describe.runIf(process.platform !== "win32")("worker desktop observer proxy", ()
       trigger: "browser-close",
       cleanupCode: 1000,
       closeCode: 1001,
-      closeReason: undefined,
     });
+    expect(logCapture.records[0]?.attributes?.closeReason).toBeUndefined();
     const serialized = JSON.stringify(logCapture.records);
     expect(serialized).not.toContain("browser left");
     expect(serialized).not.toContain(token);

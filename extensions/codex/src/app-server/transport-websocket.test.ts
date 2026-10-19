@@ -4,7 +4,7 @@ import http from "node:http";
 import os from "node:os";
 import path from "node:path";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
-import { WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
+import { type RawData, WebSocketServer } from "openclaw/plugin-sdk/websocket-runtime";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { CodexAppServerClient } from "./client.js";
 import * as processRegistration from "./transport-process-registration.js";
@@ -40,7 +40,7 @@ describe("Codex app-server websocket transport", () => {
     server.on("connection", (socket, request) => {
       headers.push(request.headers[header]);
       socket.on("message", (data) => {
-        const message = JSON.parse(data.toString()) as { id?: number; method?: string };
+        const message = JSON.parse(rawDataToText(data)) as { id?: number; method?: string };
         const result =
           message.method === "initialize"
             ? { userAgent: `openclaw/${CODEX_APP_SERVER_VERSION}` }
@@ -97,7 +97,7 @@ describe("Codex app-server websocket transport", () => {
     const server = tcpServer();
     const message = createDeferred<string>();
     server.once("connection", (socket) => {
-      socket.once("message", (data) => message.resolve(data.toString()));
+      socket.once("message", (data) => message.resolve(rawDataToText(data)));
       socket.send("{}");
     });
     const transport = createTransport(await websocketUrl(server));
@@ -271,3 +271,13 @@ describe("Codex app-server websocket transport", () => {
     expect(localRegistration).not.toHaveBeenCalled();
   });
 });
+
+function rawDataToText(data: RawData): string {
+  if (Array.isArray(data)) {
+    return Buffer.concat(data).toString("utf8");
+  }
+  if (data instanceof ArrayBuffer) {
+    return Buffer.from(new Uint8Array(data)).toString("utf8");
+  }
+  return Buffer.from(data).toString("utf8");
+}

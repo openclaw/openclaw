@@ -38,7 +38,8 @@ it.each([
       { inheritEnvironment: false },
     );
 
-    expect(result, result.stderr).toMatchObject({ error: undefined, status: 1 });
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(1);
     expect(JSON.parse(result.stdout)).toEqual({
       ok: false,
       error: {
@@ -75,7 +76,8 @@ it.each([
       { inheritEnvironment: false },
     );
 
-    expect(result, result.stderr).toMatchObject({ error: undefined, status: 1 });
+    expect(result.error, result.stderr).toBeUndefined();
+    expect(result.status, result.stderr).toBe(1);
     expect(JSON.parse(result.stdout)).toMatchObject({
       ok: false,
       error: { type: "cli_error", message: expect.stringContaining("Invalid config at") },

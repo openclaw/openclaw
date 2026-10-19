@@ -150,7 +150,8 @@ describe("node desktop stream tickets", () => {
       const metadata = { auth, ...(vncPassword ? { vncPassword } : {}) };
       await connectAndSend(`${baseUrl}${minted.attachPath}`, metadata);
       const attached = await minted.attached;
-      expect(attached).toMatchObject({ ...metadata, vncPassword });
+      expect(attached).toMatchObject(metadata);
+      expect(attached.vncPassword).toBe(vncPassword);
       attached.stream.destroy();
 
       await expectUnauthorized(`${baseUrl}${minted.attachPath}`);

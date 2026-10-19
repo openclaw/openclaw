@@ -246,14 +246,10 @@ describe("SMS status probe", () => {
       );
     });
 
-    const result = await probeSmsAccount({
-      account: createAccount(),
-      timeoutMs: 1000,
-      options: {
-        fetchImpl,
-        deliveryRecords: [createDeliveryRecord("SM-delivered", "delivered")],
-      },
-    });
+    const result = await probeDelivery(
+      { messageSid: "SM-delivered", status: "delivered", lastObservedAt: 2 },
+      fetchImpl,
+    );
 
     expect(result).toMatchObject({
       ok: false,
@@ -272,14 +268,10 @@ describe("SMS status probe", () => {
       return new Response(JSON.stringify(createWebhookResponse()), { status: 200 });
     });
 
-    const result = await probeSmsAccount({
-      account: createAccount(),
-      timeoutMs: 1000,
-      options: {
-        fetchImpl,
-        deliveryRecords: [createDeliveryRecord("SM-undelivered", "undelivered")],
-      },
-    });
+    const result = await probeDelivery(
+      { messageSid: "SM-undelivered", status: "undelivered", lastObservedAt: 2 },
+      fetchImpl,
+    );
 
     expect(result).toMatchObject({
       ok: false,

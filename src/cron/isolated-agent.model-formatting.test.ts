@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_MODEL, DEFAULT_PROVIDER } from "../agents/defaults.js";
 import {
   clearRuntimeConfigSnapshot,
@@ -36,17 +36,7 @@ import { resolveCronAgentConfig } from "./isolated-agent/run-config.js";
 type SelectionParams = Parameters<typeof resolveCronModelSelection>[0];
 const defaultRef = { provider: DEFAULT_PROVIDER, model: DEFAULT_MODEL };
 const selectedRef = { provider: "openai", model: "gpt-4.1-mini" };
-const model = "openai/gpt-4.1-mini";
-const selected = (modelSource: string, ref = selectedRef) => ({ ok: true, ...ref, modelSource });
 const payload = { kind: "agentTurn", message: "do it" } as const;
-type Agents = NonNullable<OpenClawConfig["agents"]>;
-const agentConfig = (defaults: Agents["defaults"], entries: Agents["entries"] = {}) => ({
-  agents: { defaults, entries },
-});
-const discordConfig = (token: string | { provider: string; source: "env"; id: string }) =>
-  ({ channels: { discord: { accounts: { default: { token } } } } }) satisfies OpenClawConfig;
-const expectAllowed = (params: Record<string, unknown> = { raw: model }) =>
-  expect(mocks.allowed).toHaveBeenCalledWith(expect.objectContaining(params));
 const select = (overrides: Partial<SelectionParams> = {}) =>
   resolveCronModelSelection({
     cfg: {},
@@ -59,7 +49,7 @@ const select = (overrides: Partial<SelectionParams> = {}) =>
   });
 
 beforeEach(() => {
-  Object.values(mocks).forEach((mock) => mock.mockReset());
+  vi.clearAllMocks();
   mocks.loadOwner.mockImplementation(
     async (params: { config: OpenClawConfig; agentId?: string }) => ({
       agentId: params.agentId ?? "main",
@@ -71,96 +61,162 @@ beforeEach(() => {
   );
   mocks.configured.mockReturnValue(defaultRef);
   mocks.allowed.mockReturnValue({ ref: selectedRef });
+  mocks.hook.mockReturnValue(null);
+  mocks.status.mockReturnValue({ allowed: false });
+  mocks.subagent.mockReturnValue(undefined);
 });
 afterEach(clearRuntimeConfigSnapshot);
 
-it.each<[string, OpenClawConfig, string | undefined, string]>([
-  ["invalid model", {}, undefined, "rejected: invalid model"],
-  [
-    `model not allowed: ${model}`,
-    {},
-    undefined,
-    `rejected by agents.defaults.modelPolicy.allow: ${model} is not in [(none configured)]`,
-  ],
-  [
-    `model not allowed: ${model}`,
-    agentConfig(undefined, { ops: { modelPolicy: { allow: ["anthropic/*"] } } }),
-    "ops",
-    `rejected by agents.entries.*.modelPolicy.allow: ${model} is not in [anthropic/*]`,
-  ],
-])("reports explicit payload rejection: %s", async (error, cfg, agentId, expected) => {
-  mocks.allowed.mockReturnValueOnce({ error });
-  await expect(select({ cfg, agentId, payload: { ...payload, model } })).resolves.toEqual({
-    ok: false,
-    error: `automation model override '${model}' ${expected}`,
+describe("cron model selection", () => {
+  it("uses the session model when no payload model is present", async () => {
+    await expect(
+      select({ sessionEntry: { providerOverride: "openai", modelOverride: "gpt-4.1-mini" } }),
+    ).resolves.toMatchObject({ ok: true, ...selectedRef, modelSource: "session" });
+    expect(mocks.allowed).toHaveBeenCalledWith(
+      expect.objectContaining({ raw: "openai/gpt-4.1-mini" }),
+    );
   });
-  expectAllowed({ cfg, agentId: agentId ?? "main" });
-});
 
-it("uses one replacement catalog owner for config, policy, and selected identity", async () => {
-  const cfg = agentConfig({ model: "anthropic/caller-model" }, { worker: {} });
-  const ownerConfig = agentConfig({ model: "openai/owner", modelPolicy: { allow: ["openai/*"] } });
-  const catalog = [{ id: "gpt-4.1-mini", name: "Owner Model", provider: "openai" }];
-  const owner = {
-    config: ownerConfig,
-    agentId: "main",
-    agentDir: "/tmp/owner-agent",
-    workspaceDir: "/tmp/owner-workspace",
-    modelCatalog: { entries: catalog, routeVariants: [] },
-  };
-  mocks.loadOwner.mockResolvedValueOnce(owner);
-  await expect(
-    select({
-      cfg,
-      payload: { ...payload, model: `  ${model}  ` },
-      sessionEntry: { providerOverride: "anthropic", modelOverride: "claude-sonnet-4-6" },
-    }),
-  ).resolves.toMatchObject({ ...selected("payload"), owner });
-  expect(mocks.loadOwner).toHaveBeenCalledExactlyOnceWith({
-    config: cfg,
-    readOnly: true,
-    allowGatewaySubagentBinding: true,
+  it.each([
+    { error: "invalid model", cfg: {}, agentId: undefined, expected: "rejected: invalid model" },
+    {
+      error: "model not allowed: openai/gpt-4.1-mini",
+      cfg: {},
+      agentId: undefined,
+      expected:
+        "rejected by agents.defaults.modelPolicy.allow: openai/gpt-4.1-mini is not in [(none configured)]",
+    },
+    {
+      error: "model not allowed: openai/gpt-4.1-mini",
+      cfg: { agents: { entries: { ops: { modelPolicy: { allow: ["anthropic/*"] } } } } },
+      agentId: "ops",
+      expected:
+        "rejected by agents.entries.*.modelPolicy.allow: openai/gpt-4.1-mini is not in [anthropic/*]",
+    },
+  ])("reports explicit payload rejection: $expected", async ({ error, cfg, agentId, expected }) => {
+    mocks.allowed.mockReturnValueOnce({ error });
+    await expect(
+      select({ cfg, agentId, payload: { ...payload, model: "openai/gpt-4.1-mini" } }),
+    ).resolves.toEqual({
+      ok: false,
+      error: `automation model override 'openai/gpt-4.1-mini' ${expected}`,
+    });
+    expect(mocks.allowed).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg, agentId: agentId ?? "main" }),
+    );
   });
-  expect(mocks.configured.mock.lastCall?.[0]?.cfg).toMatchObject(ownerConfig);
-  expectAllowed({ cfg: ownerConfig, agentId: "main", catalog, raw: model });
-});
 
-it.each([true, false])("selects a Gmail hook model only when allowed=%s", async (allowed) => {
-  mocks.hook.mockReturnValue(selectedRef);
-  mocks.status.mockReturnValue({ allowed });
-  await expect(
-    select({
-      isGmailHook: true,
-      ...(allowed
-        ? { sessionEntry: { providerOverride: "anthropic", modelOverride: "claude-opus-4-6" } }
-        : {}),
-    }),
-  ).resolves.toMatchObject(
-    selected(allowed ? "hook" : "default", allowed ? selectedRef : defaultRef),
-  );
-});
-
-it("uses the selected subagent model with agent defaults derived from object config", async () => {
-  const agentConfigOverride = {
-    model: { primary: "anthropic/claude-opus-4-6" },
-    subagents: { model: { fallbacks: [] } },
-  };
-  const cfg = agentConfig({ model: "anthropic/claude-sonnet-4-6", subagents: { model } });
-  mocks.subagent.mockReturnValue({ raw: model, source: "default-subagent" });
-  await expect(select({ cfg, agentConfigOverride })).resolves.toMatchObject(selected("subagent"));
-  expect(mocks.subagent).toHaveBeenCalledWith({ cfg, agentId: "main", agentConfigOverride });
-  expectAllowed();
-});
-
-it("resolveCronAgentConfig keeps the active runtime snapshot after agent-default derivation", () => {
-  const sourceCfg = discordConfig({ provider: "default", source: "env", id: "TOKEN" });
-  const runtimeCfg = discordConfig("resolved-discord-token");
-  setRuntimeConfigSnapshot(runtimeCfg, sourceCfg);
-  const { agentDefaults, cfgWithAgentDefaults, runtimeConfig } = resolveCronAgentConfig({
-    config: sourceCfg,
-    agentConfigOverride: { model: "openai/gpt-5.5" },
+  it("uses one replacement catalog owner for config, policy, and selected identity", async () => {
+    const cfg = {
+      agents: {
+        defaults: { model: "anthropic/caller-model" },
+        entries: { worker: {} },
+      },
+    };
+    const ownerConfig = {
+      agents: {
+        defaults: { model: "openai/owner-default", modelPolicy: { allow: ["openai/*"] } },
+        entries: { main: {} },
+      },
+    };
+    const catalog = [{ id: "gpt-4.1-mini", name: "Owner Model", provider: "openai" }];
+    const owner = {
+      config: ownerConfig,
+      agentId: "main",
+      agentDir: "/tmp/owner-agent",
+      workspaceDir: "/tmp/owner-workspace",
+      modelCatalog: { entries: catalog, routeVariants: [] },
+    };
+    mocks.loadOwner.mockResolvedValueOnce(owner);
+    await expect(
+      select({
+        cfg,
+        payload: { ...payload, model: "  openai/gpt-4.1-mini  " },
+        sessionEntry: { providerOverride: "anthropic", modelOverride: "claude-sonnet-4-6" },
+      }),
+    ).resolves.toMatchObject({ ok: true, ...selectedRef, owner, modelSource: "payload" });
+    expect(mocks.loadOwner).toHaveBeenCalledExactlyOnceWith({
+      config: cfg,
+      readOnly: true,
+      allowGatewaySubagentBinding: true,
+    });
+    expect(mocks.configured).toHaveBeenCalledWith(
+      expect.objectContaining({ cfg: expect.objectContaining(ownerConfig) }),
+    );
+    expect(mocks.allowed).toHaveBeenCalledWith(
+      expect.objectContaining({
+        cfg: ownerConfig,
+        agentId: "main",
+        catalog,
+        raw: "openai/gpt-4.1-mini",
+      }),
+    );
   });
-  expect(runtimeConfig).toBe(runtimeCfg);
-  expect(agentDefaults.model).toEqual({ primary: "openai/gpt-5.5" });
-  expect(cfgWithAgentDefaults.channels).toBe(runtimeCfg.channels);
+
+  it.each([true, false])("selects a Gmail hook model only when allowed=%s", async (allowed) => {
+    mocks.hook.mockReturnValue(selectedRef);
+    mocks.status.mockReturnValue({ allowed });
+    await expect(
+      select({
+        isGmailHook: true,
+        ...(allowed
+          ? { sessionEntry: { providerOverride: "anthropic", modelOverride: "claude-opus-4-6" } }
+          : {}),
+      }),
+    ).resolves.toMatchObject({
+      ok: true,
+      ...(allowed ? selectedRef : defaultRef),
+      modelSource: allowed ? "hook" : "default",
+    });
+  });
+
+  it("uses the selected subagent model with agent defaults derived from object config", async () => {
+    const agentConfigOverride = {
+      model: { primary: "anthropic/claude-opus-4-6" },
+      subagents: { model: { fallbacks: [] } },
+    };
+    const cfg = {
+      agents: {
+        defaults: {
+          model: "anthropic/claude-sonnet-4-6",
+          subagents: { model: "openai/gpt-4.1-mini" },
+        },
+      },
+    };
+    mocks.subagent.mockReturnValue({ raw: "openai/gpt-4.1-mini", source: "default-subagent" });
+    await expect(select({ cfg, agentConfigOverride })).resolves.toMatchObject({
+      ok: true,
+      ...selectedRef,
+      modelSource: "subagent",
+    });
+    expect(mocks.subagent).toHaveBeenCalledWith({ cfg, agentId: "main", agentConfigOverride });
+    expect(mocks.allowed).toHaveBeenCalledWith(
+      expect.objectContaining({ raw: "openai/gpt-4.1-mini" }),
+    );
+  });
+});
+
+describe("resolveCronAgentConfig", () => {
+  it("keeps the active runtime snapshot after agent-default derivation", () => {
+    const sourceCfg = {
+      channels: {
+        discord: {
+          accounts: {
+            default: { token: { provider: "default", source: "env", id: "DISCORD_BOT_TOKEN" } },
+          },
+        },
+      },
+    } satisfies OpenClawConfig;
+    const runtimeCfg = {
+      channels: { discord: { accounts: { default: { token: "resolved-discord-token" } } } },
+    } satisfies OpenClawConfig;
+    setRuntimeConfigSnapshot(runtimeCfg, sourceCfg);
+    const { agentDefaults, cfgWithAgentDefaults, runtimeConfig } = resolveCronAgentConfig({
+      config: sourceCfg,
+      agentConfigOverride: { model: "openai/gpt-5.5" },
+    });
+    expect(runtimeConfig).toBe(runtimeCfg);
+    expect(agentDefaults.model).toEqual({ primary: "openai/gpt-5.5" });
+    expect(cfgWithAgentDefaults.channels).toBe(runtimeCfg.channels);
+  });
 });

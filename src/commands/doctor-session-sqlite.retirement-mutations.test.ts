@@ -2,319 +2,366 @@ import fs from "node:fs";
 import path from "node:path";
 import type { DatabaseSync } from "node:sqlite";
 import { expectDefined } from "@openclaw/normalization-core";
-import { expect, it, vi } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import * as directoryDurability from "../infra/directory-durability.js";
 import * as nodeSqlite from "../infra/node-sqlite.js";
 import {
   createSessionSqliteMigrationRun,
   writeSessionSqliteMigrationManifest,
-  type SessionSqliteMigrationMove,
 } from "../infra/session-sqlite-migration-manifest.js";
 import { closeOpenClawAgentDatabasesForTest } from "../state/openclaw-agent-db.js";
 import { inspectSessionSqliteRecovery } from "./doctor-session-sqlite-recovery-inventory.js";
 import { retireSessionSqliteRecovery } from "./doctor-session-sqlite-retirement.js";
 import {
-  expectFiles,
-  expectMissing,
-  snapshotFiles,
-} from "./doctor-session-sqlite.publication-spies.test-support.js";
-import {
   isDirectoryDescriptor,
   importLegacyStore,
   readMigrationManifest,
-  RECOVERY_TRANSCRIPT_LINES,
   requireMigrationManifestPath,
   useDoctorSessionSqliteTestFixture,
-  type TestStore,
 } from "./doctor-session-sqlite.test-support.js";
 
 const { createLegacyStore, createVerifiedRecoveryStore } = useDoctorSessionSqliteTestFixture();
 
-function recoveryPath(move: SessionSqliteMigrationMove) {
-  const disposal = move.artifact!.disposal;
-  return fs.existsSync(move.archivePath) || disposal.state !== "pending-disposal"
-    ? move.archivePath
-    : disposal.claimPath;
-}
-
-function expectRetained(manifestPath: string, originals: Map<string, Buffer>) {
-  for (const move of readMigrationManifest(manifestPath).targets[0]!.completedMoves) {
-    expect(move.artifact!.disposal.state).not.toBe("disposed");
-    expectFiles(originals.get(move.archivePath), recoveryPath(move));
-  }
-}
-
-function changeFile(
-  file: string,
-  saved: string,
-  kind: string,
-  replacement: string | Buffer = saved,
-) {
-  if (kind === "hardlink") {
-    fs.linkSync(file, saved);
-  } else {
-    fs.renameSync(file, saved);
-    if (kind === "symlink" && typeof replacement === "string") {
-      fs.symlinkSync(replacement, file);
-    } else if (typeof replacement !== "string") {
-      fs.writeFileSync(file, replacement);
-    } else {
-      fs.copyFileSync(replacement, file);
-    }
-  }
-}
-
-function retire(
-  store: TestStore,
-  confirm: Parameters<typeof retireSessionSqliteRecovery>[0]["confirm"] = async () => true,
-  preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
-) {
-  return retireSessionSqliteRecovery({
-    env: store.env,
-    preview,
-    readConfig: async () => ({}),
-    confirm,
-  });
-}
-
-it.each([false, true])(
-  "checks shared manifests once and preserves confirmation changes: %s",
-  async (changed) => {
-    const { store, manifestPath, manifest, archivePath } = await createVerifiedRecoveryStore();
-    const duplicate = createSessionSqliteMigrationRun(store.env, []);
-    duplicate.manifest.targets = structuredClone(manifest.targets);
-    duplicate.manifest.completedAt = manifest.completedAt;
-    writeSessionSqliteMigrationManifest(duplicate);
-    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
-    const original = fs.readFileSync(archivePath);
-    const reads = vi.spyOn(fs, "readFileSync");
-    try {
-      const cleanup = retire(
-        store,
-        async () => {
-          if (changed) {
-            duplicate.manifest.startedAt = "2026-01-01T00:00:00.000Z";
-            writeSessionSqliteMigrationManifest(duplicate);
-          }
-          reads.mockClear();
-          return true;
-        },
-        preview,
-      );
-      if (changed) {
-        await expect(cleanup).rejects.toThrow("Recovery manifest changed during confirmation");
-        expectFiles(original, archivePath);
-      } else {
-        const result = await cleanup;
-        expect(result).toMatchObject({ status: "complete", totals: { removedFiles: 2 } });
-        expectMissing(archivePath);
-        expect(result.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
-        // The post-confirmation inventory supplies each manifest's only read.
-        for (const file of [manifestPath, duplicate.manifestPath]) {
-          expect(reads.mock.calls.filter(([input]) => input === file)).toHaveLength(1);
-        }
-      }
-    } finally {
-      reads.mockRestore();
-    }
-  },
-);
-
-it.each([
-  { subject: "transcript", change: "replacement", phase: "preview" },
-  ...["new-manifest", "replacement", "symlink", "hardlink"].map((change) => ({
-    subject: "destination",
-    change,
-    phase: "confirmation",
-  })),
-  ...["replacement", "symlink", "hardlink", "same-size edit"].map((change) => ({
-    subject: "transcript",
-    change,
-    phase: "confirmation",
-  })),
-])(
-  "preserves dependencies after $subject $change at $phase",
-  async ({ subject, change, phase }) => {
-    const { store, manifestPath, archivePath, target } = await createVerifiedRecoveryStore();
-    const file = subject === "transcript" ? archivePath : target.sqlitePath;
-    const saved = path.join(store.tempDir, "parked-original");
-    const replacement = path.join(store.tempDir, "replacement");
-    if (subject === "transcript") {
-      fs.writeFileSync(replacement, "unrelated bytes");
-    }
-    const bytes = Buffer.alloc(fs.statSync(archivePath).size, "x");
-    const retained = snapshotFiles(
-      [manifestPath, ...target.completedMoves.map((move) => move.archivePath)].filter(
-        (entry) => subject !== "transcript" || entry !== archivePath,
-      ),
-    );
-    const mutate = async () => {
-      if (change === "new-manifest") {
-        const manifest = readMigrationManifest(manifestPath);
-        const added = createSessionSqliteMigrationRun(store.env, []);
-        added.manifest.targets = manifest.targets;
-        added.manifest.completedAt = manifest.completedAt;
-        writeSessionSqliteMigrationManifest(added);
-      } else if (change === "same-size edit") {
-        const contents = fs.readFileSync(file);
-        contents[0] = 0x78;
-        fs.writeFileSync(file, contents);
-      } else {
-        const source =
-          subject === "destination" ? saved : change === "replacement" ? bytes : replacement;
-        changeFile(file, saved, change, source);
-      }
-      return true;
-    };
-    if (phase === "preview") {
-      await mutate();
+describe("runDoctorSessionSqlite", () => {
+  it.each([false, true])(
+    "checks shared manifests once and preserves confirmation changes: %s",
+    async (changed) => {
+      const { store, imported, archivePath } = await createVerifiedRecoveryStore();
+      const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+      const manifest = readMigrationManifest(manifestPath);
+      const duplicate = createSessionSqliteMigrationRun(store.env, []);
+      duplicate.manifest.targets = structuredClone(manifest.targets);
+      duplicate.manifest.completedAt = manifest.completedAt;
+      writeSessionSqliteMigrationManifest(duplicate);
       const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
-      expect(preview.artifacts.find((artifact) => artifact.path === archivePath)).toMatchObject({
-        outcome: "blocked",
-        reason: "artifact-metadata-changed",
-      });
-      expect(await retire(store, async () => true, preview)).toMatchObject({
-        status: "blocked",
-        totals: { removedBytes: 0 },
-      });
-    } else {
-      const reason =
-        change === "new-manifest"
-          ? /selection changed/i
-          : subject === "destination"
-            ? /destination|symbolic|hard.link/i
-            : /selection changed|artifact/i;
-      await expect(retire(store, mutate)).rejects.toThrow(reason);
-    }
-    expect(fs.existsSync(archivePath)).toBe(true);
-    if (subject === "transcript" && change === "replacement") {
-      expectFiles(bytes, archivePath);
-    }
-    if (subject === "transcript") {
-      expectFiles("unrelated bytes", replacement);
-    }
-    for (const artifact of retained) {
-      expectFiles(artifact.bytes, artifact.file);
-    }
-  },
-);
-
-it.each([
-  { change: "in-place edit", phase: "confirmation" },
-  ...["confirmation", "publication", "unlink-intent"].map((phase) => ({
-    change: "WAL commit",
-    phase,
-  })),
-  ...["intent-sync", "publication", "unlink-intent"].map((phase) => ({
-    change: "later transcript",
-    phase,
-  })),
-])("retains connected originals after $change during $phase", async ({ change, phase }) => {
-  const store = createLegacyStore({
-    transcriptLines:
-      change === "later transcript"
-        ? ['{"type":"session","id":"session-1","version":3}']
-        : RECOVERY_TRANSCRIPT_LINES,
-  });
-  const sibling = path.join(store.sessionDir, "second.jsonl");
-  if (change === "later transcript") {
-    fs.writeFileSync(sibling, '{"type":"session","id":"second","version":3}\n');
-    const index = JSON.parse(fs.readFileSync(store.storePath, "utf8"));
-    index["agent:main:second"] = {
-      sessionId: "second",
-      updatedAt: 2000,
-      sessionFile: "second.jsonl",
-    };
-    fs.writeFileSync(store.storePath, JSON.stringify(index));
-  }
-  const imported = await importLegacyStore(store);
-  expect(imported.targets[0]?.issues).toEqual([]);
-  closeOpenClawAgentDatabasesForTest();
-  const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
-  const target = readMigrationManifest(manifestPath).targets[0]!;
-  const originals = new Map(
-    target.completedMoves.map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+      const original = fs.readFileSync(archivePath);
+      const reads = vi.spyOn(fs, "readFileSync");
+      try {
+        const cleanup = retireSessionSqliteRecovery({
+          env: store.env,
+          preview,
+          readConfig: async () => ({}),
+          confirm: async () => {
+            if (changed) {
+              duplicate.manifest.startedAt = "2026-01-01T00:00:00.000Z";
+              writeSessionSqliteMigrationManifest(duplicate);
+            }
+            reads.mockClear();
+            return true;
+          },
+        });
+        if (changed) {
+          await expect(cleanup).rejects.toThrow("Recovery manifest changed during confirmation");
+          expect(fs.readFileSync(archivePath)).toEqual(original);
+        } else {
+          const result = await cleanup;
+          expect(result.status).toBe("complete");
+          expect(result.totals.removedFiles).toBe(2);
+          expect(fs.existsSync(archivePath)).toBe(false);
+          expect(result.artifacts.filter((item) => item.outcome === "protected")).toHaveLength(2);
+          // The post-confirmation inventory supplies each manifest's only read.
+          for (const file of [manifestPath, duplicate.manifestPath]) {
+            expect(reads.mock.calls.filter(([input]) => input === file)).toHaveLength(1);
+          }
+        }
+      } finally {
+        reads.mockRestore();
+      }
+    },
   );
-  const changed =
-    change === "later transcript"
-      ? expectDefined(
-          target.completedMoves.find((move) => move.sourcePath === sibling),
-          "later transcript",
-        )
-      : target.completedMoves[0]!;
-  const databasePath = target.sqlitePath;
-  let writer: DatabaseSync | undefined;
-  let injected = false;
-  const mutate = (moves: SessionSqliteMigrationMove[] = []) => {
-    injected = true;
-    if (change === "later transcript") {
-      const move = expectDefined(
-        moves.find((item) => item.archivePath === changed.archivePath),
-        "changed transcript receipt",
-      );
-      const file = recoveryPath(move);
-      fs.appendFileSync(file, "unique late history\n");
-      originals.set(move.archivePath, fs.readFileSync(file));
-      return;
-    }
-    const before = fs.statSync(databasePath, { bigint: true });
-    if (change === "WAL commit") {
-      const databaseBefore = fs.readFileSync(databasePath);
-      writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
-      writer.exec("DELETE FROM transcript_events");
-      expectFiles(databaseBefore, databasePath);
-      expect(fs.statSync(`${databasePath}-wal`).size).toBeGreaterThan(32);
-    } else {
-      const bytes = fs.readFileSync(databasePath);
-      bytes[0] = 0;
-      fs.writeFileSync(databasePath, bytes);
-      fs.utimesSync(databasePath, before.atime, before.mtime);
-      expect(fs.statSync(databasePath).size).toBe(bytes.length);
-    }
-    expect(fs.statSync(databasePath, { bigint: true }).ino).toBe(before.ino);
-  };
-  const restore = observeRecoveryDirectorySync(path.dirname(manifestPath), (directory) => {
-    if (injected || phase === "confirmation") {
-      return;
-    }
-    const moves = readMigrationManifest(manifestPath).targets[0]!.completedMoves;
-    const atUnlink = moves.some(
-      (move) =>
-        move.artifact?.disposal.state === "pending-disposal" &&
-        move.artifact.disposal.phase === "unlink-pending",
-    );
-    const matches =
-      phase === "publication"
-        ? directory === path.dirname(changed.archivePath)
-        : directory === path.dirname(manifestPath) && atUnlink === (phase === "unlink-intent");
-    if (matches) {
-      mutate(moves);
-    }
+
+  it("blocks a same-size replacement recovery original during preview", async () => {
+    const { store, archivePath } = await createVerifiedRecoveryStore();
+    const original = fs.readFileSync(archivePath);
+    fs.renameSync(archivePath, path.join(store.tempDir, "parked-original"));
+    const replacement = Buffer.alloc(original.length, "x");
+    fs.writeFileSync(archivePath, replacement);
+
+    const preview = inspectSessionSqliteRecovery({ cfg: {}, env: store.env });
+    expect(preview.artifacts.find((artifact) => artifact.path === archivePath)).toMatchObject({
+      outcome: "blocked",
+      reason: "artifact-metadata-changed",
+    });
+    const result = await retireSessionSqliteRecovery({
+      env: store.env,
+      preview,
+      readConfig: async () => ({}),
+      confirm: async () => true,
+    });
+    expect(result.status).toBe("blocked");
+    expect(result.totals.removedBytes).toBe(0);
+    expect(fs.readFileSync(archivePath)).toEqual(replacement);
   });
-  try {
-    const cleanup = retire(store, async () => {
-      if (phase === "confirmation") {
+
+  it.each(["new-manifest", "replacement", "symlink", "hardlink"])(
+    "refuses a recovery ownership change during confirmation: %s",
+    async (kind) => {
+      const { store, imported, archivePath } = await createVerifiedRecoveryStore();
+      const databasePath = imported.targets[0]!.sqlitePath;
+      const saved = path.join(store.tempDir, "saved-destination.sqlite");
+      const original = fs.readFileSync(archivePath);
+      await expect(
+        retireSessionSqliteRecovery({
+          env: store.env,
+          preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
+          readConfig: async () => ({}),
+          confirm: async () => {
+            if (kind === "new-manifest") {
+              const manifest = readMigrationManifest(imported.migrationRun?.manifestPath);
+              const added = createSessionSqliteMigrationRun(store.env, []);
+              added.manifest.targets = manifest.targets;
+              added.manifest.completedAt = manifest.completedAt;
+              writeSessionSqliteMigrationManifest(added);
+            } else if (kind === "hardlink") {
+              fs.linkSync(databasePath, saved);
+            } else {
+              fs.renameSync(databasePath, saved);
+              if (kind === "symlink") {
+                fs.symlinkSync(saved, databasePath);
+              } else {
+                fs.copyFileSync(saved, databasePath);
+              }
+            }
+            return true;
+          },
+        }),
+      ).rejects.toThrow(
+        kind === "new-manifest" ? /selection changed/i : /destination|symbolic|hard.link/i,
+      );
+      expect(fs.readFileSync(archivePath)).toEqual(original);
+    },
+  );
+
+  it.each(["replacement", "symlink", "hardlink", "same-size edit"])(
+    "preserves every recovery dependency after a transcript %s during confirmation",
+    async (change) => {
+      const { store, imported } = await createVerifiedRecoveryStore();
+      const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+      const manifestBefore = fs.readFileSync(manifestPath);
+      const moves = readMigrationManifest(manifestPath).targets[0]!.completedMoves;
+      const archivePath = expectDefined(
+        moves.find((move) => move.kind === "transcript"),
+        "confirmation mutation archive",
+      ).archivePath;
+      const original = fs.readFileSync(archivePath);
+      const retained = moves
+        .filter((move) => move.archivePath !== archivePath)
+        .map((move) => ({ path: move.archivePath, contents: fs.readFileSync(move.archivePath) }));
+      const replacement = path.join(store.tempDir, "replacement");
+      fs.writeFileSync(replacement, "unrelated bytes");
+      await expect(
+        retireSessionSqliteRecovery({
+          env: store.env,
+          preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
+          readConfig: async () => ({}),
+          confirm: async () => {
+            if (change === "hardlink") {
+              fs.linkSync(archivePath, path.join(store.tempDir, "alias"));
+            } else if (change === "same-size edit") {
+              const contents = fs.readFileSync(archivePath);
+              contents[0] = 0x78;
+              fs.writeFileSync(archivePath, contents);
+            } else {
+              fs.renameSync(archivePath, path.join(store.tempDir, "parked-original"));
+              if (change === "symlink") {
+                fs.symlinkSync(replacement, archivePath);
+              } else {
+                fs.writeFileSync(archivePath, Buffer.alloc(original.length, "x"));
+              }
+            }
+            return true;
+          },
+        }),
+      ).rejects.toThrow(/selection changed|artifact/i);
+      expect(fs.existsSync(archivePath)).toBe(true);
+      if (change === "replacement") {
+        expect(fs.readFileSync(archivePath)).toEqual(Buffer.alloc(original.length, "x"));
+      }
+      expect(fs.readFileSync(replacement, "utf8")).toBe("unrelated bytes");
+      expect(fs.readFileSync(manifestPath)).toEqual(manifestBefore);
+      for (const artifact of retained) {
+        expect(fs.readFileSync(artifact.path)).toEqual(artifact.contents);
+      }
+    },
+  );
+
+  it.each([
+    { change: "in-place edit", phase: "confirmation" },
+    ...["confirmation", "publication", "unlink-intent"].map((phase) => ({
+      change: "WAL commit",
+      phase,
+    })),
+  ])("retains originals after destination $change during $phase", async ({ change, phase }) => {
+    const { store, imported } = await createVerifiedRecoveryStore();
+    const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+    const target = readMigrationManifest(manifestPath).targets[0]!;
+    const originals = target.completedMoves.map((move) => fs.readFileSync(move.archivePath));
+    const databasePath = target.sqlitePath;
+    let writer: DatabaseSync | undefined;
+    let injected = false;
+    const mutate = () => {
+      injected = true;
+      const before = fs.statSync(databasePath, { bigint: true });
+      if (change === "WAL commit") {
+        const databaseBefore = fs.readFileSync(databasePath);
+        writer = nodeSqlite.openNodeSqliteDatabase(databasePath);
+        writer.exec("DELETE FROM transcript_events");
+        expect(fs.readFileSync(databasePath)).toEqual(databaseBefore);
+        expect(fs.statSync(`${databasePath}-wal`).size).toBeGreaterThan(32);
+      } else {
+        const bytes = fs.readFileSync(databasePath);
+        bytes[0] = 0;
+        fs.writeFileSync(databasePath, bytes);
+        fs.utimesSync(databasePath, before.atime, before.mtime);
+        expect(fs.statSync(databasePath).size).toBe(bytes.length);
+      }
+      expect(fs.statSync(databasePath, { bigint: true }).ino).toBe(before.ino);
+    };
+    const mutateAfterSync = (directory: string) => {
+      if (injected || phase === "confirmation") {
+        return;
+      }
+      const moves = readMigrationManifest(manifestPath).targets[0]!.completedMoves;
+      const atUnlink = moves.some(
+        (move) =>
+          move.artifact?.disposal.state === "pending-disposal" &&
+          move.artifact.disposal.phase === "unlink-pending",
+      );
+      if (
+        (phase === "publication" &&
+          directory === path.dirname(target.completedMoves[0]!.archivePath)) ||
+        (phase === "unlink-intent" && directory === path.dirname(manifestPath) && atUnlink)
+      ) {
         mutate();
       }
-      return true;
-    });
-    if (phase === "confirmation") {
-      await expect(cleanup).rejects.toThrow(/destination/i);
-    } else {
-      expect(await cleanup).toMatchObject({ status: "blocked", totals: { removedFiles: 0 } });
+    };
+    const restoreSync = observeRecoveryDirectorySync(path.dirname(manifestPath), mutateAfterSync);
+    try {
+      const cleanup = retireSessionSqliteRecovery({
+        env: store.env,
+        preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
+        readConfig: async () => ({}),
+        confirm: async () => {
+          if (phase === "confirmation") {
+            mutate();
+          }
+          return true;
+        },
+      });
+      if (phase === "confirmation") {
+        await expect(cleanup).rejects.toThrow(/destination/i);
+      } else {
+        const result = await cleanup;
+        expect(result.status).toBe("blocked");
+        expect(result.totals.removedFiles).toBe(0);
+      }
+      expect(injected).toBe(true);
+      for (const [index, move] of readMigrationManifest(
+        manifestPath,
+      ).targets[0]!.completedMoves.entries()) {
+        const disposal = move.artifact!.disposal;
+        expect(disposal.state).not.toBe("disposed");
+        const retainedPath = fs.existsSync(move.archivePath)
+          ? move.archivePath
+          : disposal.state === "pending-disposal"
+            ? disposal.claimPath
+            : move.archivePath;
+        expect(fs.readFileSync(retainedPath)).toEqual(originals[index]);
+      }
+    } finally {
+      restoreSync();
+      writer?.close();
     }
-    expect(injected).toBe(true);
-    if (change !== "later transcript") {
-      expectRetained(manifestPath, originals);
-    }
-  } finally {
-    restore();
-    writer?.close();
-  }
-  if (change === "later transcript") {
-    expect((await retire(store)).totals.removedFiles).toBe(0);
-    expectRetained(manifestPath, originals);
-  }
+  });
+
+  it.each(["intent-sync", "publication", "unlink-intent"])(
+    "preserves connected originals when a later transcript changes during %s",
+    async (phase) => {
+      const store = createLegacyStore({
+        transcriptLines: [JSON.stringify({ type: "session", id: "session-1", version: 3 })],
+      });
+      const sibling = path.join(store.sessionDir, "second.jsonl");
+      fs.writeFileSync(
+        sibling,
+        JSON.stringify({ type: "session", id: "second", version: 3 }) + "\n",
+      );
+      const index = JSON.parse(fs.readFileSync(store.storePath, "utf8"));
+      index["agent:main:second"] = {
+        sessionId: "second",
+        updatedAt: 2000,
+        sessionFile: "second.jsonl",
+      };
+      fs.writeFileSync(store.storePath, JSON.stringify(index));
+      const imported = await importLegacyStore(store);
+      expect(imported.targets[0]?.issues).toEqual([]);
+      closeOpenClawAgentDatabasesForTest();
+      const manifestPath = requireMigrationManifestPath(imported.migrationRun?.manifestPath);
+      const target = readMigrationManifest(manifestPath).targets[0]!;
+      const changed = expectDefined(
+        target.completedMoves.find((move) => move.sourcePath === sibling),
+        "later transcript",
+      );
+      const originals = new Map(
+        target.completedMoves.map((move) => [move.archivePath, fs.readFileSync(move.archivePath)]),
+      );
+      let injected = false;
+      const mutateAfterSync = (directory: string) => {
+        const moves = readMigrationManifest(manifestPath).targets[0]!.completedMoves;
+        const atUnlink = moves.some(
+          (move) =>
+            move.artifact?.disposal.state === "pending-disposal" &&
+            move.artifact.disposal.phase === "unlink-pending",
+        );
+        if (
+          !injected &&
+          ((phase === "intent-sync" && directory === path.dirname(manifestPath) && !atUnlink) ||
+            (phase === "publication" && directory === path.dirname(changed.archivePath)) ||
+            (phase === "unlink-intent" && directory === path.dirname(manifestPath) && atUnlink))
+        ) {
+          injected = true;
+          const move = expectDefined(
+            moves.find((mappedMove) => mappedMove.archivePath === changed.archivePath),
+            "changed transcript receipt",
+          );
+          const disposal = move.artifact!.disposal;
+          const file = fs.existsSync(move.archivePath)
+            ? move.archivePath
+            : disposal.state === "pending-disposal"
+              ? disposal.claimPath
+              : move.archivePath;
+          fs.appendFileSync(file, "unique late history\n");
+          originals.set(move.archivePath, fs.readFileSync(file));
+        }
+      };
+      const restoreSync = observeRecoveryDirectorySync(path.dirname(manifestPath), mutateAfterSync);
+      const invoke = () =>
+        retireSessionSqliteRecovery({
+          env: store.env,
+          preview: inspectSessionSqliteRecovery({ cfg: {}, env: store.env }),
+          readConfig: async () => ({}),
+          confirm: async () => true,
+        });
+      try {
+        const result = await invoke();
+        expect(injected).toBe(true);
+        expect(result.status).toBe("blocked");
+        expect(result.totals.removedFiles).toBe(0);
+      } finally {
+        restoreSync();
+      }
+      expect((await invoke()).totals.removedFiles).toBe(0);
+      for (const move of readMigrationManifest(manifestPath).targets[0]!.completedMoves) {
+        const disposal = move.artifact!.disposal;
+        expect(disposal.state).not.toBe("disposed");
+        const file = fs.existsSync(move.archivePath)
+          ? move.archivePath
+          : disposal.state === "pending-disposal"
+            ? disposal.claimPath
+            : move.archivePath;
+        expect(fs.readFileSync(file)).toEqual(originals.get(move.archivePath));
+      }
+    },
+  );
 });
 
 function observeRecoveryDirectorySync(
