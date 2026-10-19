@@ -1,4 +1,5 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { setImmediate as drainContinuations } from "node:timers/promises";
+import { afterEach, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import {
   readOperatorToolGatewayAuthority,
@@ -14,537 +15,431 @@ import {
 } from "../tools/gateway-caller-context.js";
 import {
   beginForegroundSessionMaintenance,
-  createSessionMaintenanceOwner as createOwner,
+  createSessionMaintenanceOwner as createMaintenanceOwner,
   waitForSessionMaintenance,
 } from "./coordinator.js";
 
-function createTrackedOwner(...args: Parameters<typeof createOwner>) {
-  const owner = createOwner(...args);
+const sessionKey = "session:maintenance";
+const turn = { sessionKey, sessionId: "maintenance", storePath: "/maintenance/current" };
+const target = captureSessionTarget({
+  storeScope: turn.storePath,
+  sessionKey,
+  incarnation: turn.sessionId,
+});
+type OwnerOptions = Omit<Parameters<typeof createMaintenanceOwner>[0], "sessionKey">;
+type MaintenanceWork = (owner: ReturnType<typeof createOwner>) => Promise<void>;
+
+const createOwner = (options: OwnerOptions = {}) =>
+  createMaintenanceOwner({ sessionKey, ...options });
+
+function createTrackedOwner(options: OwnerOptions = {}) {
+  const owner = createOwner(options);
   return {
     ...owner,
     run: <T>(...work: Parameters<typeof owner.run<T>>) => owner.track(owner.run<T>(...work)),
   };
 }
 
-const drainContinuations = () =>
-  new Promise<void>((resolve) => {
-    setImmediate(resolve);
-  });
+function createScenario() {
+  const events: string[] = [];
+  const gates = new Map<string, ReturnType<typeof createDeferred<void>>>();
+  const jobs: Promise<void>[] = [];
+  function gate(name: string) {
+    const deferred = gates.get(name) ?? createDeferred();
+    gates.set(name, deferred);
+    return deferred;
+  }
+  const release = (...names: string[]) => names.forEach((name) => gate(name).resolve());
+  const mark = (name: string) => {
+    events.push(name);
+    release(name);
+  };
+  return {
+    events,
+    mark,
+    release,
+    wait: (name: string) => gate(name).promise,
+    check(expected: string) {
+      expect(events).toEqual(expected.split(" "));
+    },
+    start(name: string, work: MaintenanceWork, options: OwnerOptions = {}) {
+      const owner = createTrackedOwner(options);
+      const job = owner.run(async () => {
+        mark(`${name}:start`);
+        await work(owner);
+        mark(`${name}:done`);
+      });
+      jobs.push(job);
+      return { ...owner, work: job };
+    },
+    async settle(...names: string[]) {
+      release(...names);
+      await Promise.allSettled(jobs);
+    },
+  };
+}
 
-afterEach(async () => {
-  await drainGlobalSingletonLifecycleState("close");
+afterEach(() => drainGlobalSingletonLifecycleState("close"));
+
+it.each([false, true])(
+  "drops retired caller/operator authority (optional=%s)",
+  async (preemptible) => {
+    const source = new AbortController();
+    const operator = {
+      scopes: ["operator.admin"],
+      signal: source.signal,
+      assertCurrent: () => source.signal.throwIfAborted(),
+    };
+    await runWithOperatorToolGatewayAuthority(operator, () =>
+      withGatewayToolCallerIdentity(
+        {
+          agentId: "main",
+          sessionKey: "session:source",
+          receiptAuthority: () => !source.signal.aborted,
+        },
+        async () => {
+          const caller = getGatewayToolCallerIdentity();
+          expect(caller?.receiptAuthority?.()).toBe(true);
+          const owner = createTrackedOwner({ preemptible });
+          const work = owner.run(async () => {
+            expect(getGatewayToolCallerIdentity()).toBeUndefined();
+            expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+            await Promise.resolve();
+            owner.assertCurrent();
+            expect(getGatewayToolCallerIdentity()).toBeUndefined();
+            expect(readOperatorToolGatewayAuthority()).toBeUndefined();
+            return "maintenance completed";
+          });
+          source.abort();
+          await expect(work).resolves.toBe("maintenance completed");
+          expect(getGatewayToolCallerIdentity()).toBe(caller);
+          expect(caller?.receiptAuthority?.()).toBe(false);
+          expect(readOperatorToolGatewayAuthority()).toBe(operator);
+          expect(operator.assertCurrent).toThrow();
+        },
+      ),
+    );
+  },
+);
+
+it("aborts optional work before admitting foreground and waits for its actual cleanup", async () => {
+  const s = createScenario();
+  const owner = s.start(
+    "optional",
+    async (current) => {
+      try {
+        await s.wait("aborted");
+        current.assertCurrent();
+      } finally {
+        s.mark("cleanup:start");
+        await s.wait("finishCleanup");
+        s.mark("cleanup:finish");
+      }
+    },
+    { preemptible: true },
+  );
+  owner.signal.addEventListener("abort", () => s.release("aborted"), { once: true });
+  const rejection = expect(owner.work).rejects.toMatchObject({ name: "AbortError" });
+  await s.wait("optional:start");
+  const admission = beginForegroundSessionMaintenance(sessionKey).then((release) => {
+    s.mark("foreground:admit");
+    return release;
+  });
+  try {
+    await s.wait("cleanup:start");
+    expect(owner.signal.aborted).toBe(true);
+    s.check("optional:start cleanup:start");
+  } finally {
+    s.release("finishCleanup");
+    (await admission)();
+    await rejection;
+  }
+  s.check("optional:start cleanup:start cleanup:finish foreground:admit");
 });
 
-describe("session maintenance ownership", () => {
-  it.each([false, true])(
-    "runs without retired caller or operator authority (preemptible=%s)",
-    async (preemptible) => {
-      const source = new AbortController();
-      const operator = {
-        scopes: ["operator.admin"],
-        signal: source.signal,
-        assertCurrent: () => source.signal.throwIfAborted(),
-      };
-      await runWithOperatorToolGatewayAuthority(operator, () =>
-        withGatewayToolCallerIdentity(
-          {
-            agentId: "main",
-            sessionKey: "session:source",
-            receiptAuthority: () => !source.signal.aborted,
-          },
-          async () => {
-            const caller = getGatewayToolCallerIdentity();
-            expect(caller?.receiptAuthority?.()).toBe(true);
-            const owner = createTrackedOwner({
-              sessionKey: "session:detached",
-              preemptible,
-            });
-            const work = owner.run(async () => {
-              expect(getGatewayToolCallerIdentity()).toBeUndefined();
-              expect(readOperatorToolGatewayAuthority()).toBeUndefined();
-              await Promise.resolve();
-              owner.assertCurrent();
-              expect(getGatewayToolCallerIdentity()).toBeUndefined();
-              expect(readOperatorToolGatewayAuthority()).toBeUndefined();
-              return "maintenance completed";
-            });
-            source.abort();
-            await expect(work).resolves.toBe("maintenance completed");
-            expect(getGatewayToolCallerIdentity()).toBe(caller);
-            expect(caller?.receiptAuthority?.()).toBe(false);
-            expect(readOperatorToolGatewayAuthority()).toBe(operator);
-            expect(operator.assertCurrent).toThrow();
-          },
-        ),
-      );
-    },
-  );
-
-  it("aborts optional work before admitting foreground and waits for its actual cleanup", async () => {
-    const started = createDeferred();
-    const aborted = createDeferred();
-    const cleanupStarted = createDeferred();
-    const finishCleanup = createDeferred();
-    const events: string[] = [];
-    const owner = createTrackedOwner({
-      sessionKey: "session:cancel",
-      preemptible: true,
-    });
-    owner.signal.addEventListener("abort", () => aborted.resolve(), { once: true });
-    const work = owner.run(async () => {
-      started.resolve();
-      try {
-        await aborted.promise;
-        owner.assertCurrent();
-      } finally {
-        events.push("cleanup:start");
-        cleanupStarted.resolve();
-        await finishCleanup.promise;
-        events.push("cleanup:finish");
-      }
-    });
-    const rejection = expect(work).rejects.toMatchObject({ name: "AbortError" });
-    await started.promise;
-
-    const admission = beginForegroundSessionMaintenance("session:cancel").then((release) => {
-      events.push("foreground:admit");
-      return release;
-    });
-    try {
-      await cleanupStarted.promise;
-      expect(owner.signal.aborted).toBe(true);
-      expect(events).toEqual(["cleanup:start"]);
-    } finally {
-      finishCleanup.resolve();
-      (await admission)();
-      await rejection;
-    }
-    expect(events).toEqual(["cleanup:start", "cleanup:finish", "foreground:admit"]);
-    await owner.done;
-  });
-
-  it("keeps optional work pending until every foreground reservation releases without blocking reads", async () => {
-    const releaseFirst = await beginForegroundSessionMaintenance("session:pending");
-    const releaseSecond = await beginForegroundSessionMaintenance("session:pending");
-    const owner = createTrackedOwner({
-      sessionKey: "session:pending",
-      preemptible: true,
-    });
-    let ran = false;
-    let admitted = false;
-    const work = owner.run({
-      admit: (run) =>
-        withSessionTurn(
-          {
-            sessionKey: "session:pending",
-            sessionId: "pending",
-            storePath: "/maintenance/pending",
-          },
-          () => {
-            admitted = true;
-            return run(async () => {
-              owner.assertCurrent();
-              ran = true;
-            });
-          },
-        ),
-    });
-    try {
-      await waitForSessionMaintenance("session:pending");
-      expect(admitted).toBe(false);
-      expect(ran).toBe(false);
-
-      releaseFirst();
-      releaseFirst();
-      await waitForSessionMaintenance("session:pending");
-      expect(admitted).toBe(false);
-      expect(ran).toBe(false);
-      expect(owner.signal.aborted).toBe(false);
-    } finally {
-      releaseFirst();
-      releaseSecond();
-      await work;
-    }
-    expect(ran).toBe(true);
-  });
-
-  it("admits another session while non-preemptible maintenance keeps its own session waiting", async () => {
-    const started = createDeferred();
-    const finish = createDeferred();
-    const owner = createTrackedOwner({ sessionKey: "session:busy" });
-    const work = owner.run(async () => {
-      started.resolve();
-      await finish.promise;
-    });
-    await started.promise;
-    let busyAdmitted = false;
-    const busyAdmission = beginForegroundSessionMaintenance("session:busy").then((release) => {
-      busyAdmitted = true;
-      return release;
-    });
-    try {
-      const releaseOther = await beginForegroundSessionMaintenance("session:other");
-      releaseOther();
-      await waitForSessionMaintenance("session:other");
-      expect(busyAdmitted).toBe(false);
-      expect(owner.signal.aborted).toBe(false);
-    } finally {
-      finish.resolve();
-      await work;
-      (await busyAdmission)();
-    }
-    expect(busyAdmitted).toBe(true);
-  });
-
-  it.each(["pending-other-store", "running-writer", "non-preemptible"] as const)(
-    "keeps the admitted read checkpoint waiting for %s maintenance",
-    async (mode) => {
-      const sessionKey = `session:checkpoint:${mode}`;
-      const target = captureSessionTarget({
-        storeScope: "/maintenance/current",
-        sessionKey,
-        incarnation: mode,
-      });
-      const owner = createOwner({
-        sessionKey,
-        target:
-          mode === "pending-other-store"
-            ? captureSessionTarget({ ...target, storeScope: "/maintenance/other" })
-            : target,
-        preemptible: mode !== "non-preemptible",
-      });
-      const release = createDeferred();
-      const started = createDeferred();
-      const work = owner.track(
-        mode === "running-writer"
-          ? owner.run(async () => {
-              started.resolve();
-              await release.promise;
-            })
-          : release.promise,
-      );
-      if (mode === "running-writer") {
-        await started.promise;
-      }
-      try {
-        await withSessionTurn({ sessionKey, sessionId: mode, target }, async () => {
-          let readCompleted = false;
-          const checkpoint = waitForSessionMaintenance(sessionKey).then(() => {
-            readCompleted = true;
-          });
-          await drainContinuations();
-          expect(readCompleted).toBe(false);
-          release.resolve();
-          await checkpoint;
-          expect(readCompleted).toBe(true);
+it("keeps optional work pending until every foreground reservation releases without blocking reads", async () => {
+  const releaseFirst = await beginForegroundSessionMaintenance(sessionKey);
+  const releaseSecond = await beginForegroundSessionMaintenance(sessionKey);
+  const owner = createTrackedOwner({ preemptible: true });
+  const state = { admitted: false, ran: false };
+  const work = owner.run({
+    admit: (run) =>
+      withSessionTurn(turn, () => {
+        state.admitted = true;
+        return run(async () => {
+          owner.assertCurrent();
+          state.ran = true;
         });
-      } finally {
-        release.resolve();
-        await work;
-      }
-    },
-  );
-
-  it("does not await a maintenance dependency chain queued behind the admitted turn", async () => {
-    const sessionKey = "session:pending-dependency";
-    const target = captureSessionTarget({
-      storeScope: "/maintenance/dependency",
-      sessionKey,
-      incarnation: "dependency",
-    });
-    const finishOptional = createDeferred();
-    const optionalStarted = createDeferred();
-    const events: string[] = [];
-    let optionalWork = Promise.resolve();
-    let dependentWork = Promise.resolve();
-    try {
-      await withSessionTurn({ sessionKey, sessionId: "dependency", target }, async () => {
-        const optional = createOwner({ sessionKey, target, preemptible: true });
-        optionalWork = optional.track(
-          runWithSessionControllerCleanup(() =>
-            optional.run<void>({
-              admit: (run) =>
-                withSessionTurn({ sessionKey, sessionId: "dependency", target }, () =>
-                  run(async () => {
-                    events.push("optional");
-                    optionalStarted.resolve();
-                    await finishOptional.promise;
-                  }),
-                ),
-            }),
-          ),
-        );
-        // Outbox replay can register nonpreemptible engine maintenance for another active session.
-        const dependent = createTrackedOwner({ sessionKey });
-        dependentWork = dependent.run(async () => {
-          events.push("dependent");
-        });
-        const checkpoint = waitForSessionMaintenance(sessionKey).then(() => events.push("read"));
-        await drainContinuations();
-        expect(events).toEqual(["read"]);
-        await checkpoint;
-      });
-      await optionalStarted.promise;
-      expect(events).toEqual(["read", "optional"]);
-      finishOptional.resolve();
-      await Promise.all([optionalWork, dependentWork]);
-      expect(events).toEqual(["read", "optional", "dependent"]);
-    } finally {
-      finishOptional.resolve();
-      await Promise.allSettled([optionalWork, dependentWork]);
-    }
+      }),
   });
+  try {
+    await waitForSessionMaintenance(sessionKey);
+    expect(state).toEqual({ admitted: false, ran: false });
 
-  it.each([true, false])(
-    "serializes independent siblings and lets the older owner read with preemptible=%s",
-    async (preemptible) => {
-      const sessionKey = `session:siblings:${preemptible}`;
-      const started = createDeferred();
-      const allowRead = createDeferred();
-      const readCompleted = createDeferred();
-      const finishOlder = createDeferred();
-      const stop = createDeferred();
-      const events: string[] = [];
-      const older = createTrackedOwner({ sessionKey, preemptible });
-      const olderWork = older.run(async () => {
-        events.push("older:start");
-        started.resolve();
-        await allowRead.promise;
-        await Promise.race([waitForSessionMaintenance(sessionKey), stop.promise]);
-        events.push("older:read");
-        readCompleted.resolve();
-        await finishOlder.promise;
-        events.push("older:finish");
-      });
+    releaseFirst();
+    releaseFirst();
+    await waitForSessionMaintenance(sessionKey);
+    expect(state).toEqual({ admitted: false, ran: false });
+    expect(owner.signal.aborted).toBe(false);
+  } finally {
+    releaseFirst();
+    releaseSecond();
+    await work;
+  }
+  expect(state.ran).toBe(true);
+});
+
+it.each(["pending-other-store", "running-writer", "non-preemptible"] as const)(
+  "waits for %s maintenance before reads and foreground admission",
+  async (mode) => {
+    const owner = createOwner({
+      target:
+        mode === "pending-other-store"
+          ? captureSessionTarget({ ...target, storeScope: "/maintenance/other" })
+          : target,
+      preemptible: mode !== "non-preemptible",
+    });
+    const release = createDeferred();
+    const started = createDeferred();
+    const work = owner.track(
+      mode !== "pending-other-store"
+        ? owner.run(async () => {
+            started.resolve();
+            await release.promise;
+          })
+        : release.promise,
+    );
+    if (mode !== "pending-other-store") {
       await started.promise;
-      const younger = createTrackedOwner({ sessionKey, preemptible: !preemptible });
-      const youngerWork = younger.run(async () => {
-        events.push("younger:start");
-        await Promise.race([waitForSessionMaintenance(sessionKey), stop.promise]);
-        events.push("younger:read");
-      });
-      try {
-        expect(events).toEqual(["older:start"]);
-        allowRead.resolve();
-        await readCompleted.promise;
-        expect(events).toEqual(["older:start", "older:read"]);
-        finishOlder.resolve();
-        await Promise.all([olderWork, youngerWork]);
-        expect(events).toEqual([
-          "older:start",
-          "older:read",
-          "older:finish",
-          "younger:start",
-          "younger:read",
-        ]);
-      } finally {
-        // Unblock fixture reads after an ordering failure so real owner cleanup still runs.
-        stop.resolve();
-        allowRead.resolve();
-        finishOlder.resolve();
-        await Promise.allSettled([olderWork, youngerWork]);
-      }
-    },
-  );
-
-  it.each(
-    (["external dependent", "nested independent", "released parent"] as const).flatMap(
-      (placement) => (["read", "foreground"] as const).map((action) => ({ placement, action })),
-    ),
-  )("orders child $action with $placement sibling", async ({ placement, action }) => {
-    const sessionKey = `session:combined:${placement}:${action}`;
-    const parentStarted = createDeferred();
-    const allowChild = createDeferred();
-    const childCreated = createDeferred();
-    const childCompleted = createDeferred();
-    const siblingStarted = createDeferred();
-    const finishSibling = createDeferred();
-    const finishParent = createDeferred();
-    const events: string[] = [];
-    const parent = createTrackedOwner({ sessionKey });
-    let child: ReturnType<typeof createTrackedOwner> | undefined;
-    let childWork: Promise<void> = Promise.resolve();
-    let siblingWork: Promise<void> = Promise.resolve();
-    const startSibling = () => {
-      const sibling = createTrackedOwner({ sessionKey });
-      siblingWork = sibling.run(async () => {
-        events.push("sibling:start");
-        siblingStarted.resolve();
-        await finishSibling.promise;
-        events.push("sibling:done");
-      });
-    };
-    const parentWork = parent.run(async () => {
-      events.push("parent:start");
-      parentStarted.resolve();
-      await allowChild.promise;
-      if (placement === "nested independent") {
-        startSibling();
-        await siblingStarted.promise;
-      } else if (placement === "released parent") {
-        parent.releaseWrites();
-        await siblingStarted.promise;
-      }
-      const childOwner = createTrackedOwner({ sessionKey });
-      child = childOwner;
-      childWork = childOwner.run(async () => {
-        events.push("child:start");
-        if (action === "read") {
-          await waitForSessionMaintenance(sessionKey);
-        } else {
-          const release = await beginForegroundSessionMaintenance(sessionKey);
-          release();
-        }
-        childOwner.assertCurrent();
-        if (placement !== "released parent") {
-          parent.assertCurrent();
-        }
-        events.push("child:done");
-        childCompleted.resolve();
-      });
-      childCreated.resolve();
-      await childWork;
-      await waitForSessionMaintenance(sessionKey);
-      events.push("parent:resume");
-      await finishParent.promise;
-      events.push("parent:done");
-    });
+    }
+    const observed = { read: false, foreground: false };
+    const admission =
+      mode === "non-preemptible"
+        ? beginForegroundSessionMaintenance(sessionKey).then((releaseForeground) => {
+            observed.foreground = true;
+            return releaseForeground;
+          })
+        : undefined;
     try {
-      await parentStarted.promise;
+      (await beginForegroundSessionMaintenance("session:other"))();
+      await waitForSessionMaintenance("session:other");
+      await withSessionTurn({ ...turn, target }, async () => {
+        const checkpoint = waitForSessionMaintenance(sessionKey).then(() => {
+          observed.read = true;
+        });
+        await drainContinuations();
+        expect(observed).toEqual({ read: false, foreground: false });
+        expect(owner.signal.aborted).toBe(false);
+        release.resolve();
+        await checkpoint;
+        expect(observed.read).toBe(true);
+      });
+    } finally {
+      release.resolve();
+      await work;
+      (await admission)?.();
+    }
+    expect(observed.foreground).toBe(mode === "non-preemptible");
+  },
+);
+
+it("does not await a maintenance dependency chain queued behind the admitted turn", async () => {
+  const s = createScenario();
+  let optionalWork = Promise.resolve();
+  let dependentWork = Promise.resolve();
+  try {
+    await withSessionTurn({ ...turn, target }, async () => {
+      const optional = createOwner({ target, preemptible: true });
+      optionalWork = optional.track(
+        runWithSessionControllerCleanup(() =>
+          optional.run<void>({
+            admit: (run) =>
+              withSessionTurn({ ...turn, target }, () =>
+                run(async () => {
+                  s.mark("optional");
+                  await s.wait("finishOptional");
+                }),
+              ),
+          }),
+        ),
+      );
+      // Outbox replay can register nonpreemptible engine maintenance for another active session.
+      const dependent = createTrackedOwner();
+      dependentWork = dependent.run(async () => s.mark("dependent"));
+      const checkpoint = waitForSessionMaintenance(sessionKey).then(() => s.mark("read"));
+      await drainContinuations();
+      s.check("read");
+      await checkpoint;
+    });
+    await s.wait("optional");
+    s.check("read optional");
+    s.release("finishOptional");
+    await Promise.all([optionalWork, dependentWork]);
+    s.check("read optional dependent");
+  } finally {
+    s.release("finishOptional");
+    await Promise.allSettled([optionalWork, dependentWork]);
+  }
+});
+
+it.each(
+  [
+    { placement: "external dependent", preemptible: false },
+    { placement: "external dependent", preemptible: true },
+    { placement: "nested independent", preemptible: false },
+    { placement: "released parent", preemptible: false },
+  ].flatMap(({ placement, preemptible }) =>
+    (["read", "foreground"] as const).map((action) => ({ placement, preemptible, action })),
+  ),
+)(
+  "orders child $action with $placement sibling (preemptible=$preemptible)",
+  async ({ placement, action, preemptible }) => {
+    const s = createScenario();
+    let child: ReturnType<typeof s.start> | undefined;
+    let sibling: ReturnType<typeof s.start> | undefined;
+    const startSibling = () => {
+      sibling = s.start(
+        "sibling",
+        async () => {
+          await Promise.race([waitForSessionMaintenance(sessionKey), s.wait("stop")]);
+          await s.wait("finishSibling");
+        },
+        { preemptible: placement === "external dependent" && !preemptible },
+      );
+    };
+    const parent = s.start(
+      "parent",
+      async (owner) => {
+        await s.wait("allowChild");
+        if (placement === "nested independent") {
+          startSibling();
+          await s.wait("sibling:start");
+        } else if (placement === "released parent") {
+          owner.releaseWrites();
+          await s.wait("sibling:start");
+        }
+        child = s.start("child", async (childOwner) => {
+          if (action === "read") {
+            await waitForSessionMaintenance(sessionKey);
+          } else {
+            (await beginForegroundSessionMaintenance(sessionKey))();
+          }
+          childOwner.assertCurrent();
+          if (placement !== "released parent") {
+            owner.assertCurrent();
+          }
+        });
+        s.release("child:created");
+        await child.work;
+        await waitForSessionMaintenance(sessionKey);
+        s.mark("parent:resume");
+        await s.wait("finishParent");
+      },
+      { preemptible },
+    );
+    try {
+      await s.wait("parent:start");
       if (placement !== "nested independent") {
         startSibling();
       }
-      allowChild.resolve();
-      await childCreated.promise;
-      // These owner waits have no I/O: drain the scheduled continuations without
-      // relying on a test timeout to discover a circular dependency.
+      s.release("allowChild");
+      await s.wait("child:created");
+      // Drain non-I/O continuations so a dependency cycle fails the ordering assertion.
       await drainContinuations();
       if (placement === "external dependent") {
-        expect([...events]).toEqual(["parent:start", "child:start", "child:done", "parent:resume"]);
+        s.check("parent:start child:start child:done parent:resume");
       } else {
-        expect([...events]).toEqual(["parent:start", "sibling:start"]);
-        finishSibling.resolve();
-        await childCompleted.promise;
+        s.check("parent:start sibling:start");
+        s.release("finishSibling");
+        await s.wait("child:done");
       }
-      finishParent.resolve();
-      await parentWork;
-      await siblingStarted.promise;
-      finishSibling.resolve();
-      await siblingWork;
+      s.release("finishParent");
+      await parent.work;
+      await s.wait("sibling:start");
+      s.release("finishSibling");
+      await sibling?.work;
       const ordered =
         placement === "external dependent"
           ? ["child:done", "parent:done", "sibling:start"]
           : ["sibling:done", "child:start", "parent:done"];
-      expect(events.filter((event) => ordered.includes(event))).toEqual(ordered);
+      expect(s.events.filter((event) => ordered.includes(event))).toEqual(ordered);
     } finally {
-      // Break a failed fixture's dependency cycle only after its ordering assertion;
-      // actual tracked completion still settles every owner before teardown.
-      allowChild.resolve();
-      finishParent.resolve();
-      finishSibling.resolve();
+      // Release the failed fixture's cycle, then await real tracked completion.
+      s.release("stop", "allowChild", "finishParent", "finishSibling");
       parent.releaseWrites();
       child?.releaseWrites();
-      await Promise.allSettled([parentWork, siblingWork, childWork]);
+      await s.settle();
     }
     await waitForSessionMaintenance(sessionKey);
+  },
+);
+
+it("releases writes after disposal while retaining completion ownership of an external rerun", async () => {
+  const s = createScenario();
+  const parent = s.start("parent", async (owner) => {
+    await s.wait("finishDisposal");
+    owner.releaseWrites();
+    expect(owner.assertCurrent).toThrow();
+    s.mark("parent:released");
+    await child.work;
   });
-
-  it("releases writes after disposal while retaining completion ownership of an external rerun", async () => {
-    const sessionKey = "session:external-rerun";
-    const disposing = createDeferred();
-    const finishDisposal = createDeferred();
-    const childRead = createDeferred();
-    const finishChild = createDeferred();
-    const stop = createDeferred();
-    const events: string[] = [];
-    const parent = createTrackedOwner({ sessionKey });
-    let childWork: Promise<void> = Promise.resolve();
-    const parentWork = parent.run(async () => {
-      events.push("parent:dispose");
-      disposing.resolve();
-      await finishDisposal.promise;
-      parent.releaseWrites();
-      expect(parent.assertCurrent).toThrow();
-      events.push("parent:released");
-      await childWork;
-      events.push("parent:done");
-    });
-    await disposing.promise;
-    const child = createTrackedOwner({ sessionKey });
-    childWork = child.run(async () => {
-      events.push("child:start");
-      await Promise.race([waitForSessionMaintenance(sessionKey), stop.promise]);
-      events.push("child:read");
-      childRead.resolve();
-      await finishChild.promise;
-      events.push("child:done");
-    });
-    let parentDone = false;
-    void parent.done.then(() => {
-      parentDone = true;
-    });
-    try {
-      expect(events).toEqual(["parent:dispose"]);
-      finishDisposal.resolve();
-      await childRead.promise;
-      expect(events).toEqual(["parent:dispose", "parent:released", "child:start", "child:read"]);
-      expect(parentDone).toBe(false);
-      finishChild.resolve();
-      await Promise.all([parentWork, childWork, parent.done]);
-      expect(events.slice(-2)).toEqual(["child:done", "parent:done"]);
-      expect(parentDone).toBe(true);
-    } finally {
-      stop.resolve();
-      finishDisposal.resolve();
-      finishChild.resolve();
-      await Promise.allSettled([parentWork, childWork]);
-    }
+  await s.wait("parent:start");
+  const child = s.start("child", async () => {
+    await Promise.race([waitForSessionMaintenance(sessionKey), s.wait("stop")]);
+    s.mark("child:read");
+    await s.wait("finishChild");
   });
+  let parentDone = false;
+  void parent.done.then(() => {
+    parentDone = true;
+  });
+  try {
+    s.check("parent:start");
+    s.release("finishDisposal");
+    await s.wait("child:read");
+    s.check("parent:start parent:released child:start child:read");
+    expect(parentDone).toBe(false);
+    s.release("finishChild");
+    await Promise.all([parent.work, child.work, parent.done]);
+    expect(s.events.slice(-2)).toEqual(["child:done", "parent:done"]);
+    expect(parentDone).toBe(true);
+  } finally {
+    await s.settle("stop", "finishDisposal", "finishChild");
+  }
+});
 
-  it.each(["fulfilled", "rejected"] as const)(
-    "fences a retained assertion after tracked work is %s",
-    async (outcome) => {
-      const owner = createOwner({ sessionKey: `session:settled:${outcome}` });
-      const assertCurrent = owner.assertCurrent;
-      const completion = createDeferred<string>();
-      const work = owner.track(completion.promise);
-      expect(assertCurrent).not.toThrow();
-      if (outcome === "fulfilled") {
-        completion.resolve("completed");
-        await expect(work).resolves.toBe("completed");
-      } else {
-        const error = new Error("maintenance failed");
-        const rejection = expect(work).rejects.toBe(error);
-        completion.reject(error);
-        await rejection;
-      }
-
-      await owner.done;
-      expect(assertCurrent).toThrow();
-      await waitForSessionMaintenance(`session:settled:${outcome}`);
-    },
+it.each(["fulfilled", "rejected"] as const)("fences after %s completion", async (outcome) => {
+  const owner = createOwner();
+  const assertCurrent = owner.assertCurrent;
+  const error = new Error("maintenance failed");
+  const work = owner.track(
+    outcome === "fulfilled" ? Promise.resolve("completed") : Promise.reject(error),
   );
+  expect(assertCurrent).not.toThrow();
+  if (outcome === "fulfilled") {
+    await expect(work).resolves.toBe("completed");
+  } else {
+    await expect(work).rejects.toBe(error);
+  }
 
-  it.each(["close", "restart"] as const)(
-    "aborts active maintenance and fences retained authority on process %s",
-    async (event) => {
-      const finish = createDeferred();
-      const owner = createOwner({ sessionKey: `session:lifecycle:${event}` });
-      const assertCurrent = owner.assertCurrent;
-      const work = owner.track(finish.promise);
-      const rotation = drainGlobalSingletonLifecycleState(event);
-      try {
-        expect(owner.signal.aborted).toBe(true);
-        expect(assertCurrent).toThrow();
-      } finally {
-        finish.resolve();
-        await Promise.all([work, rotation]);
-      }
-      const successor = createTrackedOwner({ sessionKey: `session:lifecycle:${event}` });
-      await successor.run(async () => {
-        successor.assertCurrent();
-      });
-      expect(assertCurrent).toThrow();
-    },
-  );
+  expect(assertCurrent).toThrow();
+  await waitForSessionMaintenance(sessionKey);
+});
+
+it.each(["close", "restart"] as const)("aborts and fences on %s", async (event) => {
+  const finish = createDeferred();
+  const owner = createOwner();
+  const assertCurrent = owner.assertCurrent;
+  const work = owner.track(finish.promise);
+  const rotation = drainGlobalSingletonLifecycleState(event);
+  try {
+    expect(owner.signal.aborted).toBe(true);
+    expect(assertCurrent).toThrow();
+  } finally {
+    finish.resolve();
+    await Promise.all([work, rotation]);
+  }
+  const successor = createTrackedOwner();
+  await successor.run(async () => successor.assertCurrent());
+  expect(assertCurrent).toThrow();
 });
