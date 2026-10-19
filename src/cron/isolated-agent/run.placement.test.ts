@@ -175,30 +175,31 @@ describe("current-bound cron placement", () => {
         { sessionKey: cronKey, workspaceDir: root },
       ]);
       const unexpectedRun = vi.fn(async () => ({ meta: { durationMs: 0 } }));
+      const turnTarget = {
+        sessionId: run.sessionId,
+        sessionKey: cronKey,
+        agentId: "main",
+        runId: "wrong-target",
+      };
+      const rejectTarget = (
+        overrides: Partial<typeof turnTarget>,
+        error = "Worker turn session key does not match its placement",
+      ) =>
+        expect(
+          provider.executeLocalTurn({ ...turnTarget, ...overrides }, unexpectedRun),
+        ).rejects.toThrow(error);
       for (const sessionKey of [
         SESSION_KEY,
         "agent:main:cron:other-job",
         `${cronKey}:run:another-run`,
         `${run.sessionKey}:thread:other`,
       ]) {
-        await expect(
-          provider.executeLocalTurn(
-            { sessionId: run.sessionId, sessionKey, agentId: "main", runId: "wrong-target" },
-            unexpectedRun,
-          ),
-        ).rejects.toThrow("Worker turn session key does not match its placement");
+        await rejectTarget({ sessionKey });
       }
-      await expect(
-        provider.executeLocalTurn(
-          {
-            sessionId: run.sessionId,
-            sessionKey: cronKey,
-            agentId: "other",
-            runId: "wrong-agent",
-          },
-          unexpectedRun,
-        ),
-      ).rejects.toThrow("Worker turn agent id does not match its placement");
+      await rejectTarget(
+        { agentId: "other", runId: "wrong-agent" },
+        "Worker turn agent id does not match its placement",
+      );
       await expect(
         execute({
           sessionId: SESSION_ID,
@@ -225,27 +226,15 @@ describe("current-bound cron placement", () => {
         "local root",
       );
       for (const suffix of [rootOnly.sessionId, "another-run"]) {
-        await expect(
-          provider.executeLocalTurn(
-            { ...rootOnly, sessionKey: `${rootOnly.sessionKey}:run:${suffix}` },
-            unexpectedRun,
-          ),
-        ).rejects.toThrow("Worker turn session key does not match its placement");
+        await rejectTarget({ ...rootOnly, sessionKey: `${rootOnly.sessionKey}:run:${suffix}` });
       }
       await accessor.patchSessionEntryCore({ ...sessionTarget, sessionKey: cronKey }, () => ({
         repositoryWorkspaceId: "repository-needs-worker",
       }));
-      await expect(
-        provider.executeLocalTurn(
-          {
-            sessionId: run.sessionId,
-            sessionKey: cronKey,
-            agentId: "main",
-            runId: "repository-send",
-          },
-          unexpectedRun,
-        ),
-      ).rejects.toThrow("This repository session needs a cloud worker");
+      await rejectTarget(
+        { runId: "repository-send" },
+        "This repository session needs a cloud worker",
+      );
       expect(unexpectedRun).not.toHaveBeenCalled();
       expect(placements.get(SESSION_ID)).toEqual(sourcePlacement);
       expect(environments.startTunnel).not.toHaveBeenCalled();

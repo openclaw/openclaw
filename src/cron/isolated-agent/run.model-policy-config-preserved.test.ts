@@ -22,6 +22,23 @@ function buildCronConfig(cfg: OpenClawConfig, agentId: string): OpenClawConfig {
   }).cfgWithAgentDefaults;
 }
 
+function selectModel(
+  owner: Parameters<typeof resolveCronModelSelection>[0]["owner"],
+  isGmailHook = false,
+) {
+  return resolveCronModelSelection({
+    cfg: owner.config,
+    owner,
+    agentConfigOverride: resolveAgentConfig(owner.config, owner.agentId),
+    agentId: owner.agentId,
+    agentDir: owner.agentDir,
+    workspaceDir: owner.workspaceDir,
+    payload: { kind: "agentTurn", message: "scheduled work" },
+    sessionEntry: {},
+    isGmailHook,
+  });
+}
+
 function resolveCronPayloadModel(cfg: OpenClawConfig, raw: string) {
   return resolveAllowedModelRefCore({
     cfg,
@@ -64,17 +81,7 @@ describe("resolveCronAgentConfig model policy preservation", () => {
       metadataSnapshot: createPluginMetadataSnapshotFixture({ plugins: [] }),
       modelCatalog: { entries: [], routeVariants: [] },
     };
-    const result = await resolveCronModelSelection({
-      cfg,
-      owner,
-      agentConfigOverride: resolveAgentConfig(cfg, owner.agentId),
-      agentId: owner.agentId,
-      agentDir: owner.agentDir,
-      workspaceDir: owner.workspaceDir,
-      payload: { kind: "agentTurn", message: "scheduled work" },
-      sessionEntry: {},
-      isGmailHook: false,
-    });
+    const result = await selectModel(owner);
     expect(result).toMatchObject({
       ok: true,
       provider: "native",
@@ -228,20 +235,7 @@ describe("resolveCronAgentConfig model policy preservation", () => {
       };
       for (const ambient of [metadataSnapshot, otherWorkspace]) {
         const result = await withPluginRuntimeGenerationScope({ metadataSnapshot: ambient }, () =>
-          resolveCronModelSelection({
-            cfg,
-            owner,
-            agentConfigOverride: resolveAgentConfig(cfg, owner.agentId),
-            agentId: owner.agentId,
-            agentDir: owner.agentDir,
-            workspaceDir: owner.workspaceDir,
-            payload: {
-              kind: "agentTurn",
-              message: "scheduled work",
-            },
-            sessionEntry: {},
-            isGmailHook: source === "hook",
-          }),
+          selectModel(owner, source === "hook"),
         );
         expect(result).toMatchObject({
           ok: true,
@@ -271,52 +265,30 @@ const defaultSandbox = {
   },
 };
 
-function buildRunCfg(
-  agentId: string,
-  agentConfigOverride: Parameters<typeof resolveCronAgentConfig>[0]["agentConfigOverride"],
-) {
-  const { cfgWithAgentDefaults } = resolveCronAgentConfig({
-    config: { agents: { defaults: { sandbox: structuredClone(defaultSandbox) } } },
-    agentConfigOverride,
-  });
-  return {
-    ...cfgWithAgentDefaults,
-    agents: {
-      ...cfgWithAgentDefaults.agents,
-      entries: { [agentId]: { ...agentConfigOverride } },
-    },
-  };
-}
-
 describe("runCronIsolatedAgentTurn sandbox config preserved", () => {
   it("keeps global sandbox defaults when agent override is partial", () => {
-    const runCfg = buildRunCfg("specialist", {
-      sandbox: {
-        docker: {
-          image: "ghcr.io/openclaw/sandbox:custom",
-        },
-        browser: {
-          image: "ghcr.io/openclaw/browser:custom",
-        },
-        prune: {
-          idleHours: 1,
+    const sandbox = {
+      docker: { image: "ghcr.io/openclaw/sandbox:custom" },
+      browser: { image: "ghcr.io/openclaw/browser:custom" },
+      prune: { idleHours: 1 },
+    };
+    const runCfg = buildCronConfig(
+      {
+        agents: {
+          defaults: { sandbox: structuredClone(defaultSandbox) },
+          entries: { specialist: { sandbox } },
         },
       },
+      "specialist",
+    );
+    expect(runCfg.agents?.defaults?.sandbox).toEqual(defaultSandbox);
+    expect(resolveSandboxConfigForAgent(runCfg, "specialist")).toMatchObject({
+      mode: "all",
+      workspaceAccess: "rw",
+      docker: { ...defaultSandbox.docker, ...sandbox.docker },
+      browser: { ...defaultSandbox.browser, ...sandbox.browser },
+      prune: { ...defaultSandbox.prune, ...sandbox.prune },
     });
-    const resolvedSandbox = resolveSandboxConfigForAgent(runCfg, "specialist");
-
-    expect(runCfg.agents.defaults?.sandbox).toEqual(defaultSandbox);
-    expect(resolvedSandbox.mode).toBe("all");
-    expect(resolvedSandbox.workspaceAccess).toBe("rw");
-    expect(resolvedSandbox.docker.image).toBe("ghcr.io/openclaw/sandbox:custom");
-    expect(resolvedSandbox.docker.network).toBe("none");
-    expect(resolvedSandbox.docker.dangerouslyAllowContainerNamespaceJoin).toBe(true);
-    expect(resolvedSandbox.docker.dangerouslyAllowExternalBindSources).toBe(true);
-    expect(resolvedSandbox.browser.enabled).toBe(true);
-    expect(resolvedSandbox.browser.image).toBe("ghcr.io/openclaw/browser:custom");
-    expect(resolvedSandbox.browser.autoStart).toBe(false);
-    expect(resolvedSandbox.prune.idleHours).toBe(1);
-    expect(resolvedSandbox.prune.maxAgeDays).toBe(7);
   });
 });
 

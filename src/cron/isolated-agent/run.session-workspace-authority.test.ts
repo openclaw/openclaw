@@ -3,10 +3,7 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
-import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
-import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { AUTOMATIONS_TOOL_NAME } from "../../agents/tools/automations-tool-name.js";
 import {
   createAdmittedGatewayToolCallerIdentity,
@@ -17,15 +14,12 @@ import {
   materializeManagedWorktreeFixture,
   useManagedWorktreeTestRepository,
 } from "../../agents/worktrees/service.test-support.js";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
-import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { cronHandlers } from "../../gateway/server-methods/cron.js";
 import {
   CREATOR,
   SESSION,
   SESSION_ID,
-  cfg,
   stateDir,
   inRun,
   createCronFixture,
@@ -41,6 +35,7 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { CronService } from "../service.js";
 import { createNoopLogger } from "../service.test-harness.js";
 import { resolveCronSessionTargetSessionKey } from "../session-target.js";
+import { createAuthorityTools, prepareAuthorityConfig } from "./run.authority.test-support.js";
 import {
   ensureAgentWorkspaceMock,
   loadRunCronIsolatedAgentTurn,
@@ -49,13 +44,11 @@ import {
   patchSessionEntryMock,
   resetRunCronIsolatedAgentTurnHarness,
   resolveCronDeliveryPlanMock,
-  resolveConfiguredModelRefMock,
   resolveCronSessionMock,
   runEmbeddedAgentMock,
 } from "./run.test-harness.js";
 
 const runCronIsolatedAgentTurn = await loadRunCronIsolatedAgentTurn();
-const { resolveAgentDir } = await import("./run.runtime.js");
 const session = await vi.importActual<typeof import("./session.js")>("./session.js");
 const accessor = await vi.importActual<typeof import("../../config/sessions/session-accessor.js")>(
   "../../config/sessions/session-accessor.js",
@@ -88,32 +81,8 @@ describe("scheduled workspace authority through creator, storage, scheduler and 
     const foreignWorkspace = tempDirs.make("cron-foreign-workspace-");
     const foreignKey = "agent:main:dashboard:another-person";
     const targetKey = scenario === "foreign" || scenario === "operator" ? foreignKey : SESSION;
-    const agentDir = path.join(stateDir, "agents", "main", "agent");
-    const config: OpenClawConfig = {
-      ...cfg,
-      models: createEmbeddedAgentRunnerOpenAiConfig(["gpt-4.1"]).models,
-      agents: {
-        defaults: { skipBootstrap: true, workspace: stateDir, model: "openai/gpt-4.1" },
-        entries: { main: { agentDir, workspace: stateDir } },
-      },
-      auth: {
-        profiles: { "openai:cron-fixture": { provider: "openai", mode: "api_key" } },
-        order: { openai: ["openai:cron-fixture"] },
-      },
+    const config = await prepareAuthorityConfig({
       tools: { allow: [AUTOMATIONS_TOOL_NAME, "read", "write"], fs: { workspaceOnly: true } },
-    };
-    setRuntimeConfigSnapshot(config);
-    // Capture and execution must address the same canonical credential owner.
-    vi.mocked(resolveAgentDir).mockReturnValue(agentDir);
-    resolveConfiguredModelRefMock.mockReturnValue({ provider: "openai", model: "gpt-4.1" });
-    await persistAuthProfileBatch({
-      stateDir,
-      profiles: [
-        {
-          profileId: "openai:cron-fixture",
-          credential: { type: "api_key", provider: "openai", key: "gpt-4.1-key" },
-        },
-      ],
     });
     const managedRoot = scenario.startsWith("managed")
       ? tempDirs.make("cron-managed-workspace-")
@@ -222,24 +191,9 @@ describe("scheduled workspace authority through creator, storage, scheduler and 
         sessionKey: targetKey,
       });
       return withGatewayToolCallerIdentity(caller, async () => {
-        const tools = createOpenClawCodingTools({
-          config: params.config,
-          agentId: "main",
+        const tools = createAuthorityTools(params, {
           sessionKey: targetKey,
-          sessionId: params.sessionId,
-          runId: params.runId,
           operationalRunInstance: admitted.operationalRunInstance,
-          workspaceDir: params.workspaceDir,
-          cwd: params.cwd,
-          runtimeToolAllowlist: params.toolsAllow,
-          scheduledToolPolicy: params.scheduledToolPolicy,
-          toolConstructionPlan: {
-            includeBaseCodingTools: true,
-            includeShellTools: false,
-            includeChannelTools: false,
-            includeOpenClawTools: false,
-            includePluginTools: false,
-          },
         });
         const read = expectDefined(
           tools.find((tool) => tool.name === "read"),

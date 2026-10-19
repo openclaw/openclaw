@@ -1,6 +1,5 @@
 import path from "node:path";
 import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
-import { setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import {
   type DiagnosticEventPayload,
@@ -25,6 +24,7 @@ vi.mock("../../agents/auth-profiles/source-check.js", () => ({
   hasAnyAuthProfileStoreSourceAsync: hasAnyAuthProfileStoreSourceAsyncMock,
 }));
 
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   loadRunCronIsolatedAgentTurn,
@@ -43,26 +43,23 @@ function makeParams(config: OpenClawConfig = {}) {
     ...config,
     session: { ...config.session, store: sessionStorePath },
   };
-  setRuntimeConfigSnapshot(cfg);
-  return {
-    deliveryAttemptFence: null,
+  return makeIsolatedAgentParamsFixture({
     cfg,
-    deps: {} as never,
     job: {
       id: "cron-diag-events",
       name: "Diag Events",
       enabled: true,
       createdAtMs: 0,
       updatedAtMs: 0,
-      schedule: { kind: "cron" as const, expr: "0 * * * *", tz: "UTC" },
-      sessionTarget: "isolated" as const,
+      schedule: { kind: "cron", expr: "0 * * * *", tz: "UTC" },
+      sessionTarget: "isolated",
       state: {},
-      wakeMode: "next-heartbeat" as const,
-      payload: { kind: "agentTurn" as const, message: "run task" },
+      wakeMode: "next-heartbeat",
+      payload: { kind: "agentTurn", message: "run task" },
     },
     message: "run task",
     sessionKey: "cron:diag-events",
-  };
+  });
 }
 function fallbackResult(agentMeta: Record<string, unknown>, text = "test output") {
   return {
@@ -217,14 +214,13 @@ describe("runCronIsolatedAgentTurn diagnostic events", () => {
       ...makeParams(),
       abortSignal: abortController.signal,
     });
-    expect(result.status).toBe("error");
-    expect(result.error).toBe("cron: job execution timed out");
-    const usageEvents = events.filter((event) => event.type === "model.usage");
-    expect(usageEvents).toHaveLength(1);
-    expect(usageEvents[0]).toMatchObject({
-      type: "model.usage",
-      sessionId: "test-session-id",
-      usage: { input: 50, output: 10, total: 60 },
-    });
+    expect(result).toMatchObject({ status: "error", error: "cron: job execution timed out" });
+    expect(events.filter((event) => event.type === "model.usage")).toMatchObject([
+      {
+        type: "model.usage",
+        sessionId: "test-session-id",
+        usage: { input: 50, output: 10, total: 60 },
+      },
+    ]);
   });
 });
