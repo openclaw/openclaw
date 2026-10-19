@@ -152,11 +152,9 @@ suite.define(() => {
   });
 
   it("retains a personal menu unpin for replay when profile storage is unavailable", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installPinGateway(page, [pinRef]);
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installPinGateway(page, [pinRef]);
 
-    try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, candidateKey));
       const pin = personalPin(page);
       const row = candidateRow(page);
@@ -200,17 +198,13 @@ suite.define(() => {
       await expect.poll(() => storedPins(page)).toEqual([]);
       await expectNoSharedPinWrites(gateway);
       await captureUiProof(suite, page, "optimistic-pin-05-unpin-replayed.png");
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it("keeps the newest personal pin intent while the older preference write completes", async () => {
-    const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-    const page = await context.newPage();
-    const gateway = await installPinGateway(page);
+    await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+      const gateway = await installPinGateway(page);
 
-    try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, candidateKey));
       const pin = personalPin(page);
       const row = candidateRow(page);
@@ -248,8 +242,6 @@ suite.define(() => {
       expect(await storedPins(page)).toEqual([]);
       await expectNoSharedPinWrites(gateway);
       await captureUiProof(suite, page, "optimistic-pin-06-newest-intent-wins.png");
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

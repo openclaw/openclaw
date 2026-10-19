@@ -27,29 +27,27 @@ function largeOwnerList(count: number) {
 
 suite.define(() => {
   it("navigates session filters and display controls with Tab, arrows, Space, and Escape", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 800, width: 1200 } });
-    const page = await context.newPage();
-    const gateway = await installMockGateway(page, {
-      sessionKey: "agent:main:ada",
-      presenceUsers: [{ self: true, id: "profile-patrick", name: "Patrick" }],
-      historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
-      methodResponses: {
-        "sessions.list": {
-          ...sessionsListResponse([
-            sessionRow("agent:main:ada", "Ada research", 2),
-            sessionRow("agent:main:bob", "Bob operations", 1),
-          ]),
-          owners: [
-            { type: "human", id: "profile-ada", label: "Ada Lovelace Byron" },
-            { type: "human", id: "profile-bob", label: "Bob" },
-            { type: "human", id: "profile-carol", label: "Carol" },
-            { type: "human", id: "profile-dave", label: "Dave" },
-          ],
+    await suite.withPage({ viewport: { height: 800, width: 1200 } }, async ({ page }) => {
+      const gateway = await installMockGateway(page, {
+        sessionKey: "agent:main:ada",
+        presenceUsers: [{ self: true, id: "profile-patrick", name: "Patrick" }],
+        historyMessages: [{ role: "assistant", content: [{ type: "text", text: "Ready." }] }],
+        methodResponses: {
+          "sessions.list": {
+            ...sessionsListResponse([
+              sessionRow("agent:main:ada", "Ada research", 2),
+              sessionRow("agent:main:bob", "Bob operations", 1),
+            ]),
+            owners: [
+              { type: "human", id: "profile-ada", label: "Ada Lovelace Byron" },
+              { type: "human", id: "profile-bob", label: "Bob" },
+              { type: "human", id: "profile-carol", label: "Carol" },
+              { type: "human", id: "profile-dave", label: "Dave" },
+            ],
+          },
         },
-      },
-    });
+      });
 
-    try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:ada"));
       await waitForSessionRosterHydration(page);
       await selectAllSidebarSessions(page);
@@ -91,9 +89,7 @@ suite.define(() => {
       await menu.getByRole("link", { name: "Session sources", exact: true }).focus();
       await page.keyboard.press("Tab");
       await expectBrowser(menu).toHaveCount(0);
-    } finally {
-      await context.close();
-    }
+    });
   });
 
   it.each([
@@ -102,22 +98,20 @@ suite.define(() => {
   ])(
     "contains the filters and a large owner roster in the $name viewport",
     async ({ name, ownerCount, viewport }) => {
-      const context = await suite.browser.newContext({ viewport });
-      const page = await context.newPage();
-      const ownerOptions = largeOwnerList(ownerCount);
-      await installMockGateway(page, {
-        sessionKey: "agent:main:large-roster",
-        methodResponses: {
-          "sessions.list": {
-            ...sessionsListResponse([
-              sessionRow("agent:main:large-roster", "Large owner roster", Date.now()),
-            ]),
-            owners: ownerOptions,
+      await suite.withPage({ viewport }, async ({ page }) => {
+        const ownerOptions = largeOwnerList(ownerCount);
+        await installMockGateway(page, {
+          sessionKey: "agent:main:large-roster",
+          methodResponses: {
+            "sessions.list": {
+              ...sessionsListResponse([
+                sessionRow("agent:main:large-roster", "Large owner roster", Date.now()),
+              ]),
+              owners: ownerOptions,
+            },
           },
-        },
-      });
+        });
 
-      try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:large-roster"));
         if (name === "compact") {
           await page.getByRole("button", { name: "Expand sidebar" }).click();
@@ -155,26 +149,24 @@ suite.define(() => {
         const selectedBounds = await owners.boundingBox();
         expect(selectedBounds).not.toBeNull();
         expect(selectedBounds!.x + selectedBounds!.width).toBeLessThanOrEqual(viewport.width);
-      } finally {
-        await context.close();
-      }
+      });
     },
   );
 
   it("keeps owner selection and radio navigation usable in RTL", async () => {
-    const context = await suite.browser.newContext({ viewport: { height: 650, width: 390 } });
-    const page = await context.newPage();
-    await installMockGateway(page, {
-      sessionKey: "agent:main:rtl-owners",
-      methodResponses: {
-        "sessions.list": {
-          ...sessionsListResponse([sessionRow("agent:main:rtl-owners", "RTL owners", Date.now())]),
-          owners: largeOwnerList(3),
+    await suite.withPage({ viewport: { height: 650, width: 390 } }, async ({ page }) => {
+      await installMockGateway(page, {
+        sessionKey: "agent:main:rtl-owners",
+        methodResponses: {
+          "sessions.list": {
+            ...sessionsListResponse([
+              sessionRow("agent:main:rtl-owners", "RTL owners", Date.now()),
+            ]),
+            owners: largeOwnerList(3),
+          },
         },
-      },
-    });
+      });
 
-    try {
       await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rtl-owners"));
       await page.locator("html").evaluate((element) => element.setAttribute("dir", "rtl"));
       await page.getByRole("button", { name: "Expand sidebar" }).click();
@@ -200,8 +192,6 @@ suite.define(() => {
       await expectBrowser(
         page.getByRole("button", { name: "Filter & sort", exact: true }),
       ).toBeFocused();
-    } finally {
-      await context.close();
-    }
+    });
   });
 });

@@ -19,20 +19,20 @@ suite.define(() => {
   it.each([false, true])(
     "keeps a duplicate rename in the dialog (concurrent failure: %s)",
     async (concurrent) => {
-      const context = await suite.browser.newContext(createControlUiE2eContextOptions());
-      const page = await context.newPage();
-      const gateway = await installMockGateway(page, {
-        deferredMethods: ["sessions.patch"],
-        methodResponses: {
-          "sessions.list": sessionsListResponse([
-            sessionRow("agent:main:rename-me", "Rename me", Date.now()),
-            ...(concurrent ? [sessionRow("agent:main:archive-me", "Archive me", Date.now())] : []),
-          ]),
-        },
-        sessionKey: "agent:main:rename-me",
-      });
+      await suite.withPage(createControlUiE2eContextOptions(), async ({ page }) => {
+        const gateway = await installMockGateway(page, {
+          deferredMethods: ["sessions.patch"],
+          methodResponses: {
+            "sessions.list": sessionsListResponse([
+              sessionRow("agent:main:rename-me", "Rename me", Date.now()),
+              ...(concurrent
+                ? [sessionRow("agent:main:archive-me", "Archive me", Date.now())]
+                : []),
+            ]),
+          },
+          sessionKey: "agent:main:rename-me",
+        });
 
-      try {
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, "agent:main:rename-me"));
         const row = page.locator('[data-session-key="agent:main:rename-me"]');
         await row.waitFor({ state: "visible", timeout: 10_000 });
@@ -54,8 +54,10 @@ suite.define(() => {
         await row.click({ button: "right" });
         await page.getByRole("menuitem", { name: "Rename…" }).click();
         const dialog = page.locator('openclaw-modal-dialog[label="Rename session"]');
-        await dialog.getByRole("textbox", { name: "Rename session" }).fill("Rejected rename");
-        await dialog.getByRole("button", { name: "Save" }).click();
+        const field = dialog.getByRole("textbox", { name: "Rename session" });
+        const save = dialog.getByRole("button", { name: "Save" });
+        await field.fill("Rejected rename");
+        await save.click();
         const rename = await gateway.waitForRequest("sessions.patch", {
           after: concurrent ? 1 : 0,
         });
@@ -66,24 +68,10 @@ suite.define(() => {
               if (!mock) {
                 throw new Error("Mock Gateway is not installed");
               }
-              mock.deliverLatest({
-                type: "res",
-                id: renameId,
-                ok: false,
-                error: {
-                  code: "INVALID_REQUEST",
-                  message: "label already in use: Rejected rename",
-                },
-              });
-              mock.deliverLatest({
-                type: "res",
-                id: archiveId,
-                ok: false,
-                error: {
-                  code: "UNAVAILABLE",
-                  message: "archive rejected",
-                },
-              });
+              const reject = (id: string, code: string, message: string) =>
+                mock.deliverLatest({ type: "res", id, ok: false, error: { code, message } });
+              reject(renameId, "INVALID_REQUEST", "label already in use: Rejected rename");
+              reject(archiveId, "UNAVAILABLE", "archive rejected");
             },
             { renameId: rename.id, archiveId: pendingArchive.id },
           );
@@ -103,9 +91,7 @@ suite.define(() => {
         } else {
           await expect.poll(() => error.count()).toBe(0);
         }
-        await expect
-          .poll(() => dialog.getByRole("textbox", { name: "Rename session" }).inputValue())
-          .toBe("Rejected rename");
+        await expect.poll(() => field.inputValue()).toBe("Rejected rename");
         await captureUiProof(
           suite,
           page,
@@ -117,8 +103,8 @@ suite.define(() => {
         );
 
         await gateway.deferNext("sessions.patch");
-        await dialog.getByRole("textbox", { name: "Rename session" }).fill("Unavailable rename");
-        await dialog.getByRole("button", { name: "Save" }).click();
+        await field.fill("Unavailable rename");
+        await save.click();
         const retry = await gateway.waitForRequest("sessions.patch", {
           after: concurrent ? 2 : 1,
         });
@@ -147,17 +133,13 @@ suite.define(() => {
         await dialog.waitFor({ state: "detached" });
         await error.getByRole("button", { name: "Dismiss error" }).click();
         await expect.poll(() => error.count()).toBe(0);
-      } finally {
-        await context.close();
-      }
+      });
     },
   );
 
   it("renames a sidebar session through an in-app dialog", async () => {
     const context = await suite.browser.newContext({
-      locale: "en-US",
-      serviceWorkers: "block",
-      viewport: { height: 900, width: 1280 },
+      ...createControlUiE2eContextOptions(),
       recordVideo: captureUiProofEnabled
         ? { dir: suite.artifactDir, size: { height: 900, width: 1280 } }
         : undefined,
