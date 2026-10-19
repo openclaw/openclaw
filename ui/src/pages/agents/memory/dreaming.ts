@@ -1,5 +1,6 @@
 import { asNullableRecord as asRecord } from "@openclaw/normalization-core/record-coerce";
 import { normalizeOptionalString as normalizeTrimmedString } from "@openclaw/normalization-core/string-coerce";
+import type { MemoryWikiDashboards } from "../../../../../extensions/memory-wiki/api.ts";
 import type {
   DoctorMemoryDreamActionPayload,
   DoctorMemoryDreamDiaryPayload,
@@ -27,87 +28,8 @@ const MEMORY_WIKI_PLUGIN_ID = "memory-wiki";
 type DreamingStatus = NonNullable<DoctorMemoryStatusPayload["dreaming"]>;
 export type DreamingEntry = DreamingStatus["shortTermEntries"][number];
 
-type WikiImportInsightItem = {
-  pagePath: string;
-  title: string;
-  riskLevel: "low" | "medium" | "high" | "unknown";
-  riskReasons: string[];
-  labels: string[];
-  topicKey: string;
-  topicLabel: string;
-  digestStatus: "available" | "withheld";
-  activeBranchMessages: number;
-  userMessageCount: number;
-  assistantMessageCount: number;
-  firstUserLine?: string;
-  lastUserLine?: string;
-  assistantOpener?: string;
-  summary: string;
-  candidateSignals: string[];
-  correctionSignals: string[];
-  preferenceSignals: string[];
-  createdAt?: string;
-  updatedAt?: string;
-};
-
-type WikiImportInsightCluster = {
-  key: string;
-  label: string;
-  itemCount: number;
-  highRiskCount: number;
-  withheldCount: number;
-  preferenceSignalCount: number;
-  updatedAt?: string;
-  items: WikiImportInsightItem[];
-};
-
-export type WikiImportInsights = {
-  sourceType: "chatgpt";
-  totalItems: number;
-  totalClusters: number;
-  clusters: WikiImportInsightCluster[];
-  truncated: boolean;
-};
-
-type WikiOverviewItem = {
-  pagePath: string;
-  title: string;
-  kind: "entity" | "concept" | "source" | "synthesis" | "report";
-  id?: string;
-  updatedAt?: string;
-  sourceType?: string;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  claims: string[];
-  questions: string[];
-  contradictions: string[];
-  snippet?: string;
-};
-
-type WikiOverviewCluster = {
-  key: WikiOverviewItem["kind"];
-  label: string;
-  itemCount: number;
-  claimCount: number;
-  questionCount: number;
-  contradictionCount: number;
-  updatedAt?: string;
-  items: WikiOverviewItem[];
-};
-
-type WikiOverviewPageCounts = Record<WikiOverviewItem["kind"], number>;
-
-export type WikiOverview = {
-  totalItems: number;
-  totalPages: number;
-  pageCounts: WikiOverviewPageCounts;
-  totalClaims: number;
-  totalQuestions: number;
-  totalContradictions: number;
-  clusters: WikiOverviewCluster[];
-  truncated: boolean;
-};
+export type WikiImportInsights = MemoryWikiDashboards["importInsights"];
+export type WikiOverview = MemoryWikiDashboards["overview"];
 
 export type WikiPagePreview = {
   title: string;
