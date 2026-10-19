@@ -104,6 +104,12 @@ and cannot authorize execution by itself. Missing, invalid, or revoked evidence 
 the interrupted result available for inspection; recovery never substitutes system
 authority. Start a new authorized requester turn to continue that work.
 
+Shared-token and password owner connections, including CLI/backend requests,
+retain this evidence too. Recovery requires the same shared authentication
+generation and method; rotating the credential or changing authentication mode
+refuses the old continuation. Nested requesters inherit the admitted owner's
+evidence and cannot widen its scope ceiling.
+
 Legacy completions without saved operator evidence record permanent non-delivery
 once, including requester-settle wakes and yielded runs without a final outcome.
 Recovery clears the unavailable wake while preserving execution results and any

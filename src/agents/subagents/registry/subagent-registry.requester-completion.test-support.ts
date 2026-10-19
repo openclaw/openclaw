@@ -11,6 +11,8 @@ import {
   createOperatorClient,
 } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createMockGatewayRecoveryRuntime } from "../../../gateway/server-recovery-runtime.test-support.js";
+import { SharedGatewaySessionGenerationState } from "../../../gateway/server-shared-auth-generation.js";
+import { resolveSharedGatewaySessionGeneration } from "../../../gateway/server/ws-shared-generation.js";
 import { rotateAgentEventLifecycleGeneration } from "../../../infra/agent-events.js";
 import { WorkerTaskError } from "../../../infra/worker-task-pool.js";
 import { createEmptyPluginRegistry } from "../../../plugins/registry-empty.js";
@@ -26,6 +28,7 @@ import {
 } from "../../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../../plugins/status.test-helpers.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
+import { ensureGatewayOwnerProfile } from "../../../state/user-profiles.js";
 import { withOpenClawTestState } from "../../../test-utils/openclaw-test-state.js";
 import { createAdmittedRunOperatorAuthority } from "../../admitted-run-context.js";
 import * as delivery from "../announce/subagent-announce-delivery.js";
@@ -58,6 +61,9 @@ export function registerRequesterCompletionCustodyTests({
 }) {
   it.each([
     "current",
+    "owner current",
+    "owner nested password",
+    "owner rotated",
     "overloaded then current",
     "overloaded then revoked",
     "overloaded then retired",
@@ -72,6 +78,15 @@ export function registerRequesterCompletionCustodyTests({
   ] as const)(
     "revalidates %s for a cold-loaded interrupted child batch without widening the parent",
     async (recovery) => {
+      const owner = recovery.startsWith("owner ");
+      const nestedOwner = recovery === "owner nested password";
+      const ownerAuth = nestedOwner
+        ? { mode: "password" as const, password: "owner-password-fixture" }
+        : { mode: "token" as const, token: "owner-token-fixture" };
+      const ownerGeneration = resolveSharedGatewaySessionGeneration({
+        ...ownerAuth,
+        allowTailscale: false,
+      });
       const overloaded = recovery.startsWith("overloaded");
       const unavailablePolicy = recovery === "unavailable policy then current";
       const deferred = overloaded || unavailablePolicy;
@@ -81,12 +96,21 @@ export function registerRequesterCompletionCustodyTests({
         recovery === "mismatched source" ||
         recovery === "revoked grant";
       const canDispatch =
-        recovery === "current" || recovery === "overloaded then current" || unavailablePolicy;
+        recovery === "current" ||
+        recovery === "owner current" ||
+        nestedOwner ||
+        recovery === "overloaded then current" ||
+        unavailablePolicy;
       await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
-        const cfg = { session: { store: state.path("sessions.json") } };
+        const cfg = {
+          session: { store: state.path("sessions.json") },
+          ...(owner ? { gateway: { auth: ownerAuth } } : {}),
+        };
         config.setRuntimeConfigSnapshot(cfg);
         vi.mocked(config.getRuntimeConfig).mockReturnValue(cfg);
-        const requesterSessionKey = "agent:main:main";
+        const requesterSessionKey = nestedOwner
+          ? "agent:main:subagent:restart-lead"
+          : "agent:main:main";
         const sessionId = "restart-requester";
         const lifecycleRevision = "restart-requester-lifecycle";
         const requesterTurnRunId = "restart-parent-turn";
@@ -95,12 +119,14 @@ export function registerRequesterCompletionCustodyTests({
           expectDefined(subagentRuns.get(runId), "restored child");
         await upsertSessionEntryCore(
           { storePath: cfg.session.store, sessionKey: requesterSessionKey, agentId: "main" },
-          { sessionId, lifecycleRevision, updatedAt: 1 },
+          { sessionId, lifecycleRevision, updatedAt: 1, ...(nestedOwner ? { spawnDepth: 1 } : {}) },
         );
         const context = createContext([], () => cfg);
         context.resolveGatewayContext = () => context;
         const client = createOperatorClient({
-          profileName: "restart-requester",
+          ...(owner
+            ? { profileId: ensureGatewayOwnerProfile("Owner").id }
+            : { profileName: "restart-requester" }),
           scopes: ["operator.admin"],
         });
         expectDefined(client.authenticatedUserProfile, "requester profile").displayName =
@@ -108,9 +134,23 @@ export function registerRequesterCompletionCustodyTests({
         client.connect.client.id = "openclaw-control-ui";
         client.connect.client.mode = "webchat";
         client.internal = { authenticatedOperator: true, controlUiAdmin: true };
+        if (owner) {
+          // The shared-secret CLI handshake attests the owner but omits display attribution.
+          delete client.authenticatedUserProfile;
+          delete client.authenticatedUserId;
+          client.connect.client.id = "gateway-client";
+          client.connect.client.mode = "backend";
+          client.internal = { authenticatedOperator: true, operatorRoleActor: { kind: "system" } };
+          client.usesSharedGatewayAuth = true;
+          client.sharedGatewaySessionGeneration = ownerGeneration;
+          context.sharedGatewaySessionGenerationState = new SharedGatewaySessionGenerationState({
+            current: client.sharedGatewaySessionGeneration,
+            required: null,
+          });
+        }
         client.authPolicy = captureGatewayAuthPolicy(cfg, {
           role: "operator",
-          authMethod: "token",
+          authMethod: owner ? ownerAuth.mode : "token",
         });
         const grantRef = { pluginId: "restart-access", grantId: "original-requester-grant" };
         let grantCurrent = true;
@@ -132,21 +172,25 @@ export function registerRequesterCompletionCustodyTests({
         });
         const registry = createEmptyPluginRegistry();
         registry.plugins.push(createPluginRecord({ id: grantRef.pluginId }));
-        registry.gatewayAccessPolicies.push({
-          pluginId: grantRef.pluginId,
-          source: "fixture",
-          policy: {
-            authorize: () => (grantCurrent ? grant : undefined),
-            resume: resumeGrant,
-          },
-        });
+        if (!owner) {
+          registry.gatewayAccessPolicies.push({
+            pluginId: grantRef.pluginId,
+            source: "fixture",
+            policy: {
+              authorize: () => (grantCurrent ? grant : undefined),
+              resume: resumeGrant,
+            },
+          });
+        }
         const previousRegistry = captureActivePluginRegistrySnapshot();
         stageActivePluginRegistry(registry, null, "default");
         const source = expectDefined(
           await operatorCapture.captureGatewayOperatorRunAuthority({
             client: expectDefined(captureAgentTurnPrincipal(client), "authenticated requester"),
             context,
-            sourceAuthority: { gatewayAccessGrant: grantRef, assertCurrent: grant.assertCurrent },
+            sourceAuthority: owner
+              ? null
+              : { gatewayAccessGrant: grantRef, assertCurrent: grant.assertCurrent },
           }),
           "restart requester source",
         );
@@ -208,8 +252,17 @@ export function registerRequesterCompletionCustodyTests({
               sessionId,
               lifecycleRevision,
               sourceRunId: requesterTurnRunId,
-              snapshot: { scopes: ["operator.write"], grant: grantRef },
+              snapshot: { scopes: ["operator.write"], grant: owner ? null : grantRef },
             });
+            if (owner) {
+              expect(admitted?.operatorRecoverySource?.snapshot).toMatchObject({
+                sharedGeneration: ownerGeneration,
+                authPolicy: { authMethod: ownerAuth.mode },
+              });
+              expect(JSON.stringify(admitted?.operatorRecoverySource)).not.toContain(
+                nestedOwner ? ownerAuth.password : ownerAuth.token,
+              );
+            }
             // Crash after interruption was recorded, before its parent continuation was dispatched.
             await updateRun(runId, (draft) => {
               const text = `${runId} interrupted by Gateway restart`;
@@ -265,6 +318,20 @@ export function registerRequesterCompletionCustodyTests({
           }
           const replacement = createContext([], () => cfg);
           replacement.resolveGatewayContext = () => replacement;
+          if (owner) {
+            replacement.sharedGatewaySessionGenerationState =
+              new SharedGatewaySessionGenerationState({
+                current:
+                  recovery === "owner rotated"
+                    ? resolveSharedGatewaySessionGeneration({
+                        mode: "token",
+                        token: "rotated-owner-fixture",
+                        allowTailscale: false,
+                      })
+                    : ownerGeneration,
+                required: null,
+              });
+          }
           replacement.recoveryRuntime = createMockGatewayRecoveryRuntime();
           const recoveryTarget = {
             ...buildRequesterSettleWakeIdentity({
@@ -383,7 +450,7 @@ export function registerRequesterCompletionCustodyTests({
             await testing.sweepOnceForTests();
             expect(resumeGrant).toHaveBeenCalledTimes(resumedGrants);
           }
-          if (recovery !== "replaced requester") {
+          if (recovery !== "replaced requester" && !owner) {
             expect(resumeGrant).toHaveBeenCalledWith(
               expect.objectContaining({ grantId: grantRef.grantId }),
             );
@@ -424,7 +491,7 @@ export function registerRequesterCompletionCustodyTests({
             expect(deliver).toHaveResolvedTimes(1);
             expect(deliveredAuthority?.profileId).toBe(source.authority.profileId);
             expect(deliveredAuthority?.scopes).toEqual(["operator.write"]);
-            expect(deliveredAuthority?.gatewayAccessGrant).toEqual(grantRef);
+            expect(deliveredAuthority?.gatewayAccessGrant).toEqual(owner ? null : grantRef);
             // Committed batch settlement releases its restored completion custody.
             expect(deliveredAuthority?.assertCurrent).toThrow(/authority/);
             const message = deliver.mock.calls[0]?.[0].triggerMessage;
