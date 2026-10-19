@@ -49,11 +49,11 @@ import {
   cacheChatSessionSnapshot,
   observeChatCache,
   resolveChatSnapshotKey,
+  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import type { ChatRouteData } from "./session-route-data.ts";
 import { clearStoredChatSnapshots } from "./session-snapshot-invalidation.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 const key = "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef";
 const initial = {

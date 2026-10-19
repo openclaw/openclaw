@@ -270,7 +270,6 @@ export async function startApplicationRouter(
     listen: (listener) => {
       let listening = true;
       let recoveryQueued = false;
-      const revalidatedCache = new WeakSet<AbortController>();
       let lastHello = context.gateway.snapshot.hello;
       let interrupted:
         | {
@@ -316,10 +315,6 @@ export async function startApplicationRouter(
               (reference.kind === "literal" && reference.slugCandidate)
             )
           ) {
-            return;
-          }
-          if (data.sessionResolutionFromCache === "snapshot") {
-            await router.revalidate(context, target.routeId);
             return;
           }
           const { querySessionReference } =
@@ -374,18 +369,7 @@ export async function startApplicationRouter(
         if (target.status === "success" && !target.isFetching) {
           const pendingVerification = interrupted;
           interrupted = undefined;
-          // Snapshot admission can finish after hello; verify it once even without
-          // an interrupted connection, using the loader's authoritative replacement.
-          // SAFETY: This branch accepts only session routes loaded by loadChatRoute.
-          const data = target.data as ChatRouteData | undefined;
-          if (
-            data?.kind === "session" &&
-            data.sessionResolutionFromCache === "snapshot" &&
-            !revalidatedCache.has(target.abortController)
-          ) {
-            revalidatedCache.add(target.abortController);
-            void verifyReconnectedSession(target, false);
-          } else if (pendingVerification) {
+          if (pendingVerification) {
             void verifyReconnectedSession(target, pendingVerification.verifySession);
           }
         }

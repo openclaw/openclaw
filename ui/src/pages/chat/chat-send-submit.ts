@@ -100,9 +100,6 @@ export async function handleSendChat(
   opts?: ChatSendSubmitOptions,
   submissionAction?: Event,
 ) {
-  if (host.isRouteSessionPending?.()) {
-    return undefined;
-  }
   if (
     chatProviderReviewRow(host)?.providerReview &&
     !isChatStopCommand(messageOverride ?? host.chatMessage)

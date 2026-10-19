@@ -98,17 +98,6 @@ describe("session route reconnect recovery", () => {
     sessionKey: "agent:main:dashboard:12345678-90ab-cdef-1234-567890abcdef",
   };
 
-  it("keeps connected roster navigation under its existing discovery lifecycle", async () => {
-    const f = await setup(referencePath);
-    f.load
-      .mockResolvedValueOnce({ ...session, sessionResolutionFromCache: "roster" })
-      .mockResolvedValue(session);
-    await f.router.navigate("chat", f.context, {}, f.destination);
-    await vi.dynamicImportSettled();
-    expect(f.load).toHaveBeenCalledOnce();
-    expect(f.request).not.toHaveBeenCalled();
-  });
-
   it.each(["pending", "cached"])(
     "verifies first-connect data only when it was already committed offline: %s",
     async (state) => {

@@ -35,12 +35,12 @@ import {
   cacheChatSessionSnapshot,
   readChatSessionSnapshot,
   type ChatMessageCache,
+  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import * as snapshotDatabase from "./session-snapshot-database.ts";
 import { resolveChatSnapshotKey } from "./session-snapshot-key.ts";
 import { prewarmChatSnapshot } from "./session-snapshot-prewarm.ts";
 import { SessionSnapshotStore } from "./session-snapshot-store.ts";
-import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 import "./chat-pane.tsx";
 
 const sessionKey = "agent:main:warm-startup";
