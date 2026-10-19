@@ -642,7 +642,9 @@ and completes the resulting transcript continuation. The driver requires one
 completed tool batch, output-limit response, and recovered response per child,
 and verifies inline images reach all three provider requests. Each provider
 response includes a distinct deterministic 16 KiB synthetic reasoning signature;
-the driver verifies that tool and recovery continuations replay it. These are
+the driver verifies that tool and recovery continuations replay the exact completed
+signature and omit the reasoning-only output-limit signature, as required by the
+replay owner. These are
 direct child-session `agent` calls, not model-driven `sessions_spawn` calls.
 Post-GC Gateway heap samples follow every completed cohort, and the optional
 final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
