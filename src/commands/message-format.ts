@@ -262,7 +262,7 @@ export function formatMessageCliText(
     );
     return [
       headingLine,
-      renderTable({
+      renderTerminalSafeTable({
         width: formatOpts.width,
         columns: [
           { key: "Channel", header: "Channel", minWidth: 10 },

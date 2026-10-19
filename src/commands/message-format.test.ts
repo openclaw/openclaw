@@ -5,7 +5,11 @@ import { formatMessageCliText } from "./message-format.js";
 
 const getChannelPluginMock = vi.hoisted(() =>
   vi.fn((channel: string) =>
-    channel === "directchat" ? { meta: { label: "Direct Chat" } } : undefined,
+    channel === "directchat"
+      ? { meta: { label: "Direct Chat" } }
+      : channel === "malicious"
+        ? { meta: { label: "\u001b]52;c;QQ==\u0007evil-channel\u001b[2J" } }
+        : undefined,
   ),
 );
 
@@ -420,5 +424,33 @@ describe("formatMessageCliText broadcast results", () => {
     expect(output).toContain("room-partial");
     expect(output).toContain("Broadcast send suppressed");
     expect(output).toContain("second payload failed");
+  });
+
+  it("renders remote channel labels and delivery errors as terminal-safe text", () => {
+    const result = {
+      kind: "broadcast",
+      action: "broadcast",
+      channel: "malicious",
+      handledBy: "core",
+      payload: {
+        results: [
+          {
+            channel: "malicious",
+            to: "room-hacked",
+            ok: false,
+            error: "delivery rejected\u001b]52;c;QQ==\u0007\u001b[2J",
+          },
+        ],
+      },
+      dryRun: false,
+    } satisfies MessageActionResult;
+
+    const output = textJoined(formatMessageCliText(result));
+
+    expect(output).toContain("evil-channel");
+    expect(output).toContain("room-hacked");
+    expect(output).toContain("delivery rejected");
+    expect(output.replaceAll("\n", "")).not.toMatch(/\p{Cc}/u);
+    expect(output).not.toContain("52;c;QQ==");
   });
 });
