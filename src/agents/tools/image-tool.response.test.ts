@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import * as llmStream from "../../llm/stream.js";
 import * as imageModelRuntime from "../../media-understanding/image-model-runtime.js";
-import { describeImageWithModelCore } from "../../media-understanding/image.js";
+import * as modelNormalization from "../../plugins/manifest-model-id-normalization.js";
 import * as providerStream from "../provider-stream.js";
 import { makeAssistantMessageFixture } from "../test-helpers/assistant-message-fixtures.js";
 import { makeProviderModelFixture } from "../test-helpers/provider-model-fixture.js";
@@ -17,9 +17,21 @@ describe("image tool response validation", () => {
       buildProviderRegistry: () => new Map(),
       getMediaUnderstandingProvider: () => undefined,
       resolveRegisteredMediaUnderstandingProvider: () => undefined,
-      describeImageWithModel: describeImageWithModelCore,
       resolveImageCompressionPolicy: async ({ imageCount }) => ({ imageCount }),
+      loadImageWebMediaRuntime: async () => ({
+        loadWebMedia: async () => {
+          throw new Error("Expected an inline image fixture");
+        },
+        optimizeImageBufferForWebMedia: async ({ buffer, contentType }) => ({
+          buffer,
+          contentType,
+          kind: "image",
+        }),
+      }),
     });
+    vi.spyOn(modelNormalization, "resolveManifestModelIdNormalizationPolicies").mockReturnValue(
+      new Map(),
+    );
     vi.spyOn(imageModelRuntime, "resolveImageRuntime").mockResolvedValue({
       runtimeValue: "test-key",
       model: makeProviderModelFixture({
