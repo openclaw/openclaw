@@ -1542,6 +1542,16 @@ importers:
         specifier: workspace:*
         version: link:../../packages/plugin-sdk
 
+  extensions/deep-research:
+    dependencies:
+      typebox:
+        specifier: 1.3.36
+        version: 1.3.36
+    devDependencies:
+      '@openclaw/plugin-sdk':
+        specifier: workspace:*
+        version: link:../../packages/plugin-sdk
+
   extensions/llm-task:
     dependencies:
       typebox:
