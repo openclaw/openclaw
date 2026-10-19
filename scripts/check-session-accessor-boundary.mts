@@ -128,7 +128,7 @@ const migratedSessionAccessorFiles = new Set([
   ...gatewaySessionServerMethodFiles,
   "src/gateway/server-session-events.ts",
   "src/gateway/session-reset-service.ts",
-  "src/infra/outbound/message-action-tts.ts",
+  "src/infra/outbound/message-action-send.ts",
   "src/agents/tools/embedded-gateway-stub.ts",
   "src/agents/tools/session-status-tool.ts",
   "src/agents/tools/sessions-list-tool.ts",

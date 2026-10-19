@@ -2219,7 +2219,6 @@ src/plugins/candidate-install-owner.ts	1
 src/plugins/capability-provider-runtime.ts	8
 src/plugins/captured-registration.ts	1
 src/plugins/channel-presence-policy.ts	2
-src/plugins/channel-validation.ts	1
 src/plugins/clawhub.ts	3
 src/plugins/cli-gateway-nodes-runtime.ts	2
 src/plugins/command-registration.ts	3

@@ -11,8 +11,8 @@ import {
 } from "../lib/board/provider.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useOptionalApplication } from "../lib/reactive/context.ts";
-import { projectBoardProvider } from "../lib/reactive/domain-board.ts";
 import { t } from "../lib/reactive/i18n.ts";
+import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import "./control-ui-dashboard.css";
@@ -81,7 +81,22 @@ function PluginSessionDashboardContent(
       current.presentationScope,
     );
     onCleanup(() => lease.release());
-    const projection = projectBoardProvider(lease.provider);
+    const projection = projectSource(lease.provider, {
+      read: (provider) => ({
+        snapshot: provider.snapshot$.value,
+        appViewGeneration: provider.appViewGeneration,
+        hasLoadedSnapshot: provider.hasLoadedSnapshot,
+      }),
+      subscribe: (provider, notify) => {
+        const stopSnapshot = provider.snapshot$.subscribe(notify);
+        const stopError = provider.loadError$.subscribe(notify);
+        return () => {
+          stopSnapshot();
+          stopError();
+        };
+      },
+      equality: "revision",
+    });
     const callbacks: BoardViewCallbacks = {
       get appViewGeneration() {
         return projection.read().appViewGeneration;
