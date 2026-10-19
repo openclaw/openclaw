@@ -97,6 +97,8 @@ it("measures fixed CPU work including a retired Worker without starting the insp
   expect(released.activeResources.Timeout ?? 0).toBe(resources.activeResources.Timeout ?? 0);
   const stopDiagnostics = await startGatewayDiagnostics(child);
   await expect(startGatewayDiagnostics(child)).rejects.toThrow("already started");
+  const stopBurstDiagnostics = await startGatewayDiagnostics(child, "burst");
+  await expect(startGatewayDiagnostics(child, "burst")).rejects.toThrow("already started");
   const before = await readGatewayCpuUsage(child);
   const mainResult = await sendMessage(child, { run: "main" });
   expect(mainResult, stderr()).toMatchObject({ completed: 1, checksum: expect.any(Number) });
@@ -110,6 +112,8 @@ it("measures fixed CPU work including a retired Worker without starting the insp
   expect(mainUsage.mainThread.totalMs).toBeLessThan(
     (before.mainThread.user + before.mainThread.system) / 1_000,
   );
+  const burstDiagnostics = await stopBurstDiagnostics();
+  await expect(stopBurstDiagnostics()).rejects.toThrow("have not started");
 
   const workerResult = await sendMessage(child, { run: "worker" });
   expect(workerResult, stderr()).toMatchObject({
@@ -122,6 +126,8 @@ it("measures fixed CPU work including a retired Worker without starting the insp
   expect(workerUsage.process.totalMs).toBeGreaterThan(workerUsage.mainThread.totalMs);
   expect(workerUsage.process.totalMs).toBeGreaterThanOrEqual(workerResult.workerCpuMicros / 1_000);
   const diagnostics = await stopDiagnostics();
+  expect(burstDiagnostics.startedAtEpochMs).toBeGreaterThan(diagnostics.startedAtEpochMs);
+  expect(burstDiagnostics.endedAtEpochMs).toBeLessThan(diagnostics.endedAtEpochMs);
   expect(diagnostics.eventLoopDelay.count).toBeGreaterThan(0);
   expect(diagnostics.eventLoopDelay.maxMs).toBeGreaterThan(0);
   expect(diagnostics.endedAtEpochMs).toBeGreaterThan(diagnostics.startedAtEpochMs);

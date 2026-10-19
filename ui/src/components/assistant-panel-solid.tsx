@@ -43,6 +43,7 @@ defineSolidBridge<AssistantPanelProps, Methods>(
       homeAvailable: { default: false, type: Boolean },
       custodianSuppressed: { default: false, type: Boolean },
       pageSessionKey: { default: "" },
+      getPrimaryChatPane: { default: undefined, attribute: false },
       pageAgentId: { default: "" },
       pageRouteId: { default: "chat" },
       pageRouteFailed: { default: false, type: Boolean },

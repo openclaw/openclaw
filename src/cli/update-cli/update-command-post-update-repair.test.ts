@@ -150,7 +150,8 @@ afterEach(() => {
   vi.unstubAllEnvs();
 });
 
-const fixture = () => createPostUpdateRepairFixture(dirs.make("post-update-repair-"));
+const fixture = (profile?: string) =>
+  createPostUpdateRepairFixture(dirs.make("post-update-repair-"), profile);
 
 describe("post-activation failure settlement without inference", () => {
   beforeEach(async () => {
@@ -671,7 +672,7 @@ describe("post-activation failure settlement without inference", () => {
   ] as const)(
     "recovers the installed Gateway only for an owned stop and settled Doctor (%s)",
     async (receipt) => {
-      const params = fixture();
+      const params = fixture("work");
       const swap =
         receipt === "migration-verified"
           ? await createRetainedPackageSwap(params.opts.run!.env!.OPENCLAW_STATE_DIR!)
@@ -985,12 +986,15 @@ describe("post-activation failure settlement without inference", () => {
         }
       }
       if (migration && !recovered) {
-        expect(rendered).toContain("openclaw doctor --fix");
-        expect(rendered).toContain("openclaw gateway start");
+        expect(rendered).toContain("openclaw --profile work doctor --fix");
+        expect(rendered).toContain("openclaw --profile work gateway start");
       }
-      if (receipt === "settled") {
-        expect(rendered).toContain("openclaw update repair");
-        expect(report?.origin.nextAction).toContain("candidate Gateway is healthy");
+      if (recovered) {
+        expect(rendered).toContain("openclaw --profile work update repair");
+        expect(report?.origin.nextAction).toContain("installed Gateway is healthy");
+        expect(report?.origin.nextAction).toContain("running on the retained state");
+        expect(report?.origin.nextAction).toContain("openclaw --profile work gateway stop");
+        expect(report?.origin.nextAction).not.toContain("migrated state");
       }
       if (receipt === "unsettled") {
         expect(mocks.rollback).not.toHaveBeenCalled();

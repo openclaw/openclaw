@@ -1,13 +1,64 @@
 import { Value } from "typebox/value";
 import { describe, expect, it } from "vitest";
 import { CronJobSchema } from "../../../packages/gateway-protocol/src/schema/cron.ts";
+import { GatewaySessionRowEvents } from "../api/gateway-session-row-events.ts";
 import type { GatewaySessionRow } from "../api/types.ts";
+import { canApplySessionListSnapshot } from "../lib/sessions/session-list-query.ts";
 import { createTeamScaleSidebarListOwner } from "./control-ui-sidebar-list-fixture.ts";
 import { createControlUiTeamScaleFixture } from "./control-ui-team-scale-fixture.ts";
 
 const now = 1_800_000_000_000;
 
 describe("Team-scale Gateway fixture", () => {
+  it("sustains certified ancestor churn past the minute fallback and preserves the raw delta baseline", () => {
+    const fixture = createControlUiTeamScaleFixture({
+      now,
+      sessionEventChurn: true,
+      sessionEventDurationMs: 135_000,
+      sessionEventAncestorRefs: true,
+    });
+    expect(fixture.liveEvents).toHaveLength(1081);
+    expect(fixture.liveEvents[0]?.atMs).toBe(125);
+    expect(fixture.liveEvents.at(-1)?.atMs).toBe(135_125);
+    const childQuery = { spawnedBy: "agent:main:main", limit: 100 };
+    const children = createTeamScaleSidebarListOwner(fixture.sidebarListInput).list({
+      ...childQuery,
+      rowMode: "compact",
+    }).result;
+    expect(canApplySessionListSnapshot(children, fixture.liveEvents[0]!.payload, childQuery)).toBe(
+      true,
+    );
+    const decoder = new GatewaySessionRowEvents();
+    let references = 0;
+    for (const event of fixture.liveEvents) {
+      const projected = decoder.project(event);
+      expect(projected.missingBaseline).toBe(false);
+      if (event.kind === "sessions.changed.child-parent-reference") {
+        references++;
+        expect(projected.event.payload).not.toHaveProperty("ancestorSessionRefs");
+        expect(projected.event.payload).toMatchObject({
+          ancestorSessions: [
+            {
+              key: fixture.selectedSessionKey,
+              ancestorRevision: "team-scale-parent-v1",
+              snapshotAt: now + event.atMs,
+            },
+          ],
+        });
+      }
+      if (event.kind === "sessions.changed.parent-raw-baseline-check") {
+        expect(projected.event.payload).toMatchObject({
+          session: {
+            key: fixture.selectedSessionKey,
+            derivedTitle: "Synthetic ancestor baseline verified",
+            snapshotAt: now + 135_125,
+          },
+        });
+      }
+    }
+    expect(references).toBe(539);
+  });
+
   it("pages session lists using pin placement, stable key ties, and the requested activity clock", () => {
     const fixture = createControlUiTeamScaleFixture({ now });
     const rows: GatewaySessionRow[] = [

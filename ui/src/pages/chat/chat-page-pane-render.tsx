@@ -6,12 +6,14 @@ import type { ApplicationContext } from "../../app/context.ts";
 import { readDeletedSessionStartup } from "../../app/deleted-session-startup.ts";
 import type { GatewayStatusProps } from "../../components/gateway-status.ts";
 import type { BoardFace } from "../../lib/board/settings.ts";
+import { elementRef } from "../../lib/reactive/element-ref.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import {
   areUiSessionKeysEquivalent,
   parseAgentSessionKey,
 } from "../../lib/sessions/session-key.ts";
 import type { DropIndicator } from "./chat-page-drop-indicator.ts";
+import { registerUnboundPane } from "./chat-pane-elements.ts";
 import type { PaneSessionChangeOptions } from "./chat-pane-shared.ts";
 import { ChatPaneView } from "./chat-pane.tsx";
 import type { RouteDraftComposerFocus } from "./route-draft-focus-handoff.ts";
@@ -209,6 +211,7 @@ function ChatPageSession(props: { options: ChatPagePaneRenderOptions; sessionKey
           props.options.splitMode ? parseAgentSessionKey(props.sessionKey)?.agentId : undefined
         }
         routeLoadingSkeleton={routeLoadingSkeleton()}
+        routeResolutionPending={retainedRoute()?.sessionResolutionFromCache === "snapshot"}
         presented={presented()}
         visuallyPresented={presented()}
         active={active()}
@@ -259,6 +262,7 @@ function ChatPagePaneCell(props: { options: ChatPagePaneRenderOptions }) {
       <div class="chat-pane-cache">
         <Show when={props.options.unbound}>
           <div
+            ref={[elementRef(registerUnboundPane)]}
             class="chat-split-view__unbound"
             data-unbound-pane-id={props.options.pane.id}
             tabindex={0}

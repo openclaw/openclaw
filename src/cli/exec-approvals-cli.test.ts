@@ -115,6 +115,20 @@ describe("exec approvals CLI", () => {
     expect(runtimeErrors).toHaveLength(0);
   });
 
+  it.each([
+    ["get", ["approvals", "get"]],
+    ["allowlist add", ["approvals", "allowlist", "add", "/usr/bin/uname"]],
+  ] as const)(
+    "%s rejects --gateway combined with --node instead of silently routing to the gateway",
+    async (_label, baseArgs) => {
+      await expect(
+        runApprovalsCommand([...baseArgs, "--gateway", "--node", "macbook"]),
+      ).rejects.toThrow("__exit__:1");
+      expect(runtimeErrors.join("\n")).toContain("Pass only one of --gateway or --node.");
+      expect(callGatewayFromCli).not.toHaveBeenCalled();
+    },
+  );
+
   it("renders an unstored fresh-install policy as defaults instead of absent", async () => {
     localSnapshot.exists = false;
 

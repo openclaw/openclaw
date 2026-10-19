@@ -1,6 +1,6 @@
 import { generateKeyPairSync } from "node:crypto";
 import { createRequireRecord } from "openclaw/plugin-sdk/test-fixtures";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   sendApnsAlert,
   sendApnsBackgroundWake,
@@ -9,12 +9,11 @@ import {
   sendApnsPluginApprovalAlert,
   sendApnsPluginApprovalResolvedWake,
 } from "./push-apns.js";
+import * as apnsRelay from "./push-apns.relay.js";
+
+afterEach(() => vi.restoreAllMocks());
 
 const apnsPrivateKey = generateKeyPairSync("ec", { namedCurve: "prime256v1" }).privateKey.export({
-  format: "pem",
-  type: "pkcs8",
-});
-const relayPrivateKey = generateKeyPairSync("ed25519").privateKey.export({
   format: "pem",
   type: "pkcs8",
 });
@@ -30,18 +29,7 @@ const senderOptionKeys = {
     "pushType",
     "priority",
   ],
-  relay: [
-    "relayConfig",
-    "sendGrant",
-    "relayHandle",
-    "gatewayDeviceId",
-    "signature",
-    "signedAtMs",
-    "bodyJson",
-    "pushType",
-    "priority",
-    "payload",
-  ],
+  relay: ["relayConfig", "sendGrant", "relayHandle", "payload", "pushType", "priority"],
 };
 
 function createApnsTransportFixture(transport: "direct" | "relay") {
@@ -66,7 +54,8 @@ function createApnsTransportFixture(transport: "direct" | "relay") {
       },
     };
   }
-  const send = vi.fn().mockResolvedValue({ ok: true, status: 202, environment: "sandbox" });
+  const send = vi.spyOn(apnsRelay, "sendApnsRelayPush");
+  send.mockResolvedValue({ ok: true, status: 202, environment: "sandbox" });
   return {
     send,
     params: {
@@ -79,8 +68,6 @@ function createApnsTransportFixture(transport: "direct" | "relay") {
         distribution: "official" as const,
       },
       relayConfig: { baseUrl: "https://relay.example.test", timeoutMs: 2_500 },
-      relayGatewayIdentity: { deviceId: "gateway-dispatch", privateKeyPem: relayPrivateKey },
-      relayRequestSender: send,
     },
   };
 }
@@ -122,12 +109,12 @@ describe("APNs dispatch", () => {
       expect(controlled.isCurrent).toBe(isCurrent);
       expect(controlled.pushType).toBe(kind);
       expect(controlled.priority).toBe(kind === "alert" ? "10" : "5");
-      expect(isCurrent).toHaveBeenCalledTimes(1);
+      expect(isCurrent).toHaveBeenCalledTimes(transport === "direct" ? 1 : 0);
 
       send.mockClear();
       await sendPush({});
       expect(Object.keys(requireSendRequest(send))).toEqual(senderOptionKeys[transport]);
-      expect(isCurrent).toHaveBeenCalledTimes(1);
+      expect(isCurrent).toHaveBeenCalledTimes(transport === "direct" ? 1 : 0);
     },
   );
 

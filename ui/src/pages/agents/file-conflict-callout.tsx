@@ -1,5 +1,8 @@
 import { Show } from "solid-js";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 export function AgentFileError(params: {
   error: string | null;

@@ -31,6 +31,7 @@ import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
 } from "../../agents/tools/gateway-caller-context.js";
+import * as gatewayModule from "../../agents/tools/gateway.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../../config/config.js";
 import type { SessionEntry } from "../../config/sessions.js";
 import { resolveSessionStorePathCore } from "../../config/sessions/paths.js";
@@ -662,31 +663,30 @@ describe("runPreparedReply media-only handling", () => {
             await withGatewayToolCallerIdentity(
               { ...identity, approvalAuthority: authority },
               async () => {
-                const tool = createCronTool(
-                  { runId: instance.runId, agentSessionKey: "session-key" },
-                  {
-                    callGatewayTool: async <T>(method: string) => {
-                      const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
-                      return grant
-                        ? withCronManagementGrant(grant, identity, method, async () => {
-                            getCronManagementAuthority(identity)!();
-                            expect(queuedCapability?.requesterOwner?.senderId).toBe("owner-1");
-                            expect(getCronManagementChannelRequester(identity)).toEqual(
-                              channel === "discord"
-                                ? {
-                                    version: 1,
-                                    channel,
-                                    accountId: "default",
-                                    senderId: promoted ? "owner-1" : "transport-alias",
-                                  }
-                                : undefined,
-                            );
-                            return { jobs: [], total: 0, hasMore: false } as T;
-                          })
-                        : ({ jobs: [], total: 0, hasMore: false } as T);
-                    },
-                  },
-                );
+                using _ = vi
+                  .spyOn(gatewayModule, "callGatewayTool")
+                  .mockImplementation(async <T>(method: string) => {
+                    const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
+                    return grant
+                      ? withCronManagementGrant(grant, identity, method, async () => {
+                          getCronManagementAuthority(identity)!();
+                          expect(queuedCapability?.requesterOwner?.senderId).toBe("owner-1");
+                          expect(getCronManagementChannelRequester(identity)).toEqual(
+                            channel === "discord"
+                              ? {
+                                  version: 1,
+                                  channel,
+                                  accountId: "default",
+                                  senderId: promoted ? "owner-1" : "transport-alias",
+                                }
+                              : undefined,
+                          );
+                          return { jobs: [], total: 0, hasMore: false } as T;
+                        })
+                      : ({ jobs: [], total: 0, hasMore: false } as T);
+                  });
+                const options = { runId: instance.runId, agentSessionKey: "session-key" };
+                const tool = createCronTool(options);
                 if (kind === "revoked-after-bind") {
                   current = false;
                   await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
@@ -867,31 +867,30 @@ describe("runPreparedReply media-only handling", () => {
             if (kind === "revoked-before-bind") {
               setRuntimeConfigSnapshot({});
             }
-            const tool = createCronTool(
-              { runId: opts?.runId, agentSessionKey: identity.sessionKey },
-              {
-                callGatewayTool: async <T>(method: string) => {
-                  const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
-                  if (!admitted) {
-                    expect(grant).toBeUndefined();
-                    calls.push("restricted");
-                    return { jobs: [], total: 0, hasMore: false } as T;
+            using _ = vi
+              .spyOn(gatewayModule, "callGatewayTool")
+              .mockImplementation(async <T>(method: string) => {
+                const grant = getGatewayToolCallerIdentity()?.cronManagementGrant;
+                if (!admitted) {
+                  expect(grant).toBeUndefined();
+                  calls.push("restricted");
+                  return { jobs: [], total: 0, hasMore: false } as T;
+                }
+                expect(grant, "configured owner must receive a management grant").toBeDefined();
+                return await withCronManagementGrant(grant!, identity, method, async () => {
+                  const assertActive = getCronManagementAuthority(identity)!;
+                  assertActive();
+                  await Promise.resolve();
+                  if (kind === "revoked") {
+                    setRuntimeConfigSnapshot({});
                   }
-                  expect(grant, "configured owner must receive a management grant").toBeDefined();
-                  return await withCronManagementGrant(grant!, identity, method, async () => {
-                    const assertActive = getCronManagementAuthority(identity)!;
-                    assertActive();
-                    await Promise.resolve();
-                    if (kind === "revoked") {
-                      setRuntimeConfigSnapshot({});
-                    }
-                    assertActive();
-                    calls.push(method);
-                    return { jobs: [], total: 0, hasMore: false } as T;
-                  });
-                },
-              },
-            );
+                  assertActive();
+                  calls.push(method);
+                  return { jobs: [], total: 0, hasMore: false } as T;
+                });
+              });
+            const options = { runId: opts?.runId, agentSessionKey: identity.sessionKey };
+            const tool = createCronTool(options);
             if (kind === "revoked") {
               await expect(tool.execute("list", { action: "list" })).rejects.toThrow(
                 "Automation admin grant",

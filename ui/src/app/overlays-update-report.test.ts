@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred as deferred } from "../../../test/helpers/promise.js";
 import { createStorageMock } from "../test-helpers/storage.ts";
 import { createUpdateRunFixture } from "../test-helpers/update-run.ts";
+import { waitForFast } from "../test-helpers/wait-for.ts";
 import {
   client,
   createGatewayHarness,
@@ -54,6 +55,7 @@ function reportTest(
 }
 
 async function beginReport(overlays: ReturnType<typeof updateFixture>["overlays"], id: string) {
+  await waitForFast(() => expect(overlays.snapshot.reportableUpdateFailureId).toBe(id));
   const reporting = overlays.reportUpdateFailure(id);
   await vi.waitFor(() => expect(reportUpdateFailure).toHaveBeenCalledOnce());
   const admission = reportUpdateFailure.mock.calls[0]?.[0];
@@ -73,8 +75,9 @@ afterEach(async () => {
 
 it("does not admit a failure report without an identified administrator profile", async () => {
   const { overlays, expectState } = reportTest(undefined, null);
-  await flushMicrotasks();
-  expect(overlays.snapshot.reportableUpdateFailureId).toBe(FAILED_RUN.runId);
+  await waitForFast(() =>
+    expect(overlays.snapshot.reportableUpdateFailureId).toBe(FAILED_RUN.runId),
+  );
   await overlays.reportUpdateFailure(FAILED_RUN.runId);
   expect(reportUpdateFailure).not.toHaveBeenCalled();
   expectState({ updateFailureReportBusy: false, updateFailureReportNotice: null });
@@ -86,8 +89,7 @@ describe("update failure report continuity", () => {
     const { overlays } = reportTest();
     const pending = deferred<{ status: "created"; url: string }>();
     reportUpdateFailure.mockReturnValue(pending.promise);
-    await flushMicrotasks();
-    expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
+    await waitForFast(() => expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId));
     expect(reportUpdateFailure).not.toHaveBeenCalled();
 
     const first = overlays.reportUpdateFailure(attemptId);
@@ -124,8 +126,7 @@ describe("update failure report continuity", () => {
       hello: administrator,
       selfUser: { id: "gateway-owner" },
     });
-    await flushMicrotasks();
-    expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId);
+    await waitForFast(() => expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId));
     expect(admission?.isCurrent?.()).toBe(false);
     await overlays.reportUpdateFailure(attemptId);
     expect(reportUpdateFailure).toHaveBeenCalledTimes(2);
@@ -134,7 +135,7 @@ describe("update failure report continuity", () => {
   it("retains the report action and visible error after submission fails", async () => {
     const { overlays } = reportTest();
     reportUpdateFailure.mockRejectedValue(new Error("unknown method: update.report"));
-    await flushMicrotasks();
+    await waitForFast(() => expect(overlays.snapshot.reportableUpdateFailureId).toBe(attemptId));
     await overlays.reportUpdateFailure(attemptId);
 
     expect(overlays.snapshot.updateFailureReportNotice).toMatchObject({
@@ -208,9 +209,10 @@ it.each(["changed-facts", "running", "succeeded", "reconciled", "skipped"] as co
       harness.emitEvent("update.run.changed", { runId: run.runId, updatedAtMs: run.updatedAtMs });
     }
     expect(admission?.isCurrent?.()).toBe(false);
-    await flushMicrotasks();
-    expect(overlays.snapshot.reportableUpdateFailureId).toBe(
-      change === "changed-facts" || change === "skipped" ? run.runId : null,
+    await waitForFast(() =>
+      expect(overlays.snapshot.reportableUpdateFailureId).toBe(
+        change === "changed-facts" || change === "skipped" ? run.runId : null,
+      ),
     );
     if (change === "reconciled") {
       expectState({

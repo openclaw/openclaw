@@ -42,8 +42,8 @@ if (!unsupportedControlUiBrowser) {
   }
   bindControlUiDocumentHead({ themeColors, favicons });
 
-  const root = document.querySelector<HTMLElement>("openclaw-app");
-  if (root) {
+  const root = document.getElementsByTagName("openclaw-app").item(0);
+  if (root instanceof HTMLElement) {
     mountOpenClawApp(root);
   }
   const isProd = (import.meta as ViteImportMeta).env?.PROD === true;

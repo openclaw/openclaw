@@ -111,11 +111,6 @@ export class RestScheduler<TData> {
     this.rejectPending(new Error("Discord request queue cleared"));
   }
 
-  abortPending(): void {
-    this.queueGeneration += 1;
-    this.rejectPending(new DOMException("Aborted", "AbortError"));
-  }
-
   get queueSize(): number {
     return this.queuedRequests;
   }

@@ -27,14 +27,14 @@ import {
 import {
   collectMatrixInboundDedupeSources,
   hasCompletedMatrixInboundDedupeMigration,
-  importNewestInboundDedupeMarkers,
+  importInboundDedupeMarkersToIngress,
+  matrixReplayGuardIngressMigration,
   readLegacyInboundDedupeSqliteSource,
   recordMatrixInboundDedupeMigrationCompletion,
   reserveMatrixInboundDedupeMigrationCompletion,
   retireLegacyInboundDedupeSqliteRows,
   verifyMatrixInboundDedupeSourcesRetired,
   type LegacyInboundDedupeMarker,
-  type MatrixInboundDedupeMigrationIo,
 } from "./src/matrix/monitor/inbound-dedupe-migration.js";
 import { walkMatrixStateFiles } from "./src/matrix/state-layout-walk.js";
 import { resolveMatrixCredentialsDir } from "./src/storage-paths.js";
@@ -301,7 +301,6 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
     },
     async migrateLegacyState(params) {
       const sources = await collectMatrixInboundDedupeSources(params.stateDir);
-      const io: MatrixInboundDedupeMigrationIo = { context: params.context, env: params.env };
       const changes: string[] = [];
       const warnings: string[] = [];
       if (await hasCompletedMatrixInboundDedupeMigration(params.context, params.env)) {
@@ -369,9 +368,12 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       }
 
       try {
-        const result = await importNewestInboundDedupeMarkers({ io, markers: gathered });
+        const result = await importInboundDedupeMarkersToIngress({
+          context: params.context,
+          markers: gathered,
+        });
         changes.push(
-          `Migrated Matrix inbound dedupe markers to the claimable dedupe store (${result.imported} of ${result.total} entries)`,
+          `Migrated Matrix inbound dedupe markers to the durable ingress spool (${result.imported} of ${result.total} entries)`,
         );
       } catch (err) {
         warnings.push(
@@ -396,5 +398,6 @@ export const stateMigrations: PluginDoctorStateMigration[] = [
       return { changes, warnings };
     },
   },
+  matrixReplayGuardIngressMigration,
   matrixSyncCacheMigration,
 ];

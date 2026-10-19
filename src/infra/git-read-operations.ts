@@ -45,7 +45,7 @@ export type GitReadOperations = {
   "checkout.revision": {
     input: {
       root: string;
-      scope: "context" | "refs" | "worktree";
+      scope: "context" | "refs" | "worktree" | "diff";
       branch?: string;
       defaultBranch?: string;
     };

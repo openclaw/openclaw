@@ -149,6 +149,41 @@ export class GatewaySessionRowEvents {
         ? ancestors.map((row) => decodeRow(row, transaction))
         : ancestors;
       let envelope = payload;
+      if (Array.isArray(ancestorSessions) && Array.isArray(payload.ancestorSessionRefs)) {
+        const unresolved: unknown[] = [];
+        for (const value of payload.ancestorSessionRefs) {
+          const reference = asNullableRecord(value);
+          const retained =
+            reference &&
+            typeof reference.key === "string" &&
+            (reference.agentId === undefined || typeof reference.agentId === "string")
+              ? transaction.get(sessionRowIdentity(reference.key, reference.agentId))?.row
+              : undefined;
+          if (
+            !reference ||
+            !retained ||
+            (reference.sessionId !== undefined && typeof reference.sessionId !== "string") ||
+            reference.sessionId !== retained.sessionId ||
+            typeof reference.revision !== "string" ||
+            reference.revision !== retained.ancestorRevision ||
+            typeof reference.snapshotAt !== "number" ||
+            !Number.isFinite(reference.snapshotAt)
+          ) {
+            unresolved.push(value);
+            continue;
+          }
+          // References certify content, but never change the wire delta baseline or its LRU.
+          ancestorSessions.push({ ...retained, snapshotAt: reference.snapshotAt });
+        }
+        if (unresolved.length !== payload.ancestorSessionRefs.length) {
+          envelope = { ...payload };
+          if (unresolved.length) {
+            envelope.ancestorSessionRefs = unresolved;
+          } else {
+            delete envelope.ancestorSessionRefs;
+          }
+        }
+      }
       if (Object.hasOwn(payload, "sessionFieldRefs")) {
         const row = asNullableRecord(session);
         if (!row || !Array.isArray(payload.sessionFieldRefs)) {
@@ -163,7 +198,7 @@ export class GatewaySessionRowEvents {
           }
           restored[field] = row[field];
         }
-        envelope = { ...payload, ...restored };
+        envelope = { ...envelope, ...restored };
         delete envelope.sessionFieldRefs;
       }
       transaction.commit();

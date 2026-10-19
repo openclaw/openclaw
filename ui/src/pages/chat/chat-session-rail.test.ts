@@ -6,6 +6,7 @@ import type { SessionObserverDigest } from "../../../../packages/gateway-protoco
 import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { currentThemeBranding, setCurrentThemeBranding } from "../../app/theme-branding.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
+import { waitForSolid } from "../../test-helpers/solid-settle.ts";
 import {
   getChatAttachmentDataUrl,
   registerChatAttachmentPayload,
@@ -395,6 +396,9 @@ describe("ChatSessionRailElement", () => {
       },
     });
     const textarea = element.querySelector("textarea")!;
+    await waitForSolid(() =>
+      expect(element.querySelector('button[aria-label="Delete comment"]')).not.toBeNull(),
+    );
     element.querySelector<HTMLButtonElement>('button[aria-label="Delete comment"]')!.click();
     expect(onAttachmentsChange).toHaveBeenCalledWith([]);
     expect(document.activeElement).toBe(textarea);

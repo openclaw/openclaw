@@ -2,9 +2,12 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
+import { providerResponse } from "../../agents/embedded-agent-runner.wire.test-support.js";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test-support.js";
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
@@ -20,55 +23,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-function successfulResponse(model: string) {
-  const item = {
-    id: "fallback-message",
-    type: "message",
-    role: "assistant",
-    status: "completed",
-    content: [{ type: "output_text", text: "Fallback report", annotations: [] }],
-  };
-  const response = {
-    id: "fallback-response",
-    model,
-    status: "completed",
-    output: [item],
-    usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-  };
-  const events = [
-    { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
-    { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
-    {
-      type: "response.content_part.added",
-      item_id: item.id,
-      output_index: 0,
-      content_index: 0,
-      part: { type: "output_text", text: "", annotations: [] },
-    },
-    {
-      type: "response.output_text.delta",
-      item_id: item.id,
-      output_index: 0,
-      content_index: 0,
-      delta: "Fallback report",
-    },
-    {
-      type: "response.output_text.done",
-      item_id: item.id,
-      output_index: 0,
-      content_index: 0,
-      text: "Fallback report",
-    },
-    { type: "response.output_item.done", output_index: 0, item },
-    { type: "response.completed", response },
-  ];
-  return new Response(events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""), {
-    headers: { "content-type": "text/event-stream" },
-  });
-}
-
-it("continues one cron user turn when the primary times out after provider dispatch", async () => {
-  await withOpenClawTestState({ label: "cron-fallback-transcript" }, async (state) => {
+it("continues one cron user turn when the primary times out after provider dispatch", () =>
+  withOpenClawTestState({ label: "cron-fallback-transcript" }, async (state) => {
     await mkdir(state.agentDir(), { recursive: true });
     await writeFile(
       path.join(state.agentDir(), "settings.json"),
@@ -91,21 +47,16 @@ it("continues one cron user turn when the primary times out after provider dispa
       profiles: { "mock-openai:cron-fixture": { provider: "mock-openai", mode: "api_key" } },
       order: { "mock-openai": ["mock-openai:cron-fixture"] },
     };
+    const modelConfig = (): AgentModelEntryConfig => ({
+      agentRuntime: { id: "openclaw" },
+      params: { transport: "sse", openaiWsWarmup: false },
+    });
     config.agents = {
       entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
       defaults: {
         workspace: state.workspaceDir,
         model: { primary: "mock-openai/primary", fallbacks: ["mock-openai/backup"] },
-        models: {
-          "mock-openai/primary": {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
-          },
-          "mock-openai/backup": {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
-          },
-        },
+        models: { "mock-openai/primary": modelConfig(), "mock-openai/backup": modelConfig() },
       },
     };
     setRuntimeConfigSnapshot(config);
@@ -124,13 +75,20 @@ it("continues one cron user turn when the primary times out after provider dispa
     );
     const requests: string[] = [];
     const timeoutAdvances: ReturnType<typeof vi.advanceTimersByTimeAsync>[] = [];
-    const fetchProvider = vi.fn<typeof fetch>(async (_url, options) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, options) => {
       const request = new Request(_url, options);
       expect(request.headers.get("authorization")).toBe("Bearer synthetic-cron-key");
       const body = JSON.parse(await request.text()) as { model: string };
       requests.push(body.model);
       if (body.model !== "primary") {
-        return successfulResponse(body.model);
+        return providerResponse({
+          api: "openai-responses",
+          model: body.model,
+          id: "fallback-response",
+          messageId: "fallback-message",
+          text: "Fallback report",
+          calls: [],
+        }).response;
       }
       const { signal } = request;
       return await new Promise<Response>((_resolve, reject) => {
@@ -147,9 +105,8 @@ it("continues one cron user turn when the primary times out after provider dispa
         timeoutAdvances.push(advance);
       });
     });
-    vi.spyOn(globalThis, "fetch").mockImplementation(fetchProvider);
-
-    const running = runCronIsolatedAgentTurn({
+    const message = "Reply exactly Fallback report";
+    const result = await runCronIsolatedAgentTurn({
       cfg: config,
       onExecutionPhase: ({ phase, model }) => {
         if (phase === "model_call_started" && model === "primary") {
@@ -160,32 +117,21 @@ it("continues one cron user turn when the primary times out after provider dispa
       deliveryAttemptFence: null,
       agentId: "main",
       sessionKey: "cron:fallback-transcript",
-      message: "Reply exactly Fallback report",
+      message,
       job: {
-        id: "fallback-transcript",
+        ...createDueIsolatedJob({ id: "fallback-transcript", nowMs: 1, nextRunAtMs: 1 }),
         inferenceBinding,
         name: "Fallback transcript proof",
         enabled: false,
-        createdAtMs: 1,
-        updatedAtMs: 1,
         schedule: { kind: "every", everyMs: 3_600_000 },
-        sessionTarget: "isolated",
         wakeMode: "now",
-        payload: {
-          kind: "agentTurn",
-          message: "Reply exactly Fallback report",
-          timeoutSeconds: 120,
-          toolsAllow: [],
-        },
-        delivery: { mode: "none" },
+        payload: { kind: "agentTurn", message, timeoutSeconds: 120, toolsAllow: [] },
         state: {},
       },
     });
 
-    const result = await running;
     await Promise.all(timeoutAdvances);
     vi.useRealTimers();
-
     expect(result, JSON.stringify({ result, requests })).toMatchObject({
       status: "ok",
       outputText: "Fallback report",
@@ -196,7 +142,13 @@ it("continues one cron user turn when the primary times out after provider dispa
       sessionKey: result.sessionKey!,
       storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
     });
-    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
+    const userMessages = messages.filter((entry) => entry.role === "user");
+    expect(userMessages).toHaveLength(2);
+    expect(userMessages[0]).not.toHaveProperty("display", false);
+    expect(userMessages[1]).toMatchObject({
+      display: false,
+      provenance: { kind: "internal_system" },
+    });
     expect(messages.map(readModelFallbackNotice).filter(Boolean)).toMatchObject([
       {
         kind: "model-fallback",
@@ -207,11 +159,10 @@ it("continues one cron user turn when the primary times out after provider dispa
     ]);
     expect(
       messages.filter(
-        (message) =>
-          message.role === "assistant" &&
-          message.stopReason === "stop" &&
-          !readModelFallbackNotice(message),
+        (entry) =>
+          entry.role === "assistant" &&
+          entry.stopReason === "stop" &&
+          !readModelFallbackNotice(entry),
       ),
     ).toHaveLength(1);
-  });
-});
+  }));

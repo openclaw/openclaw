@@ -60,6 +60,44 @@ function harness(params: Omit<Params, "session" | "runId"> = {}) {
 }
 
 describe("tool result ordering", () => {
+  it.each(["discarded", "rejected"] as const)(
+    "settles nested lifecycle accounting when terminal presentation is %s",
+    async (outcome) => {
+      const onAgentEvent = vi.fn<NonNullable<Params["onAgentEvent"]>>();
+      const h = harness({ onAgentEvent });
+      let lifecycleAtTerminal: ReturnType<typeof h.subscription.getItemLifecycle> | undefined;
+      const failure = new Error("terminal acceptance failed");
+      const execution = h.subscription.runToolLifecycle({
+        toolName: "read",
+        toolCallId: "discarded-terminal",
+        args: {},
+        execute: async (started) => {
+          started();
+          return jsonResult({ done: true });
+        },
+        onTerminal: () => {
+          lifecycleAtTerminal = h.subscription.getItemLifecycle();
+          if (outcome === "rejected") {
+            throw failure;
+          }
+          return false;
+        },
+      });
+      if (outcome === "rejected") {
+        await expect(execution).rejects.toBe(failure);
+      } else {
+        await execution;
+      }
+      expect(lifecycleAtTerminal).toEqual({ startedCount: 1, completedCount: 1, activeCount: 0 });
+      expect(h.subscription.getItemLifecycle()).toEqual(lifecycleAtTerminal);
+      expect(
+        onAgentEvent.mock.calls.some(
+          ([event]) => event.stream === "item" && event.data.phase === "end",
+        ),
+      ).toBe(false);
+    },
+  );
+
   it("settles subscribed nested dispatch exactly once across repeated exec and wait turns", async () => {
     const blockReplyFlush = createDeferred();
     const onBlockReplyFlush = vi.fn(() => blockReplyFlush.promise);

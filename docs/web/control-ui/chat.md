@@ -961,6 +961,8 @@ Session context groups workspace information, pull requests, people, subagents,
 and attached automations; it reuses their existing actions rather than duplicating
 their data. Attached automations appear only when the connected account can read
 automations; accounts with session-only access do not request that inventory.
+Running and scheduled states update from automation events. If an inventory
+refresh is already running, later changes share one follow-up refresh.
 The former pull-request and task-progress bars are not repeated above
 the composer.
 

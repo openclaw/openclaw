@@ -5,18 +5,17 @@ import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
 import type { SessionRowDatabaseFacts } from "../config/sessions/session-row-facts.types.js";
 import { addSessionMember } from "../config/sessions/session-sharing-store.native.js";
-import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import type { InternalSessionEntry, SessionAcpMeta } from "../config/sessions/types.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
 import { ensureProfileForEmail } from "../state/user-profiles.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import * as databaseFactsRead from "./session-row-database-facts.js";
 import { withReadySessionRows } from "./session-row-prepared-read.js";
 import { ready, type Row } from "./session-row-projection-record.js";
-import { createSessionRowProjection, type SessionRowProjection } from "./session-row-projection.js";
+import type { SessionRowProjection } from "./session-row-projection.js";
+import * as rowFixture from "./session-row-projection.read-fixture.test-support.js";
 import * as rowInputs from "./session-utils-row.js";
 
 /** Pause after the real worker read scope has released its request hold. */
@@ -53,29 +52,29 @@ export async function withAcceptedSuffix(
       "agent:main:accepted-a",
       options.acpMeta === undefined ? "agent:main:accepted-b" : "agent:main:acp:accepted-b",
     ];
-    const identities = options.membership
-      ? {
-          owner: ensureProfileForEmail("accepted-owner@example.test"),
-          viewer: ensureProfileForEmail("accepted-viewer@example.test"),
-        }
-      : undefined;
-    const entries = keys.map<InternalSessionEntry>((_, index) => ({
+    const query = { agentId: "main", key: keys[1]! };
+    const scope = { agentId: query.agentId, sessionKey: query.key };
+    const [profileOwner, viewer] = options.membership
+      ? ["owner", "viewer"].map((name) => ensureProfileForEmail(`accepted-${name}@example.test`))
+      : [];
+    const entries = keys.map<InternalSessionEntry>((_key, index) => ({
       sessionId: `accepted-${index}`,
       updatedAt: 1,
       label: `initial-${index}`,
-      ...(options.acpMeta !== undefined && index === 1
-        ? { lifecycleRevision: "accepted-lifecycle" }
-        : {}),
-      ...(options.archived && index === 1 ? { archivedAt: 1 } : {}),
-      ...(identities && index === 1
-        ? {
-            visibility: "read-only",
-            createdActor: { type: "human", source: "profile", id: identities.owner.id },
-          }
-        : {}),
     }));
+    const suffixEntry = entries[1]!;
+    if (options.acpMeta !== undefined) {
+      suffixEntry.lifecycleRevision = "accepted-lifecycle";
+    }
+    if (options.archived) {
+      suffixEntry.archivedAt = 1;
+    }
+    if (profileOwner) {
+      suffixEntry.visibility = "read-only";
+      suffixEntry.createdActor = { type: "human", source: "profile", id: profileOwner.id };
+    }
     for (const [index, sessionKey] of keys.entries()) {
-      replaceSessionEntrySync({ agentId: "main", sessionKey }, entries[index]!);
+      rowFixture.seedRow(sessionKey, entries[index]!);
     }
     if (options.acpMeta) {
       seedCanonicalAcpSessionMeta({
@@ -86,69 +85,45 @@ export async function withAcceptedSuffix(
         now: () => 1,
       });
     }
-    if (identities) {
-      addSessionMember(
-        { agentId: "main", sessionKey: keys[1]! },
-        {
-          identityId: identities.viewer.id,
-          addedBy: identities.owner.id,
-          addedAt: 1,
-        },
-      );
+    if (profileOwner && viewer) {
+      addSessionMember(scope, { identityId: viewer.id, addedBy: profileOwner.id, addedAt: 1 });
     }
     const replacementPath = state.statePath("imports", "accepted-replacement.sqlite");
     if (options.replacement) {
       replaceSessionEntrySync(
-        { agentId: "main", sessionKey: keys[1]!, storePath: replacementPath },
+        { ...scope, storePath: replacementPath },
         { ...entries[1]!, updatedAt: 2, label: "replacement store" },
       );
       await closeOpenClawAgentDatabaseByPathAsync(replacementPath, "main");
     }
-    const releaseForeground = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({
-      cfg,
-      modelCatalog: [],
-    });
+    using _ = rowFixture.holdForeground();
+    using projection = await rowFixture.createTestProjection({ cfg, modelCatalog: [] });
     const paused = createDeferredCore();
     const release = createDeferredCore();
     let reading: Promise<void> | undefined;
     try {
       await projection.ensureMaterialized();
-      const query = { agentId: "main", key: keys[1]! };
       const previous = await withReadySessionRows(
         projection,
         () => keys.map((key) => ({ agentId: "main", key })),
         (read) => read.describe(query)!,
       );
       const count = projection.materializedCount;
-      const releases: string[] = [];
+      let releases = 0;
       let trackingCustody = false;
       const reads: SessionRowDatabaseFacts[][] = [];
-      const readDatabases = history.withSessionHistoryWorkerDatabases;
-      vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-        async (selected, consume, lane) => {
-          const tracked = trackingCustody;
-          const result = await readDatabases(
-            selected,
-            (owners) =>
-              consume(
-                owners.map((owner) => ({
-                  ...owner,
-                  async readRowFacts(input) {
-                    const reply = await owner.readRowFacts(input);
-                    reads.push(structuredClone(reply.rows));
-                    return reply;
-                  },
-                })),
-              ),
-            lane,
-          );
-          if (tracked) {
-            releases.push("worker");
-          }
-          return result;
-        },
-      );
+      const databases = rowFixture.watchRowFacts((owner) => async (input) => {
+        const reply = await owner.readRowFacts(input);
+        reads.push(structuredClone(reply.rows));
+        return reply;
+      });
+      const readDatabases = databases.getMockImplementation()!;
+      databases.mockImplementation(async (...args) => {
+        const tracked = trackingCustody;
+        const result = await readDatabases(...args);
+        releases += tracked ? 1 : 0;
+        return result;
+      });
       let elapsed = 0;
       vi.spyOn(performance, "now").mockImplementation(() => elapsed);
       const readInputs = rowInputs.readSessionRowInputs;
@@ -170,11 +145,13 @@ export async function withAcceptedSuffix(
           await release.promise;
         },
       );
+      const acceptedEntries = entries.map((entry, index) => ({
+        ...entry,
+        updatedAt: 2,
+        label: `accepted-${index}`,
+      }));
       for (const [index, sessionKey] of keys.entries()) {
-        replaceSessionEntrySync(
-          { agentId: "main", sessionKey },
-          { ...entries[index]!, updatedAt: 2, label: `accepted-${index}` },
-        );
+        rowFixture.seedRow(sessionKey, acceptedEntries[index]!);
         sessionChanges.emit({
           agentId: "main",
           storePath: previous.storeTarget.storePath,
@@ -189,7 +166,7 @@ export async function withAcceptedSuffix(
           throw new Error("Drain bypassed the released-custody boundary");
         }),
       ]);
-      expect(releases).toEqual(["worker"]);
+      expect(releases).toBe(1);
       const suffix = projection.findBySessionId({
         agentId: "main",
         sessionId: entries[1]!.sessionId,
@@ -208,9 +185,9 @@ export async function withAcceptedSuffix(
         query,
         reads,
         replacementPath,
-        viewerId: identities?.viewer.id,
-        scope: { agentId: "main", sessionKey: query.key },
-        entry: { ...entries[1]!, updatedAt: 2, label: "accepted-1" },
+        viewerId: viewer?.id,
+        scope,
+        entry: acceptedEntries[1]!,
         resume: async () => {
           release.resolve();
           await reading;
@@ -225,8 +202,6 @@ export async function withAcceptedSuffix(
       release.resolve();
       await Promise.allSettled(reading ? [reading] : []);
       vi.restoreAllMocks();
-      projection.dispose();
-      releaseForeground();
     }
   });
 }

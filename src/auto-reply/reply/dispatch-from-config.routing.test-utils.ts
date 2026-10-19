@@ -176,11 +176,13 @@ describe("dispatchReplyFromConfig", () => {
 
   it("forces suppressTyping when routing to a different originating channel", async () => {
     setNoAbort();
+    mocks.routeReply.mockClear();
     installThreadingTestPlugin({ id: "telegram" });
     const cfg = emptyConfig;
     const dispatcher = createDispatcher();
     const ctx = buildTestCtx({
       Provider: "slack",
+      Surface: "slack",
       OriginatingChannel: "telegram",
       OriginatingTo: "telegram:999",
     });
@@ -192,6 +194,14 @@ describe("dispatchReplyFromConfig", () => {
     };
 
     await dispatchReplyFromConfig({ ctx, cfg, dispatcher, replyResolver });
+    expect(mocks.routeReply).toHaveBeenCalledWith(
+      expect.objectContaining({
+        channel: "telegram",
+        to: "telegram:999",
+        payload: expect.objectContaining({ text: "hi" }),
+      }),
+    );
+    expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
   });
 
   it("forces suppressTyping for internal webchat turns", async () => {

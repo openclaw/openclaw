@@ -505,18 +505,18 @@ try {
       String.raw`
 function Invoke-FixtureNode {
   $global:LASTEXITCODE = 0
-  if ($args[0] -eq '-v') { return $script:case[0] }
+  if ($args[0] -eq '-v') { return $script:nodeCapabilityCase[0] }
   $input | Out-Null
-  return (@{ available = $true; version = $script:case[1]; text = $script:case[2]; blob = $true; json = $true } | ConvertTo-Json -Compress)
+  return (@{ available = $true; version = $script:nodeCapabilityCase[1]; text = $script:nodeCapabilityCase[2]; blob = $true; json = $true } | ConvertTo-Json -Compress)
 }
 function Get-Command {
   if ($script:explicit) { throw 'unexpected ambient runtime lookup' }
   return [pscustomobject]@{ Source = 'Invoke-FixtureNode' }
 }
-foreach ($script:case in $cases) {
-  $script:explicit = $script:case[0] -eq 'v26.1.0'
+foreach ($script:nodeCapabilityCase in $cases) {
+  $script:explicit = $script:nodeCapabilityCase[0] -eq 'v26.1.0'
   $actual = if ($script:explicit) { Check-Node -NodePath 'Invoke-FixtureNode' } else { Check-Node }
-  if ($actual -ne $script:case[3]) { throw "Node/SQLite case failed: $script:case actual=$actual" }
+  if ($actual -ne $script:nodeCapabilityCase[3]) { throw "Node/SQLite case failed: $script:nodeCapabilityCase actual=$actual" }
 }
 `,
     ),

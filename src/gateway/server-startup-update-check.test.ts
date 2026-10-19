@@ -50,6 +50,8 @@ beforeEach(async () => {
   resetGatewayWorkAdmission();
   scheduler = createTestGatewayScheduler();
   state = await createOpenClawTestState({ label: "gateway-update-check" });
+  // Keep cold partial-mock loading outside the factory-readiness assertion window.
+  await import("../infra/update-startup.js");
   defaultUpdateCheck = {
     initialize: vi.fn(async () => initialized),
     start: vi.fn(),

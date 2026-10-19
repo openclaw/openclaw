@@ -349,7 +349,10 @@ it("does not let a replacement draft's pending preference load restore a consume
   await next.flow.submit(undefined, true);
   expect(next.context.sessions.createResult).toHaveBeenCalledWith(
     expect.not.objectContaining({ worktreeName: "first-task" }),
-    { reconciliation: "background" },
+    {
+      reconciliation: "background",
+      signal: expect.any(AbortSignal),
+    },
   );
 });
 
@@ -424,6 +427,7 @@ it("retires the restored agent's name despite default-agent hydration", async ()
   await retry.flow.submit(undefined, true);
   expect(retry.context.sessions.createResult).toHaveBeenCalledExactlyOnceWith(original, {
     reconciliation: "background",
+    signal: expect.any(AbortSignal),
   });
   expect(start).toHaveBeenCalledOnce();
   expect(prefs.stored("work")).toMatchObject({ worktreeName: "" });

@@ -1,5 +1,7 @@
-import { render, type JSX } from "@solidjs/web";
+import { render, spread, type JSX } from "@solidjs/web";
 import { createComponent, createSignal, onSettled } from "solid-js";
+import { createResizeObserver } from "../lib/reactive/observers.ts";
+import { controlsForHovercard, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 
 const roots = new WeakMap<HTMLDivElement, () => void>();
 
@@ -9,7 +11,10 @@ export function disposePreview(card: HTMLDivElement): void {
 }
 
 /** Each portaled card keeps one Solid root until its owner closes or changes its view. */
-export function createPreviewRenderer<T>(view: (props: { value: T }) => JSX.Element) {
+export function createPreviewRenderer<T>(
+  view: (props: { value: T }) => JSX.Element,
+  label: (value: T) => string,
+) {
   const updates = new WeakMap<HTMLDivElement, (value: T) => void>();
   return (card: HTMLDivElement, value: T, afterCommit: () => void): void => {
     const update = updates.get(card);
@@ -27,13 +32,20 @@ export function createPreviewRenderer<T>(view: (props: { value: T }) => JSX.Elem
       });
     const dispose = render(() => {
       const [current, setCurrent] = createSignal<T>(() => value, { ownedWrite: true });
+      spread(card, () => ({ "aria-label": label(current()) }), true);
+      createResizeObserver(() => [card], afterCommit);
       updates.set(card, (next) => {
         setCurrent(() => next);
         afterUpdate();
       });
-      const content = createComponent(view, {
-        get value() {
-          return current();
+      const content = createComponent(HovercardControlsContext, {
+        value: controlsForHovercard(card),
+        get children() {
+          return createComponent(view, {
+            get value() {
+              return current();
+            },
+          });
         },
       });
       afterUpdate();

@@ -12,7 +12,6 @@ import {
   runMediaGenerationCandidates,
 } from "../media-generation/runtime-shared.js";
 import { withAcquiredPluginCapabilityProviders } from "../plugins/capability-provider-acquisition.js";
-import { getProviderEnvVarsCore } from "../secrets/provider-env-vars.js";
 import { resolveMusicGenerationOverrides } from "./normalization.js";
 import type { GenerateMusicParams, GenerateMusicRuntimeResult } from "./runtime-types.js";
 import type { MusicGenerationResult } from "./types.js";
@@ -23,7 +22,6 @@ const log = createSubsystemLogger("music-generation");
 type MusicGenerationRuntimeDeps = {
   getProvider?: typeof getMusicGenerationProvider;
   listProviders?: typeof listMusicGenerationProviders;
-  getProviderEnvVars?: typeof getProviderEnvVarsCore;
   log?: Pick<typeof log, "debug" | "warn">;
 };
 
@@ -70,7 +68,6 @@ async function runMusicGeneration(
   return runMediaGenerationCandidates({
     request: params,
     listProviders,
-    getProviderEnvVars: deps.getProviderEnvVars,
     capability: "music",
     getProvider: (providerId) => getProvider(providerId, params.cfg),
     onFailure: (attempt) => {

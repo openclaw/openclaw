@@ -95,14 +95,14 @@ async function read(location = filename, checkFreshAdmission = false) {
         checkFreshAdmission,
       },
       { signal: new AbortController().signal, assertCurrent: admission.assertCurrent },
-    ).result;
+    );
     if ("error" in outcome) {
       throw outcome.error;
     }
     assert(outcome.value.ok && outcome.value.type === "nodeHost.config");
     assert.equal(outcome.value.row?.updated_at_ms, 1);
   } finally {
-    await transport.startClose().result;
+    await transport.startClose();
   }
 }
 

@@ -24,12 +24,15 @@ import {
   areUiSessionKeysEquivalent,
   isUiSelectedGlobalSessionKey,
   resolveUiDefaultAgentId,
+  resolveUiConversationIdentity,
   resolveUiSelectedGlobalAgentId,
   type UiSessionDefaultsHost,
 } from "../../lib/sessions/session-key.ts";
-import { executeSlashCommand } from "./chat-command-executor.ts";
+import { generateUUID } from "../../lib/uuid.ts";
+import type { executeSlashCommand } from "./chat-command-executor.ts";
 import { clearChatHistory } from "./chat-history-actions.ts";
 import { setChatError } from "./chat-history-state.ts";
+import { chatOutboxOwner } from "./chat-outbox-owner.ts";
 import { enqueuePendingRunMessage } from "./chat-queue.ts";
 import { readChatSessionActionAccess } from "./chat-session-action-access.ts";
 import type { ChatExportResult } from "./export.ts";
@@ -213,16 +216,14 @@ function loadRemoteSlashCommands(
   };
   const inFlight = requestRemoteSlashCommands(client, agentId, sessionKey)
     .then((commands) => {
-      if (commands && cache.get(key) === entry) {
+      if (commands) {
         entry.commands = commands;
         entry.expiresAt = Date.now() + REMOTE_SLASH_COMMAND_CACHE_TTL_MS;
       }
       return commands ?? cached?.commands ?? buildFallbackSlashCommands();
     })
     .finally(() => {
-      if (cache.get(key) === entry) {
-        delete entry.inFlight;
-      }
+      delete entry.inFlight;
     });
   entry.inFlight = inFlight;
   cache.set(key, entry);
@@ -369,15 +370,29 @@ export async function dispatchChatSlashCommand(
     return "failed";
   }
 
-  const targetIsCurrent = () => isChatCommandTargetCurrent(host, target);
+  const runId = name === "steer" || name === "redirect" ? generateUUID() : undefined;
+  const request = runId
+    ? chatOutboxOwner(host).admissions.beginRequest(
+        host,
+        resolveUiConversationIdentity(host, target.sessionKey, target.agentId),
+        runId,
+      )
+    : undefined;
+  const targetIsCurrent = () =>
+    !request?.signal.aborted && isChatCommandTargetCurrent(host, target);
   let result: Awaited<ReturnType<typeof executeSlashCommand>>;
   try {
+    const { executeSlashCommand } = await import("./chat-command-executor.ts");
+    if (!targetIsCurrent()) {
+      return "failed";
+    }
     result = await executeSlashCommand(target.client, target.sessionKey, name, args, {
       sessions: host.sessions,
       attachments,
       sessionAccessSnapshot: currentSessionAccessSnapshot(host),
       readSessionAccessSnapshot: () => currentSessionAccessSnapshot(host),
       isCurrent: targetIsCurrent,
+      runRequest: request && runId ? { runId, signal: request.signal } : undefined,
       chatModelCatalog: host.chatModelCatalog,
       defaultAgentId: resolveUiDefaultAgentId(host),
       agentId: target.agentId,
@@ -392,6 +407,8 @@ export async function dispatchChatSlashCommand(
       });
     }
     return "failed";
+  } finally {
+    request?.release();
   }
 
   if (result.content && targetIsCurrent()) {

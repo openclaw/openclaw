@@ -2,7 +2,13 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createConnectedShellOwner as createShellOwner } from "./app-host-solid.test-support.ts";
 import { resetAppHostTestGlobals } from "./app-host.test-support.ts";
-import { handleNavDrawerKeydown, navDrawerFocusableElements } from "./navigation-surface.ts";
+import {
+  handleNavDrawerKeydown,
+  NAV_DRAWER_TOGGLE_REGISTRATION,
+  navDrawerFocusableElements,
+  visibleNavDrawerToggle,
+} from "./navigation-surface.ts";
+import { registerRouteElement, RouteElements, type RouteElementEvent } from "./route-elements.ts";
 
 afterEach(resetAppHostTestGlobals);
 
@@ -99,4 +105,34 @@ describe("navigation drawer focus ownership", () => {
       drawer.remove();
     }
   });
+});
+
+it("selects live registered drawer toggles in visible DOM order", () => {
+  const root = document.createElement("main");
+  const elements = new RouteElements();
+  root.addEventListener("openclaw-route-element", (event) =>
+    elements.register(event as RouteElementEvent),
+  );
+  const topbar = document.createElement("button");
+  const chat = document.createElement("button");
+  root.append(topbar, chat);
+  document.body.append(root);
+  let topbarVisible = true;
+  Object.defineProperty(topbar, "checkVisibility", { value: () => topbarVisible });
+  Object.defineProperty(chat, "checkVisibility", { value: () => true });
+  const releases = [
+    registerRouteElement(chat, NAV_DRAWER_TOGGLE_REGISTRATION),
+    registerRouteElement(topbar, NAV_DRAWER_TOGGLE_REGISTRATION),
+  ];
+  const host = { queryRenderedElements: elements.renderedElements.bind(elements) };
+  try {
+    expect(visibleNavDrawerToggle(host)).toBe(topbar);
+    topbarVisible = false;
+    expect(visibleNavDrawerToggle(host)).toBe(chat);
+    chat.remove();
+    expect(visibleNavDrawerToggle(host)).toBeUndefined();
+  } finally {
+    releases.forEach((release) => release?.());
+    root.remove();
+  }
 });

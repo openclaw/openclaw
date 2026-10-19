@@ -438,7 +438,7 @@ describe("bounded memory publication transfer", () => {
         sourceIdentity: readMemoryShadowIdentity(sourcePath),
         metaKey: "test-meta",
         expectedRevision: readMemoryDatabaseRevision(owner.db),
-        sourceHasVectors: false,
+        sourceSchema: shadow.searchSchema,
         vectorIndexComplete: false,
         extensionPath: owner.vector.extensionPath,
       },

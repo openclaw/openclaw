@@ -11,6 +11,7 @@ import { setRuntimeConfigSnapshot } from "../../../config/config.js";
 import {
   appendTranscriptMessage,
   loadSessionEntry,
+  loadTranscriptEvents,
   replaceSessionEntry,
 } from "../../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../../config/types.openclaw.js";
@@ -34,9 +35,9 @@ import {
   recordOperationBackendRunId,
 } from "../../../sessions/session-controller.state.js";
 import { AgentSelectionRequiredError, resolveSessionAgentId } from "../../agent-scope.js";
-import type { EmbeddedAgentQueueHandle } from "../../embedded-agent-runner/run-state.js";
 import { createEmbeddedRunHandle } from "../../embedded-agent-runner/runs.test-support.js";
 import {
+  createDurableSessionsSendTestRun,
   createSessionsSendTestCaller,
   setSessionsSendTestActiveRun,
 } from "../../openclaw-tools.sessions-steering.test-support.js";
@@ -437,18 +438,7 @@ it("numbers watched raw children independently and keeps their completion owner"
 it("steers its watched raw child while another agent has a newer row", async () => {
   const { cfg, children, send } = await prepareWatchedRawChildren();
   const caller = createSessionsSendTestCaller(children.get("main")!.parentKey);
-  const queueMessage = vi.fn<EmbeddedAgentQueueHandle["queueMessage"]>(async () => {});
-  const handle: EmbeddedAgentQueueHandle = {
-    ...createEmbeddedRunHandle({ runId: "main-1", queueMessage }),
-    messageInjectionV2: {
-      version: 2,
-      isAvailable: () => true,
-      queueMessage: async (text, options, assertCurrent) => {
-        assertCurrent();
-        await queueMessage(text, options);
-      },
-    },
-  };
+  const { handle, queueMessage } = createDurableSessionsSendTestRun("main-1");
   const close = await setSessionsSendTestActiveRun(
     "main-global",
     handle,
@@ -465,6 +455,35 @@ it("steers its watched raw child while another agent has a newer row", async () 
       targetDisposition: "steered",
     });
     expect(queueMessage).toHaveBeenCalledOnce();
+    expect(
+      await loadTranscriptEvents({
+        agentId: "main",
+        storePath: children.get("main")!.storePath,
+        sessionKey: "global",
+        sessionId: "main-global",
+      }),
+    ).toContainEqual(
+      expect.objectContaining({
+        message: expect.objectContaining({
+          role: "user",
+          content: expect.stringContaining("Continue main"),
+          provenance: {
+            kind: "inter_session",
+            sourceSessionKey: children.get("main")!.parentKey,
+            sourceTool: "sessions_send",
+          },
+          __openclaw: { steerTargetRunId: "main-1", requesterOrigin: caller.requesterOrigin },
+        }),
+      }),
+    );
+    expect(
+      await loadTranscriptEvents({
+        agentId: "research",
+        storePath: children.get("research")!.storePath,
+        sessionKey: "global",
+        sessionId: "research-global",
+      }),
+    ).toEqual([]);
     expect(getSubagentRunByRunId("main-1")?.requesterTurnRunId).toBe("main-turn");
     expect(getSubagentRunByRunId("research-2")?.requesterTurnRunId).toBe("research-turn");
   } finally {

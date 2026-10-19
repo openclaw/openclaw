@@ -37,6 +37,7 @@ import {
   type ExecApprovalsTarget,
   type DevicesPageDataState,
 } from "../../lib/nodes/page-operations.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { useApplication } from "../../lib/reactive/context.ts";
 import { projectRuntimeConfig } from "../../lib/reactive/domain-capabilities.ts";
 import { useGatewayPage, type GatewayPageChange } from "../../lib/reactive/gateway-page.ts";
@@ -45,7 +46,6 @@ import { projectSource } from "../../lib/reactive/projection.ts";
 import { useVisiblePoll } from "../../lib/reactive/visible-poll.ts";
 import { canReadSystemInfo, readSystemInfo } from "../../lib/system-info.ts";
 import { createDevicesDialogs } from "./devices-dialogs.ts";
-import { createPageRequest } from "./page-request.ts";
 import { DevicesView } from "./view.tsx";
 import type { DevicesProps } from "./view.types.ts";
 
@@ -117,24 +117,31 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       publishData();
     },
   });
-  const presenceTask = createPageRequest({
-    task: (signal) =>
+  const presenceTask = createPageRequest(() => {}, {
+    task: async (_args: void, { signal }) =>
       gatewayBinding.connected && canRead && gatewayBinding.gateway
         ? gatewayBinding.client?.request<PresenceEntry[]>("system-presence", {}, { signal })
         : undefined,
-    onComplete: updatePresence,
+    onComplete: (entries) => {
+      if (entries !== undefined) {
+        updatePresence(entries);
+      }
+    },
     onError: (error) => {
       if (isMissingOperatorReadScopeError(error)) {
         updatePresence([]);
       }
     },
   });
-  const systemInfoTask = createPageRequest({
-    task: (signal) =>
+  const systemInfoTask = createPageRequest(() => {}, {
+    task: async (_args: void, { signal }) =>
       gatewayBinding.gateway && canLoadSystemInfo() && gatewayBinding.client
         ? readSystemInfo(gatewayBinding.gateway, signal).then((sample) => sample.value)
         : undefined,
     onComplete: (result) => {
+      if (result === undefined) {
+        return;
+      }
       setGatewaySystemInfo(result);
       // Quiet node reloads also fetch stats; a fresh snapshot restarts the periodic deadline.
       systemInfoPolling.stop();
@@ -148,8 +155,8 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
       }
     },
   });
-  const environmentsTask = createPageRequest({
-    task: (signal) =>
+  const environmentsTask = createPageRequest(() => {}, {
+    task: async (_args: void, { signal }) =>
       gatewayBinding.gateway && canLoadDesktopEnvironments()
         ? gatewayBinding.client?.request<EnvironmentsListResult>(
             "environments.list",
@@ -157,7 +164,11 @@ export function DevicesPage(props: { routeData?: DevicesRouteData }) {
             { signal },
           )
         : undefined,
-    onComplete: (result) => setDesktopEnvironments(result.environments),
+    onComplete: (result) => {
+      if (result !== undefined) {
+        setDesktopEnvironments(result.environments);
+      }
+    },
     onError: () => setDesktopEnvironments([]),
   });
   const systemInfoPolling = useVisiblePoll(SYSTEM_INFO_POLL_INTERVAL_MS, refreshSystemInfo);

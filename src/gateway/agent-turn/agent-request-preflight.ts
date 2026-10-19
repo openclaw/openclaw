@@ -29,10 +29,14 @@ import {
   createAgentDatabaseAdmissionErrorShape,
   readAgentDatabaseAdmissionRefusal,
 } from "../../state/agent-database-admission.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { resolveExpectedExistingSessionConstraint } from "../server-methods/agent-expected-session.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
-import { resolveRequestedSessionAgentId } from "../session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "../session-request-agent.js";
 import { withGatewaySessionStoreTarget } from "../session-utils-store-lookup.js";
 import { readGatewayDedupeEntry, resolveAgentDedupeKeys } from "./agent-dedupe.js";
 import type { AgentTurnContext, AgentTurnIo, AgentTurnPrincipal } from "./types.js";
@@ -59,6 +63,15 @@ export async function prepareAgentRequestPreflight(params: {
   const parsedRequestSessionKey = requestSessionKey
     ? parseAgentSessionKey(requestSessionKey)
     : undefined;
+  const preparingAgentId =
+    parsedRequestSessionKey?.agentId ??
+    normalizeOptionalString(request.agentId) ??
+    tryResolveSessionCompatibilityOwnerAgentId(cfg, requestSessionKey);
+  if (preparingAgentId) {
+    await waitForAgentDatabaseWriteAdmission(preparingAgentId, {
+      owner: params.context.resolveGatewayContext?.()?.agentDatabaseStartup,
+    });
+  }
   const bareSessionAgent =
     requestSessionKey && !parsedRequestSessionKey
       ? resolveRequestedSessionAgentId(cfg, requestSessionKey, request.agentId)

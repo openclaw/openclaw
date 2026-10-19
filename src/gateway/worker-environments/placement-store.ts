@@ -318,14 +318,14 @@ export function createWorkerSessionPlacementStore(
       }
     },
 
-    async readEnvironmentOwner(environmentId: string) {
+    async readEnvironmentOwner(environmentId: string, signal?: AbortSignal) {
       const result = await executeExistingOpenClawStateRead(
         { path },
         {
           type: "workers.placementEnvironmentOwner",
           environmentId: required(environmentId, "environment id"),
         },
-        { current: true },
+        { current: true, signal },
       );
       if (!result) {
         throw new Error("Worker placement environment owner source is unavailable");

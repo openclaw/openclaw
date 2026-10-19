@@ -1,6 +1,7 @@
 import path from "node:path";
-import * as ts from "typescript/unstable/ast";
-import { SymbolFlags, type Symbol } from "typescript/unstable/sync";
+import * as ts from "typescript/ast";
+import { serverFS } from "typescript/fs";
+import { SymbolFlags, type Symbol } from "typescript/sync";
 import { createNativeTypeScriptProject } from "./native-typescript.mts";
 import { inspectPersonalCredentialWriters } from "./personal-credential-writer-guard.mts";
 
@@ -369,11 +370,14 @@ export function inspectDatabaseWorkerBoundaries(
     configFileName: config,
     files,
     fs: {
-      readFile: () => null,
+      readFile: () => undefined,
       fileExists: () => false,
       directoryExists: () => false,
-      getAccessibleEntries: () => ({ files: [], directories: [] }),
-      realpath: (file) => file,
+      getAccessibleEntries: () => ({ files: [], directories: [], symlinks: undefined }),
+      realpath: serverFS.identity,
+      stat: serverFS.fakeStat,
+      writeFile: serverFS.error,
+      removeFile: serverFS.error,
     },
   });
   const { checker, program } = session.project;

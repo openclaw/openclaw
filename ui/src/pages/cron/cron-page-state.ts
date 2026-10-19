@@ -1,5 +1,6 @@
 import { createSignal, onSettled } from "solid-js";
-import type { CronJob, CronScratchGetResult } from "../../api/types.ts";
+import { cronRunEntryMatchesLink } from "../../../../src/cron/run-link.js";
+import type { CronJob, CronRunLogEntry, CronScratchGetResult } from "../../api/types.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { hasOperatorReadAccess, readGatewayOperatorAccess } from "../../app/operator-access.ts";
 import { showConfirmDialog } from "../../components/confirm-dialog.ts";
@@ -97,7 +98,7 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
   });
   const routeSelection = createCronRouteSelection();
   let pendingRunScroll = false;
-  let highlightedRun: { element: HTMLElement; link: string } | null = null;
+  const runRows = new Map<HTMLElement, () => CronRunLogEntry>();
   let modelSuggestionsRequest: { state: CronState; agentId: string } | null = null;
   let stopModelSuggestions: (() => void) | undefined;
   const deliveryDirectory = createDeliveryConversations({
@@ -372,9 +373,13 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
         ),
       );
     }
-    if (pendingRunScroll && highlightedRun && highlightedRun.link === cron.cronRunsRunId) {
-      highlightedRun.element.scrollIntoView?.({ block: "nearest" });
-      pendingRunScroll = false;
+    const runId = cron.cronRunsRunId;
+    if (pendingRunScroll && runId) {
+      const row = [...runRows].find(([, entry]) => cronRunEntryMatchesLink(runId, entry()));
+      if (row) {
+        row[0].scrollIntoView?.({ block: "nearest" });
+        pendingRunScroll = false;
+      }
     }
   }
 
@@ -753,15 +758,10 @@ export function createCronPage(context: () => ApplicationContext, host: () => HT
     revision: projection.revision,
     publish,
     setRouteSearch,
-    highlightRun(this: void, element: HTMLElement, link: string) {
-      const current = { element, link };
-      highlightedRun = current;
+    registerRun(this: void, element: HTMLElement, entry: () => CronRunLogEntry) {
+      runRows.set(element, entry);
       afterRender();
-      return () => {
-        if (highlightedRun === current) {
-          highlightedRun = null;
-        }
-      };
+      return () => runRows.delete(element);
     },
   };
 }

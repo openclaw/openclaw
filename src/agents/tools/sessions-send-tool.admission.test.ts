@@ -20,6 +20,7 @@ import {
   createContext,
   createOperatorClient,
 } from "../../gateway/server-plugin-in-process-dispatch.test-support.js";
+import { readSessionSendDeliveryAdmission } from "../../gateway/session-send-delivery.js";
 import { drainSystemEvents, peekSystemEvents } from "../../infra/system-events.js";
 import { setActivePluginRegistry } from "../../plugins/runtime.js";
 import {
@@ -49,6 +50,10 @@ import { attachActiveEmbeddedRun, detachActiveEmbeddedRun } from "../embedded-ag
 import { createEmbeddedRunHandle } from "../embedded-agent-runner/runs.test-support.js";
 import { withPreparedEmbeddedRunToolAuthority } from "../harness/tool-authority.runtime.js";
 import { createOpenClawTools } from "../openclaw-tools.js";
+import {
+  createSessionsSendTestCaller,
+  setSessionsSendTestActiveRun,
+} from "../openclaw-tools.sessions-steering.test-support.js";
 import {
   readFollowupRequest,
   SessionFollowupCompletion,
@@ -227,6 +232,7 @@ describe("sessions_send dispatch admission", () => {
     const selected = createEmbeddedRunHandle({
       runId: "selected-steer-run",
       guarded: true,
+      supportsTranscriptCommitWait: true,
       queueMessage: async (_text, options) => {
         options?.onQueueAccepted?.(true);
         accepted.resolve();
@@ -413,6 +419,75 @@ describe("sessions_send dispatch admission", () => {
         observeCapture.mockRestore();
         source.release();
       }
+    }
+  });
+
+  it("queues an unsupported durable steer once without injecting volatile guidance", async () => {
+    const context = createContext([], () => config);
+    const caller = createSessionsSendTestCaller(requesterSessionKey);
+    const queueMessage = vi.fn(async () => {});
+    const handle = createEmbeddedRunHandle({
+      guarded: true,
+      queueMessage,
+      supportsTranscriptCommitWait: false,
+    });
+    const close = await setSessionsSendTestActiveRun(
+      "target-session",
+      handle,
+      targetSessionKey,
+      requesterSessionKey,
+      config,
+    );
+    const callGateway = vi.fn();
+    callGateway.mockImplementation(
+      async (request: Parameters<AgentToolGatewayRequestCaller>[0]) => {
+        if (request.method === "sessions.resolve") {
+          return { key: targetSessionKey, agentId: "main" };
+        }
+        if (request.method !== "agent") {
+          throw new Error(`Unexpected Gateway method: ${request.method}`);
+        }
+        expect(
+          readSessionSendDeliveryAdmission({
+            agentId: "main",
+            sessionKey: targetSessionKey,
+            sessionId: "target-session",
+            runId,
+          })?.delivery,
+        ).toMatchObject({
+          source: { sessionKey: requesterSessionKey, sessionId: "requester-session" },
+          target: { sessionKey: targetSessionKey, sessionId: "target-session" },
+        });
+        return { runId, status: "accepted" };
+      },
+    );
+    try {
+      const result = await withGatewayToolCallerIdentity(
+        {
+          ...caller,
+          gatewayContextResolver: () => context,
+          receiptAuthority: () => true,
+        },
+        () =>
+          createSessionsSendTool({
+            agentSessionKey: requesterSessionKey,
+            config,
+            callGateway,
+            idempotencyKey: runId,
+          }).execute("durable-steer-fallback", {
+            sessionKey: targetSessionKey,
+            message: "Save this guidance before acknowledging it",
+            mode: "steer",
+            timeoutSeconds: 0,
+          }),
+      );
+      expect(result.details).toMatchObject({ status: "accepted", targetDisposition: "queued" });
+      expect(queueMessage).not.toHaveBeenCalled();
+      expect(callGateway.mock.calls.filter(([request]) => request.method === "agent")).toHaveLength(
+        1,
+      );
+    } finally {
+      await close();
     }
   });
 

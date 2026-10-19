@@ -2,7 +2,7 @@ import { existsSync } from "node:fs";
 import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { createNativeTypeScriptParser } from "./native-typescript.mts";
 
 type RawCopyFinding = {

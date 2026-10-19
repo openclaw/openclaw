@@ -29,7 +29,10 @@ import {
 } from "../plugins/plugin-metadata-snapshot.js";
 import * as pluginArtifactIdentity from "../plugins/plugin-runtime-artifact-identity.js";
 import { listSystemAgentAuditEntriesForTests } from "./audit.test-support.js";
-import { resolveSystemAgentConfiguredRouteFromConfig } from "./inference-route.js";
+import {
+  resolveSystemAgentConfiguredRouteFromConfig,
+  type SystemAgentConfigSnapshot,
+} from "./inference-route.js";
 import { createSystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 import { mockPluginRegistry, pluginRecord } from "./verified-inference.test-support.js";
 
@@ -149,7 +152,10 @@ export function expectSystemAgentAuditRecord(
 }
 
 /** Build exact, revalidatable proof for a test config without reading host credentials. */
-export async function createSystemAgentVerifiedInferenceTestFixture(config: OpenClawConfig) {
+export async function createSystemAgentVerifiedInferenceTestFixture(
+  config: OpenClawConfig,
+  snapshot?: SystemAgentConfigSnapshot,
+) {
   const routeAgentId = resolveAmbientOwnerAgentId(config);
   const selection = resolveSimpleCompletionSelectionForAgent({
     cfg: config,
@@ -178,7 +184,12 @@ export async function createSystemAgentVerifiedInferenceTestFixture(config: Open
     profiles:
       selectedProfileId && selectedCredential ? { [selectedProfileId]: selectedCredential } : {},
   });
-  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(config);
+  const configuredRoute = await resolveSystemAgentConfiguredRouteFromConfig(
+    config,
+    undefined,
+    {},
+    snapshot,
+  );
   if (!configuredRoute) {
     throw new Error("missing test route");
   }

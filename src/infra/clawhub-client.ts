@@ -24,13 +24,10 @@ const CLAWHUB_JSON_MAX_BYTES = 16 * 1024 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_BYTES = 8 * 1024;
 const CLAWHUB_ERROR_BODY_MAX_CHARS = 400;
 
-export type ClawHubFetch = (input: string | URL | Request, init?: RequestInit) => Promise<Response>;
-
 export type ClawHubFetchOptions = {
   baseUrl?: string;
   token?: string;
   timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
 };
 
 export type ClawHubRequestParams = ClawHubFetchOptions & {
@@ -174,6 +171,10 @@ export async function resolveClawHubAuthToken(): Promise<string | undefined> {
       return extractTokenFromClawHubConfig(JSON.parse(raw));
     } catch (error) {
       if (!isErrno(error) || error.code !== "ENOENT") {
+        // Parser errors can include token bytes; keep this warning content-free.
+        console.warn(
+          "ClawHub sign-in configuration could not be loaded; repair it or sign in again. Continuing without a saved token.",
+        );
         return undefined;
       }
     }
@@ -245,7 +246,7 @@ async function requestClawHub(params: ClawHubRequestParams) {
       }
     };
     try {
-      const response = await (params.fetchImpl ?? fetch)(url, {
+      const response = await fetch(url, {
         ...init,
         signal: controller.signal,
       });

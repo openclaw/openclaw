@@ -123,7 +123,6 @@ export async function runPackageUpdateDoctor(params: PackageDoctorOptions) {
   // transaction protects this migration and the later restart verification.
   const doctorPolicy = resolveUpdateDoctorExecutionPolicy({
     targetVersion: candidateHostVersion,
-    allowGatewayServiceRepair: false,
   });
   let doctorArgv: string[];
   if (context) {

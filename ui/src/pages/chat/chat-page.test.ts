@@ -274,6 +274,7 @@ describe("chat page split layout host", () => {
       const header = original.appendChild(document.createElement("div"));
       header.className = "chat-pane__header";
       header.tabIndex = -1;
+      Object.defineProperty(original, "headerElement", { configurable: true, value: header });
       const button = added.appendChild(document.createElement("button"));
       const outside = document.body.appendChild(document.createElement("button"));
       const teardown = createDeferred();
@@ -639,7 +640,7 @@ describe("chat page split layout host", () => {
     await settleChatPage(page);
     expectPresence(["agent:main:replacement"]);
     page.remove();
-    await Promise.resolve();
+    await settleChatPage(page);
     expectPresence([]);
   });
 

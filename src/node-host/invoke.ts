@@ -285,18 +285,10 @@ export async function handleInvoke(
     logWarn(
       `node host invoke failed (command=${frame.command ?? "unknown"}, id=${frame.id}): ${String(err)}`,
     );
-    try {
-      await createNodeInvokeResponder(invocationClient, frame).error(
-        "UNAVAILABLE",
-        "node invocation failed",
-      );
-    } catch (sendErr) {
-      // The caller intentionally detaches this promise. A failed result send is
-      // terminal for this request and must not surface as an unhandled rejection.
-      logWarn(
-        `node host invoke failure response could not be sent (id=${frame.id}): ${String(sendErr)}`,
-      );
-    }
+    await createNodeInvokeResponder(invocationClient, frame).error(
+      "UNAVAILABLE",
+      "node invocation failed",
+    );
   }
 }
 

@@ -563,6 +563,7 @@ describe("conversation position rail", () => {
       const entry = [...elements.elements].find(([, element]) => element === original);
       assert(entry);
       const bubbleRef = elements.forKey(entry[0]);
+      bubbleRef(original);
       bubbleRef();
       original.remove();
       await settleFrames();

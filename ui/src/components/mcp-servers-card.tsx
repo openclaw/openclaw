@@ -19,7 +19,7 @@ import { canCallGatewayMethod } from "../lib/gateway-methods.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
 import { t } from "../lib/reactive/i18n.ts";
-import { projectSource } from "../lib/reactive/projection.ts";
+import { projectOwner } from "../lib/reactive/projection.ts";
 import type { McpServerForm } from "./mcp-server-form.ts";
 import { McpServersForm } from "./mcp-servers-form.tsx";
 import { Icon } from "./solid/icon.tsx";
@@ -56,11 +56,7 @@ function tlsLabel(tls: McpServerSummary["tls"]): string | null {
 export function McpServersCard(props: McpServersCardProps) {
   const context = useApplication();
   const gateway = projectGateway(context.gateway);
-  const config = projectSource(context.runtimeConfig, {
-    read: (source) => source.state,
-    subscribe: (source, notify) => source.subscribe(notify),
-    equality: "revision",
-  });
+  const config = projectOwner(context.runtimeConfig, (source) => source.state);
   const [view, setView] = createSignal<{
     busy: boolean;
     message: McpServerMessage | null;

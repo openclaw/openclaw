@@ -12,7 +12,7 @@ import {
   CHAT_TRANSCRIPT_LOADING_CHANGED_EVENT,
 } from "./chat-history-events.ts";
 import { requestChatSessionSnapshot } from "./chat-history-request.ts";
-import type { ChatPaneElement } from "./route-draft-focus-handoff.ts";
+import { chatPanesWithin } from "./chat-pane-elements.ts";
 import { MAX_CACHED_CHAT_SESSIONS } from "./session-cache.ts";
 import {
   appendChatMessageToCache,
@@ -20,10 +20,10 @@ import {
   projectChatTranscriptMetadata,
   readChatSessionSnapshot,
   type ChatMessageCache,
-  type ChatSessionSnapshot,
 } from "./session-message-cache.ts";
 import { resolveChatSnapshotKey, resolveChatSnapshotSessionKey } from "./session-snapshot-key.ts";
 import type { SessionSnapshotStore } from "./session-snapshot-store.ts";
+import type { ChatSessionSnapshot } from "./session-snapshot-types.ts";
 
 // Coalesce navigation intent while leaving time to warm history before a click.
 const SESSION_PREFETCH_INTENT_DELAY_MS = 75;
@@ -444,7 +444,7 @@ export function createSessionPrefetch(
     }
     const source = context;
     // The shell owns these sibling panes, whose public host properties describe readiness.
-    const panes = [...paneRoot.querySelectorAll<ChatPaneElement>("openclaw-chat-pane")].filter(
+    const panes = chatPanesWithin(paneRoot).filter(
       (pane) => pane.closest("openclaw-app-shell") === paneRoot.closest("openclaw-app-shell"),
     );
     const openSessionKeys = panes.flatMap((pane) => (pane.sessionKey ? [pane.sessionKey] : []));

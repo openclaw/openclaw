@@ -112,20 +112,20 @@ function downloadPackageArchive(
   response: Response,
   options: Partial<Parameters<typeof downloadClawHubPackageArchive>[0]> = {},
 ) {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => response);
   return downloadClawHubPackageArchive({
     name: "@hyf/zai-external-alpha",
     version: "0.0.1",
     token: "test-token",
-    fetchImpl: async () => response,
     ...options,
   });
 }
 
 function downloadSkill(response: Response, slug: string) {
+  vi.spyOn(globalThis, "fetch").mockImplementation(async () => response);
   return downloadClawHubSkillArchive({
     slug,
     token: "test-token",
-    fetchImpl: async () => response,
   });
 }
 
@@ -174,16 +174,14 @@ describe("clawhub artifacts", () => {
   it("downloads ClawPack package artifacts from the version route and verifies response headers", async () => {
     const sha256Hex = digest("sha256");
     let requestedUrl = "";
-    const archive = await downloadClawHubPackageArchive({
-      ...clawpackOptions,
-      fetchImpl: async (input) => {
-        requestedUrl = input instanceof Request ? input.url : String(input);
-        return archiveResponse({
-          "content-type": "application/octet-stream",
-          "X-ClawHub-Artifact-Sha256": sha256Hex,
-        });
-      },
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input) => {
+      requestedUrl = input instanceof Request ? input.url : String(input);
+      return archiveResponse({
+        "content-type": "application/octet-stream",
+        "X-ClawHub-Artifact-Sha256": sha256Hex,
+      });
     });
+    const archive = await downloadClawHubPackageArchive(clawpackOptions);
 
     await withArchive(archive, async () => {
       expect(new URL(requestedUrl).pathname).toBe(
@@ -246,12 +244,12 @@ describe("clawhub artifacts", () => {
       const response = createArchiveResponse(
         artifact === "clawpack" ? { "content-type": "application/octet-stream" } : undefined,
       );
+      vi.spyOn(globalThis, "fetch").mockImplementation(async () => response);
       const archive = await (artifact === "clawpack"
         ? downloadPackageArchive(response, clawpackOptions)
         : downloadClawHubGitHubSkillArchive({
             repo: "owner/repo",
             commit: "abc123",
-            fetchImpl: async () => response,
           }));
       const workspace = observed.workspace();
 
@@ -342,13 +340,13 @@ describe("clawhub artifacts", () => {
 
   it("times out and cancels stalled skill archive body reads", async () => {
     const stalled = unendingArchive({ "content-type": "application/zip" }, new Uint8Array([4]));
+    vi.spyOn(globalThis, "fetch").mockImplementation(async () => stalled.response);
 
     await expect(
       downloadClawHubSkillArchive({
         slug: "agentreceipt",
         version: "1.0.0",
         timeoutMs: 5,
-        fetchImpl: async () => stalled.response,
       }),
     ).rejects.toThrow(/skill archive download for agentreceipt body stalled after 5ms/i);
     expect(stalled.cancel).toHaveBeenCalledTimes(1);
@@ -359,15 +357,14 @@ describe("clawhub artifacts", () => {
     process.env.CLAWHUB_TOKEN = "test-auth-token";
     let requestedUrl = "";
     let requestedInit: RequestInit | undefined;
-
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (input, init) => {
+      requestedUrl = input instanceof Request ? input.url : String(input);
+      requestedInit = init;
+      return archiveResponse();
+    });
     const archive = await downloadClawHubSkillArchiveUrl({
       baseUrl: "https://clawhub.ai",
       url: "https://codeload.github.com/NVIDIA/skills/zip/abcdef",
-      fetchImpl: async (input, init) => {
-        requestedUrl = input instanceof Request ? input.url : String(input);
-        requestedInit = init;
-        return archiveResponse();
-      },
     });
 
     await withArchive(archive, async () => {

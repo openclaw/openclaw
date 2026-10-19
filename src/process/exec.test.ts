@@ -636,10 +636,7 @@ describe("attachChildProcessBridge", () => {
     child.kill = kill as ChildProcess["kill"];
     const observedSignals: NodeJS.Signals[] = [];
 
-    const { detach } = attachChildProcessBridge(child, {
-      signals: ["SIGTERM"],
-      onSignal: (signal) => observedSignals.push(signal),
-    });
+    const { detach } = attachChildProcessBridge(child, (signal) => observedSignals.push(signal));
     try {
       const addedSigterm = process
         .listeners("SIGTERM")

@@ -1,4 +1,4 @@
-import { toImageDataUrl } from "openclaw/plugin-sdk/image-generation";
+import { resolveImageSourceUrl } from "openclaw/plugin-sdk/image-generation";
 import {
   downloadGeneratedVideoAsset,
   resolveGeneratedMediaMaxBytes,
@@ -198,15 +198,10 @@ export function buildTogetherVideoGenerationProvider(): VideoGenerationProvider 
             `Together video model ${model} does not support image reference inputs. Use Wan-AI/wan2.7-i2v or omit input images.`,
           );
         }
-        const input = req.inputImages[0];
-        const value =
-          normalizeOptionalString(input.url) ??
-          (input.buffer
-            ? toImageDataUrl({ ...input, buffer: input.buffer, defaultMimeType: "image/png" })
-            : undefined);
-        if (!value) {
-          throw new Error("Together reference image is missing image data.");
-        }
+        const value = resolveImageSourceUrl(
+          req.inputImages[0],
+          "Together reference image is missing image data.",
+        );
         body.media = { frame_images: [{ input_image: value, frame: "first" }] };
       }
       const submitted = await postJsonResponse<TogetherVideoResponse>({

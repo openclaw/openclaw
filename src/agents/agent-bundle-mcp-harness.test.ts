@@ -478,11 +478,41 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
 
     const authed = await fullPermissionTools("session-stable", "authed");
     const advertisedNames = authed!.advertisedTools.map((tool) => tool.name);
+    const advertisedSpecs = authed!.advertisedTools.map(({ name, description, parameters }) => ({
+      name,
+      description,
+      parameters,
+    }));
     expect(advertisedNames).toEqual(["user-mail__inbox"]);
 
     const live = await authed!.tools[0]!.execute("c1", {});
     expect(live.content[0]).toMatchObject({ type: "text", text: "live:inbox:authed" });
     await authed!.dispose();
+
+    const unavailable = makeRuntime({ sessionId: "session-stable", requesterSenderId: "busy" });
+    const emptyCatalog = { version: 1, generatedAt: 0, servers: {}, tools: [] };
+    unavailable.getCatalog = async () => emptyCatalog;
+    unavailable.peekCatalog = () => emptyCatalog;
+    const unavailableCall = vi.spyOn(unavailable, "callTool");
+    mocks.acquireRequesterScopedMcpRuntime.mockResolvedValueOnce({
+      runtime: unavailable,
+      releaseLease: unavailable.acquireLease!(),
+      advertisedCatalogConfigFingerprint: "",
+    });
+    const busy = await fullPermissionTools("session-stable", "busy");
+    expect(busy).toBeDefined();
+    expect(
+      busy!.advertisedTools.map(({ name, description, parameters }) => ({
+        name,
+        description,
+        parameters,
+      })),
+    ).toEqual(advertisedSpecs);
+    const unavailableResult = await busy!.tools[0]!.execute("busy-call", {});
+    expect(unavailableResult.details).toMatchObject({ status: "error" });
+    expect(unavailableCall).not.toHaveBeenCalled();
+    await busy!.dispose();
+    expect(unavailable.activeLeases).toBe(0);
 
     const guest = await fullPermissionTools("session-stable", "guest");
     expect(guest!.advertisedTools.map((tool) => tool.name)).toEqual(advertisedNames);
@@ -494,6 +524,16 @@ describe("materializeRequesterScopedMcpToolsForHarnessRunCore", () => {
       text: expect.stringMatching(/has not connected MCP server/i),
     });
     await guest!.dispose();
+
+    const recovered = await fullPermissionTools("session-stable", "authed");
+    expect(
+      recovered!.advertisedTools.map(({ name, description, parameters }) => ({
+        name,
+        description,
+        parameters,
+      })),
+    ).toEqual(advertisedSpecs);
+    await recovered!.dispose();
   });
 
   it("removes direct-policy-denied tools from executable and advertised requester catalogs", async () => {

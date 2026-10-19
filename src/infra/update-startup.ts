@@ -233,7 +233,6 @@ export async function runGatewayUpdateCheck(
     onUpdateScheduleChange?: (schedule: UpdateScheduleState) => void;
     onUpdateRunCreated?: () => void;
     activeWorkInspectors?: Partial<GatewayActiveWorkInspectors>;
-    runAutoUpdate?: AutoUpdateRunner;
     signal?: AbortSignal;
   },
   lifecycle = currentUpdateCheckLifecycle(),
@@ -268,12 +267,10 @@ async function runGatewayUpdateCheckOwned(
   }
   const cfg = params.getConfig();
   const configChannel = normalizeUpdateChannel(cfg.update?.channel);
-  const runAuto: AutoUpdateRunner =
-    params.runAutoUpdate ??
-    (async (runParams) => {
-      const { runAutoUpdateCommand } = await import("./update-startup-auto-run.js");
-      return runAutoUpdateCommand(runParams, params.log);
-    });
+  const runAuto: AutoUpdateRunner = async (runParams) => {
+    const { runAutoUpdateCommand } = await import("./update-startup-auto-run.js");
+    return runAutoUpdateCommand(runParams, params.log);
+  };
   const announceUpdate = createUpdateCampaignPublisher({
     ...params,
     lifecycle,
@@ -620,8 +617,13 @@ export function createGatewayUpdateCheck(params: {
       lifecycle.schedule("update.check", async () => {
         try {
           await runGatewayUpdateCheck(params, lifecycle);
-        } catch {
+        } catch (error) {
           // Discovery failures must not crash or retire the Gateway update loop.
+          if (!lifecycle.signal.aborted) {
+            params.log.info("update check failed; retrying at the next scheduled check", {
+              error: String(error),
+            });
+          }
         }
         return resolveCheckIntervalMs(params.getConfig(), getUpdateSchedule()?.install?.kind);
       });

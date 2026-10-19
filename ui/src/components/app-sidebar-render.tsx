@@ -47,6 +47,7 @@ function readSidebarNativeGateway(host: AppSidebarRenderHost): NativeGateway | n
 }
 
 export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element {
+  let menuTrigger: HTMLButtonElement | undefined;
   const chipAgent = createMemo(() => host.activeChipAgent()),
     cardAgentId = () => chipAgent().activeId,
     rosterAgent = () => chipAgent().agent,
@@ -92,8 +93,12 @@ export function renderSidebarAgentCard(host: AppSidebarRenderHost): JSX.Element 
       when={host.sidebarAgentsMode !== "roster" && (cardAgent() || cached())}
       fallback={renderSidebarWorkspaceHeader(host)}
     >
-      <openclaw-tooltip prop:content={cardName()}>
+      <openclaw-tooltip
+        prop:content={cardName()}
+        prop:descriptionTarget={() => menuTrigger ?? null}
+      >
         <SidebarAgentCard
+          onTriggerRef={(element) => (menuTrigger = element)}
           compact={true}
           agentName={cardName()}
           agentId={cardAgentId()}
@@ -186,7 +191,7 @@ function renderSidebarWorkspaceHeader(host: AppSidebarRenderHost): JSX.Element {
   const name = () => brand().name;
   const menuOpen = () => host.sidebarMenus.agentMenuPosition !== null;
   return (
-    <openclaw-tooltip prop:content={name()}>
+    <openclaw-tooltip prop:content={name()} prop:descriptionTarget={() => button ?? null}>
       <div class="sidebar-workspace-header sidebar-workspace-header--rail">
         <button
           type="button"

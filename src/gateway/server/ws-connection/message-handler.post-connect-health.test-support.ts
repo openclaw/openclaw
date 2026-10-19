@@ -1,5 +1,5 @@
 import type { IncomingMessage } from "node:http";
-import { afterEach, beforeEach, onTestFinished, vi, type Mock } from "vitest";
+import { afterEach, beforeEach, expect, onTestFinished, vi, type Mock } from "vitest";
 import type { WebSocket } from "ws";
 import { PROTOCOL_VERSION } from "../../../../packages/gateway-protocol/src/version.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -94,6 +94,7 @@ export function connectTrustedProxyUser(
   clientOverrides: Record<string, unknown> = {},
   scopes: string[] = [],
   handoffAuthenticatedReceive?: () => void,
+  scopeCap?: string,
 ) {
   loadConfigMock.mockImplementation(() => ({
     gateway: {
@@ -130,6 +131,7 @@ export function connectTrustedProxyUser(
       "x-forwarded-for": "203.0.113.10",
       "x-forwarded-user": "alice@example.com",
       "x-forwarded-proto": "https",
+      ...(scopeCap === undefined ? {} : { "x-openclaw-scopes": scopeCap }),
     },
     ingressAttribution: {
       kind: "trusted-proxy",
@@ -158,6 +160,30 @@ export function localUserIngressFor(client: unknown) {
   return typeof client === "object" && client !== null
     ? getGatewayLocalUserIngress(client)
     : undefined;
+}
+
+export const IDENTITY_SCOPE_AUDIT_CASES: Array<[string, string[], string[], string?]> = [
+  ["scope-grant-first", ["operator.admin"], ["operator.admin"]],
+  ["scope-grant-reconnect", ["operator.admin"], ["operator.admin"]],
+  ["scope-grant-changed", ["operator.read"], ["operator.read"]],
+  ["scope-grant-capped", ["operator.write"], ["operator.read"], "operator.read"],
+  ["scope-grant-removed", [], []],
+];
+
+export function expectIdentityScopeAudit(
+  harness: ReturnType<typeof connectTrustedProxyUser>,
+  connId: string,
+  scopes: readonly string[],
+) {
+  expect(harness.client).toMatchObject({ connect: { scopes } });
+  expect(harness.logGateway.warn).not.toHaveBeenCalled();
+  if (scopes.length > 0) {
+    expect(harness.logGateway.info).toHaveBeenCalledExactlyOnceWith(
+      `security audit: identity scope grant elevated connection identity=alice@example.com addedScopes=${scopes.join(",")} auth=trusted-proxy conn=${connId}`,
+    );
+  } else {
+    expect(harness.logGateway.info).not.toHaveBeenCalled();
+  }
 }
 
 export function useGatewayTestConfig<T>(mock: Mock<() => T>, implementation: () => T) {

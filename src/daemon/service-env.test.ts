@@ -36,45 +36,45 @@ describe("service PATH", () => {
   it("excludes user bins without HOME", () => {
     expect(paths({ HOME: undefined })).toEqual(["/usr/local/bin", "/usr/bin", "/bin"]);
   });
-  it("places package-manager bins after trusted system directories", () => {
-    const result = paths(
-      { PNPM_HOME: userPath(".local/share/pnpm"), NPM_CONFIG_PREFIX: userPath(".npm-global") },
-      { existsSync: allExist },
+  it("uses explicit service home before the invocation home", () => {
+    expect(paths({ HOME: "/home/installer" }, { home: "/home/operator" })).toContain(
+      "/home/operator/.local/bin",
     );
+  });
+  it("places package-manager bins after trusted system directories", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation(allExist);
+    const result = paths({
+      PNPM_HOME: userPath(".local/share/pnpm"),
+      NPM_CONFIG_PREFIX: userPath(".npm-global"),
+    });
     for (const suffix of [".local/share/pnpm", ".local/share/pnpm/bin", ".npm-global/bin"]) {
       expectPathOrder(result, ["/usr/bin", userPath(suffix)]);
     }
   });
   it("does not include Linux user directories on Windows", () => {
-    expect(
-      paths({}, { platform: "win32", home: "C:\\Users\\u", existsSync: allExist }),
-    ).toStrictEqual([]);
+    expect(paths({ HOME: "C:\\Users\\u" }, { platform: "win32" })).toStrictEqual([]);
   });
   it("can omit missing stable user-bin defaults for audits", () => {
-    const result = paths(
-      {},
-      {
-        existsSync: (candidate) => candidate === userPath(".local/bin"),
-        includeMissingUserBinDefaults: false,
-      },
+    vi.spyOn(fs, "existsSync").mockImplementation(
+      (candidate) => candidate === userPath(".local/bin"),
     );
+    const result = paths({}, { includeMissingUserBinDefaults: false });
     expect(result).toContain(userPath(".local/bin"));
     for (const suffix of [".npm-global/bin", "bin", ".nix-profile/bin"]) {
       expect(result).not.toContain(userPath(suffix));
     }
   });
   it("excludes env-configured bins derived from the install workspace", () => {
-    const result = paths(
-      {
-        PNPM_HOME: userPath("workspace/evil-pnpm"),
-        NPM_CONFIG_PREFIX: "/proc/thread-self/cwd/evil-npm",
-        BUN_INSTALL: "/proc/12345/cwd/evil-bun",
-        VOLTA_HOME: "/opt/volta",
-        ASDF_DATA_DIR: "relative-asdf",
-        NIX_PROFILES: `/nix/default ${home}/workspace/evil-nix`,
-      },
-      { cwd: userPath("workspace"), existsSync: noneExist },
-    );
+    vi.spyOn(process, "cwd").mockReturnValue(userPath("workspace"));
+    vi.spyOn(fs, "existsSync").mockImplementation(noneExist);
+    const result = paths({
+      PNPM_HOME: userPath("workspace/evil-pnpm"),
+      NPM_CONFIG_PREFIX: "/proc/thread-self/cwd/evil-npm",
+      BUN_INSTALL: "/proc/12345/cwd/evil-bun",
+      VOLTA_HOME: "/opt/volta",
+      ASDF_DATA_DIR: "relative-asdf",
+      NIX_PROFILES: `/nix/default ${home}/workspace/evil-nix`,
+    });
     for (const entry of [
       userPath("workspace/evil-pnpm"),
       "/proc/thread-self/cwd/evil-npm/bin",
@@ -87,6 +87,8 @@ describe("service PATH", () => {
     expect(result).toEqual(expect.arrayContaining(["/opt/volta/bin", "/nix/default/bin"]));
   });
   it("excludes bins whose existing parent resolves into the workspace", () => {
+    vi.spyOn(process, "cwd").mockReturnValue(userPath("workspace"));
+    vi.spyOn(fs, "existsSync").mockImplementation(noneExist);
     vi.spyOn(fs.realpathSync, "native").mockImplementation((candidate) => {
       const value = String(candidate);
       if (value === "/tmp/link") {
@@ -97,24 +99,17 @@ describe("service PATH", () => {
       }
       throw Object.assign(new Error("missing"), { code: "ENOENT" });
     });
-    const result = paths(
-      { PNPM_HOME: "/tmp/link/missing", VOLTA_HOME: "/opt/volta" },
-      {
-        cwd: userPath("workspace"),
-        existsSync: noneExist,
-      },
-    );
+    const result = paths({ PNPM_HOME: "/tmp/link/missing", VOLTA_HOME: "/opt/volta" });
     expect(result).not.toContain("/tmp/link/missing");
     expect(result).toContain("/opt/volta/bin");
   });
   it("keeps toolchain roots when the install cwd is HOME", () => {
-    const result = paths(
-      { PNPM_HOME: userPath(".local/share/pnpm"), FNM_DIR: userPath(".local/share/fnm") },
-      {
-        cwd: home,
-        existsSync: noneExist,
-      },
-    );
+    vi.spyOn(process, "cwd").mockReturnValue(home);
+    vi.spyOn(fs, "existsSync").mockImplementation(noneExist);
+    const result = paths({
+      PNPM_HOME: userPath(".local/share/pnpm"),
+      FNM_DIR: userPath(".local/share/fnm"),
+    });
     expect(result).toEqual(
       expect.arrayContaining(
         [
@@ -127,11 +122,9 @@ describe("service PATH", () => {
     );
   });
   it("preserves Nix precedence across three profiles", () => {
+    vi.spyOn(fs, "existsSync").mockImplementation(allExist);
     const profiles = [userPath(".nix-profile"), "/nix/custom", "/nix/default"];
-    const result = paths(
-      { NIX_PROFILES: profiles.toReversed().join(" ") },
-      { existsSync: allExist },
-    );
+    const result = paths({ NIX_PROFILES: profiles.toReversed().join(" ") });
     expectPathOrder(
       result,
       profiles.map((profile) => `${profile}/bin`),
@@ -262,4 +255,24 @@ it.each([
   [{ OPENCLAW_STATE_DIR: "C:\\State\\openclaw" }, "C:\\State\\openclaw"],
 ])("resolves state paths literally: %j", (env, expected) => {
   expect(resolveGatewayStateDir(env)).toBe(expected);
+});
+
+describe("process-owned egress trust", () => {
+  it.each(["darwin", "linux", "win32"] as const)(
+    "does not persist a Gateway CA on %s",
+    (platform) => {
+      const env = {
+        HOME: home,
+        NODE_EXTRA_CA_CERTS: "/state/a/secret-egress-proxy/gateway-expired/trust-bundle.pem",
+      };
+      for (const environment of [
+        buildServiceEnvironment({ env, platform, port: 18789 }),
+        buildNodeServiceEnvironment({ env, platform }),
+      ]) {
+        expect(environment.NODE_EXTRA_CA_CERTS).not.toEqual(
+          expect.stringContaining("secret-egress-proxy"),
+        );
+      }
+    },
+  );
 });

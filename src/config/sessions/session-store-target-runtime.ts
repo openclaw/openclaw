@@ -135,6 +135,7 @@ export function prepareSessionStoreTargetInventoryRead(
             request,
             [
               request.selection,
+              request.recoveryExclusions,
               request.agentIds,
               request.config.session?.store,
               request.config.agents?.defaults?.sessionStore?.agentId,

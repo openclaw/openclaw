@@ -1,3 +1,4 @@
+import { createAgentRunRestartAbortError } from "../agents/run-termination.js";
 /** Captured mailbox batch cleanup and summary bookkeeping. */
 import type { FollowupRun } from "../auto-reply/reply/queue/types.js";
 import { getGatewayRestartDrainSignal } from "../process/gateway-work-admission.js";
@@ -66,6 +67,7 @@ export function clearSessionControllerMailbox(
   settleSource: (source: FollowupRun) => void,
   capturedInputs?: readonly SessionControllerInput[],
   assertCurrent: () => void = () => {},
+  reason: unknown = new Error("Session mailbox cleared"),
 ): number {
   const inputs = capturedInputs
     ? capturedInputs.filter(
@@ -139,7 +141,7 @@ export function clearSessionControllerMailbox(
       input.retirementRequested = true;
       try {
         if (!input.withdrawalHolds) {
-          abortSessionControllerInput(input, new Error("Session mailbox cleared"), assertCurrent);
+          abortSessionControllerInput(input, reason, assertCurrent);
         }
         for (const [source, capturedInput] of sources) {
           if (capturedInput === input) {
@@ -210,7 +212,13 @@ export function bindSessionControllerMailboxRestartDrain(): void {
           const waiting = mailbox.entries.filter(
             (input) => (!input.claim || input.claim.released) && input.phase !== "injecting",
           );
-          clearSessionControllerMailbox(mailbox, completeRestartClearedSource, waiting);
+          clearSessionControllerMailbox(
+            mailbox,
+            completeRestartClearedSource,
+            waiting,
+            undefined,
+            createAgentRunRestartAbortError(),
+          );
         }
       });
     },

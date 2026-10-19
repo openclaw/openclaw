@@ -1,4 +1,3 @@
-import type { OpenClawPluginNodeInvokePolicyContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -16,14 +15,10 @@ vi.mock("./audit.js", () => ({ appendFileTransferAudit: vi.fn() }));
 const binding = { kind: "write", anchorPath: "/workspace", anchorDevice: "1", anchorInode: "2" };
 const sizeBytes = 50 * 1024 * 1024;
 const expectedSha256 = "a".repeat(64);
+const policy = createFileTransferNodeInvokePolicy();
 
-beforeEach(() => {
-  setRuntimeConfigSnapshot({});
-});
-
-afterEach(() => {
-  clearRuntimeConfigSnapshot();
-});
+beforeEach(() => setRuntimeConfigSnapshot({}));
+afterEach(clearRuntimeConfigSnapshot);
 
 function fixture(overrides: { maxBytes?: number } = {}) {
   const { ctx, invokeNode } = createCtx({
@@ -51,55 +46,58 @@ function fixture(overrides: { maxBytes?: number } = {}) {
       },
     },
   });
-  invokeNode.mockImplementation(async (options = {}) => {
-    const { params } = options;
-    return {
+  invokeNode.mockImplementation(async ({ params }: Parameters<typeof invokeNode>[0] = {}) => ({
+    ok: true,
+    payload: {
       ok: true,
-      payload: {
-        ok: true,
-        path: "/workspace/input",
-        binding,
-        ...((params as Record<string, unknown>).preflightOnly === true
-          ? {}
-          : { status: "created" }),
-        size: sizeBytes,
-        sha256: expectedSha256,
-      },
-    };
-  });
+      path: "/workspace/input",
+      binding,
+      ...(requireRecord(params, "invoke params").preflightOnly === true
+        ? {}
+        : { status: "created" }),
+      size: sizeBytes,
+      sha256: expectedSha256,
+    },
+  }));
   return { ctx, invokeNode };
+}
+
+async function expectInvalid(
+  ctx: ReturnType<typeof createCtx>["ctx"],
+  invokeNode: ReturnType<typeof createCtx>["invokeNode"],
+) {
+  expect(await policy.handle(ctx)).toMatchObject({ ok: false, code: "INVALID_PARAMS" });
+  expect(invokeNode).not.toHaveBeenCalled();
 }
 
 describe("file.create node policy", () => {
   it("authorizes writes and binds canonical metadata before the duplex effect", async () => {
     const { ctx, invokeNode } = fixture();
-    expect(await createFileTransferNodeInvokePolicy().handle(ctx)).toMatchObject({
+    expect(await policy.handle(ctx)).toMatchObject({
       ok: true,
       payload: { status: "created" },
     });
     expect(invokeNode).toHaveBeenCalledTimes(2);
-    expect(invokeNode.mock.calls[0]?.[0]?.params).toMatchObject({
+    const preflight = requireInvokeParams(invokeNode, 0);
+    const final = requireInvokeParams(invokeNode, 1);
+    expect(preflight).toMatchObject({
       sizeBytes,
       maxBytes: sizeBytes,
       followSymlinks: false,
       preflightOnly: true,
     });
-    expect(invokeNode.mock.calls[0]?.[0]?.params).not.toHaveProperty("expectedBinding");
-    expect(invokeNode.mock.calls[1]?.[0]?.params).toMatchObject({
+    expect(preflight).not.toHaveProperty("expectedBinding");
+    expect(final).toMatchObject({
       expectedCanonicalPath: "/workspace/input",
       expectedBinding: binding,
       expectedSha256,
     });
-    expect(invokeNode.mock.calls[1]?.[0]?.params).not.toHaveProperty("preflightOnly");
+    expect(final).not.toHaveProperty("preflightOnly");
   });
 
   it("honors a smaller configured byte allowance before node dispatch", async () => {
     const { ctx, invokeNode } = fixture({ maxBytes: 16 * 1024 * 1024 });
-    expect(await createFileTransferNodeInvokePolicy().handle(ctx)).toMatchObject({
-      ok: false,
-      code: "INVALID_PARAMS",
-    });
-    expect(invokeNode).not.toHaveBeenCalled();
+    await expectInvalid(ctx, invokeNode);
   });
 
   it.each([{ sizeBytes: -1 }, { expectedSha256: "bad" }, { maxBytes: Infinity }])(
@@ -107,11 +105,7 @@ describe("file.create node policy", () => {
     async (params) => {
       const { ctx, invokeNode } = fixture();
       ctx.params = { ...(ctx.params as object), ...params };
-      expect(await createFileTransferNodeInvokePolicy().handle(ctx)).toMatchObject({
-        ok: false,
-        code: "INVALID_PARAMS",
-      });
-      expect(invokeNode).not.toHaveBeenCalled();
+      await expectInvalid(ctx, invokeNode);
     },
   );
 });
@@ -135,23 +129,19 @@ describe("binary file.fetch policy", () => {
         nodes: { "node-1": { ask: "off", allowReadPaths: ["/tmp/**"], maxBytes } },
       },
     });
-    expect(await createFileTransferNodeInvokePolicy().handle(ctx)).toMatchObject({ ok: true });
+    expect(await policy.handle(ctx)).toMatchObject({ ok: true });
+    const fields = { transport: "binary", maxBytes, followSymlinks: false };
     expect(invokeNode).toHaveBeenCalledTimes(2);
-    expect(requireInvokeParams(invokeNode, 0)).toMatchObject({
-      transport: "binary",
-      maxBytes,
-      followSymlinks: false,
-      preflightOnly: true,
-    });
-    expect(requireInvokeParams(invokeNode, 0)).not.toHaveProperty("expectedBinding");
-    expect(requireInvokeParams(invokeNode, 1)).toMatchObject({
-      transport: "binary",
-      maxBytes,
-      followSymlinks: false,
+    const preflight = requireInvokeParams(invokeNode, 0);
+    const final = requireInvokeParams(invokeNode, 1);
+    expect(preflight).toMatchObject({ ...fields, preflightOnly: true });
+    expect(preflight).not.toHaveProperty("expectedBinding");
+    expect(final).toMatchObject({
+      ...fields,
       expectedCanonicalPath: "/tmp/output",
       expectedBinding: EXISTING_BINDING,
     });
-    expect(requireInvokeParams(invokeNode, 1)).not.toHaveProperty("preflightOnly");
+    expect(final).not.toHaveProperty("preflightOnly");
   });
 
   it("rejects unknown modes and unsafe binary budgets before node dispatch", async () => {
@@ -161,120 +151,80 @@ describe("binary file.fetch policy", () => {
         params: { path: "/tmp/output", transport: "binary", maxBytes: size, ...extra },
         approvals,
       });
-      expect(await createFileTransferNodeInvokePolicy().handle(ctx)).toMatchObject({
-        ok: false,
-        code: "INVALID_PARAMS",
-      });
-      expect(invokeNode).not.toHaveBeenCalled();
+      await expectInvalid(ctx, invokeNode);
       expect(approvals.request).not.toHaveBeenCalled();
     }
   });
 });
 
-describe("file-transfer preflight identity", () => {
-  it("fails closed when a node preflight omits filesystem identity", async () => {
-    const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(async () => ({
-      ok: true,
-      payload: { ok: true, path: "/tmp/file.txt", size: 1 },
-    }));
-    const ctx: OpenClawPluginNodeInvokePolicyContext = {
-      nodeId: "node-1",
-      command: "file.fetch",
-      params: { path: "/tmp/file.txt" },
-      config: {},
-      pluginConfig: {
-        policyVersion: 2,
-        nodes: { "node-1": { allowReadPaths: ["/tmp/**"] } },
-      },
-      node: { nodeId: "node-1" },
-      invokeNode,
-    };
-
-    const result = await createFileTransferNodeInvokePolicy().handle(ctx);
-
-    expect(result).toMatchObject({ ok: false, code: "FILESYSTEM_IDENTITY_MISSING" });
-    expect(invokeNode).toHaveBeenCalledOnce();
+it("fails closed when a node preflight omits filesystem identity", async () => {
+  const { ctx, invokeNode } = createCtx({
+    params: { path: "/tmp/file.txt" },
+    pluginConfig: {
+      nodes: { "node-1": { allowReadPaths: ["/tmp/**"] } },
+    },
   });
+  invokeNode.mockResolvedValue({
+    ok: true,
+    payload: { ok: true, path: "/tmp/file.txt", size: 1 },
+  });
+  expect(await policy.handle(ctx)).toMatchObject({
+    ok: false,
+    code: "FILESYSTEM_IDENTITY_MISSING",
+  });
+  expect(invokeNode).toHaveBeenCalledOnce();
 });
-
-describe("file-transfer dir.list policy", () => {
-  it("reapproves a stale grant before listing and binds the retry", async () => {
-    const events: string[] = [];
-    const approvals = {
-      request: vi.fn(async () => {
-        events.push("approval");
-        return { id: "approval-1", decision: "allow-once" as const };
-      }),
-    };
-    const invokeNode = vi.fn<OpenClawPluginNodeInvokePolicyContext["invokeNode"]>(
-      async (options = {}) => {
-        const { params } = options;
-        const record = requireRecord(params, "invoke params");
-        events.push(record.preflightOnly === true ? "preflight" : "list");
-        if (record.preflightOnly === true && record.expectedCanonicalPath === "/tmp/old-project") {
-          return {
-            ok: true,
-            payload: {
+it("dir.list reapproves a stale grant before listing and binds the retry", async () => {
+  const events: string[] = [];
+  const approvals = {
+    request: vi.fn(async () => {
+      events.push("approval");
+      return { id: "approval-1", decision: "allow-once" as const };
+    }),
+  };
+  const { ctx, invokeNode } = createCtx({
+    command: "dir.list",
+    params: { path: "/tmp/project", expectedCanonicalPath: "/tmp/injected" },
+    pluginConfig: {
+      nodes: { "node-1": { ask: "on-miss", followSymlinks: true } },
+      literalGrants: [
+        {
+          nodeId: "node-1",
+          command: "dir.list",
+          requestedPath: "/tmp/project",
+          canonicalPath: "/tmp/old-project",
+        },
+      ],
+    },
+    approvals,
+  });
+  invokeNode.mockImplementation(async ({ params }: Parameters<typeof invokeNode>[0] = {}) => {
+    const record = requireRecord(params, "invoke params");
+    events.push(record.preflightOnly === true ? "preflight" : "list");
+    return {
+      ok: true,
+      payload:
+        record.preflightOnly === true && record.expectedCanonicalPath === "/tmp/old-project"
+          ? {
               ok: false,
               code: "CANONICAL_PATH_CHANGED",
               message: "canonical path differs from the authorized target",
               canonicalPath: "/tmp/new-project",
-            },
-          };
-        }
-        return {
-          ok: true,
-          payload: { ok: true, binding: EXISTING_BINDING, path: "/tmp/new-project", entries: [] },
-        };
-      },
-    );
-    const ctx: OpenClawPluginNodeInvokePolicyContext = {
-      nodeId: "node-1",
-      command: "dir.list",
-      params: { path: "/tmp/project", expectedCanonicalPath: "/tmp/injected" },
-      config: {},
-      pluginConfig: {
-        policyVersion: 2,
-        nodes: { "node-1": { ask: "on-miss", followSymlinks: true } },
-        literalGrants: [
-          {
-            nodeId: "node-1",
-            command: "dir.list",
-            requestedPath: "/tmp/project",
-            canonicalPath: "/tmp/old-project",
-          },
-        ],
-      },
-      node: { nodeId: "node-1", displayName: "Node One" },
-      approvals,
-      invokeNode,
+            }
+          : { ok: true, binding: EXISTING_BINDING, path: "/tmp/new-project", entries: [] },
     };
-
-    expect((await createFileTransferNodeInvokePolicy().handle(ctx)).ok).toBe(true);
-    expect(events).toEqual(["preflight", "approval", "preflight", "list"]);
-    expect(invokeNode).toHaveBeenNthCalledWith(1, {
-      params: {
-        path: "/tmp/project",
-        followSymlinks: true,
-        preflightOnly: true,
-        expectedCanonicalPath: "/tmp/old-project",
-      },
-    });
-    expect(invokeNode).toHaveBeenNthCalledWith(2, {
-      params: {
-        path: "/tmp/project",
-        followSymlinks: true,
-        preflightOnly: true,
-        expectedCanonicalPath: "/tmp/new-project",
-      },
-    });
-    expect(invokeNode).toHaveBeenNthCalledWith(3, {
-      params: {
-        path: "/tmp/project",
-        followSymlinks: true,
-        expectedCanonicalPath: "/tmp/new-project",
-        expectedBinding: EXISTING_BINDING,
-      },
-    });
   });
+
+  expect((await policy.handle(ctx)).ok).toBe(true);
+  expect(events).toEqual(["preflight", "approval", "preflight", "list"]);
+  const params = {
+    path: "/tmp/project",
+    followSymlinks: true,
+    expectedCanonicalPath: "/tmp/new-project",
+  };
+  expect(invokeNode.mock.calls).toEqual([
+    [{ params: { ...params, preflightOnly: true, expectedCanonicalPath: "/tmp/old-project" } }],
+    [{ params: { ...params, preflightOnly: true } }],
+    [{ params: { ...params, expectedBinding: EXISTING_BINDING } }],
+  ]);
 });

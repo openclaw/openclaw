@@ -179,12 +179,12 @@ function resolveTelegramDispatcherPolicy(params: {
       mode: "explicit-proxy",
       proxyUrl: explicitProxyUrl,
       allowPrivateProxy: true,
-      proxyTls: { ...connect },
+      proxyTls: connect,
     };
   }
   return {
     mode: params.useEnvProxy ? "env-proxy" : "direct",
-    connect: { ...connect },
+    connect,
   };
 }
 

@@ -9,6 +9,7 @@ import { normalizeOptionalAccountId } from "../../routing/account-id.js";
 import { normalizeRouteBindingChannelId } from "../../routing/binding-scope.js";
 import { buildAgentMainSessionKey, normalizeAgentId } from "../../routing/session-key.js";
 import { assertAgentDatabaseAdmitted } from "../../state/agent-database-admission.js";
+import { waitForAgentDatabaseWriteAdmission } from "../../state/agent-database-preparation-context.js";
 import {
   INTERNAL_MESSAGE_CHANNEL,
   isDeliverableMessageChannel,
@@ -137,6 +138,7 @@ export async function resolveAgentDeliveryPlanWithSessionRoute(
     preparedPlugin?: ChannelPlugin;
   },
 ): Promise<AgentDeliveryPlan> {
+  await waitForAgentDatabaseWriteAdmission(params.agentId);
   assertAgentDatabaseAdmitted(params.agentId);
   const plan = resolveAgentDeliveryPlan(params);
   const { resolvedChannel } = plan;

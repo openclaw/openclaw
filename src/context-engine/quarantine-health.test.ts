@@ -3,6 +3,10 @@ import { mkdirSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
 import { ensureCliPluginRegistryLoaded } from "../cli/plugin-registry-loader.js";
+import {
+  onInternalDiagnosticEvent,
+  waitForDiagnosticEventsDrained,
+} from "../infra/diagnostic-events.js";
 import { requireNodeSqlite } from "../infra/node-sqlite.js";
 import {
   createCorePluginStateSyncKeyedStore,
@@ -33,6 +37,7 @@ import { seedNativeVersionZeroState } from "../state/native-version-zero.test-su
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { withStateDirEnv } from "../test-helpers/state-dir-env.js";
 import { MockContextEngine } from "./context-engine.test-support.js";
+import { ensureContextEnginesInitialized } from "./init.js";
 import {
   clearPersistedContextEngineQuarantineForProcess as clearPersisted,
   listPersistedContextEngineQuarantines as listPersisted,
@@ -119,6 +124,79 @@ afterEach(() => {
 afterAll(cleanupPluginLoaderFixturesForTest);
 
 describe("context engine quarantine health", () => {
+  it("warns when persisted quarantine inventory cannot be read", async () => {
+    const read = vi
+      .spyOn(pluginStateWorker, "listPluginStateInWorker")
+      .mockRejectedValueOnce(new Error("synthetic health read failure: sensitive-row-fragment"));
+    const warning = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      expect(await listPersisted()).toEqual([]);
+      expect(warning).toHaveBeenCalledExactlyOnceWith(
+        "[runtime-health] Persisted quarantine inventory is unavailable for runtime-quarantines; health warnings may be incomplete. Run openclaw doctor to inspect state storage.",
+      );
+    } finally {
+      warning.mockRestore();
+      read.mockRestore();
+    }
+  });
+
+  it("does not dispatch health cleanup again on an empty warm turn", async () => {
+    await withStateDirEnv("openclaw-context-engine-warm-health-", async () => {
+      const previous = captureRegistry();
+      setActivePluginRegistry(createEmptyPluginRegistry());
+      // Keep a different engine's health row so the empty receipt must be selection-scoped.
+      await recordPersisted(makeQuarantine());
+      await ensureContextEnginesInitialized();
+      await waitForDiagnosticEventsDrained();
+      const queued: string[] = [];
+      const unsubscribe = onInternalDiagnosticEvent(
+        (event) => {
+          if (
+            event.type === "worker.request" &&
+            event.requestClass === "plugin_state" &&
+            event.phase === "queued"
+          ) {
+            queued.push(event.kind);
+          }
+        },
+        { include: ["worker.request"] },
+      );
+      try {
+        await ensureContextEnginesInitialized();
+        await waitForDiagnosticEventsDrained();
+        expect(queued).toEqual([]);
+        expect(await listPersisted()).toEqual([makeQuarantine()]);
+        await clearPersisted("lossless-claw", process.pid);
+        expect(await listPersisted()).toEqual([]);
+      } finally {
+        unsubscribe();
+        restoreRegistry(previous);
+      }
+    });
+  });
+
+  it("invalidates empty health receipts after worker and native registrations", async () => {
+    await withStateDirEnv("openclaw-context-engine-health-receipt-", async () => {
+      await recordPersisted(makeQuarantine({ engineId: "other" }));
+      await clearPersisted("lossless-claw", process.pid);
+      // Queue without awaiting: the clear must follow the accepted namespace write.
+      const write = recordPersisted(makeQuarantine());
+      await clearPersisted("lossless-claw", process.pid);
+      await write;
+      expect((await listPersisted()).map((record) => record.engineId)).toEqual(["other"]);
+
+      await clearPersisted("lossless-claw", process.pid);
+      seedRecord({
+        engineId: "lossless-claw",
+        operation: "bootstrap",
+        reason: "native registration",
+        ...createRuntimeHealthRecordEnvelope(new Date(123)),
+      });
+      await clearPersisted("lossless-claw", process.pid);
+      expect((await listPersisted()).map((record) => record.engineId)).toEqual(["other"]);
+    });
+  });
+
   it.each(["absent", "native-only"])(
     "does not create or adopt %s state during health cleanup",
     async (mode) => {

@@ -575,7 +575,13 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
         }
         dreams={
           <Show when={agentId()} keyed>
-            {(id) => <AgentMemoryPanel agentId={id} />}
+            {(id) => {
+              const agentTarget = {
+                read: () => id,
+                subscribe: () => () => {},
+              };
+              return <AgentMemoryPanel initialAgentTarget={agentTarget} />;
+            }}
           </Show>
         }
         editor={activeTab() === "settings" ? props.buildEditor() : null}

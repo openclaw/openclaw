@@ -168,12 +168,7 @@ export function createMockReplyOperation(
     abortForRestart: vi.fn(() => true),
     supersede: vi.fn(() => true),
   };
-  return {
-    replyOperation,
-    failMock,
-    freezeAbortMock,
-    updateSessionIdMock,
-  };
+  return { replyOperation, failMock, freezeAbortMock, updateSessionIdMock };
 }
 
 /** Creates a typed mock typing controller with optional method overrides. */
@@ -199,11 +194,12 @@ export function createMockFollowupRun(
 ): FollowupRun {
   const rootDir = useAutoCleanupTempDirTracker(onTestFinished).make("openclaw-mock-followup-");
   const skipProviderRuntimeHints = process.env.OPENCLAW_TEST_FAST === "1";
-  const base: FollowupRun = {
+  return {
     prompt: "hello",
     summaryLine: "hello",
     enqueuedAt: Date.now(),
     originatingTo: "channel:C1",
+    ...overrides,
     run: {
       agentId: "main",
       agentDir: path.join(rootDir, "agent"),
@@ -214,10 +210,7 @@ export function createMockFollowupRun(
       sessionFile: path.join(rootDir, "session.jsonl"),
       workspaceDir: rootDir,
       config: {},
-      skillsSnapshot: {
-        prompt: "",
-        skills: [],
-      },
+      skillsSnapshot: { prompt: "", skills: [] },
       provider: "anthropic",
       model: "claude",
       thinkingCatalog: [
@@ -229,21 +222,10 @@ export function createMockFollowupRun(
       ],
       verboseLevel: "off",
       elevatedLevel: "off",
-      bashElevated: {
-        enabled: false,
-        allowed: false,
-        defaultLevel: "off",
-      },
+      bashElevated: { enabled: false, allowed: false, defaultLevel: "off" },
       timeoutMs: 1_000,
       blockReplyBreak: "message_end",
       skipProviderRuntimeHints,
-    },
-  };
-  return {
-    ...base,
-    ...overrides,
-    run: {
-      ...base.run,
       ...overrides.run,
     },
   };

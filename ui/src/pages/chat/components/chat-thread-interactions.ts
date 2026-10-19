@@ -203,6 +203,8 @@ export type ChatThreadProps = ChatSendStatusActions &
     mediaOwner?: object;
     onChatScroll?: (event: Event) => void;
     onHistoryIntent?: (event: Event) => void;
+    onHistorySentinelRef?: (element: HTMLElement) => void | (() => void);
+    onTranscriptAnnouncementRef?: (element: HTMLElement) => void | (() => void);
     onDraftChange: (next: string) => void;
     onSend: () => void;
     onPermissionRetry?: (message: string) => void;
@@ -324,8 +326,12 @@ export function resetThreadPresentation(paneId?: string, owner?: ParentNode) {
 }
 
 /** Toggles transcript search and retains the shortcut origin for focus restoration. */
-export function toggleTranscriptSearch(paneId: string, triggerEvent?: Event): void {
-  getTranscriptState(paneId).search.toggle(triggerEvent);
+export function toggleTranscriptSearch(
+  paneId: string,
+  triggerEvent?: Event,
+  restoreFocus?: () => void,
+): void {
+  getTranscriptState(paneId).search.toggle(triggerEvent, restoreFocus);
 }
 
 let activeReplyContextMenu: {

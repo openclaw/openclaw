@@ -125,7 +125,10 @@ describe("update campaign apply exception boundary", () => {
     vi.mocked(checkUpdateStatus).mockResolvedValue(createDevGitStatus());
     vi.mocked(resolveNpmChannelTag).mockResolvedValue({ tag: "dev", version: "99.0.0-dev.1" });
     const { runGatewayUpdateCheck } = await import("./update-startup.js");
-    const runAutoUpdate = vi.fn(async () => ({ status: "handoff" as const }));
+    const autoRun = await import("./update-startup-auto-run.js");
+    const runAutoUpdate = vi
+      .spyOn(autoRun, "runAutoUpdateCommand")
+      .mockResolvedValue({ status: "handoff" });
     const log = { info: vi.fn() };
 
     await runGatewayUpdateCheck({
@@ -134,7 +137,6 @@ describe("update campaign apply exception boundary", () => {
       isNixMode: false,
       allowInTests: true,
       activeWorkInspectors: idleActiveWorkInspectors(),
-      runAutoUpdate,
     });
     expect(getUpdateSchedule()?.campaign?.state).toBe("countdown");
     fault.at = at;

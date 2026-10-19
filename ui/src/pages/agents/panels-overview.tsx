@@ -19,14 +19,15 @@ import { AgentEmojiPicker } from "../../components/agent-emoji-picker.tsx";
 import type { DecisionModelEntry } from "../../components/model-picker-options.ts";
 import { MultiSelect } from "../../components/multi-select.tsx";
 import { createOverlayAnchor } from "../../components/overlay-anchor.ts";
-import "../../components/tooltip.ts";
 import { createOverlay, findOverlayParent } from "../../components/overlay-lifecycle.ts";
+import "../../components/tooltip.ts";
 import type { PanelRefreshStatus } from "../../components/panel-refresh-status-state.ts";
 import { DecisionModelPicker } from "../../components/solid/decision-model-picker.tsx";
 import { AgentIdentityAvatar } from "../../components/solid/identity-avatar.tsx";
 import { ModelPicker } from "../../components/solid/model-picker.tsx";
 import { PanelRefreshStatus as PanelRefreshNotice } from "../../components/solid/panel-refresh-status.tsx";
 import { SettingsRow, SettingsSection } from "../../components/solid/settings-ui.tsx";
+import { registerSettingsEnglish } from "../../i18n/locales/en-settings.ts";
 import "../../components/solid/overlay.css";
 import {
   type AgentContext,
@@ -44,11 +45,13 @@ import { resolveAgentAvatarUrl } from "../../lib/avatar.ts";
 import { createIdentityAvatars } from "../../lib/identity-avatar-loader.ts";
 import { projectApplicationConfig } from "../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../lib/reactive/context.ts";
-import { t } from "../../lib/reactive/i18n.ts";
+import { registerEnglishCatalog, t } from "../../lib/reactive/i18n.ts";
 import { projectOwner } from "../../lib/reactive/projection.ts";
 import { AvatarPicker, type GeneratedAvatar } from "./avatar-picker.tsx";
 import { AgentConfigButtons, type AgentConfigActions } from "./config-actions.tsx";
 import { renderAgentPanelFacts } from "./panel-ui.tsx";
+
+registerEnglishCatalog(registerSettingsEnglish);
 
 export type AgentIdentityDraft = {
   name: string | null;

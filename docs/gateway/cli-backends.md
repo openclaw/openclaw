@@ -179,6 +179,9 @@ of holding the tool call until it finishes. When completion notifications are
 enabled, the result wakes the originating conversation; a busy conversation handles
 it after its current turn. The continuation retains the originating turn’s tool
 policy, including native and other MCP tools, subject to current session policy.
+Session bookkeeping updates that preserve identity and permissions do not interrupt
+completion wakes. If session storage is unavailable, the Gateway records the failed
+wake with retry guidance; use `process poll` to collect the command result.
 Restricted turns keep their original limits. If only waiting remains, the agent
 reports that the job is running and ends its turn instead of repeatedly polling. Exec policy, configured
 yield windows, command deadlines, and explicit notification settings still apply.

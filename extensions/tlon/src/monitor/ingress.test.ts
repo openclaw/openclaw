@@ -9,9 +9,20 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import { UrbitHttpError } from "../urbit/errors.js";
 import { createTlonIngressMonitor } from "./ingress.js";
 
-type TlonIngressQueue = NonNullable<Parameters<typeof createTlonIngressMonitor>[0]["queue"]>;
-type TlonIngressPayload = Parameters<TlonIngressQueue["enqueue"]>[1];
+type TlonIngressPayload = {
+  version: 1;
+  receivedAt: number;
+  source: "channels" | "chat";
+  rawEvent: string;
+};
+type TlonIngressQueue = ReturnType<typeof createQueue>;
 type TlonIngressDispatch = Parameters<typeof createTlonIngressMonitor>[0]["dispatch"];
+
+const { openChannelIngressQueue } = vi.hoisted(() => ({ openChannelIngressQueue: vi.fn() }));
+vi.mock("../runtime.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../runtime.js")>()),
+  getTlonRuntime: () => ({ state: { openChannelIngressQueue } }),
+}));
 
 function essay(author = "~nec", text = "hello") {
   return { author, content: [{ text }], sent: 1_700_000_000_000 };
@@ -47,7 +58,7 @@ function chatEvent(id: string) {
   return { whom: "~nec", id, response: { add: { essay: essay() } } };
 }
 
-function createQueue(stateDir: string, accountId = "default"): TlonIngressQueue {
+function createQueue(stateDir: string, accountId = "default") {
   return createChannelIngressQueueForTests<TlonIngressPayload>({
     channelId: "tlon",
     accountId,
@@ -77,13 +88,11 @@ async function withQueue<T>(
 }
 
 function startMonitor(queue: TlonIngressQueue, dispatch: TlonIngressDispatch) {
+  openChannelIngressQueue.mockReturnValue(queue);
   const monitor = createTlonIngressMonitor({
     accountId: "default",
-    queue,
     dispatch,
     runtime: { error: vi.fn(), log: vi.fn() },
-    pollIntervalMs: 60_000,
-    adoptionStallTimeoutMs: 5_000,
   });
   monitor.start();
   return monitor;

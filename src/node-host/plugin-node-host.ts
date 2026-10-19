@@ -2,6 +2,7 @@ import { asOptionalRecord as normalizeRecord } from "@openclaw/normalization-cor
 import { normalizeOptionalString } from "@openclaw/normalization-core/string-coerce";
 import type { NodePluginToolDescriptor } from "../../packages/gateway-protocol/src/schema/nodes.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import { prepareExecApprovalsCurrentRead } from "../infra/exec-approvals-store.js";
 import { logDebug } from "../logger.js";
 import {
@@ -22,7 +23,6 @@ import type {
 import type { OpenClawPluginNodeHostCommandContext } from "../plugins/types.node-host.js";
 import { createLazyRuntimeModule } from "../shared/lazy-runtime.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
-import { throwNodeHostCleanupErrors } from "./cleanup-errors.js";
 import { preparePluginExecAuthorization } from "./plugin-exec-policy.js";
 
 const loadPluginRegistryLoaderModule = createLazyRuntimeModule(
@@ -151,7 +151,7 @@ export function watchRegisteredNodeHostCommandAvailability(
         const failures = results.flatMap((result) =>
           result.status === "rejected" ? [result.reason] : [],
         );
-        throwNodeHostCleanupErrors(failures, "node-host watcher cleanup failed");
+        throwCollectedErrors(failures, "node-host watcher cleanup failed");
       })
       .catch((error: unknown) => {
         stopping = undefined;

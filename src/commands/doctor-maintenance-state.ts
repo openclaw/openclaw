@@ -273,7 +273,7 @@ export async function createDoctorMaintenanceState(options: {
       await state.acquire();
       if (migration) {
         const { loadDotEnv } = await import("../infra/dotenv.js");
-        loadDotEnv({ quiet: true });
+        loadDotEnv();
         const result = migration.result;
         for (const change of [...result.changes, ...(result.notices ?? [])]) {
           params.runtime.log(sanitizeDoctorNote(change));

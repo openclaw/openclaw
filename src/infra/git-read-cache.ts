@@ -26,13 +26,23 @@ type ReadEntry<T> = {
   value?: T;
 };
 
+function gitEnvironmentKey(input: unknown): string {
+  return JSON.stringify([
+    input,
+    Object.entries(process.env)
+      .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
+      .toSorted(([left], [right]) => left.localeCompare(right)),
+  ]);
+}
+
 function createReadCache<Input, Output>(
   load: (input: Input, signal: AbortSignal) => Promise<Output>,
-  freshness: number | { milliseconds: number; joinPending: true },
+  freshness: number | { milliseconds: number; joinPending?: true; versionedMilliseconds?: number },
   revision?: (input: Input, signal: AbortSignal) => Promise<string | null>,
   keyOf: (input: Input) => string = JSON.stringify,
   snapshot?: { empty: () => Output },
   retain: (value: Output) => boolean = () => true,
+  maxEntries = MAX_CACHED_CHECKOUTS,
 ) {
   const freshnessMs = typeof freshness === "number" ? freshness : freshness.milliseconds;
   const joinPending = typeof freshness !== "number" && freshness.joinPending;
@@ -40,7 +50,10 @@ function createReadCache<Input, Output>(
   // eviction and Gateway shutdown own their lifetime, independently of viewers.
   const entries = new Map<string, ReadEntry<Output>>();
   const pending = new Set<ReadEntry<Output>>();
-  const revisions = new Map<AbortController, Promise<string | null>>();
+  const revisions = new Map<
+    string,
+    { controller: AbortController; promise: Promise<string | null> }
+  >();
   let refreshTail: Promise<unknown> = Promise.resolve();
   let closed = false;
   const remove = (key: string, entry: ReadEntry<Output>) => {
@@ -54,18 +67,27 @@ function createReadCache<Input, Output>(
       const key = keyOf(input);
       let currentRevision: string | null | undefined;
       if (revision) {
-        const controller = new AbortController();
-        const check = revision(
-          input,
-          options.signal ? AbortSignal.any([controller.signal, options.signal]) : controller.signal,
-        );
-        revisions.set(controller, check);
-        try {
-          currentRevision = await check;
-        } finally {
-          revisions.delete(controller);
+        // Share only overlapping checks of identical inputs, never a settled revision.
+        const revisionInput = gitEnvironmentKey(input);
+        let check = revisions.get(revisionInput);
+        if (!check) {
+          const controller = new AbortController();
+          const promise = revision(input, controller.signal).finally(() => {
+            revisions.delete(revisionInput);
+          });
+          check = { controller, promise };
+          revisions.set(revisionInput, check);
         }
+        currentRevision = await racePromiseWithAbortSignal(
+          check.promise,
+          options.signal,
+          (signal) => toErrorObject(signal.reason, "Git read aborted"),
+        );
       }
+      const retainedFreshnessMs =
+        typeof freshness !== "number" && typeof currentRevision === "string"
+          ? (freshness.versionedMilliseconds ?? freshnessMs)
+          : freshnessMs;
       const revisionKey = JSON.stringify([input, currentRevision]);
       options.signal?.throwIfAborted();
       if (closed) {
@@ -86,10 +108,12 @@ function createReadCache<Input, Output>(
         const next: ReadEntry<Output> = {
           revision: revisionKey,
           expiresAt:
-            freshnessMs === 0
+            retainedFreshnessMs === 0
               ? Number.POSITIVE_INFINITY
               : Date.now() +
-                (currentRevision === null ? Math.min(freshnessMs, 75_000) : freshnessMs),
+                (currentRevision === null
+                  ? Math.min(retainedFreshnessMs, 75_000)
+                  : retainedFreshnessMs),
           controller,
           pending: true,
           value: entry?.value,
@@ -114,7 +138,7 @@ function createReadCache<Input, Output>(
               next.value = value;
               next.expiresAt = Date.now() + freshnessMs;
             }
-            if (freshnessMs === 0 || !retain(value)) {
+            if (retainedFreshnessMs === 0 || !retain(value)) {
               remove(key, next);
             }
             return value;
@@ -145,7 +169,7 @@ function createReadCache<Input, Output>(
       }
       entries.delete(key);
       entries.set(key, entry);
-      pruneMapToMaxSize(entries, MAX_CACHED_CHECKOUTS);
+      pruneMapToMaxSize(entries, maxEntries);
       // Viewer cancellation stops waiting, not the shared bounded read.
       return snapshot
         ? (entry.value ?? snapshot.empty())
@@ -155,7 +179,7 @@ function createReadCache<Input, Output>(
     },
     async close(): Promise<void> {
       closed = true;
-      for (const controller of revisions.keys()) {
+      for (const { controller } of revisions.values()) {
         controller.abort();
       }
       const retiring = [...pending];
@@ -164,7 +188,10 @@ function createReadCache<Input, Output>(
         entry.controller.abort();
       }
       entries.clear();
-      await Promise.allSettled([...revisions.values(), ...retiring.map((entry) => entry.promise)]);
+      await Promise.allSettled([
+        ...Array.from(revisions.values(), (check) => check.promise),
+        ...retiring.map((entry) => entry.promise),
+      ]);
     },
   };
 }
@@ -197,13 +224,7 @@ function createReadCaches() {
       // after one minute; checkout-set/environment changes select an independent snapshot.
       60_000,
       undefined,
-      (input) =>
-        JSON.stringify([
-          input,
-          Object.entries(process.env)
-            .filter(([key]) => /^(GIT_|HOME$|XDG_CONFIG_HOME$|PATH$|SUDO_UID$)/i.test(key))
-            .toSorted(([left], [right]) => left.localeCompare(right)),
-        ]),
+      gitEnvironmentKey,
       { empty: () => [] },
     ),
     context: createReadCache(
@@ -249,13 +270,35 @@ function createReadCaches() {
     diff: createReadCache(
       (input: GitReadOperations["checkout.diff"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
-      0,
+      { milliseconds: 0, versionedMilliseconds: Number.POSITIVE_INFINITY },
+      (input, signal) =>
+        runGitWorkerOperation(
+          { type: "checkout.revision", input: { root: input.cwd, scope: "diff" } },
+          { signal },
+        ),
+      undefined,
+      undefined,
+      (value) => !value.unavailableReason,
+      // Full results may retain 1.5 MB of patches each.
+      32,
     ),
     diffSummary: createReadCache(
       (input: GitReadOperations["checkout.diff"]["input"], signal) =>
         runGitWorkerOperation({ type: "checkout.diff", input }, { signal }),
       // Visible clients share this short-lived summary; never duplicate a slow scan.
-      { milliseconds: 10_000, joinPending: true },
+      {
+        milliseconds: 10_000,
+        joinPending: true,
+        versionedMilliseconds: Number.POSITIVE_INFINITY,
+      },
+      (input, signal) =>
+        runGitWorkerOperation(
+          { type: "checkout.revision", input: { root: input.cwd, scope: "diff" } },
+          { signal },
+        ),
+      undefined,
+      undefined,
+      (value) => !value.unavailableReason,
     ),
     branches: createReadCache(
       (input: GitReadOperations["repository.branches"]["input"], signal) =>

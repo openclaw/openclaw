@@ -14,10 +14,8 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
 import { runDoctorConfigPreflight } from "../doctor-config-preflight.js";
-import {
-  applyOnboardingPrimaryModel,
-  type OnboardingAgentTarget,
-} from "../onboard-agent-target.js";
+import { applyOnboardingPrimaryModel } from "../onboard-agent-target.js";
+import type { applyNonInteractiveAuthChoice } from "./local/auth-choice.js";
 
 const mocks = vi.hoisted(() => ({
   applyAuthChoice: vi.fn(),
@@ -35,6 +33,13 @@ vi.mock("./local/auth-choice.js", () => ({
 }));
 
 import { runNonInteractiveSetup } from "../onboard-non-interactive.js";
+
+function expectFleet(agents: OpenClawConfig["agents"], entries: unknown) {
+  expect(agents?.entries).toEqual(entries);
+  expect(agents).not.toHaveProperty("list");
+  expect(agents?.ownership).toBe("explicit");
+  expect(agents?.defaults?.systemAgent).toEqual({ agentId: "beta" });
+}
 
 afterEach(async () => {
   vi.resetAllMocks();
@@ -61,11 +66,20 @@ describe("local setup fleet owner persistence", () => {
         const stateDir = path.join(home, ".openclaw");
         const configPath = path.join(stateDir, "openclaw.json");
         const includePath = path.join(stateDir, "roster.json");
+        const read = (file = configPath) => fs.readFile(file, "utf8");
+        const write = (value: unknown, file = configPath) =>
+          fs.writeFile(file, JSON.stringify(value));
+        const profileId = "fixture:setup";
+        const readProfile = async (dir: string) =>
+          (await loadAuthProfileStoreWithoutExternalProfilesAsync(dir)).profiles[profileId];
         const workspace = path.join(home, "existing-workspace");
-        const siblingWorkspace = path.join(home, "alpha-workspace");
         const agentDir = path.join(stateDir, "agents", "beta", "agent");
+        const defaults = { workspace, model: "fixture/shared" };
+        const selected = "fixture/selected";
+        const models = ["alpha", "beta", "shared", "selected"].map((id) => ({ id, name: id }));
+        const provider = { api: "openai-completions", baseUrl: "https://fixture.test", models };
         const entries = {
-          alpha: { model: "fixture/alpha", workspace: siblingWorkspace },
+          alpha: { model: "fixture/alpha", workspace: path.join(home, "alpha-workspace") },
           beta: { model: "fixture/beta", ...(!legacy ? { workspace } : {}), agentDir },
         };
         // The legacy default is deliberately neither the first nor lexical agent.
@@ -85,48 +99,27 @@ describe("local setup fleet owner persistence", () => {
           agents: {
             ...(include ? { $include: "./roster.json" } : roster),
             ...(!legacy ? { ownership: "explicit" } : {}),
-            defaults: {
-              workspace,
-              model: "fixture/shared",
-              ...(!legacy ? { systemAgent: { agentId: "beta" } } : {}),
-            },
+            defaults: { ...defaults, ...(!legacy ? { systemAgent: { agentId: "beta" } } : {}) },
           },
           bindings,
           gateway: { mode: "local", port: 24680 },
-          models: {
-            providers: {
-              fixture: {
-                api: "openai-completions",
-                baseUrl: "https://fixture.example/v1",
-                models: ["alpha", "beta", "shared", "selected"].map((id) => ({
-                  id,
-                  name: id,
-                  contextWindow: 8192,
-                  maxTokens: 1024,
-                })),
-              },
-            },
-          },
+          models: { providers: { fixture: provider } },
         });
         await fs.writeFile(configPath, raw);
         resetConfigRuntimeState();
         const before = await readConfigFileSnapshot();
         expect(before.valid, JSON.stringify(before.issues)).toBe(!legacy);
         expect(before.sourceConfig.agents).toMatchObject(roster);
-        expect(await fs.readFile(configPath, "utf8")).toBe(raw);
+        expect(await read()).toBe(raw);
         if (include) {
-          expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+          expect(await read(includePath)).toBe(includeRaw);
         }
-        const canonicalEntries = {
-          ...entries,
-          beta: { ...entries.beta, workspace },
-        };
+        const canonicalEntries = { ...entries, beta: { ...entries.beta, workspace } };
         let setupIncludeRaw = includeRaw;
         if (legacy) {
           if (include) {
-            // Doctor needs the original list and owner marker when repair spans
-            // an included roster and root-owned roles. Re-split only after repair.
-            await fs.writeFile(configPath, JSON.stringify(before.sourceConfig));
+            // Repair the root-owned roles before re-splitting the included roster.
+            await write(before.sourceConfig);
             resetConfigRuntimeState();
           }
           await runDoctorConfigPreflight({
@@ -139,52 +132,35 @@ describe("local setup fleet owner persistence", () => {
           resetConfigRuntimeState();
           const repaired = await readConfigFileSnapshot();
           expect(repaired.valid, JSON.stringify(repaired.issues)).toBe(true);
-          expect(repaired.sourceConfig.agents?.entries).toEqual(canonicalEntries);
-          expect(repaired.sourceConfig.agents).not.toHaveProperty("list");
-          expect(repaired.sourceConfig.agents?.ownership).toBe("explicit");
-          expect(repaired.sourceConfig.agents?.defaults?.systemAgent).toEqual({ agentId: "beta" });
+          expectFleet(repaired.sourceConfig.agents, canonicalEntries);
           expect(repaired.sourceConfig.bindings).toEqual(bindings);
           if (include) {
-            expect(await fs.readFile(includePath, "utf8")).toBe(includeRaw);
+            expect(await read(includePath)).toBe(includeRaw);
             setupIncludeRaw = JSON.stringify({ entries: canonicalEntries });
             await fs.writeFile(includePath, setupIncludeRaw);
-            const agents = repaired.sourceConfig.agents;
-            if (!agents) {
-              throw new Error("Doctor did not retain the fleet");
-            }
-            const { entries: _entries, ...rootOwnedAgents } = agents;
-            await fs.writeFile(
-              configPath,
-              JSON.stringify({
-                ...repaired.sourceConfig,
-                agents: { $include: "./roster.json", ...rootOwnedAgents },
-              }),
-            );
+            const rootOwnedAgents = { ...repaired.sourceConfig.agents };
+            delete rootOwnedAgents.entries;
+            await write({
+              ...repaired.sourceConfig,
+              agents: { $include: "./roster.json", ...rootOwnedAgents },
+            });
             resetConfigRuntimeState();
             expect((await readConfigFileSnapshot()).valid).toBe(true);
           }
         }
         const runtime = { log: vi.fn(), error: vi.fn(), exit: vi.fn() } as unknown as RuntimeEnv;
-        const profileId = "fixture:setup";
         mocks.applyAuthChoice.mockImplementation(
-          async ({
-            nextConfig,
-            target,
-          }: {
-            nextConfig: OpenClawConfig;
-            target: OnboardingAgentTarget;
-          }) => {
+          async ({ nextConfig, target }: Parameters<typeof applyNonInteractiveAuthChoice>[0]) => {
             expect(target).toEqual({ agentId: "beta", agentDir, workspaceDir: workspace });
             await upsertAuthProfileAsync({
               agentDir: target.agentDir,
               profileId,
               credential: { type: "api_key", provider: "fixture", key: "synthetic-setup-key" },
             });
-            // Include-owned entries remain authored in their own file. Root-owned
-            // model edits exercise the writer's existing ownership projection.
+            // Keep included entries file-owned; edit root-owned models.
             return include
               ? { ...nextConfig }
-              : applyOnboardingPrimaryModel(nextConfig, target, "fixture/selected");
+              : applyOnboardingPrimaryModel(nextConfig, target, selected);
           },
         );
 
@@ -203,12 +179,8 @@ describe("local setup fleet owner persistence", () => {
             },
             runtime,
           );
-          await expect(
-            mocks.ensureOnboardingAgent.mock.results[rerun]?.value,
-          ).resolves.toMatchObject({
-            agentId: "beta",
-            createdAgent: false,
-          });
+          const onboarded = await mocks.ensureOnboardingAgent.mock.results[rerun]?.value;
+          expect(onboarded).toMatchObject({ agentId: "beta", createdAgent: false });
           expect(mocks.ensureWorkspaceAndSessions).toHaveBeenLastCalledWith(
             workspace,
             runtime,
@@ -220,53 +192,33 @@ describe("local setup fleet owner persistence", () => {
           resetConfigRuntimeState();
           const reopened = await readConfigFileSnapshot();
           expect(reopened.valid, JSON.stringify(reopened.issues)).toBe(true);
-          const expectedEntries = include
-            ? canonicalEntries
-            : {
-                ...canonicalEntries,
-                beta: {
-                  ...entries.beta,
-                  workspace,
-                  model: { primary: "fixture/selected" },
-                  models: { "fixture/selected": {} },
+          const expectedEntries = {
+            ...canonicalEntries,
+            beta: include
+              ? canonicalEntries.beta
+              : {
+                  ...canonicalEntries.beta,
+                  model: { primary: selected },
+                  models: { [selected]: {} },
                 },
-              };
-          expect(reopened.sourceConfig.agents?.entries).toEqual(expectedEntries);
-          expect(reopened.sourceConfig.agents?.defaults).toMatchObject({
-            workspace,
-            model: "fixture/shared",
-            skipBootstrap: true,
-            systemAgent: { agentId: "beta" },
-          });
+          };
+          const { agents, gateway, hooks } = reopened.sourceConfig;
+          expectFleet(agents, expectedEntries);
+          expect(agents?.defaults).toMatchObject({ ...defaults, skipBootstrap: true });
+          expect(gateway?.port).toBe(24680);
+          expect(hooks?.internal?.entries?.["session-memory"]?.enabled).toBe(true);
           expect(reopened.sourceConfig.bindings).toEqual(bindings);
-          expect(reopened.sourceConfig.gateway?.port).toBe(24680);
-          expect(reopened.sourceConfig.hooks?.internal?.entries?.["session-memory"]?.enabled).toBe(
-            true,
-          );
           if (include) {
-            expect(await fs.readFile(includePath, "utf8")).toBe(setupIncludeRaw);
-            expect(JSON.parse(await fs.readFile(configPath, "utf8")).agents.$include).toBe(
-              "./roster.json",
-            );
+            expect(await read(includePath)).toBe(setupIncludeRaw);
+            expect(JSON.parse(await read()).agents.$include).toBe("./roster.json");
           } else {
-            const persisted = JSON.parse(await fs.readFile(configPath, "utf8"));
-            expect(persisted.agents.entries).toEqual(expectedEntries);
-            expect(persisted.agents).not.toHaveProperty("list");
-            expect(persisted.agents.ownership).toBe("explicit");
-            expect(persisted.agents.defaults.systemAgent).toEqual({ agentId: "beta" });
+            const persisted = JSON.parse(await read());
+            expectFleet(persisted.agents, expectedEntries);
           }
-          expect(
-            (await loadAuthProfileStoreWithoutExternalProfilesAsync(agentDir)).profiles[profileId],
-          ).toMatchObject({ provider: "fixture" });
+          expect(await readProfile(agentDir)).toMatchObject({ provider: "fixture" });
           for (const nonOwner of ["alpha", "ignored"]) {
-            expect(
-              (
-                await loadAuthProfileStoreWithoutExternalProfilesAsync(
-                  path.join(stateDir, "agents", nonOwner, "agent"),
-                )
-              ).profiles[profileId],
-              `credentials must not be stored for ${nonOwner}`,
-            ).toBeUndefined();
+            const profile = await readProfile(path.join(stateDir, "agents", nonOwner, "agent"));
+            expect(profile, `credentials must not be stored for ${nonOwner}`).toBeUndefined();
           }
         }
         expect(runtime.exit).not.toHaveBeenCalled();

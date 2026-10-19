@@ -152,10 +152,14 @@ describe
       }
     });
 
-    it("commits transcript appends, retains warm state, rolls back refused writes, and reopens", async () => {
+    it("commits transcript appends and metadata pairs, rolls back refused writes, and reopens", async () => {
       const options = { agentId: "main", env: process.env };
       const sessionKey = "agent:main:actor-conformance";
       const sessionId = "actor-conformance";
+      const readRows = () =>
+        withEngineStoreAdmission(() =>
+          readTranscriptEventRows(openOpenClawAgentDatabase(options), sessionId),
+        );
       const acquire = async () => {
         const database = withEngineStoreAdmission(() => openOpenClawAgentDatabase(options));
         const identity = readOpenClawAgentDatabaseIdentity(database);
@@ -193,6 +197,34 @@ describe
                 ...(initialize
                   ? { initialization: { scope, entry: { sessionId, updatedAt: 2 } } }
                   : {}),
+              },
+            }),
+          appendInitialMetadata: (modelId: string) =>
+            appendSessionManagerActor({
+              actor,
+              toolResult: false,
+              assertCurrent() {},
+              append: {
+                kind: "metadata",
+                input: {
+                  scope,
+                  initialModel: {
+                    type: "model_change",
+                    id: modelId,
+                    parentId: null,
+                    timestamp: "1970-01-01T00:00:00.003Z",
+                    provider: "synthetic",
+                    modelId: "synthetic-model",
+                  },
+                  event: JSON.stringify({
+                    type: "thinking_level_change",
+                    id: "initial-thinking",
+                    parentId: modelId,
+                    timestamp: "1970-01-01T00:00:00.003Z",
+                    thinkingLevel: "high",
+                  }),
+                  options: { appendIntent: "active-branch" },
+                },
               },
             }),
         };
@@ -243,6 +275,56 @@ describe
         // Both engines invalidate attempted-write witnesses, even when the data rolls back.
         expect(afterRefusal.writeToken).not.toBe(beforeRefusal.writeToken);
         expect(afterRefusal.version).not.toEqual(beforeRefusal.version);
+
+        assert(appended.committed.kind === "message");
+        assert(appended.committed.value.snapshot.ok);
+        const firstMessageId = appended.committed.value.snapshot.value.result?.messageId;
+        assert(firstMessageId);
+        const metadata = await first.appendInitialMetadata("initial-model");
+        expect(metadata.failure).toBeUndefined();
+        expect(metadata.committed).toMatchObject({
+          kind: "metadata",
+          value: {
+            initialModelParentId: firstMessageId,
+            snapshot: {
+              ok: true,
+              value: {
+                before: afterRefusal.transcript.version,
+                result: { appended: true, effectiveParentId: "initial-model" },
+              },
+            },
+          },
+        });
+        const rowsBeforePartialPair = readRows();
+        expect(rowsBeforePartialPair.slice(-2).map((row) => JSON.parse(row.eventJson))).toEqual([
+          {
+            type: "model_change",
+            id: "initial-model",
+            parentId: firstMessageId,
+            timestamp: "1970-01-01T00:00:00.003Z",
+            provider: "synthetic",
+            modelId: "synthetic-model",
+          },
+          {
+            type: "thinking_level_change",
+            id: "initial-thinking",
+            parentId: "initial-model",
+            timestamp: "1970-01-01T00:00:00.003Z",
+            thinkingLevel: "high",
+          },
+        ]);
+        const beforePartialPair = first.actor.snapshot(authority);
+        assert(beforePartialPair);
+        await expect(first.appendInitialMetadata("refused-model")).rejects.toThrow(
+          "Initial thinking metadata was not persisted: transcript-event-not-appended",
+        );
+        expect(readRows()).toEqual(rowsBeforePartialPair);
+        const afterPartialPair = await first.actor.read(authority);
+        expect(afterPartialPair.entry).toEqual(beforePartialPair.entry);
+        expect(afterPartialPair.transcript.watermark).toEqual(
+          beforePartialPair.transcript.watermark,
+        );
+        expect(afterPartialPair.pendingInputs).toEqual(beforePartialPair.pendingInputs);
       } finally {
         await first.actor.release();
       }
@@ -253,13 +335,16 @@ describe
       try {
         expect((await reopened.actor.read(authority)).entry?.updatedAt).toBe(543);
         expect((await reopened.append("continued input")).failure).toBeUndefined();
-        const rows = withEngineStoreAdmission(() =>
-          readTranscriptEventRows(openOpenClawAgentDatabase(options), sessionId),
-        );
-        expect(rows.map((row) => JSON.parse(row.eventJson))).toMatchObject([
+        expect(readRows().map((row) => JSON.parse(row.eventJson))).toMatchObject([
           { type: "session", id: sessionId },
           { type: "message", message: { role: "user", content: "first input" } },
-          { type: "message", message: { role: "user", content: "continued input" } },
+          { type: "model_change", id: "initial-model" },
+          { type: "thinking_level_change", id: "initial-thinking", parentId: "initial-model" },
+          {
+            type: "message",
+            parentId: "initial-thinking",
+            message: { role: "user", content: "continued input" },
+          },
         ]);
       } finally {
         await reopened.actor.release();

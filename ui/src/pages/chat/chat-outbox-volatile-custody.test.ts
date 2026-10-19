@@ -22,7 +22,7 @@ import {
   listStoredChatOutboxes,
   removeStoredChatComposerQueueItem,
 } from "./composer-persistence.ts";
-import { admitInitialTurnHandoff } from "./initial-turn-handoff.ts";
+import { admitInitialTurnHandoff } from "./initial-turn-handoff-admission.ts";
 import { useChatSendBrowserFixture } from "./outbox-browser.test-support.ts";
 
 useChatSendBrowserFixture();

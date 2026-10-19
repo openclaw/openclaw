@@ -1,10 +1,12 @@
 import { EventEmitter } from "node:events";
 import type { ChannelGatewayContext } from "openclaw/plugin-sdk/channel-contract";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
+import type { NativeCommandSpec } from "openclaw/plugin-sdk/native-command-registry";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { ResolvedClickClackAccount } from "./types.js";
 
 type GatewayContext = ChannelGatewayContext<ResolvedClickClackAccount>;
+type CommandMenuEntry = { command: string; description: string; args_hint: string };
 
 class FakeSocket extends EventEmitter {
   emitErrorOnClose = false;
@@ -23,12 +25,13 @@ function waitForState<T>(assertion: () => T | Promise<T>): Promise<T> {
 
 const mocks = vi.hoisted(() => ({
   createClickClackClient: vi.fn(),
+  listNativeCommandSpecsForConfig: vi.fn(),
   client: {
     me: vi.fn(),
     eventPage: vi.fn(),
     websocket: vi.fn(),
     message: vi.fn(),
-    setBotCommands: vi.fn(),
+    setBotCommands: vi.fn<(commands: CommandMenuEntry[]) => Promise<unknown[]>>(),
   },
   inbound: vi.fn(),
   resolveAccess: vi.fn(),
@@ -48,8 +51,9 @@ vi.mock("./http-client.js", async (importOriginal) => {
 // mock-isolation: Gateway tests observe dispatch without starting agent turns.
 vi.mock("./inbound.js", () => ({ handleClickClackInbound: mocks.inbound }));
 
-vi.mock("openclaw/plugin-sdk/native-command-registry", () => ({
-  listNativeCommandSpecsForConfig: () => [],
+vi.mock("openclaw/plugin-sdk/native-command-registry", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("openclaw/plugin-sdk/native-command-registry")>()),
+  listNativeCommandSpecsForConfig: mocks.listNativeCommandSpecsForConfig,
 }));
 
 // mock-isolation: Workspace resolution is fixed by the synthetic gateway fixture.
@@ -91,6 +95,29 @@ let run: Promise<void> | undefined;
 async function startGateway() {
   run = startClickClackGatewayAccount(ctx);
   await waitForState(() => expect(client.websocket).toHaveBeenCalledTimes(1));
+}
+
+function nativeCommand(
+  name: string,
+  options: Partial<Omit<NativeCommandSpec, "name">> = {},
+): NativeCommandSpec {
+  return {
+    name,
+    description: options.description ?? `Run ${name}`,
+    acceptsArgs: options.acceptsArgs ?? false,
+    ...options,
+  };
+}
+
+async function publishNativeCommands(specs: NativeCommandSpec[]): Promise<CommandMenuEntry[]> {
+  mocks.listNativeCommandSpecsForConfig.mockReturnValue(specs);
+  await startGateway();
+  expect(client.setBotCommands).toHaveBeenCalledTimes(1);
+  const commands = client.setBotCommands.mock.calls[0]?.[0];
+  if (!commands) {
+    throw new Error("Gateway startup did not publish its command menu");
+  }
+  return commands;
 }
 
 function nextTurn() {
@@ -155,6 +182,7 @@ describe("ClickClack gateway", () => {
     client.me.mockResolvedValue({ id: "bot-user", handle: "bot" });
     client.eventPage.mockResolvedValue({ events: [] });
     client.setBotCommands.mockResolvedValue([]);
+    mocks.listNativeCommandSpecsForConfig.mockReturnValue([]);
     resolveAccess.mockResolvedValue({
       shouldDispatch: true,
       commandAuthorized: true,
@@ -170,6 +198,74 @@ describe("ClickClack gateway", () => {
   afterEach(async () => {
     abort.abort();
     await run;
+  });
+
+  it("maps native commands to the bounded ClickClack menu contract", async () => {
+    const longDescription = "\u{1F642}".repeat(101);
+    const commands = await publishNativeCommands([
+      nativeCommand("Deploy-Now", {
+        description: `  ${longDescription}  `,
+        acceptsArgs: true,
+        args: [
+          { name: "target", description: "Target", type: "string", required: true },
+          { name: "message", description: "Message", type: "string" },
+        ],
+      }),
+      nativeCommand("deploy-now", { description: "Duplicate loses" }),
+      nativeCommand("shortcut", { isAlias: true }),
+      nativeCommand("bad name"),
+      nativeCommand("also/bad"),
+      nativeCommand("status", { description: "   ", acceptsArgs: true }),
+      nativeCommand("noargs"),
+      nativeCommand("long-hint", {
+        args: Array.from({ length: 20 }, (_, index) => ({
+          name: `argument${index}`,
+          description: "Argument",
+          type: "string" as const,
+          required: index === 0,
+        })),
+      }),
+    ]);
+
+    expect(mocks.listNativeCommandSpecsForConfig).toHaveBeenCalledWith(ctx.cfg, {
+      provider: "clickclack",
+    });
+    expect(commands).toHaveLength(4);
+    expect(commands[0]).toEqual({
+      command: "deploy-now",
+      description: expect.any(String),
+      args_hint: "<target> [message]",
+    });
+    expect(Array.from(commands[0]?.description ?? "")).toHaveLength(100);
+    expect(commands[1]).toEqual({
+      command: "status",
+      description: "status",
+      args_hint: "[args]",
+    });
+    expect(commands[2]).toEqual({
+      command: "noargs",
+      description: "Run noargs",
+      args_hint: "",
+    });
+    expect(Array.from(commands[3]?.args_hint ?? "")).toHaveLength(100);
+    expect(ctx.log?.warn).toHaveBeenCalledTimes(1);
+    expect(ctx.log?.warn).toHaveBeenCalledWith(
+      'ClickClack command menu skipped invalid native command names: "bad name", "also/bad"',
+    );
+  });
+
+  it("keeps the first 100 unique normalized commands", async () => {
+    const specs = Array.from({ length: 101 }, (_, index) => nativeCommand(`command${index}`));
+
+    const commands = await publishNativeCommands(specs);
+
+    expect(commands).toHaveLength(100);
+    expect(commands[0]?.command).toBe("command0");
+    expect(commands[99]?.command).toBe("command99");
+  });
+
+  it("returns an empty overwrite for an empty native catalog", async () => {
+    await expect(publishNativeCommands([])).resolves.toEqual([]);
   });
 
   it("publishes ready only after the realtime socket opens", async () => {

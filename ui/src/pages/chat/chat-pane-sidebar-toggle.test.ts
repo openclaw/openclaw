@@ -1,6 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { registerModalSurface } from "../../components/overlay-registry.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { makeChatHost } from "./chat-host.test-support.ts";
 import { createChatPaneRails } from "./chat-pane-rails.ts";
@@ -141,6 +142,7 @@ describe("chat pane sidebar toggles", () => {
       pane.presented = gate !== "hidden";
       const modal = document.createElement("nav");
       modal.className = "shell-nav";
+      const releaseModal = registerModalSurface(modal);
       if (gate === "modal") {
         modal.setAttribute("aria-modal", "true");
         document.body.append(modal);
@@ -159,6 +161,7 @@ describe("chat pane sidebar toggles", () => {
       }
       pane.handleDocumentKeydown(event);
       expect(isSidebarSlotVisible(state.sidebarLayout, slot), gate).toBe(false);
+      releaseModal();
       modal.remove();
     }
     pane.active = true;

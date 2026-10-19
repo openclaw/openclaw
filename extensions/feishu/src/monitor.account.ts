@@ -50,27 +50,14 @@ type ResolveReactionSyntheticEventParams = {
   accountId: string;
   event: FeishuReactionCreatedEvent;
   botOpenId?: string;
-  fetchMessage?: typeof getMessageFeishu;
-  verificationTimeoutMs?: number;
   logger?: (message: string) => void;
-  uuid?: () => string;
   action?: "created" | "deleted";
 };
 
 export async function resolveReactionSyntheticEvent(
   params: ResolveReactionSyntheticEventParams,
 ): Promise<FeishuMessageEvent | null> {
-  const {
-    cfg,
-    accountId,
-    event,
-    botOpenId,
-    fetchMessage = getMessageFeishu,
-    verificationTimeoutMs = FEISHU_REACTION_VERIFY_TIMEOUT_MS,
-    logger,
-    uuid = () => crypto.randomUUID(),
-    action = "created",
-  } = params;
+  const { cfg, accountId, event, botOpenId, logger, action = "created" } = params;
 
   const emoji = event.reaction_type?.emoji_type;
   const messageId = event.message_id;
@@ -103,9 +90,12 @@ export async function resolveReactionSyntheticEvent(
     return null;
   }
 
-  const reactedMsg = await raceWithTimeoutAndAbort(fetchMessage({ cfg, messageId, accountId }), {
-    timeoutMs: verificationTimeoutMs,
-  })
+  const reactedMsg = await raceWithTimeoutAndAbort(
+    getMessageFeishu({ cfg, messageId, accountId }),
+    {
+      timeoutMs: FEISHU_REACTION_VERIFY_TIMEOUT_MS,
+    },
+  )
     .then((result) => (result.status === "resolved" ? result.value : null))
     .catch(() => null);
   const isBotMessage = reactedMsg?.senderType === "app" || reactedMsg?.senderOpenId === botOpenId;
@@ -136,7 +126,7 @@ export async function resolveReactionSyntheticEvent(
       sender_type: "user",
     },
     message: {
-      message_id: `${messageId}:reaction:${emoji}:${uuid()}`,
+      message_id: `${messageId}:reaction:${emoji}:${crypto.randomUUID()}`,
       // Synthetic IDs are local-only; replies and topic routing must retain the real message facts.
       reply_target_message_id: messageId,
       typing_target_message_id: messageId,

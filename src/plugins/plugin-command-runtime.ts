@@ -14,12 +14,10 @@ import {
   pluginCommandSupportsChannel,
   projectPluginCommandNativeMetadata,
 } from "./plugin-command-metadata.js";
-import {
-  listRegisteredPluginCommands,
-  resolveSelectedPluginCommandRegistry,
-} from "./plugin-command-registry.js";
+import { listRegisteredPluginCommands } from "./plugin-command-registry.js";
 import { isPluginRegistryRetired } from "./registry-lifecycle.js";
 import type { PluginRecord, PluginRegistry } from "./registry-types.js";
+import { getPluginRegistryForContext } from "./runtime/gateway-request-scope.js";
 import type { PluginCommandContext, PluginCommandResult } from "./types.js";
 
 export { PLUGIN_COMMAND_DISPATCH };
@@ -187,7 +185,7 @@ export async function executePluginCommandDispatch(
 
 /** Creates one command runtime bound permanently to the current scoped registry generation. */
 export function createPluginCommandRuntime(): PluginCommandRuntime {
-  const registry = resolveSelectedPluginCommandRegistry();
+  const registry = getPluginRegistryForContext();
   if (!registry) {
     throw new Error("Plugin command runtime requires an active or request-scoped registry.");
   }

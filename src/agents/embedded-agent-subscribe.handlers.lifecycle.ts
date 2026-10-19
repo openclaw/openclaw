@@ -107,8 +107,7 @@ export function handleAgentEnd(
   // Classification must key on the same fact, otherwise a delivered reply is
   // recorded here as an abandoned, replay-invalid turn. Error and abort stop
   // reasons keep the streamed-only view because their raw text can describe an
-  // interrupted generation rather than a reply (mirrors
-  // resolveTerminalAssistantTexts).
+  // interrupted generation rather than a reply (mirrors attempt finalization).
   const hasStreamedAssistantVisibleText = ctx.state.assistantTexts.some((text) =>
     hasAssistantVisibleReply({ text }),
   );

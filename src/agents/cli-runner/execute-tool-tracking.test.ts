@@ -58,7 +58,7 @@ describe("CLI loopback ask_user deadline tracking", () => {
   it("keeps the deadline until Claude emits the correlated tool result", () => {
     const tracking = createTracking();
     const listener = vi.fn();
-    tracking.onActiveLoopbackAskUserDeadlineChange(listener);
+    tracking.setOnActiveLoopbackAskUserDeadlineChange(listener);
     const capture = startQuestion(tracking, "tool-1");
     expect(tracking.getActiveLoopbackAskUserDeadline()).toBe(Date.now() + 910_000);
     expect(listener).toHaveBeenCalledOnce();

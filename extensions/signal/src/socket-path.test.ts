@@ -1,13 +1,15 @@
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
-import { chmod, lstat, mkdir, realpath, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, symlink, writeFile } from "node:fs/promises";
 import { createServer, type Server } from "node:net";
-import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { useAutoCleanupTempDirTracker } from "openclaw/plugin-sdk/test-env";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { assertSignalSocketEndpoint, prepareSignalSocketPath } from "./socket-path.js";
+import {
+  assertSignalSocketEndpoint as assertEndpoint,
+  prepareSignalSocketPath as prepare,
+} from "./socket-path.js";
 
 const execFileAsync = promisify(execFile);
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
@@ -20,22 +22,29 @@ vi.mock("node:fs/promises", async (importOriginal) => {
   return { ...actual, lstat: fsMocks.lstat };
 });
 
-async function withSocket(socketPath: string, run: (server: Server) => Promise<void>) {
-  const server = createServer();
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(socketPath, resolve);
+function mockSocketStat(socketPath: string, property: "uid" | "ino", onRead?: number) {
+  let reads = 0;
+  fsMocks.lstat.mockImplementation(async (entryPath, ...args) => {
+    const stat = await fsMocks.actualLstat(entryPath, ...args);
+    if (entryPath !== socketPath || (onRead !== undefined && ++reads !== onRead)) {
+      return stat;
+    }
+    const value = property === "uid" ? (process.getuid?.() ?? 0) + 1 : Number(stat.ino) + 1;
+    return Object.assign(stat, { [property]: value });
   });
-  try {
-    await run(server);
-  } finally {
-    await new Promise<void>((resolve, reject) => {
-      server.close((error) => (error ? reject(error) : resolve()));
-    });
-  }
 }
 
-async function withStaleSocket(socketPath: string, run: () => Promise<void>) {
+const servers = new Set<Server>();
+async function listen(endpoint = socketPath) {
+  const server = createServer();
+  servers.add(server);
+  const listening = once(server, "listening");
+  server.listen(endpoint);
+  await listening;
+  return server;
+}
+
+async function createStaleSocket() {
   const child = spawn(
     process.execPath,
     [
@@ -47,10 +56,6 @@ async function withStaleSocket(socketPath: string, run: () => Promise<void>) {
   );
   try {
     await once(child.stdout, "data");
-    const exit = once(child, "exit");
-    child.kill("SIGKILL");
-    await exit;
-    await run();
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
       const exit = once(child, "exit");
@@ -60,45 +65,43 @@ async function withStaleSocket(socketPath: string, run: () => Promise<void>) {
   }
 }
 
+let root: string;
+let socketPath: string;
+beforeEach(() => {
+  root = tempDirs.make("oc-sig-");
+  socketPath = path.join(root, "rpc");
+});
+afterEach(async () => {
+  for (const server of servers) {
+    await promisify(server.close.bind(server))();
+  }
+  servers.clear();
+  fsMocks.lstat.mockImplementation(fsMocks.actualLstat);
+});
+
 describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary", () => {
-  let root: string;
-  beforeEach(async () => {
-    root = tempDirs.make("oc-sig-", await realpath(os.tmpdir()));
-  });
-  afterEach(() => {
-    fsMocks.lstat.mockImplementation(fsMocks.actualLstat);
-  });
-
   it("creates a private immediate parent and accepts only an owned socket endpoint", async () => {
-    const socketPath = path.join(root, "private", "rpc");
-    await prepareSignalSocketPath(socketPath);
+    socketPath = path.join(root, "private", "rpc");
+    await prepare(socketPath);
     expect((await lstat(path.dirname(socketPath))).mode & 0o777).toBe(0o700);
-    await withSocket(socketPath, async (server) => {
-      await expect(assertSignalSocketEndpoint(socketPath)).resolves.toBeUndefined();
-      await expect(prepareSignalSocketPath(socketPath)).rejects.toThrow("already exists");
-      expect(server.listening).toBe(true);
-    });
+    const server = await listen(socketPath);
+    await expect(assertEndpoint(socketPath)).resolves.toBeUndefined();
+    await expect(prepare(socketPath)).rejects.toThrow("already exists");
+    expect(server.listening).toBe(true);
   });
 
-  it.each([
-    { mode: 0o755, privateChild: false },
-    { mode: 0o770, privateChild: false },
-    { mode: 0o777, privateChild: true },
-  ])(
-    "rejects nonprivate directories ($mode, child=$privateChild) without changing permissions",
-    async ({ mode, privateChild }) => {
+  it.each([0o755, 0o770, 0o777])(
+    "preserves nonprivate directory permissions (%s)",
+    async (mode) => {
+      const privateChild = mode === 0o777;
       const parent = privateChild ? path.join(root, "private") : root;
       if (privateChild) {
         await mkdir(parent, { mode: 0o700 });
       }
       await chmod(root, mode);
-      if (privateChild) {
-        await expect(assertSignalSocketEndpoint(path.join(parent, "rpc"))).rejects.toThrow(
-          "ancestors",
-        );
-      } else {
-        await expect(prepareSignalSocketPath(path.join(parent, "rpc"))).rejects.toThrow();
-      }
+      await expect(
+        (privateChild ? assertEndpoint : prepare)(path.join(parent, "rpc")),
+      ).rejects.toThrow(privateChild ? "ancestors" : undefined);
       expect((await lstat(root)).mode & 0o777).toBe(mode);
     },
   );
@@ -107,102 +110,54 @@ describe.skipIf(process.platform === "win32")("Signal socket filesystem boundary
     const target = path.join(root, "target");
     await mkdir(target, { mode: 0o700 });
     await symlink(target, path.join(root, "alias"));
-    await expect(prepareSignalSocketPath(path.join(root, "alias", "rpc"))).rejects.toThrow(
-      "symlinks",
-    );
+    await expect(prepare(path.join(root, "alias", "rpc"))).rejects.toThrow("symlinks");
     expect((await lstat(target)).mode & 0o777).toBe(0o700);
   });
 
-  it("preserves existing files and rejects them as socket endpoints", async () => {
-    const socketPath = path.join(root, "rpc");
+  it.each([false, true])("preserves existing files (cancelled=%s)", async (cancelled) => {
     await writeFile(socketPath, "not a socket");
-    await expect(prepareSignalSocketPath(socketPath)).rejects.toThrow("already exists");
-    await expect(assertSignalSocketEndpoint(socketPath)).rejects.toThrow("must name a socket");
+    const abort = new AbortController();
+    if (cancelled) {
+      abort.abort(new Error("cancelled"));
+    }
+    await expect(prepare(socketPath, abort.signal)).rejects.toThrow(
+      cancelled ? "cancelled" : "already exists",
+    );
+    if (!cancelled) {
+      await expect(assertEndpoint(socketPath)).rejects.toThrow("must name a socket");
+    }
     expect((await lstat(socketPath)).isFile()).toBe(true);
   });
 
   it("rejects a socket endpoint reported as owned by another uid", async () => {
-    const socketPath = path.join(root, "rpc");
-    await withSocket(socketPath, async () => {
-      fsMocks.lstat.mockImplementation(async (entryPath, ...args) => {
-        const stat = await fsMocks.actualLstat(entryPath, ...args);
-        if (entryPath !== socketPath) {
-          return stat;
-        }
-        return new Proxy(stat, {
-          get: (target, property, receiver) =>
-            property === "uid"
-              ? (process.getuid?.() ?? 0) + 1
-              : Reflect.get(target, property, receiver),
-        });
-      });
-      await expect(assertSignalSocketEndpoint(socketPath)).rejects.toThrow(
-        "socket owned by the current user",
-      );
-    });
+    await listen();
+    mockSocketStat(socketPath, "uid");
+    await expect(assertEndpoint(socketPath)).rejects.toThrow("socket owned by the current user");
   });
 
-  it.each([false, true])(
-    "recovers only an unchanged stale owned socket (replaced=%s)",
-    async (replaced) => {
-      const socketPath = path.join(root, "rpc");
-      await withStaleSocket(socketPath, async () => {
-        expect((await lstat(socketPath)).isSocket()).toBe(true);
-        let endpointStats = 0;
-        if (replaced) {
-          fsMocks.lstat.mockImplementation(async (entryPath, ...args) => {
-            const stat = await fsMocks.actualLstat(entryPath, ...args);
-            if (entryPath !== socketPath || ++endpointStats !== 2) {
-              return stat;
-            }
-            return new Proxy(stat, {
-              get: (target, property, receiver) =>
-                property === "ino"
-                  ? Number(target.ino) + 1
-                  : Reflect.get(target, property, receiver),
-            });
-          });
-        }
-        const preparation = prepareSignalSocketPath(socketPath);
-        if (replaced) {
-          await expect(preparation).rejects.toThrow("changed during its ownership check");
-          expect((await fsMocks.actualLstat(socketPath)).isSocket()).toBe(true);
-        } else {
-          await expect(preparation).resolves.toBeUndefined();
-          await expect(lstat(socketPath)).rejects.toMatchObject({ code: "ENOENT" });
-        }
-      });
-    },
-  );
-
-  it("does not probe or remove an existing socket when startup was cancelled", async () => {
-    const socketPath = path.join(root, "rpc");
-    await writeFile(socketPath, "preserve");
-    const abort = new AbortController();
-    abort.abort(new Error("cancelled"));
-    await expect(prepareSignalSocketPath(socketPath, abort.signal)).rejects.toThrow("cancelled");
-    expect((await lstat(socketPath)).isFile()).toBe(true);
+  it.each([false, true])("recovers stale sockets (replaced=%s)", async (replaced) => {
+    await createStaleSocket();
+    expect((await lstat(socketPath)).isSocket()).toBe(true);
+    if (replaced) {
+      mockSocketStat(socketPath, "ino", 2);
+    }
+    const preparation = prepare(socketPath);
+    if (replaced) {
+      await expect(preparation).rejects.toThrow("changed during its ownership check");
+      expect((await fsMocks.actualLstat(socketPath)).isSocket()).toBe(true);
+    } else {
+      await expect(preparation).resolves.toBeUndefined();
+      await expect(lstat(socketPath)).rejects.toMatchObject({ code: "ENOENT" });
+    }
   });
 
   it("rejects traversal syntax and oversized paths before creating anything", async () => {
-    await expect(prepareSignalSocketPath(`${root}/child/../rpc`)).rejects.toThrow(
-      "normalized absolute",
-    );
-    await expect(prepareSignalSocketPath(`${root}/${"x".repeat(104)}`)).rejects.toThrow(
-      "103 UTF-8 bytes",
-    );
+    await expect(prepare(`${root}/child/../rpc`)).rejects.toThrow("normalized absolute");
+    await expect(prepare(`${root}/${"x".repeat(104)}`)).rejects.toThrow("103 UTF-8 bytes");
   });
 });
 
 describe.skipIf(process.platform !== "darwin")("Signal socket macOS ACL boundary", () => {
-  let root: string;
-  beforeEach(async () => {
-    root = tempDirs.make("oc-sig-acl-", await realpath(os.tmpdir()));
-  });
-  afterEach(() => {
-    fsMocks.lstat.mockImplementation(fsMocks.actualLstat);
-  });
-
   it.each([false, true])("rejects parent ACL access (inherited=%s)", async (inherited) => {
     await execFileAsync("/bin/chmod", [
       "+a",
@@ -210,7 +165,7 @@ describe.skipIf(process.platform !== "darwin")("Signal socket macOS ACL boundary
       root,
     ]);
     const parent = inherited ? path.join(root, "private") : root;
-    await expect(prepareSignalSocketPath(path.join(parent, "rpc"))).rejects.toThrow("ACL access");
+    await expect(prepare(path.join(parent, "rpc"))).rejects.toThrow("ACL access");
     if (inherited) {
       await expect(lstat(parent)).rejects.toMatchObject({ code: "ENOENT" });
     } else {
@@ -219,10 +174,8 @@ describe.skipIf(process.platform !== "darwin")("Signal socket macOS ACL boundary
   });
 
   it("rejects a socket endpoint with an access-granting ACL", async () => {
-    const socketPath = path.join(root, "rpc");
-    await withSocket(socketPath, async () => {
-      await execFileAsync("/bin/chmod", ["+a", "everyone allow write", socketPath]);
-      await expect(assertSignalSocketEndpoint(socketPath)).rejects.toThrow("ACL access");
-    });
+    await listen();
+    await execFileAsync("/bin/chmod", ["+a", "everyone allow write", socketPath]);
+    await expect(assertEndpoint(socketPath)).rejects.toThrow("ACL access");
   });
 });

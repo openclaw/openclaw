@@ -152,9 +152,15 @@ export function ensureMemoryChunkFtsTriggers(db: DatabaseSync): void {
   }
 }
 
-export function rebuildMemoryChunkFts(db: DatabaseSync, ftsTable: string): void {
+export function rebuildMemoryChunkFts(
+  db: DatabaseSync,
+  ftsTable: string,
+  options: { fresh?: boolean } = {},
+): void {
+  if (!options.fresh) {
+    db.exec(`DELETE FROM ${ftsTable}`);
+  }
   db.exec(`
-    DELETE FROM ${ftsTable};
     INSERT INTO ${ftsTable} (
       rowid, text, id, path, source, model, start_line, end_line
     )
@@ -196,6 +202,7 @@ export function backfillMemoryPathFtsRows(db: DatabaseSync): void {
 export function admitSqliteMemoryTextSearch(
   db: DatabaseSync,
   definition: SearchSchema,
+  options: { fresh?: true } = {},
 ): SearchSchema {
   const body = definition.text!.body!;
   const ftsTable =
@@ -227,7 +234,9 @@ export function admitSqliteMemoryTextSearch(
       db.exec(buildSqliteMemoryBodyFtsSchema({ tableName: ftsTable, tokenizer }));
     }
     // Installing rowid maintenance owns the one-time rebuild of pre-rowid indexes.
-    reconcileMemoryChunkFtsRows(db, ftsTable, !bodyTriggersMatch);
+    if (!options.fresh) {
+      reconcileMemoryChunkFtsRows(db, ftsTable, !bodyTriggersMatch);
+    }
     if (canonical && (bodyStatus !== "matching" || !bodyTriggersMatch)) {
       if (bodyStatus === "matching") {
         dropMemoryChunkFtsTriggers(db);
@@ -239,7 +248,9 @@ export function admitSqliteMemoryTextSearch(
       if (pathStatus !== "matching") {
         db.exec(buildSqliteMemoryPathFtsSchema({ tokenizer }));
       }
-      backfillMemoryPathFtsRows(db);
+      if (!options.fresh) {
+        backfillMemoryPathFtsRows(db);
+      }
       if (pathStatus !== "matching" || !pathTriggersMatch) {
         if (pathStatus === "matching") {
           dropMemoryPathFtsTriggers(db);

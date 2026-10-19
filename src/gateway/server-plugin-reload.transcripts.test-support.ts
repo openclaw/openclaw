@@ -99,6 +99,7 @@ export async function startTranscriptReloadFixtureSidecars(
       dispatchAgent: unusedRecovery,
       waitForAgent: unusedRecovery,
       sendRecoveryNotice: unusedRecovery,
+      resumeChatInput: unusedRecovery,
     },
     resolveGatewayContext: () => undefined,
     logHooks: log,

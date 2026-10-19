@@ -8,6 +8,7 @@ import { DEFAULT_AGENTS_FILENAME } from "../agents/workspace.js";
 import { safeRealpathSync } from "../infra/boundary-path.js";
 import { formatErrorMessage } from "../infra/errors.js";
 import { findGitRoot } from "../infra/git-root.js";
+import { statIfExists as statPathIfExists } from "../infra/path-existence.js";
 import {
   CANONICAL_ROOT_MEMORY_FILENAME,
   LEGACY_ROOT_MEMORY_FILENAME,
@@ -83,15 +84,8 @@ export async function shouldSuggestMemorySystem(workspaceDir: string): Promise<b
 }
 
 async function statIfExists(filePath: string) {
-  try {
-    const stat = await fs.promises.stat(filePath);
-    return stat.isFile() ? { exists: true, bytes: stat.size } : { exists: false };
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException | undefined)?.code === "ENOENT") {
-      return { exists: false };
-    }
-    throw err;
-  }
+  const stat = await statPathIfExists(filePath);
+  return stat?.isFile() ? { exists: true, bytes: stat.size } : { exists: false };
 }
 
 async function listWorkspaceEntries(workspaceDir: string): Promise<Set<string>> {

@@ -1,7 +1,7 @@
 // Verifies GitHub Copilot profile token fallback and implicit provider planning.
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
-import { resolveImplicitProviders } from "./models-config.providers.js";
+import { resolveImplicitProviders } from "./models-config.providers.implicit.js";
 import { createProviderAuthResolver } from "./models-config.providers.secrets.js";
 
 vi.mock("./model-auth-env.js", () => ({
@@ -26,11 +26,24 @@ vi.mock("../plugins/provider-runtime.js", () => ({
   resolveProviderSyntheticAuthWithPlugin: () => undefined,
 }));
 
-vi.mock("./models-config.providers.js", () => ({
+vi.mock("./models-config.providers.catalog.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-config.providers.catalog.js")>()),
   materializeConfiguredProviderCatalogModels: (providers: unknown) => providers,
-  enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,
   normalizeProviderCatalogModelsForConfig: (providers: unknown) => providers,
+}));
+
+vi.mock("./models-config.providers.source-managed.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-config.providers.source-managed.js")>()),
+  enforceSourceManagedProviderSecrets: ({ providers }: { providers: unknown }) => providers,
+}));
+
+vi.mock("./models-config.providers.normalize.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-config.providers.normalize.js")>()),
   normalizeProviders: ({ providers }: { providers: unknown }) => providers,
+}));
+
+vi.mock("./models-config.providers.implicit.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./models-config.providers.implicit.js")>()),
   resolveImplicitProviders: vi.fn(),
 }));
 
