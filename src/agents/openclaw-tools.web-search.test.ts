@@ -47,6 +47,45 @@ afterEach(() => {
 
 describe("unconfigured web search tool surface", () => {
   it.each([
+    { model: "gpt-5.4", profile: undefined, expected: "openai:configured" },
+    { model: "gpt-5.4", profile: "openai:selected", expected: "openai:selected" },
+    { model: "gpt-5.5", profile: undefined, expected: undefined },
+  ])(
+    "retains the selected credential owner through search execution ($model, $profile)",
+    async ({ model, profile, expected }) => {
+      const execute = vi.fn(async () => ({ results: [] }));
+      resolveProviders.mockReturnValue([
+        createWebSearchTestProvider({
+          pluginId: "test-search",
+          id: "test-search",
+          requiresCredential: false,
+          credentialPath: "plugins.entries.test-search.config.apiKey",
+          createTool: () => ({ description: "Fixture search", parameters: {}, execute }),
+        }),
+      ]);
+      const tools = await createOpenClawToolsAsync({
+        config: {
+          agents: { defaults: { model: "openai/gpt-5.4@openai:configured" } },
+          tools: { web: { search: { provider: "test-search" } } },
+        },
+        webSearchModelSelection: { provider: "openai", model, authProfileId: profile },
+        disableMessageTool: true,
+        disablePluginTools: true,
+        wrapBeforeToolCallHook: false,
+      });
+      const search = tools.find((tool) => tool.name === "web_search");
+      expect(search).toBeDefined();
+      await search?.execute("selected-search", { query: "synthetic query" });
+      expect(execute).toHaveBeenCalledWith(
+        expect.objectContaining({ query: "synthetic query" }),
+        expect.objectContaining({
+          modelSelection: { provider: "openai", model, authProfileId: expected },
+        }),
+      );
+    },
+  );
+
+  it.each([
     { label: "unconfigured", config: {}, expected: false, fact: false },
     {
       label: "configured",

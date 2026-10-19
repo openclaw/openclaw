@@ -83,7 +83,11 @@ export type ResearchResult = {
     tokensComplete: boolean;
   };
   providerCitations?: Array<{ url: string; title?: string; startByte?: number; endByte?: number }>;
-  route: { model: string; runtime: "direct-provider" | "managed-service" };
+  route: {
+    model: string;
+    runtime: "direct-provider" | "isolated-agent-runtime" | "managed-service" | "unobserved";
+    owner?: { kind: "provider" | "cli" | "harness"; id: string };
+  };
 };
 
 export const researchToolSchema = Type.Union([
@@ -110,6 +114,6 @@ export const researchToolDefinition = {
   name: "deep_research",
   label: "Deep Research",
   description:
-    "Start, inspect, resume or cancel evidence-backed research. Portable uses ordinary API completions and configured web tools; Google uses an explicitly activated managed research service. Reuse the same idempotency key for a retried start. Results include honest gaps and route-specific evidence.",
+    "Start, inspect, resume or cancel evidence-backed research. Portable uses the configured isolated model runtime (explicit OAuth-only uses direct completion) and configured web tools; Google uses an explicitly activated managed research service. Reuse the same idempotency key for a retried start. Results include honest gaps and route-specific evidence.",
   parameters: researchToolSchema,
 };

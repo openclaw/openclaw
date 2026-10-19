@@ -578,7 +578,14 @@ export async function runWebSearch(params: RunWebSearchParams): Promise<RunWebSe
         args: params.args,
         signal: params.signal,
         assertCurrent: assertRequestCurrent,
-        allowFallback,
+        modelSelection: params.modelSelection,
+        // A pinned model credential must not fund a different search provider on failure.
+        allowFallback:
+          allowFallback &&
+          !(
+            params.modelSelection?.authProfileId &&
+            candidates[0]?.authProviderId === params.modelSelection.provider
+          ),
       }),
   );
 }

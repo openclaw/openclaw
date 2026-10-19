@@ -603,37 +603,53 @@ describe("web search runtime", () => {
     });
   });
 
-  it("falls back to another provider when auto-selected search execution fails", async () => {
-    resolveRuntimeWebSearchProvidersMock.mockReturnValue([
-      createGoogleSearchProvider({
-        createTool: () => ({
-          description: "google",
-          parameters: {},
-          execute: async () => {
-            throw new Error("google aborted");
-          },
+  it.each([false, true])(
+    "only permits automatic search fallback without a pinned model profile (%s)",
+    async (pinned) => {
+      resolveRuntimeWebSearchProvidersMock.mockReturnValue([
+        createGoogleSearchProvider({
+          authProviderId: "google",
+          createTool: () => ({
+            description: "google",
+            parameters: {},
+            execute: async () => {
+              throw new Error("google aborted");
+            },
+          }),
         }),
-      }),
-      createWebSearchTestProvider({
-        pluginId: "backup-search",
-        id: "backup",
-        credentialPath: "tools.web.search.backup.apiKey",
-        autoDetectOrder: 2,
-        getConfiguredCredentialValue: () => "backup-configured",
-        getCredentialValue: () => "backup-configured",
-      }),
-    ]);
+        createWebSearchTestProvider({
+          pluginId: "backup-search",
+          id: "backup",
+          credentialPath: "tools.web.search.backup.apiKey",
+          autoDetectOrder: 2,
+          getConfiguredCredentialValue: () => "backup-configured",
+          getCredentialValue: () => "backup-configured",
+        }),
+      ]);
 
-    await expect(
-      runWebSearch({
+      const result = runWebSearch({
         config: {},
         args: { query: "fallback" },
-      }),
-    ).resolves.toEqual({
-      provider: "backup",
-      result: { query: "fallback", provider: "backup" },
-    });
-  });
+        ...(pinned
+          ? {
+              modelSelection: {
+                provider: "google",
+                model: "gemini-test",
+                authProfileId: "google:research",
+              },
+            }
+          : {}),
+      });
+      if (pinned) {
+        await expect(result).rejects.toThrow("google aborted");
+      } else {
+        await expect(result).resolves.toEqual({
+          provider: "backup",
+          result: { query: "fallback", provider: "backup" },
+        });
+      }
+    },
+  );
 
   it("falls back when an auto-selected provider returns a structured error payload", async () => {
     resolveRuntimeWebSearchProvidersMock.mockReturnValue([

@@ -1,7 +1,10 @@
 // Web search provider execution owns cancellation precedence and automatic fallback.
 import { isTrustedToolExecutionPreflightError } from "../agents/tool-result-error.js";
 import type { OpenClawConfig } from "../config/types.openclaw.js";
-import type { PluginWebSearchProviderEntry } from "../plugins/web-provider-types.js";
+import type {
+  PluginWebSearchProviderEntry,
+  WebSearchProviderToolExecutionContext,
+} from "../plugins/web-provider-types.js";
 import type { RuntimeWebSearchMetadata } from "../secrets/runtime-web-tools.types.js";
 import { isMissingCredentialCode, WebSearchProviderError } from "./runtime-error.js";
 import type { RunWebSearchResult } from "./runtime-types.js";
@@ -16,6 +19,7 @@ type ExecuteWebSearchCandidatesParams = {
   signal?: AbortSignal;
   assertCurrent?: () => void;
   allowFallback: boolean;
+  modelSelection?: WebSearchProviderToolExecutionContext["modelSelection"];
 };
 
 function isStructuredAvailabilityError(
@@ -52,6 +56,7 @@ export async function executeWebSearchCandidates(
       }
       const executed = await definition.execute(params.args, {
         signal: params.signal,
+        ...(params.modelSelection ? { modelSelection: params.modelSelection } : {}),
         ...(params.assertCurrent ? { assertCurrent: params.assertCurrent } : {}),
       });
       // Cancellation wins races with provider completion or cleanup failures. Otherwise an

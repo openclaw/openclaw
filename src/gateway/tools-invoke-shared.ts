@@ -12,6 +12,7 @@ import { runBeforeToolCallHook } from "../agents/agent-tools.before-tool-call.js
 import { resolveToolLoopDetectionConfig } from "../agents/agent-tools.js";
 import { getChannelAgentToolMeta } from "../agents/channel-tool-metadata.js";
 import { readEmbeddedMessageDeliveryFact } from "../agents/embedded-agent-message-delivery.js";
+import { resolveSessionModelRef } from "../agents/session-model-ref.js";
 import { resolveIngressWorkspaceOverrideForSessionRun } from "../agents/spawned-context.js";
 import { isKnownCoreToolId } from "../agents/tool-catalog.js";
 import { resolveStoredSessionPermissionPolicy } from "../agents/tool-fs-policy.js";
@@ -495,6 +496,7 @@ async function invokeGatewayToolWithSignal(
     sessionEntry,
     sessionWorkspace,
   );
+  const searchModel = resolveSessionModelRef(params.cfg, sessionEntry, selectedAgentId);
   const resolveTools = (disablePluginTools: boolean) =>
     resolveGatewayScopedTools({
       cfg: params.cfg,
@@ -503,6 +505,10 @@ async function invokeGatewayToolWithSignal(
       sessionPermissionPolicy,
       preparedSessionWorkspaceDir: sessionWorkspace,
       agentId: selectedAgentId,
+      webSearchModelSelection: {
+        ...searchModel,
+        authProfileId: sessionEntry?.authProfileOverride,
+      },
       messageProvider: params.messageChannel,
       accountId: params.accountId,
       agentTo: params.agentTo,

@@ -16,6 +16,21 @@ function candidate(id: string, execute: WebSearchProviderToolDefinition["execute
 }
 
 describe("executeWebSearchCandidates", () => {
+  it("carries host model/profile selection independently of model-authored arguments", async () => {
+    const execute = vi.fn(async () => ({ results: [] }));
+    const modelSelection = {
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:research",
+    };
+    await executeWebSearchCandidates({
+      candidates: [candidate("codex", execute)],
+      args: { query: "synthetic query", modelSelection: { authProfileId: "wrong" } },
+      modelSelection,
+      allowFallback: false,
+    });
+    expect(execute).toHaveBeenCalledWith(expect.any(Object), { signal: undefined, modelSelection });
+  });
   it.each([
     new ToolAuthorizationError("Search is not authorized for this run"),
     new SecretSurfaceUnavailableError({

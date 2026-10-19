@@ -1,11 +1,19 @@
 # Deep Research
 
 A default-enabled, lazy bundled research tool. Existing plugin allowlists and tool policy still apply. Disable it with `plugins.entries.deep-research.enabled: false`.
-Supply a question; the host selects its configured API model. An explicit model
-override requires the existing plugin LLM policy permission. An optional
-`requiredAuthMode: "oauth"` refuses other credential modes through the auth owner.
-The controller uses ordinary `llm.complete` calls and existing policy-checked
-`web_search` / `web_fetch` tools. It does not run Codex or require function calling.
+Supply a question; the host selects its configured model and isolated agent runtime.
+An explicit model override requires the existing plugin LLM policy permission.
+The controller uses `llm.complete` with `execution.mode: "isolated-agent-runtime"`
+and existing policy-checked `web_search` / `web_fetch` tools. A selected Codex
+runtime executes bounded native turns, not a managed research service. Unsupported
+native routes produce an explicit partial result; there is no direct fallback.
+The optional `requiredAuthMode: "oauth"` retains the host's explicit direct-only
+completion contract and refuses other credential modes. It is never dropped to
+force native execution. Results report the actual returned runtime and owner;
+`unobserved` means no completion supplied runtime evidence. Hosted search uses
+the originating session's selected model/profile when its provider matches,
+independently of a research-only model override. Search URLs are discovery only;
+source evidence still requires a separate fetch.
 
 The result contains source text, content fingerprints, quote-linked findings,
 reported token usage, and explicit gaps. Failed branches, invalid citations, no

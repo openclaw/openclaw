@@ -728,7 +728,13 @@ describe("tools.invoke Gateway RPC", () => {
     setMainAllowedTools({ allow: ["terminal"], gatewayAllow: ["terminal"] });
     cfg = { ...cfg, tools: { exec: { mode: "deny" } } };
     const sessionKey = "agent:main:main";
-    sessionEntries.set(sessionKey, { sessionId: "S2" });
+    sessionEntries.set(sessionKey, {
+      sessionId: "S2",
+      providerOverride: "openai",
+      modelOverride: "gpt-5.4",
+      modelOverrideRouteResolution: "resolved",
+      authProfileOverride: "openai:research",
+    });
     const oldPty = makeFakePty();
     const currentPty = makeFakePty();
     const ptys = [oldPty, currentPty];
@@ -762,7 +768,15 @@ describe("tools.invoke Gateway RPC", () => {
         );
       const listed = await invokeTerminal({ action: "list" });
       expect(listed?.[1]?.ok).toBe(true);
-      expect(lastCreateOpenClawToolsContext?.sessionId).toBe("S2");
+      expect(lastCreateOpenClawToolsContext).toMatchObject({
+        sessionId: "S2",
+        webSearchModelSelection: {
+          provider: "openai",
+          model: "gpt-5.4",
+          authProfileId: "openai:research",
+        },
+      });
+      expect(lastCreateOpenClawToolsContext?.modelProvider).toBeUndefined();
       expect(listed?.[1]?.output).toMatchObject({
         details: { sessions: [expect.objectContaining({ sessionId: currentSession.sessionId })] },
       });

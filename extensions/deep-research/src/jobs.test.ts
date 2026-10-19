@@ -622,7 +622,7 @@ describe("research recovery fault injection", () => {
       }
     },
   );
-  it("does not repeat a paid portable operation interrupted before its receipt was saved", async () => {
+  it("does not repeat a native portable operation interrupted before its receipt was saved", async () => {
     const { jobs, api, runtime, scheduler, context, readStore } = await fixture();
     const entered = Promise.withResolvers<void>();
     const pendingResponse =
@@ -634,8 +634,8 @@ describe("research recovery fault injection", () => {
       agentId: "main",
       usage: { totalTokens: 10 },
       execution: {
-        mode: "direct-provider" as const,
-        owner: { kind: "provider" as const, id: "example" },
+        mode: "isolated-agent-runtime" as const,
+        owner: { kind: "harness" as const, id: "codex" },
       },
       audit: { caller: { kind: "plugin" as const, id: "deep-research" } },
     });
@@ -776,7 +776,7 @@ describe("research recovery fault injection", () => {
     expect((await jobs.run(job, context)).state).toBe("completed");
   });
 
-  it("replays retained portable evidence after the deadline without new paid calls", async () => {
+  it("replays retained native portable evidence after the deadline without new paid calls", async () => {
     const { jobs, api, runtime, scheduler, context, readStore } = await fixture();
     const quote = "The measured river length is twelve kilometers.";
     const modelResponse = (value: unknown) => ({
@@ -786,8 +786,8 @@ describe("research recovery fault injection", () => {
       agentId: "main",
       usage: { totalTokens: 10 },
       execution: {
-        mode: "direct-provider" as const,
-        owner: { kind: "provider" as const, id: "example" },
+        mode: "isolated-agent-runtime" as const,
+        owner: { kind: "harness" as const, id: "codex" },
       },
       audit: { caller: { kind: "plugin" as const, id: "deep-research" } },
     });
@@ -818,6 +818,11 @@ describe("research recovery fault injection", () => {
       context,
     );
     expect(first.state).toBe("completed");
+    expect(first.result?.route).toEqual({
+      model: "example/research-model",
+      runtime: "isolated-agent-runtime",
+      owner: { kind: "harness", id: "codex" },
+    });
     const { result: _result, ...retained } = first;
     await readStore().register(first.id, {
       ...retained,
@@ -833,6 +838,12 @@ describe("research recovery fault injection", () => {
       "Global research deadline exhausted; only recorded evidence was replayed, with no new calls.",
     );
     expect(complete).toHaveBeenCalledTimes(3);
+    expect(resumed.result?.route).toEqual(first.result?.route);
+    expect(
+      complete.mock.calls.every(
+        ([request]) => request.execution?.mode === "isolated-agent-runtime",
+      ),
+    ).toBe(true);
   });
 
   it("starts a queued portable budget on admission and returns a report even with no old receipts", async () => {

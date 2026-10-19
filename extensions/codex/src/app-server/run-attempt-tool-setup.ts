@@ -373,6 +373,7 @@ export async function prepareCodexAttemptTools(runtime: CodexAttemptRuntime) {
       senderIsOwner: params.senderIsOwner,
       modelProvider: params.provider,
       modelId: params.modelId,
+      modelAuthProfileId: params.authProfileId,
       modelApi: params.model.api,
       modelContextWindowTokens: params.model.contextWindow,
       modelHasVision: params.model.input?.includes("image") ?? false,

@@ -26,9 +26,14 @@ export async function executeCodexWebSearchProviderTool(
 ): Promise<Record<string, unknown>> {
   const query = readStringParam(args, "query", { required: true });
   const start = Date.now();
+  const selected =
+    executionContext?.modelSelection?.provider === "openai"
+      ? executionContext.modelSelection
+      : undefined;
   const result = await runBoundedCodexAppServerTurn({
     config: ctx.config,
-    model: { mode: "live-default" },
+    model: selected ? { mode: "required", id: selected.model } : { mode: "live-default" },
+    profile: selected?.authProfileId,
     modelProvider: "openai",
     timeoutMs: resolveSearchTimeoutSeconds(ctx.searchConfig as SearchConfigRecord) * 1_000,
     signal: executionContext?.signal,

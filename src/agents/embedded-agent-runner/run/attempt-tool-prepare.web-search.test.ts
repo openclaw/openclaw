@@ -244,6 +244,7 @@ describe("prepared missing-search guidance", () => {
         agentDir: state.agentDir(),
         modelId: "test-model",
         provider: scenario.native ? "openai" : "anthropic",
+        authProfileId: "selected-search-profile",
         model: makeProviderModelFixture({
           id: "test-model",
           provider: scenario.native ? "openai" : "anthropic",
@@ -268,6 +269,9 @@ describe("prepared missing-search guidance", () => {
         toolSearchCatalogExecutor: async () => ({ content: [], details: {} }),
       });
       expect(hoisted.createOpenClawCodingToolsMock).toHaveBeenCalledTimes(1);
+      expect(hoisted.createOpenClawCodingToolsMock.mock.calls[0]?.[0]?.modelAuthProfileId).toBe(
+        "selected-search-profile",
+      );
       expect(result.webSearchUnconfigured).toBe(scenario.expected);
       // A disabled factory does not report configuration. Reset must clear the previous fact,
       // rather than relying on a later callback to overwrite it.

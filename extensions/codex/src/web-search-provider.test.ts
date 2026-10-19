@@ -131,6 +131,33 @@ function searchFixture(options?: Parameters<typeof createFakeClient>[0], pluginC
 }
 
 describe("codex web search provider", () => {
+  it("uses the selected model and exact profile instead of the native default", async () => {
+    const { client, requests } = createFakeClient({
+      models: [baseModel("gpt-5.5"), baseModel("gpt-5.4")],
+    });
+    let selectedProfile: string | null | undefined;
+    const provider = createCodexWebSearchProvider({
+      clientFactory: async (options) => {
+        selectedProfile = options?.authProfileId;
+        return client;
+      },
+    });
+    const result = await createSearchTool(provider)?.execute(
+      { query },
+      {
+        modelSelection: { provider: "openai", model: "gpt-5.4", authProfileId: "openai:research" },
+      },
+    );
+    expect(selectedProfile).toBe("openai:research");
+    expect(requests.find((request) => request.method === "thread/start")?.params).toMatchObject({
+      model: "gpt-5.4",
+      modelProvider: "openai",
+    });
+    expect(result).toMatchObject({
+      model: "gpt-5.4",
+      citations: [{ url: "https://example.com/source", title: "Source" }],
+    });
+  });
   it("registers a selectable keyless provider contract", () => {
     const provider = createContractCodexWebSearchProvider();
 

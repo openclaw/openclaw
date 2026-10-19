@@ -65,6 +65,7 @@ export type McpLoopbackRequestContext = {
   cwd?: string;
   modelProvider?: string;
   modelId?: string;
+  webSearchModelSelection?: import("../plugins/web-provider-types.js").WebSearchProviderToolExecutionContext["modelSelection"];
   /** Prepared current-turn identity supplied only by the Gateway-launched run owner. */
   requesterModel?: ProviderModelRef;
   modelHasVision?: boolean;

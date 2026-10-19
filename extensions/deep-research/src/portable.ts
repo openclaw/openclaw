@@ -13,7 +13,7 @@ export type ResearchIO = {
   complete: (
     prompt: string,
     signal: AbortSignal,
-  ) => Promise<{ text: string; tokens?: number; model?: string }>;
+  ) => Promise<{ text: string; tokens?: number; model?: string; route?: ResearchResult["route"] }>;
   search: (query: string, signal: AbortSignal) => Promise<Array<{ url: string; title: string }>>;
   fetch: (
     url: string,
@@ -162,7 +162,10 @@ export async function runPortableResearch(
   const gaps: string[] = [];
   const seenUrls = new Set<string>();
   const seenQueries = new Set<string>();
-  let selectedModel = request.model ?? "host-default";
+  let route: ResearchResult["route"] = {
+    model: request.model ?? "host-default",
+    runtime: "unobserved",
+  };
   let status: ResearchResult["status"] = "completed";
   const current = () => {
     signal.throwIfAborted();
@@ -186,8 +189,20 @@ export async function runPortableResearch(
       throw new ModelUnavailable("The model did not produce a complete response.");
     }
     current();
-    if (result.model) {
-      selectedModel = result.model;
+    if (result.route) {
+      if (
+        route.runtime !== "unobserved" &&
+        (route.runtime !== result.route.runtime ||
+          route.owner?.id !== result.route.owner?.id ||
+          route.model !== result.route.model)
+      ) {
+        gaps.push(
+          "Model execution changed between research steps; route shows the last observed execution.",
+        );
+      }
+      route = result.route;
+    } else if (result.model) {
+      route = { model: result.model, runtime: "unobserved" };
     }
     if (result.tokens === undefined) {
       usage.tokensComplete = false;
@@ -435,6 +450,6 @@ export async function runPortableResearch(
       "Source policy filters selected evidence; it is not a network firewall.",
     ],
     usage,
-    route: { model: selectedModel, runtime: "direct-provider" },
+    route,
   };
 }

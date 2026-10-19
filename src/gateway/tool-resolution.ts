@@ -357,6 +357,7 @@ export async function resolveGatewayScopedTools(
     sessionConfigSource: "runtime" as const,
     modelProvider: params.modelProvider,
     modelId: params.modelId,
+    webSearchModelSelection: params.webSearchModelSelection,
     modelHasVision: params.modelHasVision,
     requesterModel: params.requesterModel,
     pairedNodeComputerUse: params.pairedNodeComputerUse,

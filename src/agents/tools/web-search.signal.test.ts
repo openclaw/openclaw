@@ -23,6 +23,17 @@ describe("web_search signal plumbing", () => {
     });
   });
 
+  it("preserves the host-selected model/profile through the tool boundary", async () => {
+    const modelSelection = {
+      provider: "openai",
+      model: "gpt-5.4",
+      authProfileId: "openai:research",
+    };
+    const tool = createWebSearchTool({ config: {}, modelSelection });
+    await tool?.execute("selected-search", { query: "synthetic query" });
+    expect(mocks.runWebSearch).toHaveBeenCalledWith(expect.objectContaining({ modelSelection }));
+  });
+
   it.each([false, true])(
     "preserves input errors and caller cancellation (cancelled=%s)",
     async (cancelled) => {
