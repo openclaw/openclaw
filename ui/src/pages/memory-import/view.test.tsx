@@ -1,3 +1,4 @@
+import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { i18n } from "../../i18n/index.ts";
 import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
@@ -94,14 +95,6 @@ function renderView(
   mountSolid(() => <MemoryImport {...createProps(overrides)} />, { container });
   flush();
   return container;
-}
-
-function query<T extends Element>(container: HTMLElement, selector: string): T {
-  const element = container.querySelector<T>(selector);
-  if (!element) {
-    throw new Error(`expected ${selector}`);
-  }
-  return element;
 }
 
 describe("renderMemoryImport", () => {
@@ -239,7 +232,9 @@ describe("renderMemoryImport", () => {
   it("passes the exact collection item ids when selection changes", () => {
     const onToggleCollection = vi.fn();
     const container = renderView({ onToggleCollection });
-    const checkbox = query<HTMLInputElement>(container, ".memory-import__collection-choice input");
+    const checkbox = expectDefined(
+      container.querySelector<HTMLInputElement>(".memory-import__collection-choice input"),
+    );
 
     checkbox.checked = false;
     checkbox.dispatchEvent(new Event("change", { bubbles: true }));
@@ -260,7 +255,9 @@ describe("renderMemoryImport", () => {
     });
 
     expect(container.textContent).toContain("backed up in the migration report");
-    const confirm = query<HTMLButtonElement>(container, "[data-test-id='memory-import-confirm']");
+    const confirm = expectDefined(
+      container.querySelector<HTMLButtonElement>("[data-test-id='memory-import-confirm']"),
+    );
     confirm.click();
     expect(onConfirmImport).toHaveBeenCalledOnce();
   });
@@ -300,7 +297,7 @@ describe("renderMemoryImport", () => {
       "[data-test-id='memory-import-provider-button']",
       ".memory-import__collection-choice input",
     ]) {
-      expect(query(container, selector)).toMatchObject({ disabled: true });
+      expect(container.querySelector(selector)).toMatchObject({ disabled: true });
     }
   });
 
