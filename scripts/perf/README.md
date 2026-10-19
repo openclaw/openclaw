@@ -204,6 +204,19 @@ concurrency on both revisions, and report the actual database size. For a roughl
 stops its Gateway and model fixture on completion or interruption and retains
 synthetic state for inspection. Never target a running Gateway's state.
 
+For completed-attempt retention, use `--scenario attempt-retention --clients 1
+--runs 10 --rounds 10 --chunks 1 --prompt-kib 128 --heap-snapshot`. Each round
+resets the ten child session generations, submits deterministic synthetic prompt
+text and a 256×128 synthetic noise PNG, executes three real `read` tools with
+16 KiB text results, receives one synthetic output-limit stop,
+and completes the resulting transcript continuation. The driver requires one
+completed tool batch, output-limit response, and recovered response per child,
+and verifies inline images reach all three provider requests. These are
+direct child-session `agent` calls, not model-driven `sessions_spawn` calls.
+Post-GC Gateway heap samples follow every completed cohort, and the optional
+final `settled.heapsnapshot` permits retainer inspection. Session resets exclude
+intentionally retained live histories from the trend.
+
 To start an existing fixture without regenerating it, set `HOME` and
 `OPENCLAW_HOME` to `<state-dir>/home`, `OPENCLAW_STATE_DIR` to `<state-dir>`,
 `OPENCLAW_CONFIG_PATH` to `<state-dir>/openclaw.json`, and `TMPDIR` to

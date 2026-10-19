@@ -50,20 +50,9 @@ type GuardedSessionManager = SessionManager &
     >
   > & {
     /** Refresh the exact owning run when a caller reuses this guarded manager. */
-    setTranscriptRunContext?: (
-      runId: string | undefined,
-      prepareAssistantTranscriptMessage: PrepareAssistantTranscriptMessage | undefined,
-      skipBeforeMessageWriteHooks: boolean | undefined,
-      assistantErrorTranscript: AssistantErrorTranscript | undefined,
-      inputProvenance: InputProvenance | undefined,
-      suppressNextUserMessagePersistence: boolean | undefined,
-      preparedUserTurn: {
-        message: PersistedUserTurnMessage | undefined;
-        recorder: UserTurnTranscriptRecorder | undefined;
-        replayKey: string | undefined;
-      },
-      hidden: boolean,
-    ) => void;
+    setTranscriptRunContext?: (options: Parameters<typeof guardSessionManager>[1]) => void;
+    /** Retire only this binding after its accepted transcript writes drain. */
+    clearTranscriptRunCallbacks?: () => void;
   };
 
 function publishPersistedUserEnvelope(
@@ -96,7 +85,7 @@ function publishPersistedUserEnvelope(
  */
 export function guardSessionManager(
   sessionManager: SessionManager,
-  opts?: {
+  options?: {
     agentId?: string;
     runId?: string;
     prepareAssistantTranscriptMessage?: PrepareAssistantTranscriptMessage;
@@ -135,7 +124,13 @@ export function guardSessionManager(
     withCompactionPersistenceAsync?: CompactionAppendPersistenceAsync;
   },
 ): GuardedSessionManager {
+  let opts = options;
   const guardedSessionManager: GuardedSessionManager = sessionManager;
+  if (typeof guardedSessionManager.flushPendingToolResultsAsync === "function") {
+    guardedSessionManager.setTranscriptRunContext?.(opts);
+    return guardedSessionManager;
+  }
+  const { agentId, sessionKey } = opts ?? {};
   let transcriptRunId = opts?.runId;
   let prepareAssistantTranscriptMessage =
     opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
@@ -149,26 +144,24 @@ export function guardSessionManager(
     pendingPreparedUserTurnMessage?.idempotencyKey
       ? pendingPreparedUserTurnMessage?.idempotencyKey
       : undefined;
-  if (typeof guardedSessionManager.flushPendingToolResultsAsync === "function") {
-    guardedSessionManager.setTranscriptRunContext?.(
-      opts?.runId,
-      prepareAssistantTranscriptMessage,
-      skipBeforeMessageWriteHooks,
-      opts?.assistantErrorTranscript,
-      inputProvenance,
-      preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence,
-      {
-        message: pendingPreparedUserTurnMessage,
-        recorder: preparedUserTurnTranscriptRecorder,
-        replayKey: preparedUserReplayKey,
-      },
-      hidden,
-    );
-    return guardedSessionManager;
-  }
-
   const hookRunner = getGlobalHookRunner();
   let queuedUserTurnTranscriptRecorder: UserTurnTranscriptRecorder | undefined;
+  let callbackBinding = 0;
+  const bindCallbackRelease = () => {
+    const binding = ++callbackBinding;
+    return () => {
+      // A timed-out attempt can finish draining after this manager is rebound.
+      if (binding !== callbackBinding) {
+        return;
+      }
+      opts = undefined;
+      prepareAssistantTranscriptMessage = undefined;
+      pendingPreparedUserTurnMessage = undefined;
+      preparedUserTurnTranscriptRecorder = undefined;
+      preparedUserReplayKey = undefined;
+      queuedUserTurnTranscriptRecorder = undefined;
+    };
+  };
   const runtimeUserMessageByPersistedMessage = new WeakMap<
     AgentMessage,
     Extract<AgentMessage, { role: "user" }>
@@ -209,8 +202,8 @@ export function guardSessionManager(
       }
       const next = runAgentHarnessBeforeMessageWriteHook({
         message,
-        agentId: opts?.agentId,
-        sessionKey: opts?.sessionKey,
+        agentId,
+        sessionKey,
         prepareAssistantTranscriptMessage,
         skipBeforeMessageWriteHooks: skipUserWriteHook,
       });
@@ -267,8 +260,8 @@ export function guardSessionManager(
             isSynthetic: meta.isSynthetic,
           },
           {
-            agentId: opts?.agentId,
-            sessionKey: opts?.sessionKey,
+            agentId,
+            sessionKey,
             toolName: meta.toolName,
             toolCallId: meta.toolCallId,
           },
@@ -339,7 +332,7 @@ export function guardSessionManager(
     suppressNextUserMessagePersistence: opts?.suppressNextUserMessagePersistence,
     suppressTranscriptOnlyAssistantPersistence: opts?.suppressTranscriptOnlyAssistantPersistence,
     assistantErrorTranscript: opts?.assistantErrorTranscript,
-    onMessagePersisted: opts?.onMessagePersisted,
+    onMessagePersisted: (message) => opts?.onMessagePersisted?.(message),
     withCompactionPersistence: opts?.withCompactionPersistence,
     withCompactionPersistenceAsync: opts?.withCompactionPersistenceAsync,
     onUserMessagePersisted: async (message, persistence) => {
@@ -352,8 +345,8 @@ export function guardSessionManager(
       });
       advanceMessageActionPrompt({
         runId: transcriptRunId,
-        agentId: opts?.agentId,
-        sessionKey: opts?.sessionKey,
+        agentId,
+        sessionKey,
         sessionId: sessionManager.getSessionId(),
         recorder,
       });
@@ -371,7 +364,7 @@ export function guardSessionManager(
       );
       await opts?.onUserMessagePersistenceSuppressed?.(message, runtimeMessage);
     },
-    onUserMessageBlocked: opts?.onUserMessageBlocked,
+    onUserMessageBlocked: (message) => opts?.onUserMessageBlocked?.(message),
   });
   setSessionToolResultPreparer(guardedSessionManager, {
     cap: (message) => truncateToolResultMessage(message, maxToolResultChars),
@@ -381,27 +374,30 @@ export function guardSessionManager(
   guardedSessionManager.flushPendingToolResultsAsync = guard.flushPendingToolResultsAsync;
   guardedSessionManager.clearPendingToolResults = guard.clearPendingToolResults;
   guardedSessionManager.setNextUserMessagePersistence = guard.setNextUserMessagePersistence;
-  guardedSessionManager.setTranscriptRunContext = (
-    runId,
-    prepare,
-    skipHooks,
-    errors,
-    provenance,
-    suppressUserPersistence,
-    preparedUserTurn,
-    hideMessages,
-  ) => {
-    transcriptRunId = runId;
-    guard.setTranscriptRunId(runId, errors);
-    guard.setNextUserMessagePersistence(suppressUserPersistence ? "suppress" : "normal");
-    prepareAssistantTranscriptMessage = prepare;
-    skipBeforeMessageWriteHooks = skipHooks;
-    inputProvenance = provenance;
+  guardedSessionManager.clearTranscriptRunCallbacks = bindCallbackRelease();
+  guardedSessionManager.setTranscriptRunContext = (nextOptions) => {
+    opts = nextOptions;
+    transcriptRunId = opts?.runId;
+    guard.setTranscriptRunId(transcriptRunId, opts?.assistantErrorTranscript);
+    prepareAssistantTranscriptMessage =
+      opts?.trigger === "memory" ? undefined : opts?.prepareAssistantTranscriptMessage;
+    skipBeforeMessageWriteHooks = opts?.skipBeforeMessageWriteHooks;
+    inputProvenance = opts?.inputProvenance;
     // Managers outlive individual runs; neither private nor public visibility may carry over.
-    hidden = hideMessages;
-    pendingPreparedUserTurnMessage = preparedUserTurn.message;
-    preparedUserTurnTranscriptRecorder = preparedUserTurn.recorder;
-    preparedUserReplayKey = preparedUserTurn.replayKey;
+    hidden = opts?.privateCompletion === true || opts?.trigger === "memory";
+    pendingPreparedUserTurnMessage = opts?.preparedUserTurnMessage;
+    preparedUserTurnTranscriptRecorder = opts?.preparedUserTurnTranscriptRecorder;
+    preparedUserReplayKey =
+      preparedUserTurnTranscriptRecorder?.getPersistedMessage?.()?.idempotencyKey ===
+      pendingPreparedUserTurnMessage?.idempotencyKey
+        ? pendingPreparedUserTurnMessage?.idempotencyKey
+        : undefined;
+    guard.setNextUserMessagePersistence(
+      preparedUserReplayKey === undefined && opts?.suppressNextUserMessagePersistence
+        ? "suppress"
+        : "normal",
+    );
+    guardedSessionManager.clearTranscriptRunCallbacks = bindCallbackRelease();
   };
   return guardedSessionManager;
 }

@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { randomUUID } from "node:crypto";
+import { createCipheriv, createHash, randomUUID } from "node:crypto";
 import { createWriteStream, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import path from "node:path";
@@ -8,6 +8,7 @@ import { parseArgs } from "node:util";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import { stripInboundMetadata } from "../../src/auto-reply/reply/strip-inbound-meta.js";
+import { encodePngRgba } from "../../src/media/png-encode.js";
 import { applyMockOpenAiModelConfig } from "../e2e/lib/fixtures/mock-openai-config.mjs";
 import {
   readMockUserText,
@@ -17,6 +18,7 @@ import { readBody } from "../e2e/lib/mock-openai-http.mjs";
 import { stopChild } from "../lib/gateway-bench-child.ts";
 import {
   readGatewayCpuUsage,
+  readGatewayResources,
   measureGatewayCpuUsage,
   measureGatewayAllocations,
 } from "../lib/gateway-bench-profile.ts";
@@ -44,6 +46,8 @@ const { values } = parseArgs({
     runs: { type: "string", default: "20" },
     rounds: { type: "string", default: "5" },
     chunks: { type: "string", default: "100" },
+    "prompt-kib": { type: "string", default: "128" },
+    "heap-snapshot": { type: "boolean", default: false },
   },
 });
 if (!values["state-dir"]) {
@@ -58,16 +62,23 @@ if (port > 65535 || mockPort > 65535 || port === mockPort) {
 }
 const scenario = values.scenario;
 if (
-  !["sessions.list", "subscribe", "chat.send", "transcript-broadcast", "plugins.reload"].includes(
-    scenario,
-  )
+  ![
+    "sessions.list",
+    "subscribe",
+    "chat.send",
+    "transcript-broadcast",
+    "attempt-retention",
+    "plugins.reload",
+  ].includes(scenario)
 ) {
   throw new Error(
-    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, or plugins.reload",
+    "--scenario must be sessions.list, subscribe, chat.send, transcript-broadcast, attempt-retention, or plugins.reload",
   );
 }
-const turnScenario = scenario === "chat.send" || scenario === "transcript-broadcast";
-if (!values.allocations && scenario !== "transcript-broadcast") {
+const retentionScenario = scenario === "attempt-retention";
+const turnScenario =
+  scenario === "chat.send" || scenario === "transcript-broadcast" || retentionScenario;
+if (!values.allocations && scenario !== "transcript-broadcast" && !retentionScenario) {
   throw new Error("--scenario requires --allocations");
 }
 const operations = integer(
@@ -83,6 +94,12 @@ const clientCount = scenario === "chat.send" ? 1 : integer(values.clients, "--cl
 const runCount = scenario === "chat.send" ? 1 : integer(values.runs, "--runs");
 const rounds = integer(values.rounds, "--rounds");
 const chunkCount = integer(values.chunks, "--chunks");
+const promptBytes = integer(values["prompt-kib"], "--prompt-kib") * 1024;
+const promptContent = createCipheriv(
+  "aes-256-ctr",
+  createHash("sha256").update("attempt-retention-967").digest(),
+  Buffer.alloc(16),
+);
 const root = path.resolve(values["state-dir"]);
 const fixture: unknown = JSON.parse(
   readFileSync(path.join(root, "team-shape-summary.json"), "utf8"),
@@ -117,8 +134,15 @@ if (scenario === "plugins.reload") {
   reloadPluginId = plugin.pluginIds[0];
   cfg.plugins = { enabled: true, allow: plugin.pluginIds, load: { paths: [plugin.pluginsDir] } };
 }
-const toolPath = path.join(root, "workspace", "synthetic-tool-input.txt");
-writeFileSync(toolPath, "Synthetic allocation benchmark tool result.\n");
+const toolPaths = Array.from({ length: retentionScenario ? 3 : 1 }, (_, index) => {
+  const file = path.join(root, "workspace", `synthetic-tool-input-${index}.txt`);
+  writeFileSync(
+    file,
+    "Synthetic allocation benchmark tool result.\n" +
+      (retentionScenario ? promptContent.update(Buffer.alloc(8192)).toString("hex") : ""),
+  );
+  return file;
+});
 const configPath = path.join(output, "openclaw.json");
 writeFileSync(configPath, JSON.stringify(cfg));
 const chunk = "Synthetic streamed answer. ";
@@ -173,11 +197,15 @@ let activePrimaryStreams = 0;
 let peakPrimaryStreams = 0;
 let toolCalls = 0;
 let toolResults = 0;
+let outputLimitResponses = 0;
+let recoveredResponses = 0;
+let imageRequests = 0;
 let cohort:
   | {
       id: string;
       arrivals: Set<number>;
       toolCallIds: Set<string>;
+      outputLimited: Set<string>;
       ready: Promise<void>;
       release: () => void;
       reject: (error: Error) => void;
@@ -207,23 +235,29 @@ const mock = createServer((req, res) => {
           .find((text) => text !== undefined)
       : undefined;
     const index = facts.turnIndex;
-    const toolOutput =
+    const toolOutputs =
       Array.isArray(input) && cohort
-        ? input.findLast(
+        ? input.filter(
             (item) =>
               item?.type === "function_call_output" && cohort?.toolCallIds.has(item.call_id),
           )
-        : undefined;
+        : [];
+    const toolOutput = toolOutputs.at(-1);
     const continuation =
-      scenario === "chat.send" && facts.purpose === "benchmark-turn" && toolOutput !== undefined;
+      (scenario === "chat.send" || retentionScenario) && toolOutput !== undefined;
     if (continuation) {
       if (
-        typeof toolOutput.output !== "string" ||
-        !toolOutput.output.includes("Synthetic allocation benchmark tool result.")
+        toolOutputs.some(
+          (toolResult) =>
+            typeof toolResult.output !== "string" ||
+            !toolResult.output.includes("Synthetic allocation benchmark tool result."),
+        )
       ) {
         throw new Error("synthetic read tool did not return its fixture text");
       }
-      toolResults++;
+      if (!retentionScenario || !cohort?.outputLimited.has(toolOutput.call_id)) {
+        toolResults += toolOutputs.length;
+      }
     }
     const primary =
       cohort &&
@@ -234,8 +268,27 @@ const mock = createServer((req, res) => {
       index >= 1 &&
       index <= runCount &&
       lastUser !== undefined &&
-      stripInboundMetadata(lastUser).trim() ===
+      stripInboundMetadata(lastUser).trim().split("\n")[0] ===
         `Reply with benchmark stream ${index}. Transcript-broadcast cohort ${cohort.id}.`;
+    if (retentionScenario && (primary || continuation)) {
+      const hasImage =
+        Array.isArray(input) &&
+        input.some(
+          (message) =>
+            Array.isArray(message?.content) &&
+            message.content.some(
+              (part: unknown) =>
+                isRecord(part) &&
+                part.type === "input_image" &&
+                typeof part.image_url === "string" &&
+                part.image_url.startsWith("data:image/"),
+            ),
+        );
+      if (!hasImage) {
+        throw new Error("synthetic inline image did not survive the provider request");
+      }
+      imageRequests++;
+    }
     activeStreams++;
     peakStreams = Math.max(peakStreams, activeStreams);
     streamRequests++;
@@ -257,38 +310,64 @@ const mock = createServer((req, res) => {
       }
       res.writeHead(200, { "content-type": "text/event-stream" });
       let toolAnswer;
-      if (primary && scenario === "chat.send" && cohort) {
-        const callId = `call_allocation_${cohort.id}`;
-        cohort.toolCallIds.add(callId);
-        const item = {
-          type: "function_call",
-          id: `fc_${cohort.id}`,
-          call_id: callId,
-          name: "read",
-          arguments: JSON.stringify({ path: toolPath }),
-        };
-        toolCalls++;
+      if (primary && (scenario === "chat.send" || retentionScenario) && cohort) {
+        const currentCohort = cohort;
+        const items = toolPaths.map((toolPath, toolIndex) => {
+          const callId = `call_allocation_${currentCohort.id}_${index}_${toolIndex}`;
+          currentCohort.toolCallIds.add(callId);
+          return {
+            type: "function_call",
+            id: `fc_${currentCohort.id}_${index}_${toolIndex}`,
+            call_id: callId,
+            name: "read",
+            arguments: JSON.stringify({ path: toolPath }),
+          };
+        });
+        toolCalls += items.length;
         toolAnswer = [
-          { type: "response.output_item.added", output_index: 0, item: { ...item, arguments: "" } },
-          {
-            type: "response.function_call_arguments.delta",
-            item_id: item.id,
-            output_index: 0,
-            delta: item.arguments,
-          },
-          { type: "response.output_item.done", output_index: 0, item },
+          ...items.flatMap((item, output_index) => [
+            { type: "response.output_item.added", output_index, item: { ...item, arguments: "" } },
+            {
+              type: "response.function_call_arguments.delta",
+              item_id: item.id,
+              output_index,
+              delta: item.arguments,
+            },
+            { type: "response.output_item.done", output_index, item },
+          ]),
           {
             type: "response.completed",
             response: {
               id: `resp_${cohort.id}`,
               status: "completed",
-              output: [item],
+              output: items,
               usage: { input_tokens: 11, output_tokens: 10, total_tokens: 21 },
             },
           },
         ];
       }
-      const answer = toolAnswer ?? (primary || continuation ? events : utilityEvents);
+      let answer = toolAnswer ?? (primary || continuation ? events : utilityEvents);
+      if (retentionScenario && continuation && cohort) {
+        if (!cohort.outputLimited.has(toolOutput.call_id)) {
+          cohort.outputLimited.add(toolOutput.call_id);
+          outputLimitResponses++;
+          const outputLimitAnswer = [
+            {
+              type: "response.incomplete",
+              response: {
+                id: `resp_limit_${toolOutput.call_id}`,
+                status: "incomplete",
+                incomplete_details: { reason: "max_output_tokens" },
+                output: [],
+                usage: { input_tokens: 11, output_tokens: 4096, total_tokens: 4107 },
+              },
+            },
+          ];
+          answer = outputLimitAnswer;
+        } else {
+          recoveredResponses++;
+        }
+      }
       for (const event of answer) {
         if (res.destroyed) {
           break;
@@ -412,6 +491,12 @@ async function rpc(
   return response.payload;
 }
 async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
+  if (retentionScenario) {
+    // Retire each previous session generation so retained history is not the measurement.
+    for (const key of keys) {
+      await rpc(client, "sessions.reset", { key });
+    }
+  }
   let release!: () => void;
   let reject!: (error: Error) => void;
   const cohortReady = new Promise<void>((resolve, rejectReady) => {
@@ -422,6 +507,7 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
     id: randomUUID(),
     arrivals: new Set(),
     toolCallIds: new Set(),
+    outputLimited: new Set(),
     ready: cohortReady,
     release,
     reject,
@@ -441,11 +527,35 @@ async function runRound(client: ReturnType<typeof createGatewayWsClient>) {
       cohortReady,
       ...keys.map(async (sessionKey, index) => {
         const runId = randomUUID();
+        const image = retentionScenario
+          ? promptContent.update(Buffer.alloc(256 * 128 * 4))
+          : undefined;
+        if (image) {
+          for (let alpha = 3; alpha < image.length; alpha += 4) {
+            image[alpha] = 255;
+          }
+        }
         await rpc(client, scenario === "chat.send" ? "chat.send" : "agent", {
           sessionKey,
-          message: `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.`,
+          message:
+            `Reply with benchmark stream ${index + 1}. Transcript-broadcast cohort ${current.id}.` +
+            (retentionScenario
+              ? `\nSynthetic prompt payload: ${promptContent.update(Buffer.alloc(promptBytes / 2)).toString("hex")}`
+              : ""),
           deliver: false,
           idempotencyKey: runId,
+          ...(image
+            ? {
+                attachments: [
+                  {
+                    type: "file",
+                    mimeType: "image/png",
+                    fileName: "synthetic-noise.png",
+                    content: encodePngRgba(image, 256, 128).toString("base64"),
+                  },
+                ],
+              }
+            : {}),
         });
         const result = await rpc(client, "agent.wait", { runId, timeoutMs: 170_000 });
         if (
@@ -648,6 +758,9 @@ try {
   await runScenario();
   console.log("PHASE warmed");
   await drainEvents();
+  const initialRetainedResources = retentionScenario
+    ? await readGatewayResources(gateway, { collectGarbage: true })
+    : undefined;
   const samples = [];
   for (let round = 0; round < rounds; round++) {
     counters.clear();
@@ -660,6 +773,9 @@ try {
     primaryStreamRequests = 0;
     toolCalls = 0;
     toolResults = 0;
+    outputLimitResponses = 0;
+    recoveredResponses = 0;
+    imageRequests = 0;
     const before = await readGatewayCpuUsage(gateway);
     measuring = true;
     const workload = async () => {
@@ -692,6 +808,18 @@ try {
         `expected one completed tool call per turn, calls=${toolCalls}, results=${toolResults}`,
       );
     }
+    if (
+      retentionScenario &&
+      (toolCalls !== runCount * toolPaths.length ||
+        toolResults !== toolCalls ||
+        outputLimitResponses !== runCount ||
+        recoveredResponses !== runCount ||
+        imageRequests !== runCount * 3)
+    ) {
+      throw new Error(
+        `expected ${runCount} image/tool/recovery cycles: ${JSON.stringify({ toolCalls, toolResults, outputLimitResponses, recoveredResponses, imageRequests })}`,
+      );
+    }
     for (const event of turnScenario ? ["session.message", "sessions.changed"] : []) {
       const expected = perClientCounters[0]?.get(event) ?? 0;
       if (!expected || perClientCounters.some((counts) => counts.get(event) !== expected)) {
@@ -701,6 +829,14 @@ try {
       }
     }
     const cpu = measureGatewayCpuUsage(before, await readGatewayCpuUsage(gateway));
+    const retainedResources = retentionScenario
+      ? await readGatewayResources(gateway, {
+          collectGarbage: true,
+          ...(values["heap-snapshot"] && round === rounds - 1
+            ? { snapshotPath: path.join(output, "settled.heapsnapshot") }
+            : {}),
+        })
+      : undefined;
     const deliveredEvents = [...counters.values()].reduce((sum, count) => sum + count, 0);
     const deliveredSessionEvents =
       (counters.get("session.message") ?? 0) + (counters.get("sessions.changed") ?? 0);
@@ -711,6 +847,9 @@ try {
       allocation,
       toolCalls,
       toolResults,
+      ...(retentionScenario
+        ? { outputLimitResponses, recoveredResponses, imageRequests, retainedResources }
+        : {}),
       ...cpu,
       eventCounts: Object.fromEntries(counters),
       perClientEventCounts: perClientCounters.map((counts) => Object.fromEntries(counts)),
@@ -755,6 +894,7 @@ try {
     peakStreams,
     streamRequests,
     fixture,
+    ...(retentionScenario ? { promptBytes, initialRetainedResources } : {}),
     samples,
   };
   writeFileSync(path.join(output, "result.json"), JSON.stringify(result, null, 2));

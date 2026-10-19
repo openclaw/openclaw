@@ -184,7 +184,14 @@ export async function createEmbeddedRunSessionPromptState(input: {
   };
 
   return {
-    [Symbol.asyncDispose]: async () => await initialOwner?.close(),
+    [Symbol.asyncDispose]: async () => {
+      try {
+        await initialOwner?.close();
+      } finally {
+        // Retained session callbacks share this scope, but recovery history is run-owned.
+        continuation = undefined;
+      }
+    },
     get sessionId() {
       return activeSessionId;
     },

@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import path from "node:path";
+import { setImmediate as nextTurn } from "node:timers/promises";
+import { queryObjects } from "node:v8";
 import { expectDefined } from "@openclaw/normalization-core";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { describe, expect, it, vi } from "vitest";
@@ -116,6 +118,29 @@ function createState(overrides: Partial<PreparedEmbeddedRunInput["runParams"]> =
 }
 
 describe("embedded run session prompt state", () => {
+  it("releases completed continuations while session callbacks remain retained", async () => {
+    const retainedCallbacks: Array<{
+      adoptSessionId: (sessionId: string) => void;
+      onUserMessagePersisted: (message: ReturnType<typeof makeUserMessage>) => void;
+    }> = [];
+    const references: WeakRef<object>[] = [];
+    for (let index = 0; index < 20; index++) {
+      await using state = await createState();
+      state.continueFromCurrentTranscript({ messages: [makeUserMessage(`turn ${index}`)] });
+      references.push(new WeakRef(state.continuation!));
+      retainedCallbacks.push({
+        adoptSessionId: state.adoptSessionId,
+        onUserMessagePersisted: state.onUserMessagePersisted,
+      });
+    }
+    const control = new WeakRef({ unowned: true });
+    await nextTurn();
+    queryObjects(WeakRef);
+    expect(control.deref()).toBeUndefined();
+    expect(references.filter((reference) => reference.deref())).toHaveLength(0);
+    expect(retainedCallbacks).toHaveLength(20);
+  });
+
   it("carries the current request and settled work across repeated recovery without changing legacy prompts", async () => {
     await using state = await createState({ prompt: "Task B: inspect the blue database." });
     state.continueFromCurrentTranscript({ messages: [] });

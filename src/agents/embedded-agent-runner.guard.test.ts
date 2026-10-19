@@ -126,6 +126,47 @@ describe("guardSessionManager integration", () => {
     ]);
   });
 
+  it("rebinds and retires user persistence callbacks without clearing a newer attempt", async () => {
+    installWriteHook((event) =>
+      (event as { message: AgentMessage }).message.content === "blocked"
+        ? { block: true }
+        : undefined,
+    );
+    const callbacks = () => ({
+      onUserMessagePreparingForPersistence: vi.fn(),
+      onUserMessagePersisted: vi.fn(),
+      onUserMessagePersistenceSuppressed: vi.fn(),
+      onUserMessageBlocked: vi.fn(),
+      onMessagePersisted: vi.fn(),
+    });
+    const previous = callbacks();
+    const current = callbacks();
+    const { sm } = createGuard({ runId: "reused-run", ...previous });
+    const clearPrevious = sm.clearTranscriptRunCallbacks;
+    guardSessionManager(sm, { runId: "reused-run", ...current });
+    clearPrevious?.();
+
+    await sm.appendMessageAsync(makeUserMessage("persisted", 1));
+    sm.setNextUserMessagePersistence?.("suppress");
+    await sm.appendMessageAsync(makeUserMessage("suppressed", 2));
+    await sm.appendMessageAsync(makeUserMessage("blocked", 3));
+    sm.clearTranscriptRunCallbacks?.();
+    await sm.appendMessageAsync(makeUserMessage("after cleanup", 4));
+
+    for (const callback of Object.values(previous)) {
+      expect(callback).not.toHaveBeenCalled();
+    }
+    expect(current.onUserMessagePreparingForPersistence).toHaveBeenCalledTimes(3);
+    expect(current.onUserMessagePersisted).toHaveBeenCalledOnce();
+    expect(current.onUserMessagePersistenceSuppressed).toHaveBeenCalledOnce();
+    expect(current.onUserMessageBlocked).toHaveBeenCalledOnce();
+    expect(current.onMessagePersisted).toHaveBeenCalledOnce();
+    expect(getMessages(sm)).toEqual([
+      makeUserMessage("persisted", 1),
+      makeUserMessage("after cleanup", 4),
+    ]);
+  });
+
   it("publishes a suppressed user envelope while preserving runtime media facts", () => {
     const media = [
       { path: "/workspace/current.mp4", contentType: "video/mp4", kind: "video" as const },
