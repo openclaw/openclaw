@@ -578,8 +578,10 @@ suite.define(() => {
           )
           .map((request) => request.method),
       ).toEqual(["environments.status", "desktop.observe"]);
-      await button(panel, "Browser").waitFor();
-      await button(panel, "Terminal").waitFor();
+      await button(panel, "Desktop actions").click();
+      await panel.getByRole("menuitem", { name: "Browser", exact: true }).waitFor();
+      await panel.getByRole("menuitem", { name: "Terminal", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
       expect(await panel.getAttribute("data-connect-count")).toBe("1");
       expect(await text(panel, "Desktop sources").count()).toBe(0);
     }));
@@ -597,7 +599,8 @@ suite.define(() => {
         .toBe(inventoryCount + 1);
       await page
         .locator("openclaw-desktop-panel")
-        .getByRole("status", { name: "Connecting to desktop…", exact: true })
+        .getByRole("status")
+        .filter({ hasText: "Connecting to desktop…" })
         .waitFor();
       expect(await gateway.getRequests("desktop.observe")).toHaveLength(0);
       await page.evaluate(() => {
@@ -756,8 +759,10 @@ suite.define(() => {
       const viewRequest = await gateway.waitForRequest("desktop.observe");
       expectObservation(viewRequest.params);
       await panel.getByRole("status", { name: "Connecting to desktop…" }).waitFor();
-      await button(panel, "Browser").waitFor();
-      await button(panel, "Terminal").waitFor();
+      await button(panel, "Desktop actions").click();
+      await panel.getByRole("menuitem", { name: "Browser", exact: true }).waitFor();
+      await panel.getByRole("menuitem", { name: "Terminal", exact: true }).waitFor();
+      await page.keyboard.press("Escape");
       expect(await text(panel, "View only").count()).toBe(0);
       expect(await panel.getByText(/Controlling/).count()).toBe(0);
 
