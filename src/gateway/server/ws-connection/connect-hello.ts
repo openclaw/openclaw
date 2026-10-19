@@ -165,7 +165,6 @@ export async function sendGatewayHello(
     role === "operator"
       ? operatorSessionCap(context.handler.getClient(), context.configSnapshot)
       : undefined;
-  context.recordAttachTiming?.("helloDescriptorsMs", descriptorsStartedAt);
   const helloOk = {
     type: "hello-ok",
     // Admission already verified range overlap; this field reports the server's current protocol.
@@ -270,6 +269,7 @@ export async function sendGatewayHello(
       hasMultipleSessionSharingIdentities: hasMultipleResidentSessionSharingIdentities(),
     },
   };
+  context.recordAttachTiming?.("helloDescriptorsMs", descriptorsStartedAt);
   advanceHandshakePhase("hello_payload_prepared");
 
   let bootstrapHandoff: SetupHandoff | undefined;
