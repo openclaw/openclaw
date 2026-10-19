@@ -1,6 +1,4 @@
 /**
- * Curated automation ideas for the Automations page.
- *
  * Pure UI data: each idea prefills the inline create form. Nothing here talks
  * to the gateway or adds config surface.
  */

@@ -134,7 +134,9 @@ export function createModelProviders(
       if (change.clientChanged) {
         stopCatalog?.();
         stopCatalog = change.snapshot.client
-          ? modelCatalog.subscribeModelCatalogCache(change.snapshot.client, notify)
+          ? modelCatalog.subscribeModelCatalogCache(change.snapshot.client, notify, () => ({
+              agentId: state.selectedAgentId || undefined,
+            }))
           : undefined;
       }
       if (change.initial) {

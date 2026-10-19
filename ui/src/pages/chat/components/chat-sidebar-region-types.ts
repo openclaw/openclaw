@@ -24,7 +24,6 @@ export type SidebarPanelDefinition = {
   view?: SidebarPanelData;
   loadState?: Parameters<typeof LazyViewError>[0] | null;
   loading: Parameters<typeof PanelLoadingSkeleton>[0];
-  headerAction?: JSX.Element;
   headerActionView?: SidebarPanelDefinitionParams;
   headerLink?: { href: string; label: string };
   empty: {
@@ -44,6 +43,12 @@ export type SidebarRegionCallbacks = {
 };
 
 export type RegionProps = {
+  elements: {
+    readonly shell: HTMLElement;
+    readonly header: HTMLElement;
+    readonly primary: HTMLElement;
+    readonly outlet: HTMLElement;
+  } | null;
   panelIdPrefix: string;
   conversationTab?: Pick<SidebarPanelDefinition, "label"> & {
     avatar: AgentIdentity;

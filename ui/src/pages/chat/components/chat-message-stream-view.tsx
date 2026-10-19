@@ -22,6 +22,7 @@ import { ChatTimestamp } from "./chat-message-timestamp-view.tsx";
 import { ChatQuestionSummary } from "./chat-question-summary.tsx";
 import { resolveGroupReplyLine } from "./chat-reply-attribution.ts";
 import { ReplyLineView, ReplyLineConnector } from "./chat-reply-attribution.tsx";
+import type { ReplyConnectorElements } from "./chat-reply-connector.ts";
 import type { ReplyPreviewLookup } from "./chat-reply-preview.types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
 import type { SubagentActivityProps } from "./chat-subagent-activity.ts";
@@ -74,7 +75,6 @@ export type StreamGroupOptions = StreamMessageOptions & {
   branding?: ThemeBranding;
   bubbleMode?: boolean;
   firstBubbleKey?: string | null;
-  entryRefFor?: (key: string) => ((element?: Element) => void) | undefined;
   onReply?: (target: ChatReplyTarget) => void;
   onOpenSidebar?: (content: SidebarContent) => void;
   assistant?: ChatAvatarProps["assistant"];
@@ -219,7 +219,6 @@ function StreamingMessage(props: {
       options={{
         ...props.options,
         isStreaming: part().isStreaming,
-        entryRef: props.options.entryRefFor?.(part().key),
         showReasoning: Boolean(part().thinking),
         messageActions: actions(),
       }}
@@ -232,6 +231,7 @@ function StreamingMessage(props: {
 // arrives as several stream segments renders under a single avatar/footer
 // instead of flashing a separate avatar+bubble per segment (#63956).
 export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGroupOptions }) {
+  const replyElements: ReplyConnectorElements = {};
   const starts = () =>
     props.parts.flatMap((part) => (part.kind === "stream" ? [part.startedAt] : []));
   const startedAt = () => (starts().length ? Math.min(...starts()) : null);
@@ -254,6 +254,7 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
   const hasReply = () => replyLine().state !== "hidden" && hasAvatar();
   return (
     <div
+      ref={(element) => (replyElements.group = element)}
       class={[
         "chat-group assistant",
         {
@@ -263,16 +264,21 @@ export function StreamGroup(props: { parts: StreamGroupPart[]; options: StreamGr
         },
       ]}
       data-chat-row-key={props.parts[0]?.key}
+      data-chat-streaming={active() ? "true" : undefined}
     >
       <Show when={hasAvatar()}>
-        <ChatAvatar role="assistant" assistant={props.options.assistant} />
+        <ChatAvatar
+          role="assistant"
+          assistant={props.options.assistant}
+          elementRef={(element) => (replyElements.avatar = element)}
+        />
       </Show>
-      <div class="chat-group-messages">
-        <ReplyLineView line={replyLine()} actions={props.options} />
+      <div ref={(element) => (replyElements.messages = element)} class="chat-group-messages">
+        <ReplyLineView line={replyLine()} actions={props.options} elements={replyElements} />
         <StreamGroupParts parts={props.parts} options={props.options} presentation="standalone" />
       </div>
       <Show when={hasAvatar()}>
-        <ReplyLineConnector line={replyLine()} avatar={true} />
+        <ReplyLineConnector line={replyLine()} avatar={true} elements={replyElements} />
       </Show>
       <Show when={startedAt() !== null}>
         <div class="chat-group-footer" aria-hidden={active() ? "true" : undefined}>
@@ -362,6 +368,8 @@ function WorkGroupSummaryBody(props: {
   summary: ReturnType<typeof prepareWorkGroupSummary>;
   options: WorkGroupSummaryOptions;
 }) {
+  let disclosureContent: HTMLSpanElement | undefined;
+  const syncOverflow = (event: Event) => syncToolDisclosureOverflow(event, disclosureContent);
   const compact = () => props.options.bubbleMode;
   return (
     <div
@@ -377,11 +385,14 @@ function WorkGroupSummaryBody(props: {
         class="chat-inline-disclosure chat-activity-group__summary"
         type="button"
         aria-expanded={props.options.expanded ? "true" : "false"}
-        onPointerEnter={syncToolDisclosureOverflow}
-        onFocus={syncToolDisclosureOverflow}
+        onPointerEnter={syncOverflow}
+        onFocus={syncOverflow}
         onClick={() => props.options.onToggle()}
       >
-        <span class="chat-tool-disclosure__content">
+        <span
+          ref={(element) => (disclosureContent = element)}
+          class="chat-tool-disclosure__content"
+        >
           <span class="chat-activity-group__label">{props.summary.label}</span>
         </span>
         <Show when={props.options.expanded && props.summary.total > 0}>

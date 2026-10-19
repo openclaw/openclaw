@@ -23,8 +23,8 @@ export function useObserverSuite() {
       harness.observer.dispose();
     }
     activeHarnesses.clear();
-    vi.useRealTimers();
     vi.restoreAllMocks();
+    vi.useRealTimers();
     resetSessionObserverEventSequence();
   });
   return {

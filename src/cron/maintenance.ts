@@ -1,4 +1,3 @@
-import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import type { GatewayScheduler, GatewaySchedulerScope } from "../infra/gateway-scheduler.js";
 import { normalizeDatabasePath } from "../infra/sqlite-worker-identity.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
@@ -11,7 +10,6 @@ import {
   sessionChanges,
   sessionChangeScopeAffectsStoredRows,
 } from "../sessions/session-row-changes.js";
-import { getAgentDatabaseStartupAdmission } from "../state/agent-database-startup.js";
 import { registerOpenClawStateDatabaseLifecycleListener } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { captureOpenClawStateWorkerContext } from "../state/openclaw-state-worker-context.js";
@@ -51,11 +49,6 @@ function scheduleSweep(getCronStorePath: () => string) {
 async function sweep(signal: AbortSignal, getCronStorePath: () => string) {
   let admitted = false;
   try {
-    const preparation = getAgentDatabaseStartupAdmission()?.pendingPreparation;
-    if (preparation) {
-      log.info("Cron maintenance deferred until agent database startup preparation completes");
-      await racePromiseWithAbortSignal(preparation, signal);
-    }
     await runWithGatewayIndependentRootWorkAdmission(
       async () => {
         admitted = true;
@@ -146,7 +139,12 @@ export function startCronMaintenance(scheduler: GatewayScheduler, getCronStorePa
       return;
     }
     if (scope) {
-      nextRegistrySweepAtMs = Math.min(nextRegistrySweepAtMs, scope.now() + 60_000);
+      const agentReady =
+        "all" in change && typeof change.scope === "object" && change.scope.topology === true;
+      nextRegistrySweepAtMs = Math.min(
+        nextRegistrySweepAtMs,
+        scope.now() + (agentReady ? 0 : 60_000),
+      );
     }
     scheduleSweep(getCronStorePath);
   });

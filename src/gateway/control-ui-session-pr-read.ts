@@ -127,7 +127,7 @@ export function resolveProjectedControlUiSessionPrTarget(
 }
 
 /** Audience and lineage are part of snapshot identity, never inherited from another viewer. */
-export function withControlUiTaskPrTarget(
+function withControlUiTaskPrTarget(
   target: ControlUiSessionPrTarget | undefined,
   projection: SessionRowProjection,
   root: EntryRow,

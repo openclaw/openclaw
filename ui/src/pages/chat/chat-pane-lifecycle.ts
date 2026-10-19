@@ -14,6 +14,7 @@ import {
 } from "../../app/question-prompt.ts";
 import { readPresenceEntries } from "../../app/user-profile.ts";
 import { BROWSER_ANNOTATION_EVENT } from "../../components/browser/browser-annotation.ts";
+import { hasModalSurface } from "../../components/overlay-registry.ts";
 import { matchesShortcutCombo } from "../../lib/keyboard-shortcut-contract.ts";
 import { modelAuthEventInvalidates } from "../../lib/model-auth-request-state.ts";
 import { isSessionReactionEvent } from "../../lib/protocol-validators.generated/activity.js";
@@ -220,7 +221,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       !this.active ||
       !this.presented ||
       event.defaultPrevented ||
-      document.querySelector(".shell-nav[aria-modal='true']") ||
+      hasModalSurface(this.element.ownerDocument) ||
       this.handleArchiveSessionShortcut(event)
     ) {
       return;
@@ -252,7 +253,11 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       return;
     }
 
-    focusChatComposerFromPrintableKeydown(this.element, event);
+    focusChatComposerFromPrintableKeydown(
+      this.element,
+      event,
+      getChatComposerState(this.presentationId).composerTextarea,
+    );
   };
 
   override start() {
@@ -286,7 +291,7 @@ export abstract class ChatPaneLifecycle extends ChatPaneSessionObservation {
       {
         sessionKey: this.sessionKey,
         dispatchEvent: (event) => this.element.dispatchEvent(event),
-        querySelector: (selector) => this.element.querySelector(selector),
+        transcriptLoadingChanged: this.synchronizeForegroundTranscript,
       },
       this.chatMessagesBySession,
     );

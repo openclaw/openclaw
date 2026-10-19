@@ -3,6 +3,7 @@ import type { SolidRouteProps } from "../../app-route-types.ts";
 import { createGatewayControlUiReloadOptions } from "../../app/gateway-control-ui-reload.ts";
 import { reloadAfterRenderErrorOnce } from "../../app/stale-chunk-reload.ts";
 import { ImageLightbox } from "../../components/image-lightbox.tsx";
+import { SessionBackgroundLayoutScope } from "../../components/session-background-layout-context.tsx";
 import { SessionBackgroundView } from "../../components/session-background-view.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { LoadingState } from "../../components/solid/loading-state.tsx";
@@ -18,9 +19,9 @@ import "../../styles/new-session-attachment-panel.css";
 import { defineSolidBridge } from "../../lib/solid-bridge.ts";
 import { focusChatComposerFromPrintableKeydown } from "../chat/chat-pane-shared.ts";
 import { chatStartupStatusLabel } from "../chat/chat-run-startup.ts";
-import { ComposerDictationStatus } from "../chat/components/chat-composer-controls.tsx";
 import { ChatPermissionPicker } from "../chat/components/chat-permission-picker.tsx";
 import { installChatComposerPickerDismissal } from "../chat/components/chat-picker-overlay.ts";
+import { ComposerDictationStatus } from "../chat/components/chat-voice-activity.tsx";
 import { CatalogBar } from "./catalog-target-view.tsx";
 import * as catalog from "./catalog-target.ts";
 import { NewSessionDictationView } from "./composer-dictation-view.tsx";
@@ -229,9 +230,11 @@ function PageContent(_props: { data: NewSessionRouteData | undefined }, host: Pa
     return <LazyViewError error={props.error} onRetry={props.reset} />;
   };
   return (
-    <Errored fallback={(error, reset) => <RenderError error={error()} reset={reset} />}>
-      <Content />
-    </Errored>
+    <SessionBackgroundLayoutScope>
+      <Errored fallback={(error, reset) => <RenderError error={error()} reset={reset} />}>
+        <Content />
+      </Errored>
+    </SessionBackgroundLayoutScope>
   );
 }
 
@@ -274,7 +277,12 @@ function renderPageContent(host: PageHost) {
       listen(
         document,
         "keydown",
-        (event) => focusChatComposerFromPrintableKeydown(host, event),
+        (event) =>
+          focusChatComposerFromPrintableKeydown(
+            host,
+            event,
+            owner.submission.composerTextarea.getTextarea(),
+          ),
         true,
       ),
       listen(document.defaultView!, "beforeunload", owner.flushDraft),

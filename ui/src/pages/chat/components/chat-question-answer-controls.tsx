@@ -4,6 +4,8 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import {
   adjustTextareaHeight,
+  handleTextareaOverflowInteraction,
+  handleTextareaOverflowScroll,
   disconnectTextareaOverflowObserver,
   observeTextareaOverflow,
 } from "./chat-composer-dom.ts";
@@ -17,6 +19,7 @@ type QuestionOptionsProps = {
 };
 
 type QuestionFreeTextProps = {
+  getTranscriptElement?: () => HTMLElement | null;
   question: Question;
   value: string;
   selected: boolean;
@@ -139,7 +142,7 @@ function FreeTextTextarea(props: FreeTextControlProps) {
   let textarea!: HTMLTextAreaElement;
   const value = createMemo(() => props.value);
   onSettled(() => {
-    observeTextareaOverflow(textarea);
+    observeTextareaOverflow(textarea, () => props.getTranscriptElement?.() ?? null);
     adjustTextareaHeight(textarea);
     return () => disconnectTextareaOverflowObserver(textarea);
   });
@@ -159,7 +162,17 @@ function FreeTextTextarea(props: FreeTextControlProps) {
       aria-description={t("chat.questions.multilineHint", { shortcut: "Ctrl/⌘+Enter" })}
       value={value()}
       disabled={props.disabled}
-      onInput={(event) => props.onInput(event.currentTarget.value)}
+      onInput={(event) => {
+        handleTextareaOverflowInteraction(event);
+        props.onInput(event.currentTarget.value);
+      }}
+      onBeforeInput={handleTextareaOverflowInteraction}
+      onCompositionStart={handleTextareaOverflowInteraction}
+      onKeyDown={handleTextareaOverflowInteraction}
+      onBlur={handleTextareaOverflowInteraction}
+      onWheel={handleTextareaOverflowInteraction}
+      onPointerDown={handleTextareaOverflowInteraction}
+      onScroll={handleTextareaOverflowScroll}
     />
   );
 }

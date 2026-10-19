@@ -1,6 +1,6 @@
 import type { ProgressCard, ProgressCardGetParams } from "@openclaw/gateway-protocol";
 import { render } from "@solidjs/web";
-import { createEffect, createMemo, createSignal, onSettled, runWithOwner, Show } from "solid-js";
+import { createMemo, createSignal, onSettled, runWithOwner, Show } from "solid-js";
 import type { GatewayBrowserClient } from "../api/gateway.ts";
 import { pathForRoute } from "../app-route-paths.ts";
 import type { ApplicationContext } from "../app/context.ts";
@@ -18,9 +18,10 @@ import {
 } from "../lib/session-pull-requests.ts";
 import { parseAgentSessionKey, scopedSessionArtifactKey } from "../lib/sessions/session-key.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
-import type { AppSidebarElement } from "./app-sidebar.tsx";
+import type { AppSidebarElement, AppSidebarMethods } from "./app-sidebar.tsx";
 import { registryFor } from "./overlay-registry.ts";
 import { personActivityRouting, type PersonActivityRouting } from "./person-activity-link.ts";
+import { controlsForHovercard, HovercardControlsContext } from "./portaled-hovercard-focus.ts";
 import { createPortaledHovercard, createPortaledHovercardOwner } from "./portaled-hovercard.ts";
 import { SessionHovercard, type SessionHovercardInput } from "./session-hovercard-solid.tsx";
 import { SessionLinkTitler } from "./session-link-titling.ts";
@@ -50,12 +51,25 @@ type SessionProgressHovercardProps = {
   client: GatewayBrowserClient | null;
   context: ApplicationContext | null;
   gateway: ApplicationGateway | null;
+  lookupSidebarRow: AppSidebarMethods["findSidebarHovercardRowByKey"] | null;
 };
 
-export type SessionProgressHovercardProvider = SolidBridgeElement<SessionProgressHovercardProps>;
+type SessionProgressHovercardMethods = {
+  registerSessionTitleTarget: (target: HTMLElement, label: HTMLElement) => () => void;
+};
 
-function createSessionProgressHovercard(props: SessionProgressHovercardProps, host: HTMLElement) {
-  const sessionLinkTitler = new SessionLinkTitler(host);
+export type SessionProgressHovercardProvider = SolidBridgeElement<
+  SessionProgressHovercardProps,
+  SessionProgressHovercardMethods
+>;
+const sessionLinkTitlers = new WeakMap<HTMLElement, SessionLinkTitler>();
+
+function createSessionProgressHovercard(
+  props: SessionProgressHovercardProps,
+  host: SessionProgressHovercardProvider,
+) {
+  const sessionLinkTitler = sessionLinkTitlers.get(host) ?? new SessionLinkTitler();
+  sessionLinkTitlers.set(host, sessionLinkTitler);
   const applicationContext = createMemo(() => props.context);
   const applicationGateway = createMemo(() => props.gateway);
   const titlerSource = createMemo(() => ({ client: props.client, context: applicationContext() }), {
@@ -286,9 +300,7 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
     if (!target || !session || !sessionKey || !artifactKey || !open) {
       return;
     }
-    const sidebarRow = host
-      .querySelector<AppSidebarElement>("openclaw-app-sidebar")
-      ?.findSidebarHovercardRowByKey(sessionKey);
+    const sidebarRow = host.lookupSidebarRow?.(sessionKey);
     const pullRequests = pullRequestStore?.get(artifactKey);
     const currentProgressCard = progressCards?.get(session);
     if (currentProgressCard !== undefined) {
@@ -452,15 +464,22 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
         const commit = () => {
           const callback = pendingCommit;
           pendingCommit = undefined;
-          callback?.();
+          if (!retired) {
+            callback?.();
+          }
         };
         cardUpdates.set(card, (next, committed) => {
           setSnapshot(next);
           pendingCommit = committed;
+          onSettled(() => onSettled(commit));
         });
-        // Markdown islands commit through effects before focus can be restored.
-        createEffect(snapshot, () => onSettled(commit));
-        return <SessionHovercard {...snapshot()} />;
+        // A second settle follows the Markdown islands' DOM-writing effects.
+        onSettled(() => onSettled(commit));
+        return (
+          <HovercardControlsContext value={controlsForHovercard(card)}>
+            <SessionHovercard {...snapshot()} />
+          </HovercardControlsContext>
+        );
       }, card),
     );
     // An empty initial render can retire its portal before render() returns its disposer.
@@ -513,10 +532,6 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
   }
   onSettled(() => {
     host.style.display = "contents";
-    const source = titlerSource();
-    sessionLinkTitler.client = source.client;
-    sessionLinkTitler.context = source.context;
-    sessionLinkTitler.connect();
     const stops = [
       listen(host, "pointerover", { handleEvent: handlePointerOver }),
       listen(host, "pointerout", { handleEvent: handlePointerOut }),
@@ -582,7 +597,10 @@ function createSessionProgressHovercard(props: SessionProgressHovercardProps, ho
   );
 }
 
-export const SessionProgressHovercard = defineSolidBridge<SessionProgressHovercardProps>(
+export const SessionProgressHovercard = defineSolidBridge<
+  SessionProgressHovercardProps,
+  SessionProgressHovercardMethods
+>(
   "openclaw-session-progress-hovercard-provider",
   (props, host) => {
     const bindings = createSessionProgressHovercard(props, host);
@@ -598,6 +616,11 @@ export const SessionProgressHovercard = defineSolidBridge<SessionProgressHoverca
       client: { default: null, attribute: false },
       context: { default: null, attribute: false },
       gateway: { default: null, attribute: false },
+      lookupSidebarRow: { default: null, attribute: false },
+    },
+    methods: {
+      registerSessionTitleTarget: (host, target, label) =>
+        sessionLinkTitlers.get(host)?.register(target, label) ?? (() => {}),
     },
   },
 );

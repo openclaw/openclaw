@@ -14,9 +14,19 @@ import { hasOperatorAdminAccess, hasOperatorWriteAccess } from "../../app/operat
 import { formatUiError } from "../../lib/format-error.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 
+type ModelAccountsSnapshot = {
+  gateway: ApplicationGatewaySnapshot;
+  identityId: string | null;
+  profileId: string | null;
+};
+
+export type ModelAccountsTargetSource = {
+  read: () => ModelAccountsSnapshot;
+  subscribe: (listener: () => void) => () => void;
+};
+
 export type ModelAccountsProps = {
-  identityId?: string | null;
-  profileId?: string | null;
+  target: ModelAccountsTargetSource;
   personLabel?: string | null;
 };
 
@@ -66,7 +76,11 @@ export class ModelAccountsState {
     this.stopPoll();
   }
 
-  applySnapshot(snapshot: ApplicationGatewaySnapshot, props: ModelAccountsProps) {
+  applySnapshot({
+    gateway: snapshot,
+    identityId: profileIdentityId,
+    profileId: canonicalProfileId,
+  }: ModelAccountsSnapshot) {
     const transportConnected = snapshot.phase === "connected";
     const connected = transportConnected && snapshot.selfUser !== undefined;
     const connectionChanged =
@@ -80,7 +94,7 @@ export class ModelAccountsState {
       : (this.target?.identityId ?? null);
     // users.self returns canonical IDs while presence may still name a merged alias.
     // Bind the parent's canonical result to its exact authenticated connection identity.
-    const profileId = client && identityId === props.identityId ? props.profileId : null;
+    const profileId = client && identityId === profileIdentityId ? canonicalProfileId : null;
     const canAdmin = transportConnected
       ? canWrite && hasOperatorAdminAccess(snapshot.hello?.auth ?? null)
       : (this.target?.canAdmin ?? false);

@@ -330,8 +330,9 @@ function* createMessageToolSteps(
       // The admitted prompt wins over an inherited external delivery route. Only
       // an explicit external channel enters the ordinary channel reaction path,
       // including on runs without a grant, which see the same stable definition.
-      const reactionChannel = normalizeOptionalLowercaseString(params.channel) ?? "webchat";
-      const reactsToCurrentPrompt = action === "react" && reactionChannel === "webchat";
+      const requestedChannel = normalizeOptionalLowercaseString(params.channel);
+      const reactsToCurrentPrompt =
+        action === "react" && (requestedChannel ?? "webchat") === "webchat";
       if (reactsToCurrentPrompt && supportsPromptReactions && !currentPromptReaction) {
         throw new Error("No prompt here permits reactions; pass channel, target, and messageId.");
       }
@@ -396,17 +397,12 @@ function* createMessageToolSteps(
           checkResolvedAccount: false,
         }),
       );
-      const requestedBroadcastChannel = normalizeOptionalLowercaseString(params.channel);
-      if (
-        action === "broadcast" &&
-        requestedBroadcastChannel &&
-        requestedBroadcastChannel !== "all"
-      ) {
+      if (action === "broadcast" && requestedChannel && requestedChannel !== "all") {
         // Authorize and execute the same canonical provider. Otherwise an unavailable
         // hint can fall back to the current provider only after account authorization.
         const selection = await resolveMessageChannelSelection({
           cfg: rawConfig,
-          channel: requestedBroadcastChannel,
+          channel: requestedChannel,
           fallbackChannel: effectiveCurrentChannel.currentChannelProvider,
         });
         params.channel = selection.channel;
@@ -423,7 +419,7 @@ function* createMessageToolSteps(
       // prefixes cannot authorize fewer providers than the runner will execute.
       const unscopedExplicitBroadcast =
         action === "broadcast" &&
-        (!requestedBroadcastChannel || requestedBroadcastChannel === "all") &&
+        (!requestedChannel || requestedChannel === "all") &&
         requestedAccountId !== undefined;
       const explicitAccountId = await decisions.runBoundaryAsync(() =>
         validateExplicitMessageAccountSelection({

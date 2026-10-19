@@ -19,7 +19,6 @@ import {
   pushedSnapshot,
   retainControlUiSessionPrBranchSnapshot,
   UNAVAILABLE_SNAPSHOT,
-  type LoadSessionPullRequests,
 } from "./control-ui-session-pr-prepared-read.js";
 import type {
   ControlUiSessionPrRead,
@@ -48,7 +47,6 @@ type SubscriptionDeps = {
     session: Pick<ControlUiSessionPullRequestsParams, "sessionKey" | "agentId">,
   ) => Promise<ControlUiSessionPrRead | undefined>;
   isConnectionActive?: (connId: string) => boolean;
-  load?: LoadSessionPullRequests;
   scheduler: GatewayScheduler;
   getSessionRowProjection?: () => SessionRowProjection | undefined;
 };
@@ -83,15 +81,10 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
   const limit = pLimit(CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY);
   // Loads revalidate watchers while holding a slot, so reads use their own bounded queue.
   const limitReads = pLimit(CONTROL_UI_SESSION_PR_LOAD_CONCURRENCY);
-  const customLoad = deps.load;
-  const load = customLoad ?? loadSessionPullRequests;
   const withSource = <T>(
     target: ControlUiSessionPrTarget,
     operation: (assertCurrent: () => void, sourceIdentity: string) => Promise<T>,
-  ) =>
-    customLoad
-      ? operation(() => {}, target.identity)
-      : withControlUiSessionPrSource(target.readSource, operation);
+  ) => withControlUiSessionPrSource(target.readSource, operation);
   let pollJob: GatewayScheduledJob | undefined;
   const scope = new AsyncWorkScope();
   let stopPromise: Promise<void> | undefined;
@@ -183,7 +176,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
     scope,
     limit,
     withSource,
-    load,
+    load: loadSessionPullRequests,
     keyStates,
     stateForTarget,
     getSessionRowProjection: deps.getSessionRowProjection,
@@ -328,7 +321,7 @@ export function createControlUiSessionPullRequestSubscriptions(deps: Subscriptio
               }
               throw new Error("Session pull-request watchers changed");
             };
-            const snapshot = await load(
+            const snapshot = await loadSessionPullRequests(
               { ...state.target.params, ...(refresh ? { refresh: true } : {}) },
               state.cacheLifetime.signal,
               {

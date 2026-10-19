@@ -134,8 +134,6 @@ function isOperatorCriticalSubtitle(session: SidebarRecentSession): boolean {
 }
 
 export class SidebarSessionProjection {
-  constructor(private readonly now: () => number = () => Date.now()) {}
-
   // Record frame admission only; owner.updated can precede child DOM bindings.
   private publishedSessionPresentation = "";
   private admittedPresencePresentation = "";
@@ -668,7 +666,7 @@ export class SidebarSessionProjection {
       return;
     }
     const held = this.heldSubtitles.get(session.key);
-    const now = this.now();
+    const now = Date.now();
     const replacing = held !== undefined && held.value.subtitle !== value.subtitle;
     if (
       replacing &&

@@ -15,7 +15,7 @@ import { sessionArchiveShortcut } from "./session-menu-options.ts";
 import { useSessionSnoozeEntries } from "./session-menu-snooze.tsx";
 import { Icon, type IconName } from "./solid/icon.tsx";
 import { Kbd, KeyboardShortcut } from "./solid/kbd.tsx";
-import type { MenuEntry, MenuItem } from "./solid/menu.tsx";
+import type { MenuControls, MenuEntry, MenuItem } from "./solid/menu.tsx";
 
 export function SessionMenuShortcut(props: {
   shortcut: string;
@@ -64,7 +64,7 @@ const STANDARD_ITEMS = {
 export function useSessionMenuEntries(
   actions: SessionMenuActions,
   readState: () => MenuState,
-  options: { openInExtra?: () => readonly MenuEntry[] } = {},
+  options: { openInExtra?: () => readonly MenuEntry[]; controls?: MenuControls } = {},
 ) {
   const owner = getOwner();
   const state = readState();
@@ -76,8 +76,9 @@ export function useSessionMenuEntries(
     readState,
     (kind) => actions.actionDisabled(kind),
     (action) => actions.runAction(action),
+    options.controls?.ref,
   );
-  const details = useSessionMenuDetails(actions, readState, disabled);
+  const details = useSessionMenuDetails(actions, readState, disabled, options.controls);
   const multipleOwners = actions.ownerMenu.multipleOwners;
   const involvementAvailable = createMemo(() => actions.involvementAvailable);
   let appearanceContent: JSX.Element;

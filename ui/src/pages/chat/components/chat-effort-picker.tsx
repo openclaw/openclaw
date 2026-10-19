@@ -213,7 +213,9 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
         const pickerOverlay = createChatPickerOverlay((details) => setOpen(details.open));
         return (
           <details
-            ref={pickerOverlay}
+            ref={pickerOverlay.details}
+            onClick={pickerOverlay.onClick}
+            onToggle={pickerOverlay.onToggle}
             class={[
               "chat-controls__inline-select chat-controls__effort-picker",
               {
@@ -224,6 +226,7 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
             inert={props.reserved === true}
           >
             <summary
+              ref={pickerOverlay.trigger}
               class={[
                 "chat-controls__inline-select-trigger chat-controls__effort-trigger",
                 {
@@ -298,7 +301,12 @@ export function ChatEffortPicker(props: ChatEffortPickerParams) {
                 <Icon name="chevronUp" />
               </span>
             </summary>
-            <div class="oc-overlay chat-picker-overlay" data-anchored-overlay popover="manual">
+            <div
+              ref={pickerOverlay.surface}
+              class="oc-overlay chat-picker-overlay"
+              data-anchored-overlay
+              popover="manual"
+            >
               <Show when={open()}>
                 <div
                   class="chat-controls__inline-select-menu chat-controls__effort-menu"

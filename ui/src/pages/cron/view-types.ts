@@ -96,7 +96,8 @@ export type CronProps = {
     cronRunsQuery?: string;
     cronRunsSortDir?: CronSortDir;
   }) => void | Promise<void>;
-  onHighlightedRun?: (element: HTMLElement, link: string) => () => void;
+  /** The owner reads current entries after publication; cleanup retires the mounted row. */
+  onRunMount?: (element: HTMLElement, entry: () => CronRunLogEntry) => (() => void) | undefined;
   onViewRunTranscript?: (entry: CronRunLogEntry, trigger: HTMLButtonElement) => void;
 };
 

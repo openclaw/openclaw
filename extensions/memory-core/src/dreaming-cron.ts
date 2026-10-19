@@ -1,4 +1,5 @@
 /** Stateless convergence of the memory-core-owned dreaming cron job family. */
+import { extractErrorCode } from "openclaw/plugin-sdk/error-runtime";
 import {
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_NAME,
   LEGACY_MEMORY_LIGHT_DREAMING_CRON_TAG,
@@ -86,7 +87,14 @@ export type CronServiceLike = {
 };
 
 type ReconcileResult = {
-  status: "unavailable" | "disabled" | "doctor-required" | "added" | "updated" | "noop";
+  status:
+    | "unavailable"
+    | "disabled"
+    | "doctor-required"
+    | "owner-required"
+    | "added"
+    | "updated"
+    | "noop";
   removed: number;
 };
 
@@ -256,7 +264,14 @@ export async function reconcileShortTermDreamingCronJob(params: {
   const desired = buildManagedDreamingCronJob(params.config);
   const primary = managed[0];
   if (!primary) {
-    await cron.add(desired);
+    try {
+      await cron.add(desired);
+    } catch (error) {
+      if (extractErrorCode(error) === "AGENT_SELECTION_REQUIRED") {
+        return { status: "owner-required", removed: 0 };
+      }
+      throw error;
+    }
     params.logger.info("memory-core: created managed dreaming cron job.");
     return { status: "added", removed: 0 };
   }

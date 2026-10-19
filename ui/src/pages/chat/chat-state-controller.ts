@@ -305,12 +305,15 @@ export function createChatState<TState extends ChatPageHost>(
       }
     },
 
-    prepareRender() {
+    publishPendingRunState() {
       const state = stateValue;
       if (state?.chatStreamRenderFrame != null) {
         cancelChatStreamRenderFrame(state);
         publishChatRunState(state);
       }
+    },
+
+    captureRenderChanges() {
       // Every owner-driven frame captures transcript changes before its DOM commit.
       captureRenderLifecycleChanges();
     },

@@ -158,3 +158,8 @@ export {
   CODEX_TOOL_POLICY_SAFE_DENY_NAMES,
 } from "./native-tool-policy.js";
 export { buildCodexRuntimeThreadConfigForRun } from "./src/app-server/thread-requests.js";
+
+export const loadCodexDynamicToolBuildTestFixture = () =>
+  import("./src/app-server/dynamic-tool-build.test-support.js");
+
+export const loadCodexNativeWebSearchTestFixture = () => import("./native-web-search.test-api.js");

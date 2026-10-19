@@ -3,7 +3,7 @@ import type { UserModelAccount } from "../../../../packages/gateway-protocol/src
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogResult } from "../../api/types.ts";
 import { createDraftTitleFixture } from "./draft-title.test-support.ts";
-import { renderControl } from "./model-control.test-support.ts";
+import { renderControl, waitForModelControl } from "./model-control.test-support.ts";
 
 let releaseAccount: (() => void) | undefined;
 beforeEach(() => {
@@ -92,7 +92,13 @@ function accountTitleFixture(preview?: ReturnType<typeof createDeferred<ModelCat
     titleRequest,
     select,
     chooseAccount: async (account: UserModelAccount) => {
-      draw().querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
+      const container = await waitForModelControl(
+        place.modelControl,
+        context,
+        "main",
+        place.selectedAgent(),
+      );
+      container.querySelector<HTMLButtonElement>("[data-chat-account-group-toggle]")!.click();
       await vi.advanceTimersByTimeAsync(0);
       expect(draw().textContent).toContain(account.label);
       select(`account:${account.authProfileId}`);

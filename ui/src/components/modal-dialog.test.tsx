@@ -259,7 +259,8 @@ describe("openclaw-modal-dialog", () => {
       try {
         const { modal } = await renderModal();
 
-        showToast({ message: "Saved" });
+        // Keep the toast active through a cold lazy import; this test covers layer handoff.
+        showToast({ message: "Saved", durationMs: 60_000 });
         await commitRender(appHost);
         await vi.dynamicImportSettled();
         flush();

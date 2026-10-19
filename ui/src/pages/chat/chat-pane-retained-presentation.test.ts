@@ -37,6 +37,7 @@ import {
   type TestChatPane,
 } from "./chat-pane.test-support.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { getChatComposerState } from "./components/chat-composer-state.ts";
 import { resetChatComposerState } from "./components/chat-composer.tsx";
 import { openSessionWorkspaceFile } from "./components/chat-session-workspace.ts";
 import {
@@ -114,6 +115,7 @@ describe("chat pane retained presentation lifecycle", () => {
         inputRegion: "page" | "dock";
       };
       mounted.inputRegion = index === 0 ? "page" : "dock";
+      mounted.presentationId = `native-drafts-${mounted.inputRegion}`;
       mounted.sessionKey = index === 0 ? "agent:work:task" : "agent:main:main";
       state.sessionKey = mounted.sessionKey;
       state.settings = {
@@ -131,6 +133,7 @@ describe("chat pane retained presentation lifecycle", () => {
       const composer = document.createElement("div");
       composer.className = "agent-chat__composer-combobox";
       const textarea = composer.appendChild(document.createElement("textarea"));
+      getChatComposerState(mounted.presentationId).composerTextarea = textarea;
       mounted.append(composer);
       const focus = vi.spyOn(textarea, "focus");
       connectPaneTestView(mounted);
@@ -406,7 +409,7 @@ describe("chat pane retained presentation lifecycle", () => {
     const focus = vi.spyOn(textarea, "focus");
     const target = activePane.appendChild(document.createElement("main"));
     target.addEventListener("keydown", (event) =>
-      focusChatComposerFromPrintableKeydown(activePane, event),
+      focusChatComposerFromPrintableKeydown(activePane, event, textarea),
     );
     const retainedPane = app.appendChild(document.createElement("div"));
     retainedPane.setAttribute("inert", "");

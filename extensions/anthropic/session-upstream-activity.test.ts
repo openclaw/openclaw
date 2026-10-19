@@ -16,22 +16,41 @@ function createClaudeUpstreamWorkspace(label?: string) {
   });
 }
 
+function localProbe(
+  filePath: string,
+  marker: SessionUpstreamProbe["marker"],
+  sessionKey = "agent:main:adopted:claude",
+  threadId = path.basename(filePath, ".jsonl"),
+): SessionUpstreamProbe {
+  return {
+    sessionKey,
+    threadId,
+    agentId: "main",
+    hostId: "gateway:local",
+    upstreamKind: "claude-cli",
+    upstreamRef: { filePath },
+    marker,
+    ownRecentUserTexts: [],
+  };
+}
+
 async function checkActivity(probe: SessionUpstreamProbe) {
   return (await checkClaudeUpstreamActivity([probe]))[0];
 }
 
-function row(params: {
-  type: "user" | "assistant";
-  content: unknown;
-  timestamp: string;
-  extra?: Record<string, unknown>;
-}) {
-  return JSON.stringify({
-    type: params.type,
-    timestamp: params.timestamp,
-    message: { role: params.type, content: params.content },
-    ...params.extra,
+function continueLink(overrides: Partial<Parameters<typeof linkContinued>[0]>) {
+  return linkContinued({
+    sessionKey: "agent:main:adopted",
+    hostId: "node:devbox",
+    threadId: "thread-1",
+    listLocalSessions: async () => [],
+    readRemote: async () => [],
+    ...overrides,
   });
+}
+
+function row(type: "user" | "assistant", content: unknown, timestamp: string) {
+  return JSON.stringify({ type, timestamp, message: { role: type, content } }) + "\n";
 }
 
 async function injectFileShortReads(filePath: string, maxBytes: number): Promise<void> {
@@ -60,49 +79,19 @@ afterEach(() => {
 describe("Claude upstream activity", () => {
   it("stats without reading when the file did not grow", async () => {
     await using workspace = await createClaudeUpstreamWorkspace("static");
-    const dir = workspace.dir;
-    const filePath = path.join(dir, "thread-2.jsonl");
+    const filePath = path.join(workspace.dir, "thread-2.jsonl");
     await fs.writeFile(filePath, "{}\n");
-    await expect(
-      checkActivity({
-        sessionKey: "agent:main:adopted:claude-static",
-        agentId: "main",
-        threadId: "thread-2",
-        hostId: "gateway:local",
-        upstreamKind: "claude-cli",
-        upstreamRef: { filePath },
-        marker: { size: 3 },
-        ownRecentUserTexts: [],
-      }),
-    ).resolves.toBeUndefined();
+    await expect(checkActivity(localProbe(filePath, { size: 3 }))).resolves.toBeUndefined();
   });
 
   it("completes bounded scan windows across positional short reads", async () => {
     await using workspace = await createClaudeUpstreamWorkspace("short-read");
     const filePath = path.join(workspace.dir, "thread-short-read.jsonl");
-    await fs.writeFile(
-      filePath,
-      `${row({
-        type: "user",
-        content: "short-read prompt",
-        timestamp: "2026-07-13T10:05:00.000Z",
-      })}\n`,
-    );
+    await fs.writeFile(filePath, row("user", "short-read prompt", "2026-07-13T10:05:00.000Z"));
     await injectFileShortReads(filePath, 17);
     const completeSize = (await fs.stat(filePath)).size;
 
-    await expect(
-      checkActivity({
-        sessionKey: "agent:main:adopted:claude-short-read",
-        agentId: "main",
-        threadId: "thread-short-read",
-        hostId: "gateway:local",
-        upstreamKind: "claude-cli",
-        upstreamRef: { filePath },
-        marker: { offset: 0 },
-        ownRecentUserTexts: [],
-      }),
-    ).resolves.toEqual(
+    await expect(checkActivity(localProbe(filePath, { offset: 0 }))).resolves.toEqual(
       expect.objectContaining({
         kind: "activity",
         humanTurns: 1,
@@ -112,16 +101,7 @@ describe("Claude upstream activity", () => {
 
     await fs.appendFile(filePath, '{"type":"user"');
     await expect(
-      checkActivity({
-        sessionKey: "agent:main:adopted:claude-short-read",
-        agentId: "main",
-        threadId: "thread-short-read",
-        hostId: "gateway:local",
-        upstreamKind: "claude-cli",
-        upstreamRef: { filePath },
-        marker: { offset: completeSize },
-        ownRecentUserTexts: [],
-      }),
+      checkActivity(localProbe(filePath, { offset: completeSize })),
     ).resolves.toBeUndefined();
   });
 
@@ -130,41 +110,15 @@ describe("Claude upstream activity", () => {
     vi.spyOn(fs, "open").mockRejectedValueOnce(error);
 
     await expect(
-      checkActivity({
-        sessionKey: "agent:main:adopted:claude-permission",
-        agentId: "main",
-        threadId: "thread-permission",
-        hostId: "gateway:local",
-        upstreamKind: "claude-cli",
-        upstreamRef: { filePath: "/unreadable/thread.jsonl" },
-        marker: { offset: 3 },
-        ownRecentUserTexts: [],
-      }),
+      checkActivity(localProbe("/unreadable/thread.jsonl", { offset: 3 })),
     ).resolves.toBeUndefined();
   });
 
   it("isolates a missing transcript from healthy probes", async () => {
     await using workspace = await createClaudeUpstreamWorkspace("batch");
-    const dir = workspace.dir;
-    const filePath = path.join(dir, "thread-good.jsonl");
-    await fs.writeFile(
-      filePath,
-      `${row({
-        type: "user",
-        content: "new prompt",
-        timestamp: "2026-07-13T10:06:00.000Z",
-      })}\n`,
-    );
-    const baseProbe: SessionUpstreamProbe = {
-      sessionKey: "healthy",
-      agentId: "main",
-      threadId: "thread-good",
-      hostId: "gateway:local",
-      upstreamKind: "claude-cli",
-      upstreamRef: { filePath },
-      marker: { size: 0 },
-      ownRecentUserTexts: [],
-    };
+    const filePath = path.join(workspace.dir, "thread-good.jsonl");
+    await fs.writeFile(filePath, row("user", "new prompt", "2026-07-13T10:06:00.000Z"));
+    const baseProbe: SessionUpstreamProbe = localProbe(filePath, { size: 0 }, "healthy");
 
     await expect(
       checkClaudeUpstreamActivity([
@@ -179,14 +133,12 @@ describe("Claude upstream activity", () => {
 
   it("keeps continuation successful when baseline enumeration fails", async () => {
     await expect(
-      linkContinued({
+      continueLink({
         sessionKey: "session-key",
         hostId: "gateway:local",
-        threadId: "thread-1",
         listLocalSessions: async () => {
           throw new Error("catalog unavailable");
         },
-        readRemote: async () => [],
       }),
     ).resolves.toEqual({ sessionKey: "session-key" });
   });
@@ -228,34 +180,16 @@ describe("Claude upstream activity", () => {
 
   it("scans forward across bounded ticks without skipping a middle user row", async () => {
     await using workspace = await createClaudeUpstreamWorkspace("chunks");
-    const dir = workspace.dir;
-    const filePath = path.join(dir, "thread-chunks.jsonl");
-    const firstRow = `${row({
-      type: "assistant",
-      content: "x".repeat(CLAUDE_UPSTREAM_SCAN_BYTES - 200),
-      timestamp: "2026-07-13T10:08:00.000Z",
-    })}\n`;
-    const userRow = `${row({
-      type: "user",
-      content: "middle prompt",
-      timestamp: "2026-07-13T10:09:00.000Z",
-    })}\n`;
-    const finalRow = `${row({
-      type: "assistant",
-      content: "y".repeat(512 * 1024),
-      timestamp: "2026-07-13T10:10:00.000Z",
-    })}\n`;
+    const filePath = path.join(workspace.dir, "thread-chunks.jsonl");
+    const firstRow = row(
+      "assistant",
+      "x".repeat(CLAUDE_UPSTREAM_SCAN_BYTES - 200),
+      "2026-07-13T10:08:00.000Z",
+    );
+    const userRow = row("user", "middle prompt", "2026-07-13T10:09:00.000Z");
+    const finalRow = row("assistant", "y".repeat(512 * 1024), "2026-07-13T10:10:00.000Z");
     await fs.writeFile(filePath, firstRow + userRow + finalRow);
-    const baseProbe: SessionUpstreamProbe = {
-      sessionKey: "agent:main:adopted:claude-chunks",
-      agentId: "main",
-      threadId: "thread-chunks",
-      hostId: "gateway:local",
-      upstreamKind: "claude-cli",
-      upstreamRef: { filePath },
-      marker: { offset: 0 },
-      ownRecentUserTexts: [],
-    };
+    const baseProbe: SessionUpstreamProbe = localProbe(filePath, { offset: 0 });
 
     const first = await checkActivity(baseProbe);
     expect(first).toEqual({
@@ -277,22 +211,13 @@ describe("Claude upstream activity", () => {
   });
 
   it("declines a remote link when the newest history item lacks a UUID", async () => {
-    const readRemote = async () => [{ type: "userMessage", text: "hi" }] as never;
-    const declined = await linkContinued({
-      sessionKey: "agent:main:adopted",
-      hostId: "node:devbox",
-      threadId: "thread-1",
-      listLocalSessions: async () => [],
-      readRemote,
+    const declined = await continueLink({
+      readRemote: async () => [{ type: "userMessage", text: "hi" }] as never,
     });
     // UUID-less newest item cannot baseline safely; no upstream link is seeded.
     expect(declined).toEqual({ sessionKey: "agent:main:adopted" });
 
-    const linked = await linkContinued({
-      sessionKey: "agent:main:adopted",
-      hostId: "node:devbox",
-      threadId: "thread-1",
-      listLocalSessions: async () => [],
+    const linked = await continueLink({
       readRemote: async () => [{ type: "userMessage", text: "hi", uuid: "u-9" }] as never,
     });
     expect(linked.upstream?.marker).toEqual({ uuid: "u-9" });

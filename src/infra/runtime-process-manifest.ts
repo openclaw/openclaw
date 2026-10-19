@@ -1,12 +1,12 @@
 // Keep subprocess metadata independent of executable launcher declarations.
 export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
-  function runtimeProcessEntrypoint(modulePath: string) {
+  function runtimeProcessEntrypoint(modulePath: string, distModulePath = modulePath) {
     return {
       currentModuleUrl,
       sourceWorkerName: modulePath.startsWith("infra/")
         ? modulePath.slice("infra/".length)
         : `../${modulePath}`,
-      distWorkerPath: `${modulePath}.js`,
+      distWorkerPath: `${distModulePath}.js`,
     } as const;
   }
 
@@ -44,10 +44,18 @@ export function createRuntimeProcessEntrypoints(currentModuleUrl: string) {
       "plugins/plugin-generation-preparation.worker",
     ),
     agentDatabaseExecution: runtimeProcessEntrypoint("state/openclaw-agent-execution.worker"),
-    workspaceMemory: runtimeProcessEntrypoint("worker/memory-worker-entry"),
+    // dist/worker is the sealed portable-deploy graph and is excluded from npm.
+    // Local workspace subprocesses must remain directly launchable after installation.
+    workspaceMemory: runtimeProcessEntrypoint(
+      "worker/memory-worker-entry",
+      "agents/workspace-memory.worker",
+    ),
     localAgentAvatar: runtimeProcessEntrypoint("agents/identity-avatar-file.worker"),
     identityFile: runtimeProcessEntrypoint("agents/identity-file.worker"),
-    workspaceSkills: runtimeProcessEntrypoint("worker/skills-worker-entry"),
+    workspaceSkills: runtimeProcessEntrypoint(
+      "worker/skills-worker-entry",
+      "agents/workspace-skills.worker",
+    ),
     skillsDiscovery: runtimeProcessEntrypoint("skills/runtime/discovery.worker"),
     boardStore: runtimeProcessEntrypoint("boards/sqlite-board-store.worker"),
     progressCardStore: runtimeProcessEntrypoint("session-cards/progress-card-store.worker"),

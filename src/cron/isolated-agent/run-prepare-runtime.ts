@@ -12,6 +12,7 @@ import {
 } from "../../security/external-content-source.js";
 import { createLazyImportLoader } from "../../shared/lazy-promise.js";
 import type { CronCompletionDeliveryFence } from "../delivery-attempt-fence.js";
+import { STARTUP_INTERRUPTED_ERROR } from "../execution-error-constants.js";
 import type {
   CronAgentExecutionPhaseUpdate,
   CronAgentExecutionStarted,
@@ -182,7 +183,7 @@ export async function retireRolledCronSessionMcpRuntime(params: {
 
 /** Builds the cron prompt while preserving hook wrapping and the stable unattended suffix. */
 export async function buildCronCommandBody(params: {
-  job: Pick<CronJob, "id" | "name" | "payload">;
+  job: Pick<CronJob, "id" | "name" | "payload"> & Partial<Pick<CronJob, "state">>;
   cfg: OpenClawConfig;
   message: string;
   baseSessionKey: string;
@@ -230,6 +231,11 @@ export async function buildCronCommandBody(params: {
   commandBody = appendCronUnattendedRunPreamble(commandBody, {
     externalHook: isExternalHook,
   });
+  if (job.state?.lastError === STARTUP_INTERRUPTED_ERROR) {
+    commandBody +=
+      "\n\nThe previous attempt was interrupted by a Gateway restart. Continue the unfinished task. " +
+      "Inspect the retained conversation and any tool effects before acting; do not repeat work or deliveries that already completed.";
+  }
   return { sourcePromptPrefix, isExternalHook, commandBody };
 }
 

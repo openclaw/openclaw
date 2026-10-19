@@ -177,7 +177,6 @@ function harness(provider?: string) {
     {
       sessionKey,
       dispatchEvent: () => true,
-      querySelector: () => null,
     },
   );
   state.client = client;

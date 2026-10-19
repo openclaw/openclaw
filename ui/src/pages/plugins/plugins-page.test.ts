@@ -835,6 +835,12 @@ it("requires a fresh install-policy review after reconnect", async () => {
   expect(installCalls).toBe(1);
   await clickPluginAction(page, "Install");
   await waitForSolid(() => expect(installCalls).toBe(2));
+  await waitForSolid(() => {
+    const continueButton = [...page.querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Continue installation",
+    );
+    expect(continueButton?.disabled).toBe(false);
+  });
   await clickPluginAction(page, "Continue installation");
   await waitForSolid(() => expect(installCalls).toBe(3));
   expect(showConfirmDialog).not.toHaveBeenCalled();

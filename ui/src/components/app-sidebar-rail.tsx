@@ -24,6 +24,7 @@ import {
 import { handleContextMenuEvent } from "../lib/keyboard-shortcuts.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectOnlinePresenceViewers, presenceViewerLabel } from "../lib/presence-users.ts";
+import { elementRef } from "../lib/reactive/element-ref.ts";
 import { t } from "../lib/reactive/i18n.ts";
 import { nativeListener } from "../lib/solid-native-listener.ts";
 import {
@@ -102,6 +103,16 @@ export function renderSidebarRail(host: AppSidebarRenderHost): JSX.Element {
         <For each={views}>
           {(view) => (
             <button
+              ref={[
+                elementRef((element: HTMLButtonElement) => {
+                  host.navigationViewElements.set(view, element);
+                  return () => {
+                    if (host.navigationViewElements.get(view) === element) {
+                      host.navigationViewElements.delete(view);
+                    }
+                  };
+                }),
+              ]}
               type="button"
               class="sidebar-rail__button"
               title={

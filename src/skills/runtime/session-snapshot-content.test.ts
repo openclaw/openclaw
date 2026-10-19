@@ -29,15 +29,20 @@ beforeEach(() => {
   })) {
     vi.stubEnv(key, value);
   }
-  vi.useFakeTimers({ toFake: ["setInterval", "clearInterval"] });
+  vi.useFakeTimers({
+    toFake: ["Date", "performance", "setTimeout", "clearTimeout", "setInterval", "clearInterval"],
+  });
+  vi.setSystemTime(0);
 });
 const config = { plugins: { enabled: false } };
 
 async function completePassiveScan() {
   const tasks = vi.spyOn(WorkerTaskPool.prototype, "run");
   try {
-    await vi.advanceTimersByTimeAsync(60_000);
-    await Promise.all(tasks.mock.results.map((result) => result.value));
+    for (let elapsed = 0; elapsed < 30 * 60_000 + 50; elapsed += 60_000) {
+      await vi.advanceTimersByTimeAsync(Math.min(60_000, 30 * 60_000 + 50 - elapsed));
+      await Promise.all(tasks.mock.results.map((result) => result.value));
+    }
   } finally {
     tasks.mockRestore();
   }

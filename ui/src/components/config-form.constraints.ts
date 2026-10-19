@@ -1,4 +1,3 @@
-// Control UI helpers derive native constraints and safe initial values from config schemas.
 import {
   isJsonSchemaValueValid as isSupportedConfigValueValid,
   jsonSchemaValuesEqual as configValuesEqual,

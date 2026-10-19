@@ -59,7 +59,7 @@ export function buildXaiRealtimeTranscriptionProvider(
         providerId: "xai",
         callbacks,
         url: () => {
-          const url = new URL(normalizeXaiRealtimeBaseUrl(baseUrl));
+          const url = new URL(baseUrl);
           url.protocol = url.protocol === "http:" ? "ws:" : "wss:";
           url.pathname = `${url.pathname.replace(/\/+$/, "")}/stt`;
           url.searchParams.set("sample_rate", String(config.sampleRate ?? 8000));

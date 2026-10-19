@@ -95,6 +95,105 @@ it("drops a pending response when the selected agent changes and shows the curre
   expect(view.textContent?.trim()).toBe("");
 });
 
+it("retires native scope changes immediately and coalesces them across explicit refresh", async () => {
+  const stale = createDeferredCore();
+  const previous = createGatewayRequestMock(async () => {
+    await stale.promise;
+    return snapshot;
+  });
+  const view = await mount(previous);
+  await waitForSolid(() => expect(previous).toHaveBeenCalledOnce());
+  const current = createGatewayRequestMock(async (_method, params) => ({
+    ...snapshot,
+    providers: [{ ...snapshot.providers[0], plan: (params as { profileId: string }).profileId }],
+  }));
+
+  view.client = createTestGatewayClient(current);
+  expect(previous.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
+  view.agentId = "other";
+  view.profileId = "openai:current";
+  expect(current).not.toHaveBeenCalled();
+  await waitForSolid(() => expect(current).toHaveBeenCalledOnce());
+  expect(current.mock.calls[0]?.[1]).toEqual({
+    agentId: "other",
+    profileId: "openai:current",
+  });
+  await waitForSolid(() => expect(view.textContent).toContain("openai:current"));
+
+  view.agentId = "third";
+  view.refreshUsage();
+  expect(current).toHaveBeenCalledTimes(2);
+  view.profileId = "openai:final";
+  expect(current.mock.calls[1]?.[2]?.signal?.aborted).toBe(true);
+  await waitForSolid(() => expect(current).toHaveBeenCalledTimes(3));
+  expect(current.mock.calls[2]?.[1]).toEqual({
+    agentId: "third",
+    profileId: "openai:final",
+  });
+  await waitForSolid(() => expect(view.textContent).toContain("openai:final"));
+  stale.resolve();
+  await previous.mock.results[0]!.value;
+  await view.updateComplete;
+  expect(view.textContent).toContain("openai:final");
+  expect(view.textContent).not.toContain("openai:current");
+  expect(current).toHaveBeenCalledTimes(3);
+});
+
+it("retires requests and native refresh receipts when disposed", async () => {
+  const pending = createDeferredCore();
+  const request = createGatewayRequestMock(async () => {
+    await pending.promise;
+    return snapshot;
+  });
+  const view = await mount(request);
+  await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+  view.remove();
+  await Promise.resolve();
+  expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
+  view.agentId = "other";
+  view.profileId = "openai:other";
+  view.refreshUsage();
+  await view.updateComplete;
+  expect(request).toHaveBeenCalledOnce();
+  pending.resolve();
+  await request.mock.results[0]!.value;
+  await view.updateComplete;
+  expect(view.textContent).not.toContain("12 credits");
+});
+
+it("replaces a cancelled read when same-turn receipts return to the original account", async () => {
+  const stale = createDeferredCore();
+  let calls = 0;
+  const request = createGatewayRequestMock(async () => {
+    if (++calls === 1) {
+      await stale.promise;
+      return {
+        ...snapshot,
+        providers: [
+          { ...snapshot.providers[0], billing: [{ type: "balance", amount: 99, unit: "credits" }] },
+        ],
+      };
+    }
+    return snapshot;
+  });
+  const view = await mount(request);
+  await waitForSolid(() => expect(request).toHaveBeenCalledOnce());
+  view.agentId = "other";
+  view.agentId = "main";
+  expect(request.mock.calls[0]?.[2]?.signal?.aborted).toBe(true);
+  await waitForSolid(() => expect(request).toHaveBeenCalledTimes(2));
+  await waitForSolid(() => expect(view.textContent).toContain("12 credits"));
+  stale.resolve();
+  await new Promise<void>((resolve) => {
+    setTimeout(resolve, 0);
+  });
+  flush();
+  await view.updateComplete;
+  expect(request).toHaveBeenCalledTimes(2);
+  expect(view.textContent).toContain("12 credits");
+  expect(view.textContent).not.toContain("99 credits");
+});
+
 it("shows the empty state when Codex returns a snapshot without quota data", async () => {
   const request = createGatewayRequestMock(async () => ({
     updatedAt: 1,

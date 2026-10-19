@@ -1,4 +1,5 @@
 import { once } from "node:events";
+import { createServer as createHttpServer } from "node:http";
 import net, { type Socket } from "node:net";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -13,8 +14,11 @@ import {
 } from "../../src/state/openclaw-state-db-cache.js";
 import { openOpenClawStateDatabase } from "../../src/state/openclaw-state-db.js";
 import { withEnvAsync } from "../../src/test-utils/env.js";
+import { reserveTestPortListener } from "../../src/test-utils/port-claims.js";
+import * as ports from "../../src/test-utils/ports.js";
 import {
   createDesktopResizeGuest,
+  createDesktopResizeProxy,
   observeDesktopEndpointPackets,
   resizeSources,
   seedDesktopResizeSources,
@@ -54,6 +58,39 @@ function fixture(carrier: DesktopResizeFixture["carrier"] = "ssh"): DesktopResiz
     },
   };
 }
+
+it("keeps the Gateway listener available when free-port probes reuse an address", async () => {
+  const reserved = await reserveTestPortListener({
+    offsets: [0],
+    createListener: () => net.createServer(),
+  });
+  await reserved.releaseListener();
+  const probe = vi.spyOn(ports, "getFreePort").mockResolvedValue(reserved.claim.port);
+  onTestFinished(async () => {
+    probe.mockRestore();
+    await reserved.claim.release();
+  });
+  const proxy = await createDesktopResizeProxy();
+  const gateway = createHttpServer((_request, response) => response.end("ready"));
+  onTestFinished(async () => {
+    try {
+      if (gateway.listening) {
+        await new Promise<void>((resolve, reject) => {
+          gateway.close((error) => (error ? reject(error) : resolve()));
+        });
+      }
+    } finally {
+      await proxy.close();
+    }
+  });
+  const gatewayPort = proxy.gatewayPort;
+  await new Promise<void>((resolve, reject) => {
+    gateway.once("error", reject);
+    gateway.listen(gatewayPort, "127.0.0.1", resolve);
+  });
+  const response = await fetch(new URL("/readyz", proxy.baseUrl));
+  expect(await response.text()).toBe("ready");
+});
 
 describe("desktop resize fixture provenance and carrier", () => {
   it.each([undefined, "/tmp/desktop proof/Xauthority"])(

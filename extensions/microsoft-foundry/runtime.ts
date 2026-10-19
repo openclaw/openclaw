@@ -75,12 +75,9 @@ export async function prepareFoundryRuntimeAuth(
     });
     const credential = ctx.profileId ? authStore.profiles[ctx.profileId] : undefined;
     const metadata = credential?.type === "api_key" ? credential.metadata : undefined;
-    const modelId =
-      normalizeOptionalString(ctx.modelId) ??
-      normalizeOptionalString(metadata?.modelId) ??
-      ctx.modelId;
     const requestedModelId = normalizeOptionalString(ctx.modelId);
     const metadataModelId = normalizeOptionalString(metadata?.modelId);
+    const modelId = requestedModelId ?? metadataModelId ?? ctx.modelId;
     const activeModelUsesMetadata = !requestedModelId || requestedModelId === metadataModelId;
     const activeModelNameHint = activeModelUsesMetadata ? metadata?.modelName : undefined;
     const modelNameHint = resolveConfiguredModelNameHint(

@@ -72,6 +72,8 @@ export async function runSessionsSendA2AFlow(params: {
   callGateway?: AgentToolGatewayRequestCaller;
   targetSessionKey: string;
   targetAgentId: string;
+  targetSession?: AgentStepSession;
+  replyAdmission?: Parameters<typeof runAgentStep>[0]["replyAdmission"];
   displayKey: string;
   runId: string;
   replyTimeoutMs: number;
@@ -96,8 +98,11 @@ export async function runSessionsSendA2AFlow(params: {
     deliveryContext: params.requesterOrigin,
     requester: params.requester,
     expectedSession: params.requesterSession,
+    expectedSourceSession: params.targetSession,
+    replyAdmission: params.replyAdmission,
     timeoutMs: params.replyTimeoutMs,
     sourceSessionKey: params.targetSessionKey,
+    ...(child ? {} : { sourceAgentId: params.targetAgentId }),
     callGateway: gatewayCall,
     sourceTool: child ? "subagent_announce" : "sessions_send",
     ...(child ? { sourceRole: "subagent" as const } : {}),

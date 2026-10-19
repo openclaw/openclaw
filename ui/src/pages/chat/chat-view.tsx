@@ -1,6 +1,6 @@
 import { dynamic } from "@solidjs/web";
 import type { Component } from "solid-js";
-import { createEffect, createMemo, createSignal, Show, untrack } from "solid-js";
+import { createMemo, Show, untrack } from "solid-js";
 import type { ControlUiSurfaceProps } from "../../../../src/plugin-sdk/control-ui.js";
 import type { ApplicationContext } from "../../app/context-types.ts";
 import { ExecApprovalCard } from "../../components/exec-approval-card-solid.tsx";
@@ -10,11 +10,11 @@ import {
   KEYBOARD_SHORTCUT_COMBOS,
   matchesShortcutCombo,
 } from "../../lib/keyboard-shortcut-contract.ts";
-import { PRESENTATION_CHANGED_EVENT } from "../../lib/presentation.ts";
 import { projectGateway } from "../../lib/reactive/application.ts";
 import { ApplicationProvider, useOptionalApplication } from "../../lib/reactive/context.ts";
 import { t } from "../../lib/reactive/i18n.ts";
 import { createParkedProjection } from "../../lib/reactive/parked-projection.ts";
+import { projectPresentation } from "../../lib/reactive/presentation.ts";
 import { projectSource } from "../../lib/reactive/projection.ts";
 import { scopedSessionArtifactKey } from "../../lib/sessions/session-key.ts";
 import { PluginSurface } from "../../plugins/control-ui-view.solid.tsx";
@@ -55,10 +55,18 @@ type ChatViewInput = {
   frame: ChatViewFrame;
   presented: boolean;
   application?: ApplicationContext;
+  bindTranscriptViewport: (element: HTMLDivElement) => () => void;
+  getTranscriptElement: () => HTMLDivElement | null;
 };
 
 function ChatTranscript(input: ChatViewInput) {
-  return <ChatThread props={input.frame.threadProps} transcript={input.props.transcript} />;
+  return (
+    <ChatThread
+      props={input.frame.threadProps}
+      transcript={input.props.transcript}
+      bindViewport={input.bindTranscriptViewport}
+    />
+  );
 }
 
 function ChatFooterContent(input: ChatViewInput) {
@@ -162,6 +170,7 @@ function ChatComposerView(input: ChatViewInput) {
   return (
     <ChatComposer
       {...input.props}
+      getTranscriptElement={input.getTranscriptElement}
       progressCard={input.props.detailsEnabled ? null : input.props.progressCard}
       progressCardInitialLoading={
         input.props.detailsEnabled ? false : input.props.progressCardInitialLoading
@@ -179,9 +188,15 @@ function ChatComposerView(input: ChatViewInput) {
 }
 
 function ChatComposerCompanion(input: ChatViewInput) {
+  // The companion belongs to this pane's lifetime; replacement panes mount a new owner.
+  const initialPaneId = untrack(() => input.props.paneId);
   const questionPanel = createComposerQuestionPanel(
-    () => ({ ...input.props, asyncQuestions: input.frame.asyncQuestions }),
-    getChatComposerState(untrack(() => input.props.paneId)),
+    () => ({
+      ...input.props,
+      asyncQuestions: input.frame.asyncQuestions,
+      getTranscriptElement: input.getTranscriptElement,
+    }),
+    getChatComposerState(initialPaneId),
   );
   return (
     <div class="chat-footer__context">
@@ -212,7 +227,7 @@ function ChatComposerCompanion(input: ChatViewInput) {
 
 /** Plugin mountDefault creates a separate root and must carry its application scope. */
 function ChatSurfaceContent(input: { view: Component<ChatViewInput>; viewProps: ChatViewInput }) {
-  const View = untrack(() => input.view);
+  const View = dynamic(() => input.view);
   return (
     <Show when={input.viewProps.application} keyed fallback={<View {...input.viewProps} />}>
       {(application) => (
@@ -236,12 +251,14 @@ function ChatSurface(input: {
   viewProps: ChatViewInput;
   view: Component<ChatViewInput>;
   companion?: Component<ChatViewInput>;
+  replacementRef?: (element: HTMLElement) => void | (() => void);
 }) {
   return (
     <PluginSurface
       surface={input.binding["prop:surface"]}
       props={input.binding["prop:props"]}
       presented={input.viewProps.presented}
+      replacementRef={input.replacementRef}
       renderDefault={() => <ChatSurfaceContent view={input.view} viewProps={input.viewProps} />}
       renderCompanion={() => (
         <Show when={input.companion} keyed>
@@ -265,7 +282,26 @@ export function ChatView(input: { props: ChatProps; application?: ApplicationCon
 }
 
 function ChatContent(input: { props: ChatProps }) {
-  let root: HTMLElement | undefined;
+  // Composer sizing needs the viewport even before the virtualizer has rows.
+  let transcriptViewport: HTMLDivElement | undefined;
+  const bindTranscriptViewport = (element: HTMLDivElement) => {
+    transcriptViewport = element;
+    return () => {
+      if (transcriptViewport === element) {
+        transcriptViewport = undefined;
+      }
+    };
+  };
+  const getTranscriptElement = () => (transcriptViewport?.isConnected ? transcriptViewport : null);
+  let replacementComposer: HTMLElement | undefined;
+  const registerReplacementComposer = (element: HTMLElement) => {
+    replacementComposer = element;
+    return () => {
+      if (replacementComposer === element) {
+        replacementComposer = undefined;
+      }
+    };
+  };
   const application = useOptionalApplication();
   const gateway = application && projectGateway(application.gateway);
   const skillFileHovercard = createSkillFileHovercard({
@@ -287,31 +323,11 @@ function ChatContent(input: { props: ChatProps }) {
         line,
       }),
   });
-  const [presentationRevision, setPresentationRevision] = createSignal(0, { ownedWrite: true });
-  createEffect(
-    () =>
-      new Set(
-        [input.props.presented, input.props.transcriptVisible].flatMap((binding) =>
-          typeof binding === "object" ? [binding.owner] : [],
-        ),
-      ),
-    (owners) => {
-      const notify = () => setPresentationRevision((value) => value + 1);
-      for (const owner of owners) {
-        owner.addEventListener(PRESENTATION_CHANGED_EVENT, notify);
-      }
-      return () => {
-        for (const owner of owners) {
-          owner.removeEventListener(PRESENTATION_CHANGED_EVENT, notify);
-        }
-      };
-    },
+  const presentation = createMemo(() => projectPresentation(input.props.presented ?? true));
+  const transcriptVisibility = createMemo(() =>
+    projectPresentation(input.props.transcriptVisible ?? true),
   );
-  const presented = () => {
-    presentationRevision();
-    const binding = input.props.presented;
-    return typeof binding === "object" ? binding.isPresented() : (binding ?? true);
-  };
+  const presented = () => presentation().read();
   const paneId = createMemo(() => input.props.paneId);
   const questions = createMemo(() =>
     projectSource(getTranscriptState(paneId()), {
@@ -322,22 +338,26 @@ function ChatContent(input: { props: ChatProps }) {
   );
   const questionRevision = createParkedProjection(
     () => questions().read(),
-    () => {
-      presentationRevision();
-      const visible = input.props.transcriptVisible ?? true;
-      return typeof visible === "object" ? visible.isPresented() : visible;
-    },
+    () => transcriptVisibility().read(),
     paneId,
   );
   const frame = createMemo(() => {
     questionRevision();
-    return createChatViewFrame(input.props, () => root);
+    return createChatViewFrame(input.props, (replacement) => {
+      const target =
+        replacement && replacementComposer?.isConnected
+          ? replacementComposer
+          : getChatComposerState(input.props.paneId).composerTextarea;
+      target?.focus({ preventScroll: true });
+    });
   });
   const viewProps = () => ({
     props: input.props,
     frame: frame(),
     presented: presented(),
     application,
+    bindTranscriptViewport,
+    getTranscriptElement,
   });
   const historyMessage = () => {
     const state = frame().historyLoadState;
@@ -365,7 +385,6 @@ function ChatContent(input: { props: ChatProps }) {
   );
   return (
     <section
-      ref={(element) => (root = element)}
       class={["chat", { "chat--bubbles": input.props.chatBubbleMode }]}
       style={
         input.props.chatMessageMaxWidth
@@ -404,7 +423,7 @@ function ChatContent(input: { props: ChatProps }) {
         }
         if (matchesShortcutCombo(KEYBOARD_SHORTCUT_COMBOS.transcriptSearch, event)) {
           event.preventDefault();
-          toggleTranscriptSearch(input.props.paneId, event);
+          toggleTranscriptSearch(input.props.paneId, event, frame().threadProps.onFocusComposer);
         }
       }}
     >
@@ -413,6 +432,7 @@ function ChatContent(input: { props: ChatProps }) {
           paneId={input.props.paneId}
           onFocusComposer={frame().threadProps.onFocusComposer}
           visiblePin={(id) => getTranscriptState(input.props.paneId).commentPins?.visiblePin(id)}
+          resolveSourceRange={frame().resolveCommentSource}
           props={input.props}
           disabled={!input.props.canSend}
           sessionKey={input.props.sessionKey}
@@ -521,6 +541,7 @@ function ChatContent(input: { props: ChatProps }) {
                         viewProps={viewProps()}
                         view={ChatComposerView}
                         companion={ChatComposerCompanion}
+                        replacementRef={registerReplacementComposer}
                       />
                     </div>
                   </div>

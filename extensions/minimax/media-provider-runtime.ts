@@ -90,7 +90,6 @@ export async function fetchMinimaxResponse(params: {
   url: string;
   init?: RequestInit;
   timeoutMs?: ProviderOperationTimeoutMs;
-  fetchFn: typeof fetch;
   requestFailedMessage: string;
   policy: MinimaxRequestPolicy;
 }) {
@@ -106,7 +105,7 @@ export async function fetchMinimaxResponse(params: {
         typeof timeoutMs === "number" && Number.isFinite(timeoutMs) && timeoutMs > 0
           ? timeoutMs
           : undefined,
-        params.fetchFn,
+        fetch,
         resolveMinimaxGuardedRequestOptions(params.policy),
       );
       try {

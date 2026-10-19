@@ -17,7 +17,6 @@ class GatewayContextBinding {
   constructor(owner: object) {
     this.#owner = owner;
     Object.setPrototypeOf(this, null);
-    Object.freeze(this);
   }
 
   static read(value: unknown, owner: object): GatewayContextBinding | undefined {
@@ -42,7 +41,6 @@ class GatewayContextLifetime {
   constructor(owner: GatewayContextResolver) {
     this.#owner = owner;
     Object.setPrototypeOf(this, null);
-    Object.freeze(this);
   }
 
   static read(value: unknown, owner: GatewayContextResolver): AbortController | undefined {
@@ -85,7 +83,6 @@ export function bindGatewayContextResolver(
       const slot = getGatewayContextBindingSlot(owner)!;
       binding = new GatewayContextBinding(owner);
       Object.defineProperty(slot, gatewayContextBindingKey, { value: binding });
-      Object.freeze(slot);
     }
     GatewayContextBinding.set(binding, resolver);
   }

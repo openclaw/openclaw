@@ -1,7 +1,6 @@
 import type { BoardGetParams } from "@openclaw/gateway-protocol";
 import { insert, type JSX } from "@solidjs/web";
 import {
-  createEffect,
   createRoot,
   createSignal,
   getOwner,
@@ -25,6 +24,7 @@ import { projectSource } from "../lib/reactive/projection.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import { ContentPresentation } from "../lib/solid/presentation.ts";
 import type { ControlUiRegistration } from "./control-ui-capability.ts";
+import { observeSolidBridgeProperties } from "./control-ui-properties.ts";
 import { scopeControlUiHost } from "./control-ui-scope.ts";
 
 type ViewKind = "pages" | "panels" | "accessories" | "widgets" | "replacements";
@@ -43,37 +43,6 @@ type PluginViewElement = SolidBridgeElement<
   PluginViewProps,
   { focus(options?: FocusOptions): void }
 >;
-
-/** Property writes retire authority before Solid's batched DOM commit, including A→B→A. */
-export function observePluginProperties<P extends object>(
-  host: SolidBridgeElement<P>,
-  keys: (keyof P)[],
-  changed: (key: keyof P, before: unknown, after: unknown) => void,
-) {
-  const descriptors = keys.map((key) => [key, Object.getOwnPropertyDescriptor(host, key)] as const);
-  for (const [key, descriptor] of descriptors) {
-    if (!descriptor?.get || !descriptor.set) {
-      throw new Error(`Missing plugin host property: ${String(key)}`);
-    }
-    Object.defineProperty(host, key, {
-      ...descriptor,
-      set(value: unknown) {
-        const before: unknown = descriptor.get?.call(host);
-        descriptor.set?.call(host, value);
-        if (!Object.is(before, value)) {
-          changed(key, before, value);
-        }
-      },
-    });
-  }
-  onCleanup(() => {
-    for (const [key, descriptor] of descriptors) {
-      if (descriptor) {
-        Object.defineProperty(host, key, descriptor);
-      }
-    }
-  });
-}
 
 function MountedContent(props: { mount?: (target: HTMLElement) => () => void }) {
   return (
@@ -136,17 +105,20 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       setDelegated(false);
     }
   };
-  observePluginProperties(
+  const scheduleSync = observeSolidBridgeProperties(
     host,
-    ["props", "presented", "kind", "contributionKey", "surface"],
+    ["props", "presented", "kind", "contributionKey", "surface", "mountDefaultView"],
     (key, before, after) => {
       if (key === "presented") {
         composerGeneration += 1;
         return;
       }
-      if (key !== "props") {
+      if (key === "kind" || key === "contributionKey" || key === "surface") {
         ownerChanged = true;
         mountAbort?.abort();
+        return;
+      }
+      if (key !== "props") {
         return;
       }
       // SAFETY: the prior bridge value is a host-rendered SDK props record; page props may omit session identity.
@@ -158,20 +130,18 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
         mountAbort?.abort();
       }
     },
+    sync,
   );
-  const runtime = projectSource(context?.plugins, {
-    read: (source) => source,
-    subscribe: (source, publish) =>
-      source?.subscribe(() => {
-        const next = resolveRegistration();
-        if (registration?.value !== next?.value || registration?.signal !== next?.signal) {
-          ownerChanged = true;
-          mountAbort?.abort();
-        }
-        publish();
-      }) ?? (() => {}),
-    equality: "revision",
-  });
+  onSettled(() =>
+    context?.plugins.subscribe(() => {
+      const next = resolveRegistration();
+      if (registration?.value !== next?.value || registration?.signal !== next?.signal) {
+        ownerChanged = true;
+        mountAbort?.abort();
+      }
+      scheduleSync();
+    }),
+  );
   const scopedProps = (signal: AbortSignal): unknown => {
     if (host.kind !== "replacements" || host.surface !== "composer") {
       return structuredClone(host.props);
@@ -232,39 +202,25 @@ function PluginViewContent(props: PluginViewProps, host: PluginViewElement) {
       fail(failure);
     }
   };
-  // Synchronize the foreign plugin view with live registration and host props.
-  createEffect(
-    () => {
-      runtime.read();
-      return [
-        props.kind,
-        props.contributionKey,
-        props.surface,
-        props.props,
-        props.presented,
-        props.mountDefaultView,
-      ];
-    },
-    () => {
-      // A retired host can remain queued until its owner commits the replacement.
-      if (!host.isConnected) {
-        return;
-      }
-      const next = resolveRegistration();
-      if (
-        registration?.value !== next?.value ||
-        registration?.signal !== next?.signal ||
-        ownerChanged
-      ) {
-        ownerChanged = false;
-        unmount();
-        registration = next;
-        setAvailable(Boolean(next));
-        setError("");
-      }
-      update();
-    },
-  );
+  function sync() {
+    // A retired host can remain queued until its owner commits the replacement.
+    if (!host.isConnected) {
+      return;
+    }
+    const next = resolveRegistration();
+    if (
+      registration?.value !== next?.value ||
+      registration?.signal !== next?.signal ||
+      ownerChanged
+    ) {
+      ownerChanged = false;
+      unmount();
+      registration = next;
+      setAvailable(Boolean(next));
+      setError("");
+    }
+    update();
+  }
   const mount = (container: HTMLElement) => {
     if (!host.isConnected || disposed || !registration || registration.signal.aborted) {
       return;
@@ -389,6 +345,7 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
   renderCompanion?: () => JSX.Element;
   presented?: boolean;
   enabled?: boolean;
+  replacementRef?: (element: HTMLElement) => void | (() => void);
 }) {
   // Delegated mounts run later inside a foreign plugin and retain the host's owner.
   const owner = getOwner();
@@ -429,9 +386,14 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
   }
   const mountDefault = (target: HTMLElement) => mount(target, DefaultView);
   const mountCompanion = (target: HTMLElement) => mount(target, () => props.renderCompanion?.());
-  return (
-    <Show when={selected()} fallback={props.renderDefault()}>
+  function ReplacementView() {
+    let host!: HTMLElement;
+    onSettled(() => props.replacementRef?.(host));
+    return (
       <PluginView
+        ref={(element) => {
+          host = element;
+        }}
         data-plugin-composer={props.surface === "composer" ? "" : undefined}
         surface={props.surface}
         props={props.props}
@@ -439,6 +401,11 @@ export function PluginSurface<S extends ControlUiSurface>(props: {
         mountDefaultView={mountDefault}
         mountReplacementCompanion={mountCompanion}
       />
+    );
+  }
+  return (
+    <Show when={selected()} fallback={props.renderDefault()}>
+      <ReplacementView />
     </Show>
   );
 }

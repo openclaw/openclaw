@@ -9,6 +9,7 @@ import { request as httpsRequest } from "node:https";
 import net from "node:net";
 import { StringDecoder } from "node:string_decoder";
 import { URL } from "node:url";
+import { promisify } from "node:util";
 import { isTruthyEnvValue } from "../infra/env.js";
 import { ensureDebugProxyCa } from "./ca.js";
 import { createDebugProxyChildCaptureReceiver } from "./child-server.js";
@@ -470,15 +471,7 @@ export async function startDebugProxyServer(params: {
         stopping ??= (async () => {
           childCapture.stop();
           try {
-            await new Promise<void>((resolve, reject) => {
-              server.close((error) => {
-                if (error) {
-                  reject(error);
-                  return;
-                }
-                resolve();
-              });
-            });
+            await promisify(server.close.bind(server))();
           } catch (error) {
             errors.push(error);
           }

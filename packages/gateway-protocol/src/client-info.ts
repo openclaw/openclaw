@@ -85,6 +85,7 @@ export const GATEWAY_CLIENT_CAPS = {
   ROSTER_MESSAGE_BODIES_OPTIONAL: "roster-message-bodies-optional",
   SESSION_SCOPED_EVENTS: "session-scoped-events",
   SESSION_ROW_DELTAS: "session-row-deltas",
+  SESSION_EVENT_FIELD_REFS: "session-event-field-refs",
   PLUGIN_APPROVALS: "plugin-approvals",
   PRESENCE_DELTAS: "presence-deltas",
   TASK_SUGGESTIONS: "task-suggestions",

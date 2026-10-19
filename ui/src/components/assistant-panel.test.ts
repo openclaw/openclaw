@@ -549,7 +549,7 @@ describe("assistant panel", () => {
     }
   });
 
-  it.each(["route replacement", "context replacement"] as const)(
+  it.each(["route replacement", "context replacement", "pane detachment"] as const)(
     "restores Home after the selected transcript renders across %s, preserving dock geometry",
     async (replacement) => {
       const { panel, provider, context } = await restoreHomePanel();
@@ -566,8 +566,10 @@ describe("assistant panel", () => {
           finishRender = resolve;
         }),
       });
-      pane.classList.add("chat-pane-cache__pane--active");
       provider.prepend(pane);
+      let primaryPane: typeof pane | undefined = pane;
+      panel.getPrimaryChatPane = (sessionKey) =>
+        sessionKey === primaryPane?.sessionKey ? primaryPane : undefined;
       pane.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true }));
       await panel.updateComplete;
       expect(home(panel)).toBeNull();
@@ -578,6 +580,8 @@ describe("assistant panel", () => {
       if (replacement === "route replacement") {
         // A superseded route must not release Home from the old pane's late commit.
         await update(panel, { pageSessionKey: "agent:main:next-task" });
+      } else if (replacement === "pane detachment") {
+        primaryPane = undefined;
       } else {
         provider.setContext({ ...context });
         await panel.updateComplete;
@@ -589,6 +593,10 @@ describe("assistant panel", () => {
       if (replacement === "route replacement") {
         expect(home(panel)).toBeNull();
         await update(panel, { pageSessionKey: "agent:main:task" });
+      } else if (replacement === "pane detachment") {
+        expect(home(panel)).toBeNull();
+        primaryPane = pane;
+        pane.dispatchEvent(new Event(CHAT_ROUTE_READY_EVENT, { bubbles: true }));
       }
       await vi.waitFor(() => expect(home(panel)).not.toBeNull());
       expect(reserveRight()).toBe("440px");

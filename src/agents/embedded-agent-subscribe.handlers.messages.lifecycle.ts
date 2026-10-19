@@ -2,6 +2,7 @@ import { isPromiseLike } from "@openclaw/normalization-core/promise-like";
 import { resolveSendableOutboundReplyParts } from "openclaw/plugin-sdk/reply-payload";
 import { parseReplyDirectives } from "../auto-reply/reply/reply-directives.js";
 import { applyAssistantDeliveryDirectives } from "../config/sessions/transcript-assistant-delivery.js";
+import { bindAgentAssistantSource, readAgentAssistantSource } from "../infra/agent-events.js";
 import { resolveAssistantMessagePhase } from "../shared/chat-message-content.js";
 import { prepareAgentRunTerminalReply } from "./agent-run-terminal-reply.js";
 import {
@@ -320,6 +321,10 @@ export function handleMessageEnd(
       assistant: applyAssistantDeliveryDirectives(structuredClone(assistantMessage)),
       messageIndex: ctx.state.lastAssistantTextMessageIndex,
     };
+    const sourceReceipt = readAgentAssistantSource(assistantMessage);
+    if (sourceReceipt) {
+      bindAgentAssistantSource(ctx.state.inputAnswer.assistant, sourceReceipt);
+    }
   }
 
   if (!ctx.params.silentExpected && rawThinking) {

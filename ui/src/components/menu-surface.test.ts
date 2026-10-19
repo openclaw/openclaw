@@ -2,7 +2,7 @@
 
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { subscribeNativeOverlayOcclusion } from "../lib/native-overlay-occlusion.ts";
-import { promoteToPopoverTopLayer } from "./menu-surface.ts";
+import { hasMenuSurface, promoteToPopoverTopLayer } from "./menu-surface.ts";
 
 const bridge = vi.hoisted(() => ({ available: false }));
 vi.mock("../app/native-browser-host.ts", () => ({
@@ -26,12 +26,23 @@ describe("openclaw-menu-surface", () => {
     document.body.append(surface);
     expect(surface.getAttribute("popover")).toBe("manual");
     expect(showPopover).toHaveBeenCalledTimes(1);
+    expect(surface.matches(":popover-open")).toBe(false);
+    expect(hasMenuSurface(document)).toBe(true);
 
     // Menus toggle by removing/re-adding the surface; each reopen must
     // re-enter the top layer.
     surface.remove();
+    expect(hasMenuSurface(document)).toBe(false);
     document.body.append(surface);
     expect(showPopover).toHaveBeenCalledTimes(2);
+    expect(hasMenuSurface(document)).toBe(true);
+
+    const otherDocument = document.implementation.createHTMLDocument();
+    otherDocument.body.append(surface);
+    expect(hasMenuSurface(document)).toBe(false);
+    expect(hasMenuSurface(otherDocument)).toBe(true);
+    surface.remove();
+    expect(hasMenuSurface(otherDocument)).toBe(false);
   });
 });
 

@@ -446,6 +446,40 @@ const retiredNames = [
 ];
 const publicationNames = ["prepare-push-result.env", "prepare-sync-result.env"];
 
+function publicationLineage(pr, head, anchor, bindingOid, retained) {
+  const binding = bindingAt(anchor, readRegular(join(retained, "prepare-baseline.json")));
+  const { record } = binding;
+  if (binding.oid !== bindingOid || record.pr !== pr) {
+    throw new Error("Continuation baseline identity changed.");
+  }
+  git(["merge-base", "--is-ancestor", anchor, head]);
+  exactKeys(record.authority, authorityPaths);
+  // This authenticates historical publication inputs, not the old READY review.
+  // Fresh incoming/candidate reviews replace authority; lost metadata is never rebuilt.
+  proofInventory([record.archive]);
+  for (const name of ["prep-context.env", "correction-incoming-review.json", ...publicationNames]) {
+    const expected = record.authority[`.local/${name}`];
+    const path = join(record.archive, name);
+    if (expected === "absent" && publicationNames.includes(name)) {
+      if (present(path)) {
+        throw new Error(`Unexpected retained publication evidence: ${path}`);
+      }
+    } else if (!oidPattern.test(expected) || hash(readRegular(path)) !== expected) {
+      throw new Error(`Retained publication lineage changed: ${name}`);
+    }
+  }
+  if (record.authority[".local/correction-incoming-review.json"] !== record.incomingReviewOid) {
+    throw new Error("Retained publication incoming review changed.");
+  }
+  process.stdout.write(
+    JSON.stringify({
+      archive: record.archive,
+      incoming: record.incomingHead,
+      review: record.incomingReviewOid,
+    }),
+  );
+}
+
 function incomingSourceAuthority(pr, source, reviewOid, contextPath) {
   const { prMeta } = incomingReview(pr, source, reviewOid);
   // Preparation env files belong to the shell owner, including its quoting rules.
@@ -1230,7 +1264,9 @@ function checkSigning(pr, root, lockRef, lockOid) {
 if (isDirectRunUrl(process.argv[1], import.meta.url)) {
   try {
     const [command, ...args] = process.argv.slice(2);
-    if (command === "incoming-source-snapshot" && args.length === 3) {
+    if (command === "publication-lineage" && args.length === 5) {
+      publicationLineage(Number(args[0]), ...args.slice(1));
+    } else if (command === "incoming-source-snapshot" && args.length === 3) {
       incomingSourceSnapshot(Number(args[0]), ...args.slice(1));
     } else if (command === "create" && args.length === 7) {
       create(Number(args[0]), ...args.slice(1));

@@ -24,6 +24,11 @@ import {
 import { HoverMarquee } from "../lib/solid/hover-marquee.tsx";
 import type { PersonActivityData } from "./person-activity-data.ts";
 import { personActivityLink, type PersonActivityRouting } from "./person-activity-link.ts";
+import {
+  controlsForHovercard,
+  createHovercardControlRef,
+  HovercardControlsContext,
+} from "./portaled-hovercard-focus.ts";
 import { Icon } from "./solid/icon.tsx";
 import "./elapsed-time.tsx";
 import "./viewer-facepile.ts";
@@ -128,6 +133,7 @@ function Sessions(props: {
                   });
                 return (
                   <a
+                    ref={createHovercardControlRef()}
                     class="person-activity-card__session session-row-host"
                     href={target().href}
                     onClick={(event) => {
@@ -302,7 +308,11 @@ function PersonActivityCard(props: { input: PersonCardInput }) {
       <Show when={activityLink()}>
         {(link) => (
           <footer>
-            <a href={link().href} onClick={(event) => link().open(event)}>
+            <a
+              ref={createHovercardControlRef()}
+              href={link().href}
+              onClick={(event) => link().open(event)}
+            >
               {t("presence.card.viewActivity")}
               <span aria-hidden="true">
                 <Icon name="chevronRight" />
@@ -336,22 +346,24 @@ export function updatePersonActivityCard(container: HTMLElement, input?: CardVal
         cards.set(container, { update: setValue, dispose: () => dispose() });
         onCleanup(() => cards.delete(container));
         return (
-          <Show
-            when={(() => {
-              const current = value();
-              return typeof current === "object" ? current : undefined;
-            })()}
-            fallback={
-              <div class="person-reference__status" role="status">
-                {(() => {
-                  const current = value();
-                  return typeof current === "string" ? current : "";
-                })()}
-              </div>
-            }
-          >
-            {(current) => <PersonActivityCard input={current()} />}
-          </Show>
+          <HovercardControlsContext value={controlsForHovercard(container)}>
+            <Show
+              when={(() => {
+                const current = value();
+                return typeof current === "object" ? current : undefined;
+              })()}
+              fallback={
+                <div class="person-reference__status" role="status">
+                  {(() => {
+                    const current = value();
+                    return typeof current === "string" ? current : "";
+                  })()}
+                </div>
+              }
+            >
+              {(current) => <PersonActivityCard input={current()} />}
+            </Show>
+          </HovercardControlsContext>
         );
       }, container),
     );

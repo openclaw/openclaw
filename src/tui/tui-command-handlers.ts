@@ -308,11 +308,11 @@ export function createCommandHandlers(context: CommandHandlerContext) {
 
   const openAgentSelector = async () => {
     const request = beginPickerRequest();
-    const refreshResult = await refreshAgents(() => request === pickerRequest);
+    const refreshed = await refreshAgents(() => request === pickerRequest);
     if (request !== pickerRequest) {
       return;
     }
-    if (!refreshResult.ok) {
+    if (!refreshed) {
       tui.requestRender();
       return;
     }

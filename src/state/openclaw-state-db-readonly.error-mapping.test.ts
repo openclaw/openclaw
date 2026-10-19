@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import type { OwnedWorkerTask, RetainedWorkerTask } from "@openclaw/worker-runtime";
+import type { OwnedWorkerTask } from "@openclaw/worker-runtime";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
 import * as sqliteRuntime from "../infra/bun-sqlite-library.js";
@@ -12,7 +12,6 @@ import {
 } from "./openclaw-state-db-cache.js";
 import { expectCalls, makeReadSource } from "./openclaw-state-db-fixtures.test-support.js";
 import { executeExistingOpenClawStateRead as readExisting } from "./openclaw-state-db-readonly.js";
-import { observeAsyncFixture } from "./openclaw-state-db-readonly.test-support.js";
 import { withExistingOpenClawStateSchema as withExistingSchema } from "./openclaw-state-db-schema-policy.js";
 import type {
   OpenClawStateReadReceipt,
@@ -33,9 +32,9 @@ vi.mock("../infra/worker-task-pool.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../infra/worker-task-pool.js")>()),
   createOwnedWorkerTaskPool: () =>
     createOwnedWorkerTaskPoolMock<OpenClawStateReadRequest, OpenClawStateReadReply>({
-      startTask: (): RetainedWorkerTask<OpenClawStateReadReply> => ({
-        ...observeAsyncFixture(mock.run),
-        release: (options) => observeAsyncFixture(() => mock.close(options)),
+      runTask: () => ({
+        result: mock.run(),
+        close: mock.close,
       }),
       close: mock.closePool,
       closeResources: mock.closeResources,

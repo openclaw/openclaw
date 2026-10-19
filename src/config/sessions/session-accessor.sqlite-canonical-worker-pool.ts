@@ -98,11 +98,8 @@ export async function withSqliteCanonicalValidationWorkerPool<T>(
     },
   };
   const unregister = registerOpenClawStateDatabaseAsyncResource({
-    close: async (identity) => {
-      if (!identity || identity.key === context.admission.identity.key) {
-        await execution.close();
-      }
-    },
+    admission: context.admission,
+    close: execution.close,
   });
   process.once("beforeExit", beforeExit);
   try {

@@ -25,6 +25,8 @@ const nodeSqliteConstructorOwnerPaths = new Set([
   // Native conformance must observe raw driver close on disposable probe databases.
   "src/infra/bun-sqlite-close-probe.worker.ts",
   "src/infra/node-sqlite.ts",
+  // The native library probe opens only a disposable in-memory database.
+  "src/infra/sqlite-native-runtime.ts",
   "src/infra/sqlite-runtime-version.ts",
 ]);
 

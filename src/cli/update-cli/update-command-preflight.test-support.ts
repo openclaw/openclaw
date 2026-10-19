@@ -2,9 +2,13 @@ import fsSync from "node:fs";
 import fs from "node:fs/promises";
 import { expect, it, vi, type Mock } from "vitest";
 import { withinTest } from "../../../test/helpers/promise.js";
+import { readRestartSentinelReadOnly } from "../../infra/restart-sentinel.js";
+import { createManagedHandoffLeaseStore } from "../../infra/update-managed-service-handoff-lease.js";
 import type { RetainUpdateRuntime } from "../../infra/update-retained-runtime.js";
 import type { UpdateRunRecord } from "../../infra/update-run-record.js";
 import { createDeferredCore } from "../../shared/deferred.js";
+import { closeOpenClawStateDatabaseAsync } from "../../state/openclaw-state-db.js";
+import { UpdateActivationTimeoutError } from "./update-command-activation.js";
 
 type UpdatePreflightFixture = {
   mockPackageInstallAtCaseDir: () => Promise<string>;
@@ -125,11 +129,17 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
   it("ends unfinished retention at --timeout with the installed package untouched", async () => {
     const packageRoot = await f.mockPackageInstallAtCaseDir();
     const manifest = await fs.readFile(`${packageRoot}/package.json`, "utf8");
-    const entered = createDeferredCore();
+    const entered = createDeferredCore<Parameters<RetainUpdateRuntime>[0]>();
     const release = createDeferredCore();
+    const leases = createManagedHandoffLeaseStore();
+    const sharedArtifacts = ["update-reports", "logs/support"].map(
+      (relative) => `${f.profileStateDir()}/${relative}`,
+    );
     let retentionSettled = false;
-    f.retainUpdateRuntime.mockImplementationOnce(async ({ signal }) => {
-      entered.resolve();
+    f.retainUpdateRuntime.mockImplementationOnce(async (options) => {
+      options.assertCurrent();
+      entered.resolve(options);
+      const { signal } = options;
       try {
         await (signal ? withinTest(release.promise, signal) : release.promise);
       } finally {
@@ -144,24 +154,69 @@ export function registerUpdatePreflightTests(f: UpdatePreflightFixture) {
         return error;
       });
     try {
-      await entered.promise;
+      const { assertCurrent, signal } = await entered.promise;
+      assertCurrent();
+      const before = f.listUpdateRuns();
+      expect(before[0]).toMatchObject({
+        status: "running",
+        phase: "validating",
+        steps: containingStep({ step: "updater-runtime-retention", status: "in_progress" }),
+      });
+      expect(leases.read(packageRoot)).toMatchObject({ kind: "current", lease: { version: 2 } });
+      const sentinelBefore = await readRestartSentinelReadOnly();
+      for (const artifact of sharedArtifacts) {
+        expect(fsSync.existsSync(artifact)).toBe(false);
+      }
       expect(f.retainUpdateRuntime).toHaveBeenCalledOnce();
       await vi.advanceTimersByTimeAsync(60_000);
       await vi.waitFor(() => expect(f.lastWriteJsonCall()).toMatchObject({ status: "error" }));
       expect(await work).toMatchObject({ code: 1 });
       expect(f.retainUpdateRuntime).toHaveBeenCalledOnce();
       expect(retentionSettled).toBe(true);
-      expect(f.lastWriteJsonCall()).toMatchObject({ reason: "update-activation-timeout" });
-      expect(latestRun()).toMatchObject({
-        status: "failed",
-        phase: "finished",
-        steps: containingStep({ step: "updater-runtime-retention", status: "failed" }),
+      expect(signal?.aborted).toBe(true);
+      expect(signal?.reason).toMatchObject({ reason: "update-activation-timeout" });
+      expect(assertCurrent).toThrow(UpdateActivationTimeoutError);
+      expect(f.defaultRuntime.writeJson).toHaveBeenCalledOnce();
+      expect(f.lastWriteJsonCall()).toMatchObject({
+        status: "error",
+        reason: "update-activation-timeout",
+        runId: before[0]?.runId,
+        recovery: { serviceRestartSafe: false, reason: "runtime-verification-failed" },
       });
+      // The initiating timeout diagnostic precedes the final custody outcome.
+      expect(vi.mocked(f.defaultRuntime.error).mock.calls).toEqual([
+        ["Update activation exceeded its 60-second budget."],
+        [
+          "Update recovery remains pending (update-activation-timeout). " +
+            "Retained state and artifacts were left for the owning updater to reconcile; " +
+            "automatic restart and repair were not attempted.\n" +
+            "Update activation exceeded its 60-second budget. Cancellation settled before recovery.",
+        ],
+      ]);
+      expect(f.getErrorOutput()).toContain(
+        "Update recovery remains pending (update-activation-timeout)",
+      );
+      await vi.waitFor(() => expect(leases.read(packageRoot)).toEqual({ kind: "absent" }));
+      // Cancellation revokes the original writer. A future owner may reconcile
+      // this row after driver death; the still-live test driver cannot finish it.
+      expect(f.listUpdateRuns()).toEqual(before);
+      expect(await readRestartSentinelReadOnly()).toEqual(sentinelBefore);
+      for (const artifact of sharedArtifacts) {
+        expect(fsSync.existsSync(artifact)).toBe(false);
+      }
       expect(await fs.readFile(`${packageRoot}/package.json`, "utf8")).toBe(manifest);
     } finally {
-      release.resolve();
-      await work;
-      vi.useRealTimers();
+      try {
+        release.resolve();
+        await work;
+        await vi.waitFor(() => expect(leases.read(packageRoot)).toEqual({ kind: "absent" }));
+      } finally {
+        try {
+          await closeOpenClawStateDatabaseAsync();
+        } finally {
+          vi.useRealTimers();
+        }
+      }
     }
   });
 

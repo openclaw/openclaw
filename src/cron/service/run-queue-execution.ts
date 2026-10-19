@@ -1,3 +1,4 @@
+import { resolveAgentRunErrorLifecycleFields } from "../../agents/run-termination.js";
 import { parseExecutionIdentityAdmissionToken } from "../../audit/execution-identity-admission.js";
 import type { createDeferredCore } from "../../shared/deferred.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
@@ -173,6 +174,8 @@ export async function launchCronRun(
     result = authorCronRunCompletion(executionJob, {
       status: "error",
       error: normalizeCronRunErrorText(error),
+      interruptedByRestart:
+        resolveAgentRunErrorLifecycleFields(error, undefined).stopReason === "restart",
     });
   }
   options.onTriggerDisposition?.(

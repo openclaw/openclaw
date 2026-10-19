@@ -196,7 +196,10 @@ it.each([
     status: dryRun ? "dry-run" : "prepared",
     installation: dryRun ? adopted : { ...adopted, prepared: preparedReceipt },
   });
-  await updateCommand({ json: true, restart, dryRun, timeout: "600", drainTimeout: "30" });
+  await updateCommand({ json: true, restart, dryRun, timeout: " 600 ", drainTimeout: "30" });
+  expect(immutable.prepareImmutableUpdate).toHaveBeenCalledWith(
+    expect.objectContaining({ timeoutMs: 600_000 }),
+  );
   expect(activation.activate).toHaveBeenCalledTimes(activates ? 1 : 0);
   if (activates) {
     expect(activation.activate).toHaveBeenCalledWith(

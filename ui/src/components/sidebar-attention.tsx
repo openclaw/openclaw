@@ -11,7 +11,7 @@ import { useApplication, useOptionalApplication } from "../lib/reactive/context.
 import { registerEnglishCatalog, t } from "../lib/reactive/i18n.ts";
 import { listen } from "../lib/reactive/listener.ts";
 import { createScrollStateRef } from "../lib/reactive/scroll-state.ts";
-import { defineSolidBridge } from "../lib/solid-bridge.ts";
+import { defineSolidBridge, type SolidBridgeElement } from "../lib/solid-bridge.ts";
 import "../styles/sidebar-attention-floating.css";
 import { CUSTODIAN_PANEL_TOGGLE_EVENT } from "./panel-toggle-contract.ts";
 import { sidebarInboxTabCounts, type SidebarAttentionItem } from "./sidebar-attention-entries.ts";
@@ -29,6 +29,12 @@ export type SidebarAttentionProps = {
   onNavigate?: ApplicationContext["navigate"];
   watchUpdateProgress?: (listener: (progress: UpdateProgress) => void) => () => void;
 };
+
+export type SidebarAttentionMethods = { dismissPanel(): boolean };
+export type SidebarAttentionElement = SolidBridgeElement<
+  SidebarAttentionProps,
+  SidebarAttentionMethods
+>;
 
 const panelDismissals = new WeakMap<HTMLElement, () => boolean>();
 
@@ -293,10 +299,7 @@ function renderSidebarAttentionContent(props: SidebarAttentionProps, host: HTMLE
   );
 }
 
-export const SidebarAttention = defineSolidBridge<
-  SidebarAttentionProps,
-  { dismissPanel(): boolean }
->(
+export const SidebarAttention = defineSolidBridge<SidebarAttentionProps, SidebarAttentionMethods>(
   "openclaw-sidebar-attention",
   (props, host) =>
     useOptionalApplication() ? renderSidebarAttentionContent(props, host) : props.children,

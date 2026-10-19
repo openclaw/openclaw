@@ -60,7 +60,8 @@ export function createModelProviderLogin(options: LoginOptions) {
   let inventoryRequest: AbortController | undefined;
   let startChatRequest: AbortController | undefined;
   let searchInput: HTMLInputElement | undefined;
-  let methodChoice: HTMLButtonElement | undefined;
+  let methodChoices: HTMLDivElement | undefined;
+  let apiKeyChoice: HTMLButtonElement | undefined;
   let focusPicker: "search" | "method" | null = null;
   let generation = 0;
   let mutationActive = false;
@@ -332,7 +333,8 @@ export function createModelProviderLogin(options: LoginOptions) {
     currentPicker = null;
     focusPicker = null;
     searchInput = undefined;
-    methodChoice = undefined;
+    methodChoices = undefined;
+    apiKeyChoice = undefined;
     mutationActive = false;
     refreshWarning = null;
     message = undefined;
@@ -350,8 +352,10 @@ export function createModelProviderLogin(options: LoginOptions) {
 
   function focusPickerTarget() {
     if (focusPicker && currentPicker) {
-      const target = focusPicker === "search" ? searchInput : methodChoice;
-      if (target) {
+      // The method group contains only current choice buttons; quick-key-only groups use the fallback.
+      const target =
+        focusPicker === "search" ? searchInput : (methodChoices?.firstElementChild ?? apiKeyChoice);
+      if (target instanceof HTMLElement) {
         focusPicker = null;
         target.focus({ preventScroll: true });
       }
@@ -364,15 +368,6 @@ export function createModelProviderLogin(options: LoginOptions) {
     inventoryRequest?.abort();
     completionCatalog.clear();
   });
-
-  function setSearchInput(element: HTMLInputElement): void {
-    searchInput = element;
-  }
-
-  function setMethodChoice(element: HTMLButtonElement): void {
-    methodChoice = element;
-    focusPickerTarget();
-  }
 
   function wizardViewProps() {
     view.read();
@@ -465,7 +460,6 @@ export function createModelProviderLogin(options: LoginOptions) {
         if (!canSelect()) {
           return;
         }
-        methodChoice = undefined;
         setProvider(providerId);
         focusPicker = "method";
         notify();
@@ -731,8 +725,15 @@ export function createModelProviderLogin(options: LoginOptions) {
     },
     recoveryView,
     pickerView,
-    setSearchInput,
-    setMethodChoice,
+    setSearchInput(element: HTMLInputElement) {
+      searchInput = element;
+    },
+    setMethodChoices(element: HTMLDivElement) {
+      methodChoices = element;
+    },
+    setApiKeyChoice(element: HTMLButtonElement) {
+      apiKeyChoice = element;
+    },
     connectProvider,
     open,
     invalidateInventory,

@@ -526,7 +526,7 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
   });
 
   it.each(["assistant", "prompt"] as const)(
-    "falls back immediately on organization TPM exhaustion from %s and records a primary cooldown",
+    "exhausts bounded recovery on organization TPM exhaustion from %s before fallback",
     async (source) => {
       await withDefaultAuth(async ({ agentDir, workspaceDir }) => {
         const message =
@@ -557,16 +557,23 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           });
         const result = await run("first");
         expect(result.result.payloads?.[0]?.text).toContain("fallback ok");
-        expect(recordedAttempts().map((attempt) => attempt.modelId)).toEqual(["mock-1", "mock-2"]);
-        expect(sleepWithAbortMock).not.toHaveBeenCalled();
+        const expectedModels = [...Array<string>(10).fill("mock-1"), "mock-2"];
+        expect(recordedAttempts().map((attempt) => attempt.modelId)).toEqual(expectedModels);
+        expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(
+          Array<number>(9).fill(90_000),
+        );
         const stats = (await readFallbackUsageStats(agentDir))["openai:p1"];
         expect(stats).toMatchObject({ cooldownReason: "rate_limit", cooldownModel: "mock-1" });
         expect((stats?.cooldownUntil ?? 0) - (stats?.lastFailureAt ?? 0)).toBe(30_000);
 
         runEmbeddedAttemptMock.mockClear();
+        sleepWithAbortMock.mockClear();
         const next = await run("during-cooldown");
         expect(next.result.payloads?.[0]?.text).toContain("fallback ok");
-        expect(recordedAttempts().map((attempt) => attempt.modelId)).toEqual(["mock-2"]);
+        expect(recordedAttempts().map((attempt) => attempt.modelId)).toEqual(expectedModels);
+        expect(sleepWithAbortMock.mock.calls.map(([delay]) => delay)).toEqual(
+          Array<number>(9).fill(90_000),
+        );
       });
     },
   );
@@ -688,26 +695,74 @@ describe("runWithModelFallback + runEmbeddedAgent failover behavior", () => {
           runId: `run:${mode}-suspension`,
           config: makeModelFallbackConfig(),
         };
-        if (mode === "direct") {
-          setRuntimeConfigSnapshot(params.config, params.config);
-          await expect(
-            runEmbeddedAgent({
-              ...embeddedParams(params, params.config, sessionId),
-              lane: params.lane,
-              provider: "openai",
-              model: "mock-1",
-            }),
-          ).rejects.toThrow();
-          expect(suspendSessionMock).toHaveBeenCalledOnce();
-          expect(suspendSessionMock.mock.calls[0]?.[0]).not.toHaveProperty("laneId");
-        } else {
-          const result = await runEmbeddedFallback(
-            { agentDir, workspaceDir },
-            `${mode}-suspension`,
-            params,
+        const sessionLookup = vi
+          .spyOn(await import("./command/session.js"), "resolveStoredSessionKeyForSessionId")
+          .mockResolvedValue({
+            sessionKey: params.sessionKey,
+            storePath: `${agentDir}/sessions.json`,
+          });
+        const persistSuspension = vi
+          .spyOn(await import("../config/sessions/session-accessor.js"), "patchSessionEntryCore")
+          .mockResolvedValue(null);
+        const { suspendSession } =
+          await vi.importActual<typeof import("./session-suspension.js")>(
+            "./session-suspension.js",
           );
-          expect(result.provider).toBe("groq");
-          expect(suspendSessionMock).not.toHaveBeenCalled();
+        try {
+          if (mode === "direct") {
+            setRuntimeConfigSnapshot(params.config, params.config);
+            await expect(
+              runEmbeddedAgent({
+                ...embeddedParams(params, params.config, sessionId),
+                lane: params.lane,
+                provider: "openai",
+                model: "mock-1",
+              }),
+            ).rejects.toThrow();
+          } else {
+            const result = await runEmbeddedFallback(
+              { agentDir, workspaceDir },
+              `${mode}-suspension`,
+              params,
+            );
+            expect(result.provider).toBe("groq");
+          }
+          // Join the owner's write queue; captured callbacks bypass the exported mock.
+          await suspendSession({
+            cfg: undefined,
+            sessionId,
+            reason: "manual",
+            failedProvider: "openai",
+            failedModel: "mock-1",
+          });
+          if (mode === "direct") {
+            expect(sessionLookup).toHaveBeenCalledExactlyOnceWith({
+              cfg: params.config,
+              sessionId,
+              agentId: "test",
+            });
+            expect(persistSuspension).toHaveBeenCalledOnce();
+            const [scope, update] = persistSuspension.mock.calls[0]!;
+            expect(scope).toEqual({
+              sessionKey: params.sessionKey,
+              storePath: `${agentDir}/sessions.json`,
+            });
+            expect(await update({ sessionId, updatedAt: 0 }, {})).toMatchObject({
+              quotaSuspension: {
+                state: "suspended",
+                reason: "quota_exhausted",
+                failedProvider: "openai",
+                failedModel: "mock-1",
+              },
+            });
+          } else {
+            expect(sessionLookup).not.toHaveBeenCalled();
+            expect(persistSuspension).not.toHaveBeenCalled();
+            expect(suspendSessionMock).not.toHaveBeenCalled();
+          }
+        } finally {
+          sessionLookup.mockRestore();
+          persistSuspension.mockRestore();
         }
       });
     },
