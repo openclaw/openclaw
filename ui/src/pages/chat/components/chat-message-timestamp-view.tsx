@@ -58,18 +58,16 @@ function prepareTimestamp(timestamp: number) {
 }
 
 function TimestampTime(props: { view: ReturnType<typeof prepareTimestamp> }) {
-  const dateTime = createMemo(() => props.view.dateTime);
-  const label = createMemo(() => props.view.relativeLabel);
   return (
-    <time class="chat-group-timestamp" datetime={dateTime()} aria-live="off">
-      {label()}
+    <time class="chat-group-timestamp" datetime={props.view.dateTime} aria-live="off">
+      {props.view.relativeLabel}
     </time>
   );
 }
 
 export function ChatTimestamp(props: { timestamp: number; metadata?: JSX.Element[] }) {
   const view = createMemo(() => prepareTimestamp(props.timestamp));
-  const contextLabel = createMemo(() => t("chat.messages.contextFor", { timestamp: view().title }));
+  const contextLabel = () => t("chat.messages.contextFor", { timestamp: view().title });
   const hasMetadata = () => Boolean(props.metadata?.length);
   return (
     <openclaw-tooltip
