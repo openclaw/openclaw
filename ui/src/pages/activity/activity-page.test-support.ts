@@ -5,6 +5,7 @@ import type { GatewayBrowserClient, GatewayHelloOk } from "../../api/gateway.ts"
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import { createGatewayEvent } from "../../app/gateway-store.test-support.ts";
+import { ApplicationProvider } from "../../lib/reactive/context.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { flush } from "../../test-helpers/solid-settle.ts";
 import { createActivityPageState } from "./activity-page-state.ts";
@@ -14,11 +15,22 @@ export type TestActivityPage = ReturnType<typeof createActivityPage>;
 
 export function createActivityPage(context: ApplicationContext, initial?: RouteLocation) {
   const [location, setLocation] = createSignal(initial);
-  const mounted = mountSolid(() => {
-    const page = createActivityPageState(context);
-    createEffect(location, (next) => page.setRouteLocation(next));
-    return createComponent(ActivityPageView, { page });
-  });
+  const mounted = mountSolid(
+    () => {
+      const page = createActivityPageState(context);
+      createEffect(location, (next) => page.setRouteLocation(next));
+      return createComponent(ActivityPageView, { page });
+    },
+    {
+      wrapper: (props) =>
+        createComponent(ApplicationProvider, {
+          value: context,
+          get children() {
+            return props.children;
+          },
+        }),
+    },
+  );
   flush();
   return {
     context,

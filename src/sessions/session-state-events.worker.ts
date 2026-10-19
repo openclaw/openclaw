@@ -98,8 +98,7 @@ export const sessionStateOperations = {
     { cursors, now }: SessionStateWorkerOperations["sessionState.sweep"]["input"],
     context,
   ) => {
-    return context.write(({ db }) => {
-      requestSqliteWorkerOperationAdmission({ stage: "transaction", facts: undefined });
+    return context.writeAdmitted(({ db }) => {
       const notices: SessionStateNotice[] = [];
       for (const { watcherSessionKey, targetSessionKey, watcherStorePath } of cursors) {
         const row = readCursor(db, watcherSessionKey, targetSessionKey);
@@ -127,7 +126,6 @@ export const sessionStateOperations = {
           queueOnly: isAmbientGroupWatchCursor(row),
         });
       }
-      requestSqliteWorkerOperationAdmission({ stage: "commit", facts: undefined });
       return notices;
     });
   },

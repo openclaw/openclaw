@@ -7,7 +7,6 @@ import {
   readClawHubBytes,
   withClawHubResponse,
   resolveClawHubBaseUrl,
-  type ClawHubFetch,
   type ClawHubFetchOptions,
   type ClawHubRequestParams,
 } from "./clawhub-client.js";
@@ -223,7 +222,6 @@ export async function downloadClawHubGitHubSkillArchive(params: {
   repo: string;
   commit: string;
   timeoutMs?: number;
-  fetchImpl?: ClawHubFetch;
 }): Promise<ClawHubDownloadResult> {
   const configuredBaseUrl =
     normalizeOptionalString(process.env.CLAWHUB_GITHUB_CODELOAD_BASE_URL) ||

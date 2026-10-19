@@ -75,8 +75,8 @@ esac
   }
   const hashes = {
     node: archive("node", "node-v24.21.0-linux-x64.tar.xz", "sha256"),
-    wrapper: archive("wrapper", "pnpm-12.11.1.tgz", "sha512"),
-    native: archive("native", "exe.linux-x64-12.11.1.tgz", "sha512"),
+    wrapper: archive("wrapper", "pnpm-12.12.1.tgz", "sha512"),
+    native: archive("native", "exe.linux-x64-12.12.1.tgz", "sha512"),
   };
   const productionSpec = source.match(/^pnpm_spec="([^"]+)"$/mu)?.[1] ?? "";
   const spec = `${productionSpec.split("+")[0]}+sha512.${hashes.wrapper}`;
@@ -126,7 +126,7 @@ exit 1
     .replace(productionSpec, spec)
     .replaceAll("fd8e59d5a511510f6a298afb548f18c7d2b1be404d8b4a27d94fbe49f56cb2d6", hashes.node)
     .replaceAll(
-      "73b921d30b63834e629f6c249a7e9faecfed722b9a1b0f1735952e82047cf26bd4be627cd63b023f532933ce704c5129b5d781e0e9e5446d0449465bbb8f6af1",
+      "ddb27792f3227fb7257f178fa01678d051af539e0684bc10f9e6f18f11ae2981f0ac3c9231fca0815191d20618729aeae883c6cba0ab4cf8aa80fe533932c2e7",
       hashes.native,
     );
   const scriptPath = join(root, "bootstrap.sh");
@@ -206,8 +206,8 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     for (let run = 0; run < 2; run++) {
       mkdirSync(join(f.install, "bin"), { recursive: true });
       executable(join(f.install, "bin", "node"), "#!/bin/sh\nexit 91\n");
-      mkdirSync(join(f.corepack, "v1", "pnpm", "12.11.1"), { recursive: true });
-      writeFileSync(join(f.corepack, "v1", "pnpm", "12.11.1", ".corepack"), '{"bin":"bad"}');
+      mkdirSync(join(f.corepack, "v1", "pnpm", "12.12.1"), { recursive: true });
+      writeFileSync(join(f.corepack, "v1", "pnpm", "12.12.1", ".corepack"), '{"bin":"bad"}');
       const result = f.run();
       expect(result.status, result.stderr).toBe(0);
     }
@@ -236,8 +236,8 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
         kind === "node"
           ? "node-v24.21.0-linux-x64.tar.xz"
           : kind === "wrapper"
-            ? "pnpm-12.11.1.tgz"
-            : "exe.linux-x64-12.11.1.tgz";
+            ? "pnpm-12.12.1.tgz"
+            : "exe.linux-x64-12.12.1.tgz";
       const bytes = Buffer.from("substituted archive");
       writeFileSync(join(f.image, archive), bytes);
       writeFileSync(

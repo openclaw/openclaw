@@ -77,6 +77,7 @@ export async function runGatewayStartupObservers(params: {
   isClosing?: () => boolean;
   waitForPostReadyWork?: () => Promise<void>;
   onSubagentRecoverySettled?: () => void;
+  unlockStartupMethods?: () => void;
   startupTrace?: GatewayStartupTrace;
   log: { warn: (message: string) => void };
   logHooks: {
@@ -172,7 +173,12 @@ export async function runGatewayStartupObservers(params: {
         params.log.warn(`subagent restart recovery failed to activate: ${String(err)}`);
       }
     })
-    .finally(params.onSubagentRecoverySettled);
+    .finally(() => {
+      if (params.isClosing?.() !== true) {
+        params.unlockStartupMethods?.();
+      }
+      params.onSubagentRecoverySettled?.();
+    });
   const sentinelRefresh = runWithGatewayIndependentRootWorkAdmission(
     async () => {
       await measureStartup(params.startupTrace, "post-attach.update-sentinel", async () => {

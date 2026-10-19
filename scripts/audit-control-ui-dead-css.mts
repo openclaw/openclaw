@@ -7,7 +7,7 @@ import process from "node:process";
 import { fileURLToPath } from "node:url";
 import postcss, { type Rule } from "postcss";
 import selectorParser, { type ClassName, type Root as SelectorRoot } from "postcss-selector-parser";
-import * as ts from "typescript/unstable/ast";
+import * as ts from "typescript/ast";
 import { groupBy } from "./lib/group-by.mts";
 import { createNativeTypeScriptParser } from "./lib/native-typescript.mts";
 import { getPropertyNameText, unwrapExpression } from "./lib/ts-guard-utils.mts";

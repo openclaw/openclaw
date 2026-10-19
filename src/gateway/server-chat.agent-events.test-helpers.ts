@@ -172,6 +172,9 @@ export function createDirectChatContext(
     }),
     recoveryRuntime: {
       prepareRestartRecovery: () => undefined,
+      resumeChatInput: async () => {
+        throw new Error("Unexpected chat input recovery");
+      },
       dispatchAgent: vi.fn(),
       waitForAgent: vi.fn(),
       sendRecoveryNotice: vi.fn(),

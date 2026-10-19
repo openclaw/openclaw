@@ -266,7 +266,7 @@ it("keeps a paused queue input held when its earlier settings wait finishes afte
 });
 
 it.each(["lost-ack", "accepted-unconsumed"] as const)(
-  "holds %s input across pause clearing, reload, and positive interrupted custody until explicit retry",
+  "retains %s input across pause clearing and reload until server consumption",
   async (outcome) => {
     let row: GatewaySessionRow = {
       ...paused,
@@ -276,6 +276,7 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
     };
     let attemptedRunId: string | undefined;
     let attempts = 0;
+    let consumed = false;
     const request = makeRequestMock({
       "sessions.list": () => sessionsResult([row], row.snapshotAt ?? 0),
       "chat.history": () => ({
@@ -283,20 +284,29 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
         sessionId: row.sessionId,
         sessionInfo: { ...row, hasActiveRun: false, status: "done" },
         pendingInputs: {
-          items: attemptedRunId
-            ? [
-                {
-                  id: "accepted-input",
-                  runId: attemptedRunId,
-                  acceptedAt: 1,
-                  state: "interrupted",
-                  message: { role: "user", content: "Keep this delivery identity" },
-                },
-              ]
-            : [],
-          total: attemptedRunId ? 1 : 0,
+          items:
+            attemptedRunId && !consumed
+              ? [
+                  {
+                    id: "accepted-input",
+                    runId: attemptedRunId,
+                    acceptedAt: 1,
+                    state: "interrupted",
+                    message: { role: "user", content: "Keep this delivery identity" },
+                  },
+                ]
+              : [],
+          total: attemptedRunId && !consumed ? 1 : 0,
         },
-        inputReceipts: attemptedRunId ? [{ runId: attemptedRunId, state: "pending" }] : [],
+        inputReceipts: attemptedRunId
+          ? [
+              {
+                runId: attemptedRunId,
+                state: consumed ? "consumed" : "pending",
+                ...(consumed ? { consumedByEventId: "server-recovered-input" } : {}),
+              },
+            ]
+          : [],
       }),
       "chat.send": (params: unknown) => {
         const runId = requireRecord(params, "chat.send").idempotencyKey;
@@ -365,13 +375,19 @@ it.each(["lost-ack", "accepted-unconsumed"] as const)(
       sessionId: row.sessionId,
     });
     await retryQueuedChatMessage(reloaded, attempted!.id);
-    expect(attempts).toBe(2);
-    const sent = requestCalls(request, "chat.send");
-    expect(sent[1]?.[1]).toMatchObject({
-      idempotencyKey: requireRecord(sent[0]?.[1], "original send").idempotencyKey,
-      message: "Keep this delivery identity",
+    expect(attempts).toBe(1);
+    expect(reloaded.chatQueue[0]).toMatchObject({
+      id: attempted?.id,
+      text: attempted?.text,
+      sendState: "waiting-idle",
+      sendAttempts: 1,
+      sendRunId: attemptedRunId,
     });
+    consumed = true;
+    await loadChatHistory(reloaded, { deferBranches: true });
+    await flushChatQueueForEvent(reloaded);
     expect(listStoredChatOutboxes(reloaded)).toEqual([]);
+    expect(attempts).toBe(1);
   },
 );
 

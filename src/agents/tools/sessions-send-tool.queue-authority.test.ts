@@ -132,6 +132,7 @@ describe("sessions_send direct queue source authority", () => {
         const queued = vi.spyOn(session.agent, "admitSteeringMessage");
         const preparation = createDeferredCore();
         const resumePreparation = createDeferredCore();
+        const acceptedInput = createDeferredCore();
         const queueMessage = async (
           text: string,
           options?: EmbeddedAgentQueueMessageOptions,
@@ -150,7 +151,15 @@ describe("sessions_send direct queue source authority", () => {
           await steerActiveSessionWithOptionalDeliveryWait(
             session,
             text,
-            options,
+            {
+              ...options,
+              onQueueAccepted: (accepted) => {
+                options?.onQueueAccepted?.(accepted);
+                if (accepted) {
+                  acceptedInput.resolve();
+                }
+              },
+            },
             sessionKey,
             () => {
               assertCurrent?.();
@@ -165,8 +174,7 @@ describe("sessions_send direct queue source authority", () => {
           isCompacting: () => false,
           abort: () => {},
           sourceReplyDeliveryMode: "message_tool_only",
-          // Exercise the delivery owner's retry without transcript-commit waiting.
-          supportsTranscriptCommitWait: false,
+          supportsTranscriptCommitWait: true,
           ...(source === "unscoped"
             ? { messageInjection: { isAvailable: () => true, queueMessage } }
             : {
@@ -386,6 +394,20 @@ describe("sessions_send direct queue source authority", () => {
             await revokePeer();
           }
           resumePreparation.resolve();
+          await Promise.race([acceptedInput.promise, pending]);
+          // Receiver custody survives sender closure while the durable ACK waits for consumption.
+          releaseAgentRunDelegatedAuthority(authority);
+          if (crossAgent) {
+            revokeSend();
+          }
+          if (peerPolicy && !rejected) {
+            await revokePeer();
+          }
+          streamMocks.streamSimple.mockImplementation(
+            (model: Parameters<typeof createAssistant>[0]) =>
+              createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }])),
+          );
+          await session.prompt("Consume accepted guidance.");
           const result = await pending;
           if (rejected) {
             expect(result.details).toMatchObject({
@@ -410,19 +432,6 @@ describe("sessions_send direct queue source authority", () => {
             });
             expect(queued).toHaveBeenCalledOnce();
           }
-          // Acceptance transfers ownership: closing the sender cannot withdraw accepted guidance.
-          releaseAgentRunDelegatedAuthority(authority);
-          if (crossAgent) {
-            revokeSend();
-          }
-          if (peerPolicy && !rejected) {
-            await revokePeer();
-          }
-          streamMocks.streamSimple.mockImplementation(
-            (model: Parameters<typeof createAssistant>[0]) =>
-              createAssistantResultStream(createAssistant(model, [{ type: "text", text: "done" }])),
-          );
-          await session.prompt("Consume accepted guidance.");
           const reopened = await SessionManager.openAsync(target, state.workspaceDir);
           const delivered = reopened
             .buildSessionContext()

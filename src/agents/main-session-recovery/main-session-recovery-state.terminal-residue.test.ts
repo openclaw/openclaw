@@ -30,6 +30,7 @@ const unusedGatewayRuntime: GatewayRecoveryRuntime = {
   dispatchAgent: unexpectedRuntimeCall,
   waitForAgent: unexpectedRuntimeCall,
   sendRecoveryNotice: unexpectedRuntimeCall,
+  resumeChatInput: unexpectedRuntimeCall,
 };
 
 function settledEntry(overrides: Partial<SessionEntry> = {}): SessionEntry {

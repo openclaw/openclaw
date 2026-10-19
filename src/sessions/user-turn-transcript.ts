@@ -148,9 +148,7 @@ export function createUserTurnTranscriptRecorder(
     resolvedMessagePromise = Promise.resolve(message);
   };
 
-  const applyReplacementText = (
-    candidate: PersistedUserTurnMessage | undefined,
-  ): PersistedUserTurnMessage | undefined => {
+  const applyReplacementText = (candidate: PersistedUserTurnMessage | undefined) => {
     if (!candidate || replacementText === undefined) {
       return candidate;
     }
@@ -558,7 +556,8 @@ export function createUserTurnTranscriptRecorder(
             ...options,
             requestFingerprint: params.pendingInputRequestFingerprint,
             trackCompletion: params.trackInputCompletion,
-            retryInterrupted: params.sessionTurnMutation?.kind === "goal",
+            retryInterrupted:
+              options.retryInterrupted || params.sessionTurnMutation?.kind === "goal",
             replaySourceSessionKeys: params.pendingInputReplaySourceSessionKeys,
             message: projectRequesterOrigin(candidate),
             onCommitted: adoptPendingInput,

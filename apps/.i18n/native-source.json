@@ -2601,6 +2601,8 @@
     {"path":"apps/macos/Sources/OpenClaw/SessionMenuPreviewView.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.94506a32f403196f","source":"User"},
     {"path":"apps/macos/Sources/OpenClaw/SessionMenuPreviewView.swift","kind":"ui-call","surface":"apple","id":"native.apple.5ea10f8adc0d200b","source":"Loading preview…"},
     {"path":"apps/macos/Sources/OpenClaw/SessionMenuPreviewView.swift","kind":"ui-call","surface":"apple","id":"native.apple.27fc062a31365743","source":"No recent messages"},
+    {"path":"apps/macos/Sources/OpenClaw/SpeechCaptureResources.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.6f1805ecabc40f88","source":"Recognizer unavailable"},
+    {"path":"apps/macos/Sources/OpenClaw/SpeechCaptureResources.swift","kind":"conditional-branch","surface":"apple","id":"native.apple.20e7db367823a811","source":"Speech recognition unavailable"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionColor.swift","kind":"ui-call","surface":"apple","id":"native.apple.504b712bfbd064c0","source":"Color"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionColor.swift","kind":"ui-call","surface":"apple","id":"native.apple.b13fde6cff0b1b57","source":"Default"},
     {"path":"apps/shared/OpenClawKit/Sources/OpenClawChatUI/ChatSessionColor.swift","kind":"ui-localized-call","surface":"apple","id":"native.apple.d37f59fd60f3bffc","source":"Blue"},

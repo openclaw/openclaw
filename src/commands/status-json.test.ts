@@ -1,5 +1,6 @@
 // Status JSON tests cover command output and runtime JSON writes.
 import { beforeEach, describe, expect, it, vi } from "vitest";
+import { createMockGatewayService } from "../daemon/service.test-helpers.js";
 import { statusJsonCommand } from "./status-json.js";
 import { createTestRuntime } from "./test-runtime-config-helpers.js";
 
@@ -8,8 +9,8 @@ const mocks = vi.hoisted(() => ({
   runSecurityAudit: vi.fn(),
   loadProviderUsageSummary: vi.fn(),
   callGateway: vi.fn(),
-  getDaemonStatusSummary: vi.fn(),
-  getNodeDaemonStatusSummary: vi.fn(),
+  resolveGatewayService: vi.fn(),
+  resolveNodeService: vi.fn(),
   normalizeUpdateChannel: vi.fn((value?: string | null) => value ?? null),
   resolveUpdateChannelDisplay: vi.fn(() => ({
     channel: "stable",
@@ -44,9 +45,17 @@ vi.mock("../gateway/call.js", () => ({
   callGateway: mocks.callGateway,
 }));
 
-vi.mock("./status.daemon.js", () => ({
-  getDaemonStatusSummary: mocks.getDaemonStatusSummary,
-  getNodeDaemonStatusSummary: mocks.getNodeDaemonStatusSummary,
+vi.mock("../daemon/service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/service.js")>()),
+  resolveGatewayService: mocks.resolveGatewayService,
+}));
+vi.mock("../daemon/node-service.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../daemon/node-service.js")>()),
+  resolveNodeService: mocks.resolveNodeService,
+}));
+vi.mock("../infra/openclaw-root.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../infra/openclaw-root.js")>()),
+  resolveOpenClawPackageRoot: async () => null,
 }));
 
 vi.mock("../infra/update-channels.js", () => ({
@@ -131,8 +140,28 @@ function createExpectedStatusPayload() {
       error: null,
       authWarning: null,
     },
-    gatewayService: { installed: false },
-    nodeService: { installed: false },
+    gatewayService: {
+      label: "LaunchAgent",
+      installed: false,
+      loadState: { status: "not-loaded" },
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not loaded",
+      runtime: { status: "stopped" },
+      loaded: false,
+      runtimeShort: "stopped",
+    },
+    nodeService: {
+      label: "LaunchAgent",
+      installed: false,
+      loadState: { status: "not-loaded" },
+      managedByOpenClaw: false,
+      externallyManaged: false,
+      loadedText: "not loaded",
+      runtime: { status: "stopped" },
+      loaded: false,
+      runtimeShort: "stopped",
+    },
     agents: [],
     secretDiagnostics: [],
   };
@@ -146,8 +175,8 @@ describe("statusJsonCommand", () => {
       summary: { critical: 1, warn: 0, info: 0 },
       findings: [],
     });
-    mocks.getDaemonStatusSummary.mockResolvedValue({ installed: false });
-    mocks.getNodeDaemonStatusSummary.mockResolvedValue({ installed: false });
+    mocks.resolveGatewayService.mockReturnValue(createMockGatewayService());
+    mocks.resolveNodeService.mockReturnValue(createMockGatewayService());
     mocks.loadProviderUsageSummary.mockResolvedValue({ providers: [] });
     mocks.callGateway.mockResolvedValue({});
   });

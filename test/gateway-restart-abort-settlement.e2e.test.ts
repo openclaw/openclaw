@@ -4,12 +4,13 @@ import { mkdir, writeFile } from "node:fs/promises";
 import { createServer, type ServerResponse } from "node:http";
 import path from "node:path";
 import { asRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 import type { GatewayClient } from "../src/gateway/client.js";
 import { buildMockOpenAiResponsesProvider } from "../src/gateway/test-openai-responses-model.js";
 import { createWorkerEnvironmentStore } from "../src/gateway/worker-environments/store.js";
 import { loadOrCreateDeviceIdentity } from "../src/infra/device-identity.js";
 import { writeGatewayRestartIntentSync } from "../src/infra/restart-intent.js";
+import { extractFirstTextBlock } from "../src/shared/chat-message-content.js";
 import {
   closeOpenClawStateDatabaseByPathAsync,
   openOpenClawStateDatabase,
@@ -28,6 +29,17 @@ import { runQaGatewayFixture } from "./helpers/qa-gateway-cleanup.js";
 const key = (name: string) => `agent:main:shutdown-settlement-${name}`;
 const marker = (name: string) => `SHUTDOWN_SETTLEMENT_${name}`;
 const quote = (value: string) => `'${value.replaceAll("'", "'\\''")}'`;
+
+function historyToolOutput(messages: unknown[], name: string): unknown {
+  const result = messages
+    .flatMap((message) => {
+      const entry = asRecord(message);
+      return entry.role === "custom" && Array.isArray(entry.content) ? entry.content : [entry];
+    })
+    .find((entry) => isRecord(entry) && entry.role === "toolResult" && entry.toolName === name);
+  expect(result).toBeDefined();
+  return JSON.parse(extractFirstTextBlock(result) ?? "null");
+}
 
 function childProcessDiagnostic(pid: number) {
   const read = (name: "stat" | "status") => {
@@ -78,15 +90,17 @@ function toolCall(
 }
 
 it(
-  "settles recovered provisioning and restart-aborted nested/subagent turns with a Git child",
+  "settles recovered provisioning and restart-aborted nested/subagent lifecycle turns with a Git child",
   { timeout: 180_000 },
   async ({ signal }) => {
     const ready = new Map(
-      ["spawn", "child", "nested", "exec", "plain", "provision"].map((name) => [
+      ["spawn", "child", "send", "nested", "exec", "plain", "provision"].map((name) => [
         name,
         createDeferred(),
       ]),
     );
+    const wakeChild = createDeferred<ServerResponse>();
+    const wakePending = createDeferred();
     const gitStarted = createDeferred<{ pid: number; gitPid: number }>();
     const failed = createDeferred<never>();
     void failed.promise.catch(() => {});
@@ -157,8 +171,10 @@ it(
             }
             const input = JSON.stringify(body.input);
             const name = input.includes("You are running as a subagent")
-              ? "child"
-              : ["spawn", "send", "nested", "exec", "plain"].find((candidate) =>
+              ? input.includes(marker("wake-child"))
+                ? "wake-child"
+                : "child"
+              : ["spawn", "send", "nested", "exec", "plain", "wake"].find((candidate) =>
                   input.includes(marker(candidate)),
                 );
             if (!name) {
@@ -167,28 +183,41 @@ it(
             const count = (calls.get(name) ?? 0) + 1;
             calls.set(name, count);
             ordinal++;
-            if (name === "spawn" && count === 1) {
+            if ((name === "spawn" || name === "wake") && count === 1) {
               toolCall(
                 response,
                 tools,
                 "sessions_spawn",
                 {
-                  taskName: "shutdown_child",
-                  task: marker("child"),
+                  taskName: `shutdown_${name}_child`,
+                  task: marker(name === "wake" ? "wake-child" : "child"),
                   context: "isolated",
                   cleanup: "keep",
-                  expectsCompletionMessage: false,
+                  expectsCompletionMessage: name === "wake",
                 },
                 ordinal,
               );
               return;
+            }
+            if (name === "wake-child") {
+              wakeChild.resolve(response);
+              return;
+            }
+            if (name === "wake") {
+              if (count === 2) {
+                toolCall(response, tools, "sessions_yield", {}, ordinal);
+                return;
+              }
+              expect(count).toBe(3);
+              expect(input).toContain(marker("wake-done"));
+              wakePending.resolve();
             }
             if (name === "send" && count === 1) {
               toolCall(
                 response,
                 tools,
                 "sessions_send",
-                { sessionKey: key("nested"), message: marker("nested"), timeoutSeconds: 120 },
+                { sessionKey: key("nested"), message: marker("nested"), timeoutSeconds: 0 },
                 ordinal,
               );
               return;
@@ -325,7 +354,7 @@ it(
               entries: { main: {} },
             },
             tools: {
-              allow: ["exec", "process", "sessions_spawn", "sessions_send"],
+              allow: ["exec", "process", "sessions_spawn", "sessions_yield", "sessions_send"],
               exec: { mode: "full", host: "gateway" },
               codeMode: { enabled: false },
               sessions: { visibility: "all" },
@@ -377,7 +406,7 @@ it(
               closeMessage: "restart settlement client closed",
             },
           );
-          for (const name of ["nested", "spawn", "send", "exec", "plain"]) {
+          for (const name of ["nested", "spawn", "send", "exec", "plain", "wake"]) {
             await client.request("sessions.create", {
               key: key(name),
               agentId: "main",
@@ -386,7 +415,7 @@ it(
             });
           }
           phase = "admit";
-          for (const name of ["spawn", "send", "exec", "plain"]) {
+          for (const name of ["spawn", "send", "exec", "plain", "wake"]) {
             await client.request(
               "agent",
               {
@@ -403,6 +432,36 @@ it(
           phase = "wait-active";
           await gate(Promise.all([...ready.values()].map((deferred) => deferred.promise)));
           const childPids = await gate(gitStarted.promise);
+          const senderHistory = await client.request<{ messages: unknown[] }>("chat.history", {
+            sessionKey: key("send"),
+          });
+          expect(historyToolOutput(senderHistory.messages, "sessions_send")).toMatchObject({
+            status: "accepted",
+            targetDisposition: "queued",
+            delivery: { status: "pending" },
+          });
+          const wakeResponse = await gate(wakeChild.promise);
+          const observer = client;
+          await gate(
+            vi.waitFor(
+              async () => {
+                const history = await observer.request<{ messages: unknown[] }>("chat.history", {
+                  sessionKey: key("wake"),
+                });
+                expect(historyToolOutput(history.messages, "sessions_yield")).toMatchObject({
+                  status: "yielded",
+                });
+              },
+              { timeout: 30_000 },
+            ),
+          );
+          // Complete only after the parent yielded; its next model request is a lifecycle wake.
+          writeOpenAiResponsesText(wakeResponse, {
+            text: marker("wake-done"),
+            messageId: "msg_wake_child_done",
+            responseId: "resp_wake_child_done",
+          });
+          await gate(wakePending.promise);
           phase = "restart";
           await client.stopAndWait();
           client = undefined;
@@ -415,12 +474,17 @@ it(
               intent: { reason: "gateway.restart", force: true, waitMs: 100 },
             }),
           ).toBe(true);
+          const shutdownStartedAt = Date.now();
           expect(child.kill("SIGTERM")).toBe(true);
           expect(await gate(closed), instance.logs()).toEqual([0, null]);
+          expect(Date.now() - shutdownStartedAt, instance.logs()).toBeLessThan(10_000);
           expect(instance.logs()).toMatch(
             /completed in \d+ms with warnings: restart-reply-drain\b/u,
           );
           expect(instance.logs()).not.toContain("shutdown deadline reached");
+          expect(instance.logs()).not.toContain(
+            "In-process gateway dispatch requires a current gateway instance binding",
+          );
           for (const pid of [childPids.pid, childPids.gitPid]) {
             try {
               expect(() => process.kill(pid, 0)).toThrow();

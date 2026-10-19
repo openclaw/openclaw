@@ -106,6 +106,8 @@ async function createPollFixture(options: { scratch?: string; isolated?: boolean
       await resources.cron?.waitForIdle();
       await vi.waitFor(() => expect(getActiveCronJobCount()).toBe(0));
       await scheduler.stop();
+      // Join watchdog recovery imports before retiring the fixture's module graph.
+      await vi.dynamicImportSettled();
     } finally {
       dispose();
       await closeOpenClawAgentDatabasesAsync();

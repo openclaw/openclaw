@@ -718,9 +718,32 @@ is uncertain, writer admission and cleanup custody remain held until execution e
 
 During startup, reaching the inspection's foreground deadline records pending
 preparation and marks that agent **degraded** while the Gateway continues with healthy agents.
-Its sessions remain unavailable, and its database is excluded from automatic
-migration and ordinary writes. The inspection continues in the background within
-the same concurrency limit. Expiring the wait does not establish corruption.
+Its database remains excluded from automatic migration and ordinary writes until
+admission completes.
+Session and agent write RPCs targeting a preparing agent return a retryable startup-unavailable
+error before handler work begins. The reference Gateway client waits by retrying
+that refused request with the same request ID and input, within its original
+deadline and cancellation signal. Expiry or cancellation stops retries; no write
+remains parked at the server. Clients without this retry behavior receive the
+unavailable error immediately and can retry after preparation finishes.
+TUI and Control UI sends and new sessions use the shared five-minute startup
+budget for their client-owned response deadline. Submitted chat messages keep
+waiting when a retained pane is hidden. Stop, discard, or disposing the initiating
+view cancels pending admission retries; unfinished new-session creation also
+cancels when navigation retires its initiating view. SDK, native, and tool callers
+retain their own deadlines.
+Channel ingress and direct agent execution wait for existing preparation without
+holding database or session locks, for up to five minutes plus one minute per
+remaining two-agent inspection batch. Reads keep their existing readiness behavior,
+and admitted requests do not join another agent's preparation.
+Cron configuration and wake RPCs refuse preparing targets before writing.
+Scheduled cron jobs for preparing agents retain queued custody without consuming running
+slots or inheriting the foreground request timeout. Cron initialization continues while
+those jobs observe readiness in the background. Admission completion wakes their queue;
+healthy agents remain eligible. Service or Gateway shutdown cancels the readiness observation
+and leaves those receipts queued for ordinary recovery.
+The inspection continues in the background within
+the same concurrency limit. Expiring either wait does not establish corruption.
 
 A successful inspection alone does not make the agent available. The Gateway
 opens each agent's database and completes its session validation and transcript

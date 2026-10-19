@@ -759,17 +759,66 @@ describe("ordinary chat input admission", () => {
     },
   );
 
-  it.each(["sender", "payload", "cancelled", "same-generation"] as const)(
+  it("retries an interrupted chat input in the same lifecycle once under its original identity", async ({
+    signal,
+  }) => {
+    await using fixture = await createBrowserFollowupFixture({ preserveContent: true });
+    const resumedRecorder = createDeferred<UserTurnTranscriptRecorder>();
+    const resumedRelease = createDeferred();
+    const profile = ensureProfileForEmail("retry-input@example.test");
+    setClientProfile(fixture.client, { ...profile, updatedAt: 1 }, "Input author");
+    try {
+      const { recorder, original } = await admitPending(fixture);
+      recorder.finishPendingInput?.("interrupted");
+      await recorder.waitForPendingInputSettlement?.();
+      await fixture.finishDispatch();
+      expect((await pending(fixture)).items).toEqual([{ ...original, state: "interrupted" }]);
+      expect(fixture.readTranscript()).toEqual(fixture.activeTranscript);
+      fixture.context.dedupe.clear();
+      await patchSessionEntryCore(fixture.scope, () => ({ status: "done" }));
+      dispatchInboundMessageMock.mockReset().mockImplementation(async (options: unknown) => {
+        const { replyOptions } = options as Parameters<typeof dispatchInboundMessage>[0];
+        if (replyOptions?.userTurnTranscriptRecorder) {
+          resumedRecorder.resolve(replyOptions.userTurnTranscriptRecorder);
+        }
+        await resumedRelease.promise;
+        return {};
+      });
+
+      expectStarted(await fixture.send(), { runId: fixture.params.idempotencyKey });
+      const resumed = await withinTest(resumedRecorder.promise, signal);
+      expect((await pending(fixture)).items).toEqual([{ ...original, state: "queued" }]);
+      const duplicate = await fixture.send();
+      expect(duplicate).toHaveBeenCalledWith(
+        true,
+        expect.objectContaining({ runId: fixture.params.idempotencyKey, status: "in_flight" }),
+        undefined,
+        expect.objectContaining({ cached: true }),
+      );
+      expect(dispatchInboundMessageMock).toHaveBeenCalledOnce();
+      expect(fixture.beforeApprove).toHaveBeenCalledOnce();
+      expect(await resumed.persistApproved()).toMatchObject({
+        appended: true,
+        messageId: original?.id,
+        message: original?.message,
+      });
+      await resumed.persistApproved();
+      expect(fixture.readTranscript()).toHaveLength(fixture.activeTranscript.length + 1);
+      expect((await pending(fixture)).items).toEqual([]);
+    } finally {
+      resumedRelease.resolve();
+    }
+  });
+
+  it.each(["sender", "payload", "cancelled"] as const)(
     "does not recover pending input when its %s prevents fresh admission",
     async (change) => {
       await using fixture = await createMentionFixture({ preserveContent: true });
       const { recorder, original } = await admitPending(fixture);
-      if (change === "cancelled" || change === "same-generation") {
-        recorder?.finishPendingInput?.(change === "cancelled" ? "cancelled" : "interrupted");
+      if (change === "cancelled") {
+        recorder?.finishPendingInput?.("cancelled");
       }
-      if (change !== "same-generation") {
-        rotateAgentEventLifecycleGeneration();
-      }
+      rotateAgentEventLifecycleGeneration();
       await fixture.finishDispatch();
       fixture.context.dedupe.clear();
       dispatchInboundMessageMock.mockClear();

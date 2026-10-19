@@ -136,9 +136,7 @@ describe("IMAP sender admission", () => {
     "rejects unsigned body bytes even with DMARC %s",
     async (dmarc) => {
       const result = createImapAuthResult(dmarc);
-      if (result.dmarc) {
-        result.dmarc.alignment.dkim.underSized = 32;
-      }
+      result.dmarc.alignment.dkim.underSized = 32;
       const mail = await message(["From: trusted@example.com", "To: reader@example.com"]);
       const authenticator = vi.fn(async () => result);
       await expect(

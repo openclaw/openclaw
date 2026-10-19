@@ -10,11 +10,8 @@ import {
   formatCliCommand,
   mergeScopedSearchConfig,
   readCachedSearchPayload,
-  readConfiguredSecretString,
-  readPositiveIntegerParam,
-  readProviderEnvValue,
-  readStringParam,
-  MAX_SEARCH_COUNT,
+  readWebSearchApiKey,
+  readWebSearchQueryAndCount,
   resolveProviderWebSearchPluginConfig,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
@@ -57,15 +54,6 @@ type MiniMaxSearchResponse = {
     status_msg?: string;
   };
 };
-
-function resolveMiniMaxApiKey(searchConfig?: SearchConfigRecord): string | undefined {
-  return (
-    readConfiguredSecretString(
-      searchConfig?.apiKey,
-      "plugins.entries.minimax.config.webSearch.apiKey",
-    ) ?? readProviderEnvValue([...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"])
-  );
-}
 
 function isMiniMaxCnHost(value: string | undefined): boolean {
   const trimmed = normalizeOptionalString(value);
@@ -202,19 +190,16 @@ export async function executeMiniMaxWebSearchProviderTool(
     resolveProviderWebSearchPluginConfig(ctx.config, "minimax"),
     { mirrorApiKeyToTopLevel: true },
   );
-  const apiKey = resolveMiniMaxApiKey(searchConfig);
+  const apiKey = readWebSearchApiKey(
+    searchConfig?.apiKey,
+    "plugins.entries.minimax.config.webSearch.apiKey",
+    [...MINIMAX_TOKEN_PLAN_ENV_VARS, "MINIMAX_API_KEY"],
+  );
   if (!apiKey) {
     return missingMiniMaxKeyPayload();
   }
 
-  const query = readStringParam(args, "query", { required: true });
-  const count =
-    readPositiveIntegerParam(args, "count", {
-      max: MAX_SEARCH_COUNT,
-      message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-    }) ??
-    searchConfig?.maxResults ??
-    undefined;
+  const { query, count } = readWebSearchQueryAndCount(args, searchConfig);
 
   const resolvedCount = resolveSearchCount(count, DEFAULT_SEARCH_COUNT);
   const endpoint = resolveMiniMaxEndpoint(searchConfig, ctx.config);

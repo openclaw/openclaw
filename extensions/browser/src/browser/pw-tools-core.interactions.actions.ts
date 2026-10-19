@@ -1,3 +1,4 @@
+import { addAbortListener } from "node:events";
 import { sleepWithAbort } from "openclaw/plugin-sdk/runtime-env";
 import type { Locator, Page } from "playwright-core";
 import { ACT_MAX_CLICK_DELAY_MS, resolveActInteractionTimeoutMs } from "./act-policy.js";
@@ -14,7 +15,6 @@ import {
 import {
   assertInteractionCurrent,
   awaitNavigationGuardedInteraction,
-  createAbortPromiseWithListener,
   type ElementInteractionOptions,
   getRestoredPageForTarget,
   type GuardedInteractionOptions,
@@ -100,24 +100,19 @@ async function runGuardedPageInteraction<T>(
 ): Promise<T> {
   // Mouse and keyboard primitives lack native cancellation. Keep their guard
   // alive after foreground interruption until the underlying operation settles.
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(opts.signal);
-  try {
-    return await awaitNavigationGuardedInteraction(
-      {
-        action,
-        cdpUrl: opts.cdpUrl,
-        page,
-        ...interactionNavigationPolicy(opts),
-        targetId: opts.targetId,
-        assertCurrent: opts.assertCurrent,
-      },
-      abortPromise,
-      opts.signal,
-      () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
-    );
-  } finally {
-    cleanup();
-  }
+  return await awaitNavigationGuardedInteraction(
+    {
+      action,
+      cdpUrl: opts.cdpUrl,
+      page,
+      ...interactionNavigationPolicy(opts),
+      targetId: opts.targetId,
+      assertCurrent: opts.assertCurrent,
+    },
+    opts.signal,
+    opts.signal,
+    () => reconcileRemoteDialogAfterActionSettled(page, opts.signal),
+  );
 }
 
 function resolveInteractionElement(page: Page, resolved: ReturnType<typeof requireRefOrSelector>) {
@@ -311,8 +306,8 @@ export async function evaluateViaPlaywright(
   evaluateTimeout = Math.min(evaluateTimeout, outerTimeout);
 
   const signal = opts.signal;
-  const { abortPromise, cleanup } = createAbortPromiseWithListener(signal, (reason) => {
-    if (isBrowserObservedDialogBlockedError(reason)) {
+  const onAbort = () => {
+    if (isBrowserObservedDialogBlockedError(signal?.reason)) {
       return;
     }
     void forceDisconnectPlaywrightForTarget({
@@ -321,10 +316,12 @@ export async function evaluateViaPlaywright(
       targetId: opts.targetId,
       ssrfPolicy: opts.ssrfPolicy,
     }).catch(() => {});
-  });
+  };
   if (signal?.aborted) {
+    onAbort();
     throw signal.reason ?? new Error("aborted");
   }
+  const abortListener = signal && addAbortListener(signal, onAbort);
 
   try {
     const navigationPolicy = interactionNavigationPolicy(opts);
@@ -376,12 +373,12 @@ export async function evaluateViaPlaywright(
         targetId: opts.targetId,
         assertCurrent: opts.assertCurrent,
       },
-      abortPromise,
+      signal,
       signal,
       reconcileRemoteDialog,
     );
   } finally {
-    cleanup();
+    abortListener?.[Symbol.dispose]();
   }
 }
 

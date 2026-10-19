@@ -485,7 +485,7 @@ export default [
 `,
       );
       await run(`
-import { Program } from "typescript/unstable/async";
+import { Program } from "typescript/async";
 import { build } from "tsdown";
 const buildFixture = makeBuild(build);
 const output = path.join(root, "packages/output-producer/dist");

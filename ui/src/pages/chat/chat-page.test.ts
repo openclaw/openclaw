@@ -640,7 +640,7 @@ describe("chat page split layout host", () => {
     await settleChatPage(page);
     expectPresence(["agent:main:replacement"]);
     page.remove();
-    await Promise.resolve();
+    await settleChatPage(page);
     expectPresence([]);
   });
 

@@ -9,12 +9,11 @@ import {
   buildSearchCacheKey,
   DEFAULT_SEARCH_COUNT,
   formatCliCommand,
-  MAX_SEARCH_COUNT,
   parseWebSearchTimeFilters,
   readCachedSearchPayload,
   readConfiguredSecretString,
-  readPositiveIntegerParam,
-  readProviderEnvValue,
+  readWebSearchApiKey,
+  readWebSearchQueryAndCount,
   readStringParam,
   resolveSearchCacheTtlMs,
   resolveSearchCount,
@@ -63,15 +62,6 @@ function logBraveHttp(
     return;
   }
   braveHttpLogger.info(`brave http ${event}`, meta);
-}
-
-function resolveBraveApiKey(searchConfig?: SearchConfigRecord): string | undefined {
-  return (
-    readConfiguredSecretString(
-      searchConfig?.apiKey,
-      "plugins.entries.brave.config.webSearch.apiKey",
-    ) ?? readProviderEnvValue(["BRAVE_API_KEY"])
-  );
 }
 
 function resolveBraveBaseUrl(braveConfig: { baseUrl?: unknown } | undefined): string {
@@ -247,7 +237,11 @@ export async function executeBraveSearch(
     signal?: AbortSignal;
   },
 ): Promise<Record<string, unknown>> {
-  const apiKey = resolveBraveApiKey(searchConfig);
+  const apiKey = readWebSearchApiKey(
+    searchConfig?.apiKey,
+    "plugins.entries.brave.config.webSearch.apiKey",
+    ["BRAVE_API_KEY"],
+  );
   if (!apiKey) {
     return {
       error: "missing_brave_api_key",
@@ -270,14 +264,7 @@ export async function executeBraveSearch(
     signal?.throwIfAborted();
     const braveEndpointMode = await validateBraveBaseUrl(braveBaseUrl, signal);
     signal?.throwIfAborted();
-    const query = readStringParam(args, "query", { required: true });
-    const count =
-      readPositiveIntegerParam(args, "count", {
-        max: MAX_SEARCH_COUNT,
-        message: `count must be an integer from 1 to ${MAX_SEARCH_COUNT}.`,
-      }) ??
-      searchConfig?.maxResults ??
-      undefined;
+    const { query, count } = readWebSearchQueryAndCount(args, searchConfig);
     const country = normalizeBraveCountry(readStringParam(args, "country"));
     const language = readStringParam(args, "language");
     const search_lang = readStringParam(args, "search_lang");

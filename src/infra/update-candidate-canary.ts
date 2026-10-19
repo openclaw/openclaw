@@ -248,7 +248,6 @@ export async function validateUpdateCandidateCanary(params: {
     if (params.migrationPolicy !== "startup-only") {
       const policy = resolveUpdateDoctorExecutionPolicy({
         targetVersion: await readPackageVersion(params.root),
-        allowGatewayServiceRepair: false,
       });
       if (!policy.fix) {
         throw new Error("Cannot check migrations without changing the running service");
@@ -692,7 +691,10 @@ export async function validateUpdateCandidateCanary(params: {
       failed.failureFacts.some(
         (fact) => failureLine === `${displayPhase}: ${fact.message} (${durationMs}ms)`,
       );
-    failed.stderrTail ??= stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
+    failed.stderrTail ??=
+      phase === "snapshot"
+        ? message
+        : stepLogTail.slice(0, repeatsFact ? -1 : undefined).join("\n");
     try {
       await reportReceipt(onStep, failed);
     } catch (recordingError) {

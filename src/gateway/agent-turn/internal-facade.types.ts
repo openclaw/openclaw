@@ -1,6 +1,7 @@
 import type { AgentWaitParams } from "../../../packages/gateway-protocol/src/index.js";
 import type { ConnectParams } from "../../../packages/gateway-protocol/src/schema/frames.js";
 import type { ReplyExpectation } from "../../agents/reply-completion.js";
+import type { SessionSourceAssertion } from "../../config/sessions/session-source-authority.js";
 import type { SessionControllerInput } from "../../sessions/session-controller.contracts.js";
 import type { GatewayMethodDispatchResponse } from "../server-in-process-dispatch.types.js";
 import type { AgentRunRequest } from "../server-methods/agent-request-types.js";
@@ -42,6 +43,8 @@ export type InternalAgentTurnDispatchOptions = {
   prepareDispatchCurrent?: () => Promise<void>;
   // The source owns admission only; accepted children execute under their own lifetime.
   assertAdmissionCurrent?: () => void;
+  /** Accepted execution retains this permission check through tool and delivery effects. */
+  executionSource?: SessionSourceAssertion;
   cancelOnDeadline?: boolean;
   expectFinal?: boolean;
   onAccepted?: (payload: unknown) => void;

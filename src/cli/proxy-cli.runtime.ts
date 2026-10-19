@@ -4,6 +4,7 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { toErrorObject } from "@openclaw/normalization-core/error-coercion";
 import { theme } from "../../packages/terminal-core/src/theme.js";
 import { captureRuntimeConfigAsyncReader } from "../config/config.js";
+import { throwCollectedErrors } from "../infra/error-graph-internal.js";
 import {
   runProxyValidation,
   type ProxyValidationResult,
@@ -27,12 +28,7 @@ async function finalizeProxyCommand(errors: unknown[], finalizers: Array<() => P
       errors.push(error);
     }
   }
-  if (errors.length === 1) {
-    throw errors[0];
-  }
-  if (errors.length > 1) {
-    throw new AggregateError(errors, "Debug proxy command and capture cleanup failed.");
-  }
+  throwCollectedErrors(errors, "Debug proxy command and capture cleanup failed.");
 }
 
 export async function runDebugProxyStartCommand(opts: { host?: string; port?: number }) {

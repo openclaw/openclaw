@@ -58,7 +58,6 @@ export async function notifySessionsSendSession(params: {
   inputProvenance: InputProvenance;
   sessionKey: string;
   targetAgentId: string;
-  idempotencyKey: string;
   runId: string;
   displayKey: string;
   assertCurrent?: () => void;
@@ -72,7 +71,7 @@ export async function notifySessionsSendSession(params: {
       withSystemEventOwner(
         {
           sessionKey: params.sessionKey,
-          contextKey: `session-notify:${params.idempotencyKey}`,
+          contextKey: `session-notify:${params.runId}`,
         },
         params.targetAgentId,
       ),
@@ -123,6 +122,7 @@ type SessionsSendDeliveryParams = {
   cfg: OpenClawConfig;
   admissionConfig: OpenClawConfig;
   callGateway: AgentToolGatewayRequestCaller;
+  callDurableGateway?: AgentToolGatewayRequestCaller;
   runId: string;
   sendParams: Record<string, unknown> & {
     message: string;
@@ -175,7 +175,9 @@ const FALLBACK_STEER_REJECTIONS = new Set<
 export async function trySessionsSendActiveRunDelivery(
   params: SessionsSendDeliveryParams,
   ownChild: boolean,
-): Promise<SessionsSendStart | { fallbackSessionKey?: string }> {
+): Promise<
+  SessionsSendStart | { fallbackSessionKey?: string; callGateway?: AgentToolGatewayRequestCaller }
+> {
   const assertCaller = captureGatewayToolCallerAssertion();
   try {
     const selection = resolveGatewayToolOperatorSelection({ requireRequesterOrigin: true });
@@ -240,7 +242,9 @@ export async function trySessionsSendActiveRunDelivery(
           },
           steeringMode: "all",
           debounceMs: 0,
-          deliveryTimeoutMs: params.deliveryTimeoutMs,
+          // Reply waiting and durable admission have separate deadlines.
+          deliveryTimeoutMs:
+            params.mode === "steer" || ownChild ? undefined : params.deliveryTimeoutMs,
           ...lifecycle,
           onQueueAccepted: (value) => {
             // Accepted guidance belongs to the receiver, not the sender's later policy.
@@ -258,10 +262,8 @@ export async function trySessionsSendActiveRunDelivery(
                 },
               }
             : {}),
-          // Waiting for a busy run's transcript would withdraw accepted guidance at the deadline.
-          ...(params.mode === "steer" || ownChild
-            ? { waitForTranscriptCommit: false }
-            : { waitForTranscriptCommit: true, sourceReplyDeliveryMode }),
+          waitForTranscriptCommit: true,
+          ...(params.mode === "steer" || ownChild ? {} : { sourceReplyDeliveryMode }),
           // The receiving runtime owns transcript writes to this exact incarnation.
           userTurnTranscriptRecorder: createUserTurnTranscriptRecorder({
             assertOriginalInputCommit: assertInputCurrent,
@@ -283,24 +285,13 @@ export async function trySessionsSendActiveRunDelivery(
             },
           }),
         };
-        const dispatchQueue = (options: ReplyMessageInjectionOptions) =>
-          steerSessionControllerOperation({
-            operation: activeOperation,
-            text: messageText,
-            // A status-only inter-session input cannot abort the receiving turn.
-            abortOnUnconfirmedTranscript: false,
-            options,
-          });
-        let result = await dispatchQueue(queueOptions);
-        if (
-          result.status === "rejected" &&
-          result.reason === "transcript_commit_wait_unsupported"
-        ) {
-          const bestEffortOptions = { ...queueOptions };
-          delete bestEffortOptions.waitForTranscriptCommit;
-          result = await dispatchQueue(bestEffortOptions);
-        }
-        return result;
+        return await steerSessionControllerOperation({
+          operation: activeOperation,
+          text: messageText,
+          // A status-only inter-session input cannot abort the receiving turn.
+          abortOnUnconfirmedTranscript: false,
+          options: queueOptions,
+        });
       };
       const steer = selection.operatorAuthority
         ? await queueSessionsSendSteeringWithCustody(
@@ -338,6 +329,13 @@ export async function trySessionsSendActiveRunDelivery(
           );
         }
         return {};
+      }
+      if (steer.reason === "transcript_commit_wait_unsupported") {
+        if (!params.callDurableGateway) {
+          throw new Error("The target cannot accept restart-durable steering from this caller.");
+        }
+        // Capability rejection precedes injection, so the same input can safely queue once.
+        return { callGateway: params.callDurableGateway };
       }
       fallbackSessionKey = ownChild
         ? undefined

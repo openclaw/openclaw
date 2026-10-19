@@ -577,11 +577,14 @@ describe("sessions page lifecycle", () => {
   it("forks an active session from its last completed message", async () => {
     const { page, sessions } = await mountMutation({ create: vi.fn(async () => "active-fork") });
     await page.forkSession("main", true);
-    expect(sessions.create).toHaveBeenCalledWith({
-      parentSessionKey: "main",
-      fork: true,
-      forkFrom: "last-completed",
-    });
+    expect(sessions.create).toHaveBeenCalledWith(
+      {
+        parentSessionKey: "main",
+        fork: true,
+        forkFrom: "last-completed",
+      },
+      { signal: expect.any(AbortSignal) },
+    );
   });
 });
 

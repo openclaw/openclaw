@@ -1,3 +1,4 @@
+import { channel } from "node:diagnostics_channel";
 import { performance } from "node:perf_hooks";
 import { isMainThread } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
@@ -31,6 +32,7 @@ type SessionsListAttribution = Extract<RpcEvent, { phase: "received" }>["session
 type CronListAttribution = Extract<RpcEvent, { phase: "received" }>["cronList"];
 type ChatHistoryAttribution = NonNullable<Extract<RpcEvent, { phase: "response" }>["chatHistory"]>;
 const workerMethods = new Set<string>([...WORKER_PROTOCOL_METHODS, ...WORKER_INFERENCE_METHODS]);
+const rpcDiagnostics = channel("openclaw.gateway.rpc");
 let activeHandlers = 0;
 let exclusiveHandler: GatewayRpcDiagnostics | undefined;
 const sharedResponseFields = new WeakMap<
@@ -91,6 +93,9 @@ export class GatewayRpcDiagnostics {
   }
 
   private emit(event: RpcEvent): void {
+    if (rpcDiagnostics.hasSubscribers) {
+      rpcDiagnostics.publish({ ...event, operation: `${event.method}.${event.phase}` });
+    }
     // A retained response can run under another request; preserve captured absence too.
     runWithDiagnosticTraceContext(this.trace, () => emitTrustedDiagnosticEvent(event));
   }
@@ -251,8 +256,8 @@ export class GatewayRpcDiagnostics {
 
 /** Capture receipt before a socket FIFO, without work when diagnostics are unused. */
 export function captureGatewayRpcReceivedAt(): number | undefined {
-  return areDiagnosticsEnabledForProcess() &&
-    hasInternalDiagnosticEventInterest("gateway.rpc", true)
+  return rpcDiagnostics.hasSubscribers ||
+    (areDiagnosticsEnabledForProcess() && hasInternalDiagnosticEventInterest("gateway.rpc", true))
     ? performance.now()
     : undefined;
 }
@@ -285,8 +290,8 @@ export function createGatewayRpcDiagnostics(
   },
 ): GatewayRpcDiagnostics | undefined {
   if (
-    !areDiagnosticsEnabledForProcess() ||
-    !hasInternalDiagnosticEventInterest("gateway.rpc", true)
+    !rpcDiagnostics.hasSubscribers &&
+    (!areDiagnosticsEnabledForProcess() || !hasInternalDiagnosticEventInterest("gateway.rpc", true))
   ) {
     return undefined;
   }

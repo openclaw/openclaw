@@ -23,6 +23,7 @@ export function FileDraftRecoveryDialog(props: {
 }) {
   // Review the opening batch; successful discards remove entries from this dialog.
   const initialDrafts = untrack(() => [...props.drafts]);
+  let keepButton!: HTMLButtonElement;
   const [remaining, setRemaining] = createSignal(initialDrafts);
   const [error, setError] = createSignal("");
   const [copied, setCopied] = createSignal<FileDraft>();
@@ -48,6 +49,7 @@ export function FileDraftRecoveryDialog(props: {
   };
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={() => keepButton}
       label={t("chat.detailPanel.draftRecovery.review")}
       description={t("chat.detailPanel.draftRecovery.description")}
       onModal-cancel={() => props.finish()}
@@ -124,7 +126,15 @@ export function FileDraftRecoveryDialog(props: {
         </For>
         {error() ? <p role="alert">{error()}</p> : undefined}
         <openclaw-modal-actions class="exec-approval-actions">
-          <button type="button" class="btn" autofocus onClick={() => props.finish()}>
+          <button
+            ref={(element) => {
+              keepButton = element;
+            }}
+            type="button"
+            class="btn"
+            autofocus
+            onClick={() => props.finish()}
+          >
             {t("chat.detailPanel.draftRecovery.keep")}
           </button>
         </openclaw-modal-actions>

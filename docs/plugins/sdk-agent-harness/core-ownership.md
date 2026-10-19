@@ -39,10 +39,11 @@ applies it when building the surface; harnesses do not need to forward that fact
 and plugin-supplied options cannot replace it. Tool profiles still filter the
 catalog, and each executable remains bound to the host's live authority.
 
-Core also passes optional `params.preparedWebSearchPolicy` with `allowed`,
-`persistentAllowed`, the `modelRef` provider/model tuple, and `requesterFacts`
-containing the session-policy and lineage reads consumed during capability preparation. Harnesses can consume this data without reading session
-policy synchronously. Apply turn-specific tool restrictions separately; this snapshot
+Core also passes optional `params.preparedWebSearchPolicy` to attempts and V2
+side questions with `allowed`, `persistentAllowed`, the `modelRef` provider/model
+tuple, and `requesterFacts` containing the session-policy and lineage reads
+consumed during capability preparation. Harnesses can consume this data without
+reading session policy synchronously. Apply turn-specific tool restrictions separately; this snapshot
 does not grant execution authority or replace live native-action checks. Existing
 harnesses may ignore the field.
 
@@ -58,9 +59,12 @@ captured requester checks through the physical native write, including session-I
 selection and absence. The existing `captureSessionEntryCurrentCheckAsync` helper
 accepts an optional `sessionId` selector in place of `sessionKey`; when both are
 supplied, the ID selects the row. Existing key-only callers are unchanged.
-Both bindings are optional in the SDK
-shape to preserve existing callers. Pending native supervision without a selected
-model omits the field and retains the harness's existing policy-resolution path.
+Both bindings are optional in the SDK shape to preserve existing callers.
+Pending native supervision without a selected model receives a prepared denial.
+Codex enables hosted search only from prepared policy; missing data disables
+hosted search rather than resolving requester policy after native source capture.
+Side-question builders must forward the prepared policy unchanged, including its
+model reference and requester facts.
 
 ### Prepared local execution environment
 
@@ -353,9 +357,13 @@ route, using the reply's original caller-policy snapshot for both its fingerprin
 and incoming-message projection. Native ownership or model-selection hooks do not
 replace that snapshot or authorize a different caller.
 
-Core carries optional `expectedSessionRuntimeOwnership` into the attempt, including
-`modelRef` for host-auth bindings. This is a nonauthorizing comparison, not a binding,
-credential, or retained capability. Revalidate during preflight, under the binding
+Core carries optional `expectedSessionRuntimeOwnership` into attempts and V2 side
+questions, including the captured `auth` owner and `modelRef` for host-auth bindings.
+The side-question field reuses the attempt shape; existing callers may omit it.
+This is a nonauthorizing comparison, not a binding, credential, or retained capability.
+Side hooks must check it when acquiring the binding, before selecting a connection
+or using prepared credentials. An auth-owner change rejects the side question even
+when its provider and model are unchanged. Revalidate during preflight, under the binding
 lease, and against the ready thread after resume before inference. A changed host-auth
 tuple rejects stale prepared credentials while retaining the newly observed binding.
 Native-auth connections may follow their native owner's model changes. Missing or

@@ -1,4 +1,5 @@
 import { isAgentEventLifecycleGenerationCurrent } from "../infra/agent-events.js";
+import { throwIfSettledRejected } from "../infra/error-graph-internal.js";
 import { captureSessionControllerSourceSettlement } from "../sessions/session-controller.mailbox.js";
 import {
   getRpcSourceIdentity,
@@ -175,15 +176,7 @@ function createGatewayOperatorRunCancellation(params: {
           ]
         : []),
     ]);
-    const failures = settled.flatMap((result) =>
-      result.status === "rejected" ? [result.reason] : [],
-    );
-    if (failures.length === 1) {
-      throw failures[0];
-    }
-    if (failures.length > 1) {
-      throw new AggregateError(failures, "Operator access cancellation did not fully settle");
-    }
+    throwIfSettledRejected(settled, "Operator access cancellation did not fully settle");
   };
   const onAbort = () => {
     if (released || cancellationStarted) {

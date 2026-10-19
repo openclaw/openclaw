@@ -513,6 +513,10 @@ describe("Codex native configuration", () => {
         },
       };
       if (nativeSearchEnabled) {
+        params.preparedWebSearchPolicy = {
+          allowed: true,
+          persistentAllowed: true,
+        };
         params.config = {
           ...params.config,
           tools: { ...params.config?.tools, web: { search: { enabled: true } } },

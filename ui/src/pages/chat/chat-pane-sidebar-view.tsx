@@ -1,5 +1,6 @@
 import type { JSX as SolidJSX } from "@solidjs/web";
 import { For, Show } from "solid-js";
+import { Icon } from "../../components/solid/icon.tsx";
 import { LazyViewError } from "../../components/solid/lazy-view-error.tsx";
 import { PanelLoadingSkeleton } from "../../components/solid/panel-loading-skeleton.tsx";
 import { elementRef } from "../../lib/reactive/element-ref.ts";
@@ -69,6 +70,10 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
     },
   };
   const column = () => props.layout.columns[0];
+  const visiblePanels = () =>
+    column()?.panels.filter(
+      (panel) => panel.slot !== "conversation" && isSidebarSlotVisible(props.layout, panel.slot),
+    ) ?? [];
   const chatMain = () =>
     !sidebarMainPanel(props.layout) || sidebarMainPanel(props.layout)?.slot === "conversation";
   const collapsed = () =>
@@ -108,6 +113,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
       </Show>
       <div
         class="sidebar-region__header"
+        tabindex={-1}
         ref={[(element) => (header = element), elementRef(props.onHeaderElementRef)]}
       >
         {props.header}
@@ -116,15 +122,7 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         when={props.regionError === undefined}
         fallback={
           <Show when={props.regionError === null}>
-            <For
-              each={
-                column()?.panels.filter(
-                  (panel) =>
-                    panel.slot !== "conversation" && isSidebarSlotVisible(props.layout, panel.slot),
-                ) ?? []
-              }
-              keyed={(panel) => panel.id}
-            >
+            <For each={visiblePanels()} keyed={(panel) => panel.id}>
               {(panel) => (
                 <div
                   class="side-panel__panel"
@@ -175,7 +173,35 @@ export function SidebarRegionView(props: SidebarRegionViewProps) {
         }
       >
         <div class="sidebar-region__right-runtime" ref={(element) => (outlet = element)}>
-          <LazyViewError {...props.regionError!} />
+          <For each={visiblePanels()} keyed={(panel) => panel.id}>
+            {(panel) => {
+              const label = () =>
+                props.panelDefinitions.find((definition) => definition.slot === panel().slot)!
+                  .label;
+              return (
+                <section
+                  class="side-panel__panel sidebar-region__failed-panel"
+                  data-region={panel().id === props.layout.mainPanelId ? "main" : "side"}
+                >
+                  {/* Shell chrome cannot depend on the region module that failed to load. */}
+                  <header class="rail-header">
+                    <strong>{label()}</strong>
+                    <button
+                      class="rail-header__action"
+                      type="button"
+                      aria-label={t("chat.sidebarColumns.close", {
+                        panel: label(),
+                      })}
+                      onClick={() => props.callbacks.closeSlot(panel().slot)}
+                    >
+                      <Icon name="x" />
+                    </button>
+                  </header>
+                  <LazyViewError {...props.regionError!} />
+                </section>
+              );
+            }}
+          </For>
         </div>
       </Show>
     </div>

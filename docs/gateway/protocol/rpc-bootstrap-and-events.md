@@ -406,6 +406,7 @@ or protocol-version change.
   availability, and loaded cron bindings can produce broad invalidations.
   Activity-summary-only publications update opted-in Activity consumers; shared
   session and agent rosters do not refetch for those recap-only changes.
+  Ensuring an already-current recap does not announce an updating/current cycle.
   Held row updates preserve unfiltered and dashboard-filtered windows without
   refetching; title and preview enrichment flags do not change membership.
   Healthy row traffic retains one fallback read after at least 60 seconds.
@@ -419,8 +420,11 @@ or protocol-version change.
   archive, or uncertain filter changes still require an authoritative count read.
   Prepared row publications yield between bounded slices during bursts. Pending
   activity-summary updates for the same session generation share the latest
-  snapshot; lifecycle, capacity, transcript, deletion, and clearing receipts remain
-  distinct. Publication rechecks row readiness after each yield. Accepted recap
+  snapshot within a 750 ms window, leaving headroom for delivery within one second.
+  The deadline stays fixed during continuous
+  activity; lifecycle, capacity, transcript, deletion, and clearing receipts remain
+  immediate and distinct. Live activity indicators use those separate events,
+  not recap delivery. Publication rechecks row readiness after each yield. Accepted recap
   notifications outlive the compaction or scheduler work that triggered them.
   Queued session-change notifications also survive completion or cancellation of
   the request that committed the change, so connected clients still receive the row.

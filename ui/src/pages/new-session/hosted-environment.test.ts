@@ -2,7 +2,6 @@ import { createComponent } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { ModelCatalogEntry, ModelCatalogResult } from "../../api/types.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
 import { buildDraftSessionCreateParams } from "./create-params.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
@@ -238,7 +237,7 @@ it("describes Auto using the eligible host runtime while a hosted workspace is s
       catalog({ agentRuntime: nativeRuntime("remote-runtime", "remote-exec") }),
   });
   managed.track(f.place.modelControl);
-  await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+  await vi.waitFor(() => expect(f.place.modelControl.hostedEnvironments()).toHaveLength(1));
   f.place.selectHostedEnvironment("agentsapi");
   expect(f.place.hostedEnvironment).toBeDefined();
   await f.gateway.refreshCloudProfiles();

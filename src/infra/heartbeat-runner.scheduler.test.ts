@@ -526,6 +526,52 @@ describe("startHeartbeatRunner", () => {
     return { run, runOnce: runSpy };
   }
 
+  it.each([
+    { intent: "manual", now: 1, result: instant },
+    { intent: "immediate", now: 1, result: instant },
+    {
+      intent: "scheduled",
+      now: 1_799_999,
+      result: { status: "skipped", reason: "not-due", retryAtMs: 1_800_000 },
+    },
+    { intent: "scheduled", now: 1_800_000, result: instant },
+    {
+      intent: "event",
+      now: 1,
+      result: { status: "skipped", reason: "not-due", retryAtMs: 30_000 },
+    },
+    { intent: "event", now: 1_800_000, result: instant },
+    {
+      intent: "task",
+      now: 29_999,
+      result: { status: "skipped", reason: "min-spacing", retryAtMs: 30_000 },
+    },
+    { intent: "task", now: 30_000, result: instant },
+  ] as const)("keeps the $intent admission deadline at $now", async ({ intent, now, result }) => {
+    const { run, runOnce } = startRunner();
+    await run({ source: "manual", intent: "manual", agentId: "main" });
+    runOnce.mockClear();
+    vi.setSystemTime(now);
+    expect(await run({ source: "manual", intent, agentId: "main" })).toEqual(result);
+    expect(runOnce).toHaveBeenCalledTimes(result.status === "ran" ? 1 : 0);
+  });
+
+  it("keeps the immediate flood deadline after repeated manual runs", async () => {
+    const { run, runOnce } = startRunner();
+    for (let now = 0; now < 10; now++) {
+      vi.setSystemTime(now);
+      await run({ source: "manual", intent: "manual", agentId: "main" });
+    }
+    runOnce.mockClear();
+    vi.setSystemTime(60_005);
+    const request = { source: "manual", intent: "immediate", agentId: "main" } as const;
+    expect(await run(request)).toEqual({ status: "skipped", reason: "flood", retryAtMs: 60_006 });
+    expect(runOnce).not.toHaveBeenCalled();
+    vi.setSystemTime(60_006);
+    expect(await run(request)).toEqual(instant);
+    expect(runOnce).toHaveBeenCalledOnce();
+  });
+
   it("retains an untargeted task through min-spacing and dispatches its payload at the deadline", async () => {
     const { run, runOnce } = startRunner();
     await run({ source: "manual", intent: "manual" });

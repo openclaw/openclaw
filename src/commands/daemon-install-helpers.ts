@@ -51,11 +51,6 @@ import { hasSecretRefCandidate } from "../secrets/runtime-secret-scan.js";
 import { createResolverContext } from "../secrets/runtime-shared.js";
 import { discoverConfigSecretTargets } from "../secrets/target-registry.js";
 import {
-  collectAuthProfileSecretRefs,
-  collectAuthProfileServiceEnvVars,
-  resolveAuthProfileStoreForServiceEnv,
-} from "./daemon-install-auth-profile-env.js";
-import {
   resolveDaemonInstallRuntimeInputs,
   resolveDaemonServicePathDirs,
   type GatewayInstallPlan,
@@ -153,6 +148,21 @@ type ExecSecretRefPassEnvSource = {
   ref: SecretRef;
   warningTitle: "Config SecretRef" | "Auth profile" | "Plugin config SecretRef";
 };
+
+function collectAuthProfileSecretRefs(authStore: AuthProfileStore | undefined): SecretRef[] {
+  if (!authStore) {
+    return [];
+  }
+  return Object.values(authStore.profiles).flatMap((credential) => {
+    const ref =
+      credential.type === "api_key"
+        ? credential.keyRef
+        : credential.type === "token"
+          ? credential.tokenRef
+          : undefined;
+    return ref ? [ref] : [];
+  });
+}
 
 function* configSecretRefsForService(config: OpenClawConfig) {
   for (const target of discoverConfigSecretTargets(config)) {
@@ -433,7 +443,17 @@ async function buildGatewayInstallEnvironment(params: {
       stateDirDotEnvEnvironment,
       warn: params.warn,
     });
-  const authStore = await resolveAuthProfileStoreForServiceEnv(params.authStore);
+  let authStore = params.authStore;
+  if (!authStore) {
+    // Keep the daemon install cold path cheap when there is no auth store to read.
+    const { hasAnyAuthProfileStoreSourceAsync } =
+      await import("./daemon-install-auth-profiles-source.runtime.js");
+    if (await hasAnyAuthProfileStoreSourceAsync()) {
+      const { loadAuthProfileStoreForSecretsRuntimeAsync } =
+        await import("./daemon-install-auth-profiles-store.runtime.js");
+      authStore = await loadAuthProfileStoreForSecretsRuntimeAsync();
+    }
+  }
   const execSecretRefPassEnvEnvironment = collectExecSecretRefPassEnvServiceEnvVars({
     env: params.env,
     config: params.config,
@@ -442,11 +462,28 @@ async function buildGatewayInstallEnvironment(params: {
     durableEnvironment,
     warn: params.warn,
   });
-  const authProfileEnvironment = collectAuthProfileServiceEnvVars({
-    env: params.env,
-    authStore,
-    warn: params.warn,
-  });
+  const authProfileEnvironment: Record<string, string> = {};
+  for (const ref of collectAuthProfileSecretRefs(authStore)) {
+    if (ref.source !== "env") {
+      continue;
+    }
+    const key = normalizeEnvVarKey(ref.id, { portable: true });
+    if (!key) {
+      continue;
+    }
+    if (isDangerousHostEnvVarName(key) || isDangerousHostEnvOverrideVarName(key)) {
+      params.warn?.(
+        `Auth profile env ref "${key}" blocked by host-env security policy`,
+        "Auth profile",
+      );
+      continue;
+    }
+    const value = params.env[key]?.trim();
+    if (!value) {
+      continue;
+    }
+    authProfileEnvironment[key] = value;
+  }
   const ambientProviderApiKeyEnvironment = await collectAmbientProviderApiKeyServiceEnvVars({
     env: params.env,
     config: params.config,

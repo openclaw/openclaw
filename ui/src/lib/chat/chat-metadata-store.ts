@@ -12,7 +12,6 @@ import { modelCatalogParams } from "../model-catalog-cache.ts";
 import {
   loadModelCatalog,
   peekModelCatalog,
-  settleModelCatalogRequests,
   subscribeModelCatalogCache,
 } from "../model-catalog-store.ts";
 import { uiConversationMatches, type UiSessionDefaultsHost } from "../sessions/session-key.ts";
@@ -420,7 +419,6 @@ export function loadChatMetadataRefresh(
       : undefined;
   const catalog = createDeferredCore<ModelCatalogResult | undefined>();
   const completed = createDeferredCore();
-  let wakePending = false;
   let debounceTimer: ReturnType<typeof setTimeout> | undefined;
   const record: ChatMetadataRefreshRecord = {
     controller: entry.catalogController,
@@ -455,28 +453,12 @@ export function loadChatMetadataRefresh(
         // Refresh the queued publication without admitting another transport.
         void loadChatMetadata(client, scope);
       }
+      // A same-generation startup extension adds commands beside its existing catalog.
       const inheritedCatalog =
         requestedRevision === entry.refreshRevision &&
         requestedCatalogRevision === entry.catalogRevision
           ? startupCatalog
           : undefined;
-      // A same-generation startup extension adds commands beside its existing catalog.
-      // Hidden or invalidated demand must retain both producer barriers through remount.
-      const catalogSettlement =
-        inheritedCatalog && active ? undefined : settleModelCatalogRequests(client, scope);
-      const pending = [entry.activeRequest?.promise, catalogSettlement].filter(
-        (promise) => promise !== undefined,
-      );
-      if (current && pending.length) {
-        if (!wakePending) {
-          wakePending = true;
-          void Promise.allSettled(pending).then(() => {
-            wakePending = false;
-            record.start();
-          });
-        }
-        return;
-      }
       if (!active) {
         record.phase = "inactive";
         catalog.resolve(undefined);

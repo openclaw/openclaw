@@ -57,11 +57,7 @@ import {
   assertNoCronShellExecution,
   updateCronJobFromAgentTool,
 } from "./cron-tool-write.js";
-import type {
-  CronCreatorToolAuthoritySnapshot,
-  CronToolDeps,
-  CronToolOptions,
-} from "./cron-tool.types.js";
+import type { CronCreatorToolAuthoritySnapshot, CronToolOptions } from "./cron-tool.types.js";
 import {
   getGatewayToolCallerIdentity,
   withGatewayToolCallerIdentity,
@@ -235,8 +231,7 @@ FAILURE ALERTS: routed jobs default to 2 consecutive execution failures and 1h c
 Main-job wakeMode: "now"(default)|"next-heartbeat". Scheduled runs: self status/list/get/runs/remove + own next_check only. Use jobId. contextMessages 0-10 embeds recent chat lines in reminder text.`;
 }
 
-export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): AnyAgentTool {
-  const gatewayCall = deps?.callGatewayTool ?? callGatewayTool;
+export function createCronTool(opts?: CronToolOptions): AnyAgentTool {
   const managementAuthority = bindCronManagementGrant(opts?.runId);
   const requesterAuthority = bindCronRequesterGrant(opts?.runId);
   // Trigger-gated surfaces default on, matching cron/service/jobs-validation.ts.
@@ -289,9 +284,9 @@ export function createCronTool(opts?: CronToolOptions, deps?: CronToolDeps): Any
                 ...(grant ? { cronManagementGrant: grant } : {}),
                 ...(requesterGrant ? { cronCreatorAuthorityGrant: requesterGrant } : {}),
               },
-              () => gatewayCall<T>(...request),
+              () => callGatewayTool<T>(...request),
             )
-          : await gatewayCall<T>(...request);
+          : await callGatewayTool<T>(...request);
       };
       const params = args as Record<string, unknown>;
       const action = readToolStringParam(params, "action", { required: true });

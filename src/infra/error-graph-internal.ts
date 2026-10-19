@@ -3,6 +3,26 @@ export {
   extractErrorCodeOrErrno,
 } from "@openclaw/normalization-core/error-coercion";
 
+export function throwIfSettledRejected(
+  results: readonly PromiseSettledResult<unknown>[],
+  message: string,
+): void {
+  const failures = results.flatMap((result) =>
+    result.status === "rejected" ? [result.reason] : [],
+  );
+  throwCollectedErrors(failures, message);
+}
+
+/** Preserve a sole failure; aggregate independent failures in their original order. */
+export function throwCollectedErrors(errors: readonly unknown[], message: string): void {
+  if (errors.length === 1) {
+    throw errors[0];
+  }
+  if (errors.length > 1) {
+    throw new AggregateError(errors, message);
+  }
+}
+
 /** Retained errors must not keep callers alive through V8's lazy stack frames. */
 export function materializeErrorStack(failure: unknown): void {
   let error = failure;

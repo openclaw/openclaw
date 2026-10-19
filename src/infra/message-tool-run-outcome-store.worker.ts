@@ -1,21 +1,16 @@
 import type { Result } from "@openclaw/normalization-core/result";
 import { ensureMessageToolRunOutcomeSchema } from "../state/openclaw-agent-message-tool-outcome-schema.js";
 import { OPENCLAW_SQLITE_BUSY_TIMEOUT_MS } from "../state/openclaw-state-db-contract.js";
-import {
-  encodeOpenClawStateWorkerError,
-  type OpenClawStateWorkerErrorPayload,
-} from "../state/openclaw-state-worker-error.js";
+import type { OpenClawStateWorkerErrorPayload } from "../state/openclaw-state-worker-error.js";
 import {
   recordMessageToolRunOutcomeInDatabase,
   type MessageToolRunOutcomeInsert,
 } from "./message-tool-run-outcome-store.kernel.js";
-import {
-  assertTransactionUsable,
-  runSqliteImmediateTransactionSync,
-} from "./sqlite-transaction.js";
+import { runSqliteImmediateTransactionSync } from "./sqlite-transaction.js";
 import { bindSqliteWorkerDatabase } from "./sqlite-worker-binding.js";
 import type { SqliteWorkerBackend } from "./sqlite-worker-contract.js";
 import type { SqliteWorkerDatabaseContext } from "./sqlite-worker-database-context.js";
+import { encodeSqliteWorkerDomainError } from "./sqlite-worker-domain-error.js";
 
 export type MessageToolRunOutcomeWorkerOperations = {
   record: {
@@ -51,16 +46,7 @@ export function bindSqliteWorkerBackend(
         );
         return { ok: true, value: undefined };
       } catch (error) {
-        // Only a settled rollback is a domain failure; uncertain native work stays with the broker.
-        assertTransactionUsable(db);
-        if (!db.isOpen || db.isTransaction) {
-          throw error;
-        }
-        const failure = encodeOpenClawStateWorkerError(error, { includeOrdinary: true });
-        if (!failure) {
-          throw error;
-        }
-        return { ok: false, error: failure };
+        return { ok: false, error: encodeSqliteWorkerDomainError(db, error) };
       }
     },
   });

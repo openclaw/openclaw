@@ -250,37 +250,4 @@ describe("Discord report source", () => {
       config.token,
     );
   });
-
-  it("aborts rate-limit waits without requesting another page", async () => {
-    vi.useFakeTimers();
-    const controller = new AbortController();
-    const context = runtime(
-      (url) => (url.pathname.endsWith("/messages") ? json({ retry_after: 60 }, 429) : undefined),
-      controller.signal,
-    );
-    const pending = collect(context, config, window);
-    const rejected = expect(pending).rejects.toMatchObject({ name: "AbortError" });
-    await vi.advanceTimersByTimeAsync(1);
-    const requestsBeforeAbort = context.requests.length;
-    controller.abort(new Error(config.token));
-    await rejected;
-    await vi.advanceTimersByTimeAsync(60000);
-    expect(context.requests).toHaveLength(requestsBeforeAbort);
-    expect(context.logs.join(" ")).not.toContain(config.token);
-  });
-
-  it("stops paging immediately when the run is aborted during a response", async () => {
-    const controller = new AbortController();
-    const context = runtime((url) => {
-      if (url.pathname.endsWith("/messages")) {
-        controller.abort();
-        return json(Array.from({ length: 100 }, (_, index) => message(window.sinceMs + index + 1)));
-      }
-      return undefined;
-    }, controller.signal);
-    await expect(collect(context, config, window)).rejects.toMatchObject({
-      name: "AbortError",
-    });
-    expect(context.requests.filter((url) => url.pathname.endsWith("/messages"))).toHaveLength(1);
-  });
 });

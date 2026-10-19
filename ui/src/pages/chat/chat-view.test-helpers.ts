@@ -38,6 +38,9 @@ export async function renderChatModelControls(
     ...props,
     modelPickerOpen: props.modelPickerOpen ?? true,
   };
+  if (renderProps.modelPickerOpen) {
+    await import("./components/chat-model-picker-panel.tsx");
+  }
   const update = modelControlsUpdates.get(container);
   if (update) {
     update(renderProps);
@@ -50,8 +53,10 @@ export async function renderChatModelControls(
     modelControlsUpdates.set(container, (next) => view.update(next));
   }
   if (renderProps.modelPickerOpen) {
-    await waitForSolid(() =>
-      expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+    // The first open compiles the lazy panel under the full CI shard's load.
+    await waitForSolid(
+      () => expect(container.querySelector(".chat-controls__model-menu")).not.toBeNull(),
+      { timeout: 5_000 },
     );
   }
   return container;

@@ -586,13 +586,13 @@ describe("gateway chat metadata auth deadlines", () => {
         await expect(cached.runtime.read({ agentId: "main" })).resolves.toMatchObject({
           models: [{ id: "model", provider: "acme", available: before }],
         });
-        cached.getPreparedAuthStore.mockClear();
         clock.mockReturnValue(at);
         await fresh.runtime.refresh();
         const expected = await fresh.runtime.read({ agentId: "main" });
         expect(expected).toMatchObject({
           models: [{ id: "model", provider: "acme", available: after }],
         });
+        cached.getPreparedAuthStore.mockClear();
         expect(await cached.runtime.read({ agentId: "main" })).toEqual(expected);
         expect(cached.getPreparedAuthStore).not.toHaveBeenCalled();
         expect(cached.buildCommands).toHaveBeenCalledOnce();

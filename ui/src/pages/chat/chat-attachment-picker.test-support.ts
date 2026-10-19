@@ -76,6 +76,8 @@ export async function getAttachmentMenuOption(container: Element, label: string)
   );
   trigger.click();
   await waitForSolid(() => expect(trigger.getAttribute("aria-expanded")).toBe("true"));
+  // Join the first open's content load before checking its rendered option.
+  await import("./components/chat-composer-plus-menu-content.tsx");
   return waitForSolid(() =>
     expectDefined(
       Array.from(

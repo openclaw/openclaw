@@ -66,6 +66,7 @@ export function InputDialogView(props: {
   }
   return (
     <openclaw-modal-dialog
+      prop:initialFocus={() => input}
       label={initialOptions.title}
       description={initialOptions.label ?? initialOptions.title}
       onModal-cancel={(event: Event) => {

@@ -2,7 +2,7 @@ import { describe, expect, it, onTestFinished, vi } from "vitest";
 import type { WorktreesBranchesResult } from "../../../../packages/gateway-protocol/src/index.js";
 import { createDeferred } from "../../../../test/helpers/promise.ts";
 import type { GatewayAgentRow } from "../../api/types.ts";
-import { settleModelCatalogRequests } from "../../lib/model-catalog-store.ts";
+import { loadModelCatalog } from "../../lib/model-catalog-store.ts";
 import type { DraftCloudProfile } from "./discovery.ts";
 import { DraftCloudMachineState } from "./draft-cloud-machine-state.ts";
 import { buildSelectedSessionCreateParams } from "./draft-create-params.ts";
@@ -119,7 +119,7 @@ describe("DraftPlaceState repository selection", () => {
       const settled = nextChange(f.changed, () => f.state.worktree && f.state.worktreeAvailable());
       f.state.adoptAgentDefaults();
       f.state.restorePreferenceSelections();
-      await settleModelCatalogRequests(f.context.gateway.snapshot.client!, { agentId: "main" });
+      await loadModelCatalog(f.context.gateway.snapshot.client!, { agentId: "main" });
       f.state.modelControl.selectModel("example/selected");
       f.state.modelControl.thinkingLevel = "high";
       expect(f.state.folderSubmissionBlocked()).toBe(true);
@@ -266,7 +266,7 @@ describe("DraftPlaceState repository selection", () => {
     onTestFinished(() => state.modelControl.reset());
     readPreference.mockReturnValue({ model: "example/remembered" });
     state.adoptAgentDefaults();
-    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     const view = await waitForModelControl(
       state.modelControl,
       context,
@@ -291,12 +291,12 @@ describe("DraftPlaceState repository selection", () => {
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     state.modelControl.invalidate();
     state.adoptAgentDefaults();
-    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     Object.assign(context.gateway.snapshot, { hello: { ...context.gateway.snapshot.hello } });
     state.invalidateGatewayDiscovery(false);
     state.adoptAgentDefaults();
-    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     expect(persistPreference).toHaveBeenCalledExactlyOnceWith(
       "main",
@@ -309,15 +309,14 @@ describe("DraftPlaceState repository selection", () => {
     }));
     const selectAgent = async (agentId: string, model: string) => {
       state.selectAgentId(agentId);
-      await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId });
-      expect(state.modelControl.modelForSubmission()).toBe(model);
+      await vi.waitFor(() => expect(state.modelControl.modelForSubmission()).toBe(model));
     };
     await selectAgent("scout", "example/remembered");
     await selectAgent("main", "example/second");
     expect(state.modelControl.modelForSubmission()).toBe("example/second");
     state.resetDraft();
     state.adoptAgentDefaults();
-    await settleModelCatalogRequests(context.gateway.snapshot.client!, { agentId: "main" });
+    await loadModelCatalog(context.gateway.snapshot.client!, { agentId: "main" });
     expect(state.modelControl.modelForSubmission()).toBe("example/first");
 
     expect(

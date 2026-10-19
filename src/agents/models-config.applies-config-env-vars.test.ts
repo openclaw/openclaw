@@ -6,7 +6,7 @@ import { withEnvAsync } from "../test-utils/env.js";
 import * as authProfileStoreRuntime from "./auth-profiles/store-runtime.js";
 import { modelDefinition, providerConfig } from "./model-auth.fixtures.test-support.js";
 import { planModelsJsonForTest } from "./models-config.plan.test-support.js";
-import * as modelsConfigProviders from "./models-config.providers.js";
+import * as modelsConfigProviders from "./models-config.providers.implicit.js";
 import type { ProviderConfig } from "./models-config.providers.secrets.js";
 import { AuthStorage, ModelRegistry } from "./sessions/index.js";
 

@@ -15,11 +15,7 @@ import {
   type SystemAgentCommandDeps,
   type SystemAgentOperation,
 } from "./operations.js";
-import {
-  formatSystemAgentOverview,
-  loadSystemAgentOverview,
-  type SystemAgentOverview,
-} from "./overview.js";
+import { formatSystemAgentOverview, loadSystemAgentOverview } from "./overview.js";
 import {
   hasCurrentSystemAgentOwnerPluginArtifacts,
   type SystemAgentVerifiedInferenceBinding,
@@ -42,7 +38,6 @@ export type RunSystemAgentOptions = {
   setupAgentName?: string;
   onReady?: () => void;
   deps?: SystemAgentCommandDeps;
-  formatOverview?: (overview: SystemAgentOverview) => string;
   loadOverview?: typeof loadSystemAgentOverview;
   planWithAssistant?: SystemAgentAssistantPlanner;
   input?: NodeJS.ReadableStream;
@@ -81,10 +76,9 @@ async function runOneShot(
   await executeSystemAgentOperation(operation, runtime, {
     approved,
     deps:
-      opts.deps || opts.formatOverview || opts.loadOverview
+      opts.deps || opts.loadOverview
         ? {
             ...opts.deps,
-            ...(opts.formatOverview ? { formatOverview: opts.formatOverview } : {}),
             ...(opts.loadOverview ? { loadOverview: opts.loadOverview } : {}),
           }
         : undefined,
@@ -184,7 +178,7 @@ async function runBoundSystemAgent(
       },
       async () => await (boundOpts.loadOverview ?? loadSystemAgentOverview)(),
     );
-    runtime.log((boundOpts.formatOverview ?? formatSystemAgentOverview)(overview));
+    runtime.log(formatSystemAgentOverview(overview));
     runtime.log("");
     const operation = await resolveSystemAgentOperation(boundOpts.message, runtime, {
       ...boundOpts,
@@ -196,7 +190,7 @@ async function runBoundSystemAgent(
 
   if (boundOpts.interactive === false) {
     const overview = await (boundOpts.loadOverview ?? loadSystemAgentOverview)();
-    runtime.log((boundOpts.formatOverview ?? formatSystemAgentOverview)(overview));
+    runtime.log(formatSystemAgentOverview(overview));
     return;
   }
 

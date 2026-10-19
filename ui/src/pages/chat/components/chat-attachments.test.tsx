@@ -99,21 +99,24 @@ function resizePngFixture(bytes?: Uint8Array<ArrayBuffer>): File {
 class StubFileReader extends EventTarget {
   static failNames = new Set<string>();
   static heldNames = new Set<string>();
+  static heldReads: Array<() => void> = [];
   result: string | ArrayBuffer | null = null;
   abort() {}
 
   readAsDataURL(file: File) {
-    if (StubFileReader.heldNames.has(file.name)) {
-      return;
-    }
-    queueMicrotask(() => {
+    const finish = () => {
       if (StubFileReader.failNames.has(file.name)) {
         this.dispatchEvent(new Event("error"));
         return;
       }
       this.result = "data:image/png;base64,aGk=";
       this.dispatchEvent(new Event("load"));
-    });
+    };
+    if (StubFileReader.heldNames.has(file.name)) {
+      StubFileReader.heldReads.push(finish);
+    } else {
+      queueMicrotask(finish);
+    }
   }
 }
 
@@ -228,6 +231,7 @@ describe("chat attachment read failures", () => {
     vi.stubGlobal("FileReader", StubFileReader as unknown as typeof FileReader);
     StubFileReader.failNames = new Set();
     StubFileReader.heldNames = new Set();
+    StubFileReader.heldReads = [];
     toastHost = document.createElement("openclaw-toast-host");
     document.body.append(toastHost);
   });
@@ -300,6 +304,7 @@ describe("chat attachment read failures", () => {
         : [imageFile("stalled.png", "stalled")];
     if (failure === "error") {
       StubFileReader.failNames.add("bad.png");
+      StubFileReader.heldNames = new Set(files.map((file) => file.name));
     } else {
       fakeTimers();
       StubFileReader.heldNames.add("stalled.png");
@@ -308,9 +313,12 @@ describe("chat attachment read failures", () => {
     const { container, reads } = h;
     handleChatAttachmentPaste(pasteEventWithFiles(files), h.previewProps);
     if (failure === "error") {
-      expect(container.querySelectorAll('.chat-attachment-thumb[aria-busy="true"]')).toHaveLength(
-        2,
+      await waitForSolid(() =>
+        expect(container.querySelectorAll('.chat-attachment-thumb[aria-busy="true"]')).toHaveLength(
+          2,
+        ),
       );
+      StubFileReader.heldReads.splice(0).forEach((finish) => finish());
       await vi.waitFor(() => expect(reads.pendingReads).toBe(0));
       await toastHost.updateComplete;
       expect(toastHost.querySelector(".app-toast")).toBeNull();
@@ -331,9 +339,11 @@ describe("chat attachment read failures", () => {
       expect(reads.pendingReads).toBe(1);
       await vi.advanceTimersByTimeAsync(15_001);
       expect(reads.pendingReads).toBe(0);
-      expect(
-        container.querySelector(".chat-attachment-thumb--error .chat-attachment-error"),
-      ).not.toBeNull();
+      await waitForSolid(() =>
+        expect(
+          container.querySelector(".chat-attachment-thumb--error .chat-attachment-error"),
+        ).not.toBeNull(),
+      );
       const removeButton = container.querySelector<HTMLButtonElement>(".chat-attachment-remove");
       expect(removeButton).not.toBeNull();
       removeButton?.click();
