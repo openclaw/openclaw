@@ -4,6 +4,7 @@ import type { WorkerProviderPreparedIntent } from "./preparation-identity.js";
 import {
   readWorkerPreparation,
   workerPreparationSourceKey,
+  type WorkerProjectPreparationIdentity,
 } from "./preparation-identity.schema.js";
 import {
   type createPreparedPoolPresence,
@@ -20,7 +21,7 @@ import type { WorkerEnvironmentRecord as Environment } from "./store.js";
 import { boundedWorkerError } from "./worker-error.js";
 export type Generation = {
   source: Environment;
-  preparationKey: string;
+  preparation: WorkerProjectPreparationIdentity;
   demandAtMs: number;
   expiresAtMs: number;
   retention?: { isCurrent: () => boolean };
@@ -106,7 +107,10 @@ export function deferGeneration(ctx: PassContext, generation: Generation, error:
 export function admitSources(ctx: PassContext): Generations {
   const { options, inventory: rows, activeDemand: demand, presenceDeferred: deferred } = ctx;
   const { signal, now } = options;
-  const sources = new Map<string, { record: Environment; demandAtMs: number }>();
+  const sources = new Map<
+    string,
+    { record: Environment; preparation: WorkerProjectPreparationIdentity; demandAtMs: number }
+  >();
   const activationByGeneration = new Map<string, number>();
   const buildingKeys = new Set<string>();
   for (const record of rows) {
@@ -154,12 +158,12 @@ export function admitSources(ctx: PassContext): Generations {
         demandAtMs > previous.demandAtMs ||
         (demandAtMs === previous.demandAtMs && build)
       ) {
-        sources.set(key, { record, demandAtMs });
+        sources.set(key, { record, preparation, demandAtMs });
       }
     }
   }
   const eligible = new Map<string, Generation>();
-  for (const [key, { record, demandAtMs }] of sources) {
+  for (const [key, { record, preparation, demandAtMs }] of sources) {
     const limits = poolPolicy(options, record.profileId, record.providerId);
     if (
       !limits.configured ||
@@ -173,7 +177,7 @@ export function admitSources(ctx: PassContext): Generations {
       );
       continue;
     }
-    const preparationKey = readWorkerPreparation(record.profileSnapshot)!.key;
+    const preparationKey = preparation.key;
     try {
       const provider = options.resolveProvider(record.providerId);
       if (!provider) {
@@ -199,7 +203,7 @@ export function admitSources(ctx: PassContext): Generations {
       if ((presenceOwned && presenceExpiresAtMs > now()) || activationEligible) {
         eligible.set(key, {
           source: record,
-          preparationKey,
+          preparation,
           demandAtMs: presenceOwned
             ? Math.max(presenceOwned.lastPresentAtMs, demandAtMs)
             : demandAtMs,
@@ -218,16 +222,16 @@ export function admitSources(ctx: PassContext): Generations {
       signal.throwIfAborted();
       // Unknown provider policy cannot renew demand or invalidate an already owned lease.
       const expiresAtMs = rows.reduce((latest, reserved) => {
-        const preparation = reserved.preparation;
-        return preparation?.consumedAtMs === null &&
-          preparation.key === preparationKey &&
+        const reservedPreparation = reserved.preparation;
+        return reservedPreparation?.consumedAtMs === null &&
+          reservedPreparation.key === preparationKey &&
           groupKey(reserved) === key &&
           reserved.destroyRequestedAtMs === null &&
           !["failed", "destroyed"].includes(reserved.state)
-          ? Math.max(latest, preparation.expiresAtMs)
+          ? Math.max(latest, reservedPreparation.expiresAtMs)
           : latest;
       }, 0);
-      const generation = { source: record, preparationKey, demandAtMs, expiresAtMs };
+      const generation = { source: record, preparation, demandAtMs, expiresAtMs };
       deferGeneration(ctx, generation, error);
       if (expiresAtMs > now()) {
         eligible.set(key, generation);
