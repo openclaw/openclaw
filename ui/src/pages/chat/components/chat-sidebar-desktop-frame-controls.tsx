@@ -61,6 +61,73 @@ export function DesktopFrameControls(
         }
       : undefined;
   });
+  // Replacing content siblings reparents the retained position group and drops its focus.
+  const positionEntries: MenuEntry[] = [
+    {
+      kind: "content",
+      id: "position-label",
+      content: (
+        <div class="side-panel-position-menu__label">{t("chat.sidePanel.panelPosition")}</div>
+      ),
+    },
+    {
+      kind: "group",
+      id: "position",
+      class: "side-panel-position",
+      items: positions.map((position): MenuItem => ({
+        id: position.dock,
+        get label() {
+          return t(position.labelKey);
+        },
+        type: "radio",
+        get checked() {
+          return sidebarDock(props.layout) === position.dock;
+        },
+        render: (attributes) => (
+          <button
+            {...attributes}
+            type="button"
+            class="side-panel-position__option"
+            data-dock={position.dock}
+          >
+            <Icon name="sessionPanels" />
+            <span>{t(position.labelKey)}</span>
+          </button>
+        ),
+      })),
+    },
+  ];
+  const swapItem: MenuItem = {
+    id: "swap",
+    get label() {
+      return swap()?.label ?? "";
+    },
+    icon: <Icon name="arrowLeftRight" />,
+  };
+  const closeEntries: MenuEntry[] = [
+    {
+      kind: "content",
+      id: "close-separator",
+      content: <div class="side-panel-position-menu__separator" role="separator" />,
+    },
+    {
+      id: "close-all",
+      get label() {
+        return props.hasConversation
+          ? t("chat.sidePanel.closeOtherTabs")
+          : t("chat.sidePanel.closeAllTabs");
+      },
+      icon: <Icon name="x" />,
+      get disabled() {
+        return props.closing;
+      },
+    },
+  ];
+  const items = createMemo<MenuEntry[]>(() => [
+    ...positionEntries,
+    ...(swap() ? [swapItem] : []),
+    ...(props.closable && props.callbacks?.newTab ? closeEntries : []),
+  ]);
   return (
     <>
       <Menu
@@ -76,57 +143,7 @@ export function DesktopFrameControls(
         ref={(handle) => {
           menu = handle;
         }}
-        items={[
-          {
-            kind: "content",
-            id: "position-label",
-            content: (
-              <div class="side-panel-position-menu__label">{t("chat.sidePanel.panelPosition")}</div>
-            ),
-          },
-          {
-            kind: "group",
-            id: "position",
-            class: "side-panel-position",
-            items: positions.map((position): MenuItem => ({
-              id: position.dock,
-              label: t(position.labelKey),
-              type: "radio",
-              checked: sidebarDock(props.layout) === position.dock,
-              render: (attributes) => (
-                <button
-                  {...attributes}
-                  type="button"
-                  class="side-panel-position__option"
-                  data-dock={position.dock}
-                >
-                  <Icon name="sessionPanels" />
-                  <span>{t(position.labelKey)}</span>
-                </button>
-              ),
-            })),
-          },
-          ...(swap()
-            ? [{ id: "swap", label: swap()!.label, icon: <Icon name="arrowLeftRight" /> }]
-            : []),
-          ...(props.closable && props.callbacks?.newTab
-            ? ([
-                {
-                  kind: "content",
-                  id: "close-separator",
-                  content: <div class="side-panel-position-menu__separator" role="separator" />,
-                },
-                {
-                  id: "close-all",
-                  label: props.hasConversation
-                    ? t("chat.sidePanel.closeOtherTabs")
-                    : t("chat.sidePanel.closeAllTabs"),
-                  icon: <Icon name="x" />,
-                  disabled: props.closing,
-                },
-              ] satisfies MenuEntry[])
-            : []),
-        ]}
+        items={items()}
         onSelect={(item, event) => {
           if (item.id === "swap") {
             const action = swap();

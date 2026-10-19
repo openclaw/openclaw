@@ -151,6 +151,7 @@ it("releases region refs when the lazy host or its containing view unmounts", ()
         callbacks={{
           activatePanel() {},
           togglePanelExpanded() {},
+          setDock() {},
           closeSlot() {},
           openSlot() {},
           reorderPanel() {},
