@@ -665,6 +665,7 @@ export async function finalizeCodexAttempt(
         const finalizationContext =
           (!usesSupervisionConnection && !resourceState.nativeSettlementExpired
             ? await captureCodexSettledTurnFinalizationContext({
+                runId: params.runId,
                 ...activeTranscriptTarget,
                 model: resourceState.thread.model,
                 modelProvider: resourceState.thread.modelProvider,

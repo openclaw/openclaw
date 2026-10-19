@@ -150,7 +150,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
         ).resolves.toBeUndefined();
         expect(warn).toHaveBeenCalledWith(
           "codex settled-turn finalization context capture failed",
-          { reason },
+          { turnId: "settled", reason },
         );
       } finally {
         warn.mockRestore();
@@ -350,7 +350,7 @@ describe("readCodexMirroredSessionHistoryMessages", () => {
           expect(captured).toBeUndefined();
           expect(warn).toHaveBeenCalledWith(
             "codex settled-turn finalization context capture failed",
-            { reason },
+            { turnId: "settled", reason },
           );
         }
       } finally {
