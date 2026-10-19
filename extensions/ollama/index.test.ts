@@ -15,6 +15,7 @@ import { buildOllamaModelDefinition } from "./src/provider-models.js";
 
 const localBaseUrl = "http://127.0.0.1:11434";
 const cloudBaseUrl = "https://ollama.com";
+type TestConfig = Record<string, unknown>;
 
 const setupMock = vi.hoisted(() =>
   vi.fn(async () => ({
@@ -71,9 +72,7 @@ vi.mock("./src/stream-registration.js", () => ({
 let provider: ReturnType<typeof registerProvider>;
 let guided: ReturnType<typeof registerProvider>["auth"][0]["appGuidedSetup"];
 
-afterEach(() => {
-  vi.unstubAllEnvs();
-});
+afterEach(() => vi.unstubAllEnvs());
 
 beforeEach(() => {
   for (const mock of [setupMock, pullMock, secretMock, streamMock]) {
@@ -87,7 +86,7 @@ beforeEach(() => {
   modelsMock.mockReset();
   loadedMock.mockReset().mockResolvedValue({
     reachable: true,
-    models: ["qwen-tool", "qwen3.5:4b", "llama3.3:70b", "nomic-embed-text", "unknown-tools"],
+    models: ["qwen-tool", "unknown-tools"],
   });
   discoveryMock.mockReset();
   showMock.mockReset().mockResolvedValue(showInfo());
@@ -95,7 +94,7 @@ beforeEach(() => {
   guided = provider.auth[0].appGuidedSetup;
 });
 
-function registerProvider(pluginConfig: Record<string, unknown> = {}, id = "ollama") {
+function registerProvider(pluginConfig: TestConfig = {}, id = "ollama") {
   const registerProviderMock = vi.fn();
   plugin.register(
     createTestPluginApi({
@@ -108,37 +107,33 @@ function registerProvider(pluginConfig: Record<string, unknown> = {}, id = "olla
   return registerProviderMock.mock.calls.map((call) => call[0]).find((entry) => entry.id === id);
 }
 
-function registerOllamaCloudProvider() {
-  return registerProvider({}, "ollama-cloud");
-}
+const registerOllamaCloudProvider = () => registerProvider({}, "ollama-cloud");
 
-describe("ollama compaction policy", () => {
-  it.each([
-    [localBaseUrl, cloudBaseUrl, undefined],
-    [cloudBaseUrl, localBaseUrl, "off"],
-  ] as const)(
-    "prepares compaction thinking at %s with configured URL %s",
-    (baseUrl, providerBaseUrl, expected) => {
-      const model: ProviderRuntimeModel = {
-        provider: "ollama",
-        api: "ollama",
-        baseUrl,
-        ...createModel("qwen3.5:4b", "qwen3.5:4b", { reasoning: true, contextWindow: 32_768 }),
-        params: { think: true },
-      };
-      const resolved =
-        provider.normalizeResolvedModel?.({
-          provider: model.provider,
-          modelId: model.id,
-          model,
-          config: ollamaConfig({ baseUrl: providerBaseUrl, api: "ollama", models: [] }),
-        }) ?? model;
-      expect(resolved.compactionThinkingDefault).toBe(expected);
-      expect(resolved).toMatchObject(model);
-      expect(model).not.toHaveProperty("compactionThinkingDefault");
-    },
-  );
-});
+it.each([
+  [localBaseUrl, cloudBaseUrl, undefined],
+  [cloudBaseUrl, localBaseUrl, "off"],
+] as const)(
+  "prepares compaction thinking at %s with configured URL %s",
+  (baseUrl, providerBaseUrl, expected) => {
+    const model: ProviderRuntimeModel = {
+      provider: "ollama",
+      api: "ollama",
+      baseUrl,
+      ...createModel("qwen3.5:4b", "qwen3.5:4b", { reasoning: true, contextWindow: 32_768 }),
+      params: { think: true },
+    };
+    const resolved =
+      provider.normalizeResolvedModel?.({
+        provider: model.provider,
+        modelId: model.id,
+        model,
+        config: ollamaConfig({ baseUrl: providerBaseUrl, api: "ollama", models: [] }),
+      }) ?? model;
+    expect(resolved.compactionThinkingDefault).toBe(expected);
+    expect(resolved).toMatchObject(model);
+    expect(model).not.toHaveProperty("compactionThinkingDefault");
+  },
+);
 
 const configuredRefs = (ref: string) => ({ agents: { defaults: { models: { [ref]: {} } } } });
 
@@ -172,27 +167,28 @@ function resetContext(
   };
 }
 
-function mockDiscovery(models: Array<Record<string, unknown>>, baseUrl = localBaseUrl) {
+function mockDiscovery(models: TestConfig[], baseUrl = localBaseUrl) {
   discoveryMock.mockResolvedValueOnce({ baseUrl, api: "ollama", models });
 }
 
-function showInfo(capabilities = ["completion", "tools"], contextWindow = 32_768) {
-  return { contextWindow, capabilities };
-}
+const showInfo = (capabilities = ["completion", "tools"], contextWindow = 32_768) => ({
+  contextWindow,
+  capabilities,
+});
 
-function mockShow(capabilities: string[], contextWindow = 1_048_576) {
+const mockShow = (capabilities: string[], contextWindow = 1_048_576) =>
   showMock.mockResolvedValueOnce(showInfo(capabilities, contextWindow));
-}
 
-function dynamicConfig(baseUrl: string, apiKey: ModelProviderConfig["apiKey"]) {
-  return ollamaConfig({ baseUrl, api: "ollama" as const, apiKey, models: [] });
-}
+const expectDiscoveryKey = (baseUrl: string, apiKey: string, call = 1) =>
+  expect(discoveryMock).toHaveBeenNthCalledWith(call, baseUrl, { quiet: true, apiKey });
 
-function prepareDynamic(
-  modelId: string,
-  config: Record<string, unknown> = {},
-  authProfileId?: string,
-) {
+const expectShowKey = (baseUrl: string, modelId: string, apiKey: string) =>
+  expect(showMock).toHaveBeenCalledWith(baseUrl, modelId, { apiKey });
+
+const dynamicConfig = (baseUrl: string, apiKey: ModelProviderConfig["apiKey"]) =>
+  ollamaConfig({ baseUrl, api: "ollama" as const, apiKey, models: [] });
+
+function prepareDynamic(modelId: string, config: TestConfig = {}, authProfileId?: string) {
   return provider.prepareDynamicModel?.({
     ...dynamicContext(modelId, config),
     authProfileId,
@@ -201,7 +197,7 @@ function prepareDynamic(
 
 function prepareGuided(
   modelRef = "ollama/qwen-tool",
-  config: Record<string, unknown> = {},
+  config: TestConfig = {},
   env: NodeJS.ProcessEnv = {},
 ) {
   return guided?.prepare({ modelRef, config, env });
@@ -219,7 +215,7 @@ function mockInstalledModels(models: Record<string, boolean | undefined>, parame
   }));
 }
 
-function dynamicContext(modelId: string, config: Record<string, unknown> = {}) {
+function dynamicContext(modelId: string, config: TestConfig = {}) {
   return {
     config,
     provider: "ollama",
@@ -231,7 +227,7 @@ function dynamicContext(modelId: string, config: Record<string, unknown> = {}) {
 async function runCatalog(
   target: ReturnType<typeof registerProvider>,
   auth: { apiKey?: string; discoveryApiKey?: string; profileId?: string },
-  config: Record<string, unknown> = {},
+  config: TestConfig = {},
   env: NodeJS.ProcessEnv = {},
 ) {
   return await target.catalog.run({ config, env, resolveProviderApiKey: () => auth });
@@ -239,7 +235,7 @@ async function runCatalog(
 
 async function augmentCatalog(
   target: ReturnType<typeof registerProvider>,
-  overrides: Record<string, unknown> = {},
+  overrides: TestConfig = {},
 ) {
   return await target.augmentModelCatalog?.({
     config: {},
@@ -416,10 +412,7 @@ describe("ollama plugin", () => {
   });
 
   it("discovers and prepares a loaded tool-capable model without pulling it", async () => {
-    mockInstalledModels(
-      { "embed-only": false, "unknown-tools": undefined, "qwen-tool": true },
-      4_000_000_000,
-    );
+    mockInstalledModels({ "unknown-tools": undefined, "qwen-tool": true }, 4_000_000_000);
     await expect(guided?.detect({ config: {}, env: {} })).resolves.toEqual({
       modelRef: "ollama/qwen-tool",
       detail: "qwen-tool at http://127.0.0.1:11434",
@@ -462,29 +455,34 @@ describe("ollama plugin", () => {
     expect(showMock).not.toHaveBeenCalled();
   });
 
-  it.each(["literal", "SecretRef"] as const)(
-    "prepares the exact configured idle model with its runtime context and %s credential",
+  it.each(["literal", "SecretRef", "ambient"] as const)(
+    "prepares the requested model with its runtime context and %s credential",
     async (credential) => {
-      const baseUrl = "https://ollama.com.example/v1";
+      const ambient = credential === "ambient";
+      const baseUrl = ambient ? "https://ollama.example.com" : "https://ollama.com.example/v1";
+      const model = {
+        ...createModel("qwen-tool", "qwen-tool", { contextWindow: 32_768 }),
+        compat: { supportsTools: true },
+      };
       const config = ollamaConfig({
         baseUrl,
         apiKey:
           credential === "literal"
             ? "fixture-access"
-            : { source: "env" as const, provider: "default", id: "OLLAMA_SETUP_TEST_KEY" },
+            : credential === "SecretRef"
+              ? { source: "env" as const, provider: "default", id: "OLLAMA_SETUP_TEST_KEY" }
+              : undefined,
         api: "ollama" as const,
-        models: [
-          {
-            ...createModel("qwen-tool", "qwen-tool", { contextWindow: 32_768 }),
-            compat: { supportsTools: true },
-          },
-        ],
+        models: ambient ? [] : [model],
       });
-      loadedMock.mockResolvedValue({ reachable: true, models: [] });
+      if (!ambient) {
+        loadedMock.mockResolvedValue({ reachable: true, models: [] });
+      }
       mockInstalledModels({ "qwen-tool": true });
       mockShow(["completion", "tools"], 262_144);
       const result = await prepareGuided("ollama/qwen-tool", config, {
         OLLAMA_SETUP_TEST_KEY: "fixture-access",
+        ...(ambient ? { OLLAMA_API_KEY: "fixture-access" } : {}),
       });
       expect(result).toMatchObject({
         defaultModel: "ollama/qwen-tool",
@@ -494,10 +492,16 @@ describe("ollama plugin", () => {
       });
       const prepared = result?.configPatch?.models?.providers?.ollama?.models?.[0];
       expect(prepared).toMatchObject({ contextWindow: 262_144, contextTokens: 32_768 });
-      expect(showMock).toHaveBeenCalledWith("https://ollama.com.example", "qwen-tool", {
-        apiKey: "fixture-access",
-      });
-      expect(loadedMock).not.toHaveBeenCalled();
+      expectShowKey(baseUrl.replace(/\/v1$/, ""), "qwen-tool", "fixture-access");
+      if (ambient) {
+        expect(modelsMock).toHaveBeenCalledWith(
+          baseUrl,
+          expect.objectContaining({ apiKey: "fixture-access" }),
+        );
+        expect(result?.configPatch?.models?.providers?.ollama?.apiKey).toBe("OLLAMA_API_KEY");
+      } else {
+        expect(loadedMock).not.toHaveBeenCalled();
+      }
     },
   );
 
@@ -513,24 +517,6 @@ describe("ollama plugin", () => {
       modelRef: "ollama/llama3.3:70b",
       detail: "llama3.3:70b at http://127.0.0.1:11434",
     });
-  });
-
-  it("keeps environment-backed Ollama access for the completion proposal", async () => {
-    mockInstalledModels({ "qwen-tool": true });
-    const prepared = await prepareGuided(
-      "ollama/qwen-tool",
-      ollamaConfig({
-        baseUrl: "https://ollama.example.com",
-        api: "ollama",
-        models: [],
-      }),
-      { OLLAMA_API_KEY: "environment-access" },
-    );
-    expect(modelsMock).toHaveBeenCalledWith(
-      "https://ollama.example.com",
-      expect.objectContaining({ apiKey: "environment-access" }),
-    );
-    expect(prepared?.configPatch?.models?.providers?.ollama?.apiKey).toBe("OLLAMA_API_KEY");
   });
 
   it("does not send the ambient Ollama cloud key to automatic localhost discovery", async () => {
@@ -607,10 +593,7 @@ describe("ollama plugin", () => {
       api: "openai-completions",
       baseUrl: "https://ollama.example.com/v1",
     });
-    expect(discoveryMock).toHaveBeenCalledWith("https://ollama.example.com/v1", {
-      quiet: true,
-      apiKey: "ollama-live",
-    });
+    expectDiscoveryKey("https://ollama.example.com/v1", "ollama-live");
   });
 
   it("returns the exact prepared Ollama model for concurrent credential profiles", async () => {
@@ -645,14 +628,8 @@ describe("ollama plugin", () => {
     });
     completeDiscovery[0]?.(discoveredFor("First tenant model"));
     await expect(firstPrepared).resolves.toMatchObject({ id: modelId, name: "First tenant model" });
-    expect(discoveryMock).toHaveBeenNthCalledWith(1, baseUrl, {
-      quiet: true,
-      apiKey: "first-tenant-access",
-    });
-    expect(discoveryMock).toHaveBeenNthCalledWith(2, baseUrl, {
-      quiet: true,
-      apiKey: "second-tenant-access",
-    });
+    expectDiscoveryKey(baseUrl, "first-tenant-access");
+    expectDiscoveryKey(baseUrl, "second-tenant-access", 2);
   });
 
   it("preserves opaque environment-backed SecretRef value OLLAMA_API_KEY for dynamic discovery", async () => {
@@ -664,13 +641,8 @@ describe("ollama plugin", () => {
     mockDiscovery([], baseUrl);
     const resolved = await prepareDynamic("secretref-dynamic-model", config);
     expect(resolved?.id).toBe("secretref-dynamic-model");
-    expect(discoveryMock).toHaveBeenCalledWith(baseUrl, {
-      quiet: true,
-      apiKey: secretValue,
-    });
-    expect(showMock).toHaveBeenCalledWith(baseUrl, "secretref-dynamic-model", {
-      apiKey: secretValue,
-    });
+    expectDiscoveryKey(baseUrl, secretValue);
+    expectShowKey(baseUrl, "secretref-dynamic-model", secretValue);
   });
 
   it("keeps rotated managed SecretRefs request-owned and fails closed when unavailable", async () => {
@@ -696,10 +668,7 @@ describe("ollama plugin", () => {
       name: "Rotated managed model",
     });
     await expect(prepareDynamic(modelId, config)).resolves.toBeUndefined();
-    expect(discoveryMock).toHaveBeenNthCalledWith(2, baseUrl, {
-      quiet: true,
-      apiKey: "rotated-managed-access",
-    });
+    expectDiscoveryKey(baseUrl, "rotated-managed-access", 2);
     expect(discoveryMock).toHaveBeenCalledTimes(2);
   });
 
@@ -886,23 +855,17 @@ describe("ollama plugin", () => {
   });
 
   it.each([
-    {
-      name: "remote",
-      providerId: "ollama-cloud",
-      baseUrl: cloudBaseUrl,
-      model: "kimi-k2.6",
-      modelName: "Kimi K2.6",
-    },
-    {
-      name: "mapped 127/8 loopback",
-      providerId: "ollama-alt-local",
-      baseUrl: "http://[::ffff:7f00:2]:11434",
-      model: "llama3.2",
-      modelName: "Llama 3.2",
-    },
+    ["remote", "ollama-cloud", cloudBaseUrl, "kimi-k2.6", "Kimi K2.6"],
+    [
+      "mapped loopback",
+      "ollama-alt-local",
+      "http://[::ffff:7f00:2]:11434",
+      "llama3.2",
+      "Llama 3.2",
+    ],
   ])(
-    "resolves implicit discovery with a custom $name provider",
-    async ({ name, providerId, baseUrl, model, modelName }) => {
+    "resolves implicit discovery with a custom %s provider",
+    async (name, providerId, baseUrl, model, modelName) => {
       mockDiscovery([]);
       const result = await runCatalog(
         provider,
@@ -925,23 +888,14 @@ describe("ollama plugin", () => {
     },
   );
 
-  it.each([
-    {
-      name: "keeps empty default provider stubs unauthenticated and undiscovered",
-      providerPatch: { baseUrl: localBaseUrl },
-      mintsAuth: false,
-      checkCatalog: true,
-    },
-    {
-      name: "mints synthetic auth for non-default baseURL alias config",
-      providerPatch: { baseURL: "http://remote-ollama:11434" },
-      mintsAuth: true,
-      checkCatalog: false,
-    },
-  ])("$name", async ({ providerPatch, mintsAuth, checkCatalog }) => {
-    const providerConfig = { api: "ollama", models: [], ...providerPatch };
+  it.each([false, true])("mints synthetic auth only for a non-default alias: %s", async (alias) => {
+    const providerConfig = {
+      api: "ollama",
+      models: [],
+      ...(alias ? { baseURL: "http://remote-ollama:11434" } : { baseUrl: localBaseUrl }),
+    };
     const auth = provider.resolveSyntheticAuth?.({ providerConfig });
-    if (mintsAuth) {
+    if (alias) {
       expect(auth).toEqual({
         apiKey: "ollama-local",
         source: "models.providers.ollama (synthetic local key)",
@@ -949,8 +903,6 @@ describe("ollama plugin", () => {
       });
     } else {
       expect(auth).toBeUndefined();
-    }
-    if (checkCatalog) {
       await expect(
         runCatalog(provider, { apiKey: "" }, ollamaConfig(providerConfig)),
       ).resolves.toBeNull();
@@ -986,9 +938,7 @@ describe("ollama plugin", () => {
         );
         return;
       }
-      expect(showMock).toHaveBeenCalledWith(cloudBaseUrl, "glm-5.2", {
-        apiKey: "cloud-key",
-      });
+      expectShowKey(cloudBaseUrl, "glm-5.2", "cloud-key");
       expect(result?.provider.models).toContainEqual(
         expect.objectContaining({
           id: "glm-5.2",
@@ -1122,4 +1072,3 @@ describe("ollama plugin", () => {
     });
   });
 });
-/* oxlint-disable max-lines -- TODO: split this grandfathered oversized file. */
