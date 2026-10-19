@@ -161,8 +161,7 @@ describe.skipIf(process.platform === "win32")("Gateway spawn broker lifetime", (
     async (phase) => {
       const root = tempDirs.make("openclaw-gateway-auth-worker-");
       const source = path.join(root, "source.sqlite");
-      const database = new (requireNodeSqlite().DatabaseSync)(source);
-      database.close();
+      new (requireNodeSqlite().DatabaseSync)(source).close();
       const read = () =>
         runSqliteReadOnlyWorker(source, {
           mode: "auth-profile-rows",

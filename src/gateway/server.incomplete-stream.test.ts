@@ -46,49 +46,46 @@ it(
       const tool =
         scenario.endsWith("tool") && (scenario !== "compatible-tool" || requests.length === 1);
       const complete = scenario.startsWith("complete") || scenario.startsWith("compatible");
-      const frames: unknown[] = [
-        {
-          type: "message_start",
-          message: {
-            id: `msg_${requests.length}`,
-            type: "message",
-            role: "assistant",
-            model: "stream-fixture",
-            content: [],
-            stop_reason: null,
-            usage: { input_tokens: 10, output_tokens: 0 },
-          },
+      const frames: unknown[] = [];
+      const frame = (type: string, fields: Record<string, unknown> = {}) =>
+        frames.push({ type, ...fields });
+      frame("message_start", {
+        message: {
+          id: `msg_${requests.length}`,
+          type: "message",
+          role: "assistant",
+          model: "stream-fixture",
+          content: [],
+          stop_reason: null,
+          usage: { input_tokens: 10, output_tokens: 0 },
         },
-      ];
-      frames.push({
-        type: "content_block_start",
+      });
+      frame("content_block_start", {
         index: 0,
         content_block: tool
           ? { type: "tool_use", id: "call_read_fixture", name: "read", input: {} }
           : { type: "text", text: "" },
       });
-      frames.push({
-        type: "content_block_delta",
+      frame("content_block_delta", {
         index: 0,
         delta: tool
           ? { type: "input_json_delta", partial_json: JSON.stringify({ path: fixture }) }
           : { type: "text_delta", text: complete ? "COMPLETE_REPLY_MARKER" : "Partial answer" },
       });
       if (!scenario.startsWith("started")) {
-        frames.push({ type: "content_block_stop", index: 0 });
+        frame("content_block_stop", { index: 0 });
       }
       if (complete) {
-        frames.push({
-          type: "message_delta",
+        frame("message_delta", {
           delta: { stop_reason: tool ? "tool_use" : "end_turn" },
           usage: { output_tokens: 4 },
         });
       }
       if (scenario === "complete-text") {
-        frames.push({ type: "message_stop" });
+        frame("message_stop");
       }
       response.writeHead(200, { "content-type": "text/event-stream" });
-      response.end(frames.map((frame) => `data: ${JSON.stringify(frame)}\n\n`).join(""));
+      response.end(frames.map((event) => `data: ${JSON.stringify(event)}\n\n`).join(""));
     });
     let gateway: OpenClawTestInstance | undefined;
     let client: Awaited<ReturnType<typeof connectGatewayClient>> | undefined;
@@ -154,7 +151,7 @@ it(
           gateway: { auth: { mode: "token", token: gateway.gatewayToken } },
         });
         await gateway.startGateway();
-        client = await connectGatewayClient({
+        const connected = await connectGatewayClient({
           url: gateway.url,
           token: gateway.gatewayToken,
           signal,
@@ -163,32 +160,33 @@ it(
             events.push(event);
           },
         });
+        client = connected;
+        const rpc = <T>(
+          method: string,
+          params: Record<string, unknown>,
+          options: { timeoutMs?: number } = {},
+        ) => connected.request<T>(method, params, { signal, ...options });
         for (scenario of cases) {
           requests = [];
           events.length = 0;
           const sessionKey = `agent:main:stream-${scenario}`;
-          const started = await client.request<{ runId: string; status: string }>(
-            "chat.send",
-            {
-              sessionKey,
-              message: "Read fixture.txt and report the result.",
-              deliver: false,
-              idempotencyKey: `stream-${scenario}`,
-            },
-            { signal },
-          );
+          const started = await rpc<{ runId: string; status: string }>("chat.send", {
+            sessionKey,
+            message: "Read fixture.txt and report the result.",
+            deliver: false,
+            idempotencyKey: `stream-${scenario}`,
+          });
           expect(started.status).toBe("started");
-          const waited = await client.request<{ status: string }>(
+          const waited = await rpc<{ status: string }>(
             "agent.wait",
             { runId: started.runId, timeoutMs: 60_000 },
-            { timeoutMs: 65_000, signal },
+            { timeoutMs: 65_000 },
           );
           expect(waited.status, scenario).not.toBe("timeout");
-          const history = await client.request<{ messages: ChatMessage[] }>(
-            "chat.history",
-            { sessionKey, limit: 30 },
-            { signal },
-          );
+          const history = await rpc<{ messages: ChatMessage[] }>("chat.history", {
+            sessionKey,
+            limit: 30,
+          });
           const assistant = history.messages.findLast((message) => message.role === "assistant");
           const toolResults = history.messages.filter((message) => message.role === "toolResult");
           const check = <T>(value: T) => expect.soft(value, scenario);

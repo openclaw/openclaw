@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import { createDeferred } from "../../test/helpers/promise.js";
+import { awaitGateBeforeSettlement, createDeferred } from "../../test/helpers/promise.js";
 import { getMediaDir } from "../media/store.js";
 import { handleGatewayRequest } from "./server-methods.js";
 import { agentHandlers } from "./server-methods/agent.js";
@@ -78,9 +78,14 @@ function request(
       },
     },
     context: f.context,
-    respond: vi.fn<RespondFn>(),
     isWebchatConnect: () => false,
-  } satisfies Parameters<GatewayRequestHandler>[0];
+  } satisfies Omit<Parameters<GatewayRequestHandler>[0], "respond">;
+}
+
+async function invoke(options: ReturnType<typeof request>, req = options.req) {
+  const respond = vi.fn<RespondFn>();
+  await handleGatewayRequest({ ...options, req, respond });
+  return respond;
 }
 
 it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as const)(
@@ -96,16 +101,12 @@ it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as c
       idempotencyKey: f.runId,
       attachments: [{ mimeType: "image/png", fileName: "proof.png", content: PNG }],
     };
-    const invoke = async (requestParams = params) => {
-      const options = request(f, method, requestParams, true);
-      await handleGatewayRequest(options);
-      return options.respond;
-    };
+    const send = (requestParams = params) => invoke(request(f, method, requestParams, true));
     try {
-      const accepted = await invoke();
+      const accepted = await send();
       expect(accepted.mock.calls.at(-1)?.[0]).toBe(true);
       await f.drain();
-      const baseline = await invoke();
+      const baseline = await send();
       const receipt = baseline.mock.calls.at(-1)!;
       expect(receipt[0]).toBe(true);
       expect(receipt[3]).toMatchObject({ cached: true });
@@ -113,10 +114,10 @@ it.each(["chat.send", "sessions.send", "sessions.steer", "sessions.create"] as c
       const files = await fs.readdir(mediaDir);
       const dispatches = dispatchInboundMessageMock.mock.calls.length;
       f.disable();
-      const replay = await invoke();
+      const replay = await send();
       expect(replay).toHaveBeenCalledExactlyOnceWith(receipt[0], receipt[1], receipt[2], cached);
       const freshRunId = randomUUID();
-      const denied = await invoke({ ...params, idempotencyKey: freshRunId });
+      const denied = await send({ ...params, idempotencyKey: freshRunId });
       expect(denied.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);
       expect(f.context.dedupe.has("chat:" + freshRunId)).toBe(false);
       expect(await fs.readdir(mediaDir)).toEqual(files);
@@ -180,16 +181,15 @@ it.each([
         },
       ],
     };
-    const handlerOptions = request(f, method, requestParams);
-    const { respond } = handlerOptions;
+    const respond = vi.fn<RespondFn>();
+    const handlerOptions = { ...request(f, method, requestParams), respond };
     const pending = Promise.resolve(handlers[method]!(handlerOptions));
     try {
-      await Promise.race([
+      await awaitGateBeforeSettlement(
         entered.promise,
-        pending.then(() => {
-          throw new Error("handler finished before entering the media writer");
-        }),
-      ]);
+        pending,
+        "handler finished before entering the media writer",
+      );
       let stoppedPayload: unknown;
       if (interruption !== "policy") {
         const abortRespond = vi.fn<RespondFn>();
@@ -220,19 +220,16 @@ it.each([
         expect(respond).toHaveBeenCalledExactlyOnceWith(true, stoppedPayload, undefined, cached);
         expect(f.context.dedupe.get(`agent:${f.runId}`)?.payload).toEqual(stoppedPayload);
         if (interruption === "stop-and-policy") {
-          const replay = vi.fn<RespondFn>();
-          await handleGatewayRequest({
-            ...handlerOptions,
-            req: { ...handlerOptions.req, id: f.runId + "-retry" },
-            respond: replay,
+          const replay = await invoke(handlerOptions, {
+            ...handlerOptions.req,
+            id: f.runId + "-retry",
           });
           expect(replay).toHaveBeenCalledExactlyOnceWith(true, stoppedPayload, undefined, cached);
-          const freshRespond = vi.fn<RespondFn>();
           const freshParams = { ...requestParams, idempotencyKey: f.runId + "-fresh" };
-          await handleGatewayRequest({
-            ...handlerOptions,
-            req: { ...handlerOptions.req, id: f.runId + "-fresh", params: freshParams },
-            respond: freshRespond,
+          const freshRespond = await invoke(handlerOptions, {
+            ...handlerOptions.req,
+            id: f.runId + "-fresh",
+            params: freshParams,
           });
           expect(freshRespond.mock.calls.some(([ok]) => ok)).toBe(false);
           expect(freshRespond.mock.calls.at(-1)?.[2]).toMatchObject(uploadsDisabled);

@@ -168,30 +168,28 @@ export async function createRegisteredCompletionPair(context: GatewayRequestCont
     await Promise.all(dispatches.values());
     await Promise.all([...dispatches.keys()].map((index) => runs[index].settled.promise));
   };
-  let disposal: Promise<void> | undefined;
-  const dispose = () =>
-    (disposal ??= (async () => {
+  const dispose = async () => {
+    for (const run of runs) {
+      run.releaseModel.resolve();
+      run.revoked.abort(new Error("Registered completion fixture disposed"));
+    }
+    try {
+      await Promise.allSettled(dispatches.values());
+      await Promise.all(
+        [...dispatches.keys()].flatMap((index) =>
+          subagentRuns.get(runs[index].runId)?.execution.status === "terminal"
+            ? [runs[index].settled.promise]
+            : [],
+        ),
+      );
+    } finally {
+      await resetSubagentRegistryForTests({ persist: false });
+      unsubscribe();
       for (const run of runs) {
-        run.releaseModel.resolve();
-        run.revoked.abort(new Error("Registered completion fixture disposed"));
+        run.source.release();
       }
-      try {
-        await Promise.allSettled(dispatches.values());
-        await Promise.all(
-          [...dispatches.keys()].flatMap((index) =>
-            subagentRuns.get(runs[index].runId)?.execution.status === "terminal"
-              ? [runs[index].settled.promise]
-              : [],
-          ),
-        );
-      } finally {
-        await resetSubagentRegistryForTests({ persist: false });
-        unsubscribe();
-        for (const run of runs) {
-          run.source.release();
-        }
-      }
-    })());
+    }
+  };
   try {
     await runScoped(0, () =>
       registerSubagentRun({
