@@ -18,7 +18,7 @@ import type {
   loadControlUiSessionPullRequestChecks,
 } from "../control-ui-session-pr-check-details.js";
 import {
-  prepareControlUiSessionPrRead,
+  createControlUiSessionPrRead,
   resolveControlUiSessionPrTarget,
   type ControlUiSessionPrReadContext,
   type ControlUiSessionPrTarget,
@@ -509,7 +509,7 @@ export function createControlUiHandlers(
       let preparedSession: Awaited<ReturnType<typeof prepareCheckDetailsSession>> = null;
       try {
         const reader = client
-          ? await prepareControlUiSessionPrRead({
+          ? createControlUiSessionPrRead({
               client,
               sessionKey: parsed.sessionKey,
               getRuntimeConfig: context.getRuntimeConfig,

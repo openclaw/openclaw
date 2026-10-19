@@ -834,8 +834,8 @@ async function runCliWithPreparedOutputMode(
           normalizedInvocation.commandPath[1] === "worker")))
   ) {
     // Gateway config selection and CLI bootstrap can create SQLite workers before the action.
-    const { initializeSqliteRuntimeCapabilities } = await import("../infra/bun-sqlite-library.js");
-    await initializeSqliteRuntimeCapabilities();
+    const { initializeSqliteRuntime } = await import("../infra/sqlite-runtime-initialize.js");
+    await initializeSqliteRuntime();
   }
 
   if (
@@ -875,10 +875,10 @@ async function runCliWithPreparedOutputMode(
   await configureStartupTraces();
   if (!isHelpOrVersionInvocation && isGatewayRunInvocation) {
     await startupTrace.measure("gateway-run-select-environment", async () => {
-      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await Promise.all([
-        import("./gateway-cli/pre-bootstrap.js"),
-        import("../runtime.js"),
-      ]);
+      const [{ selectGatewayRunEnvironment }, { defaultRuntime }] = await startupTrace.measure(
+        "gateway-run-select-environment-imports",
+        () => Promise.all([import("./gateway-cli/pre-bootstrap.js"), import("../runtime.js")]),
+      );
       const opts = resolveGatewayRunPreBootstrapOptions(normalizedArgv) ?? {};
       await selectGatewayRunEnvironment({ opts, runtime: defaultRuntime });
     });
@@ -1274,7 +1274,7 @@ async function runCliWithPreparedOutputMode(
         for (const message of runFatalErrorHooks({ reason: "uncaught_exception", error })) {
           console.error("[openclaw]", message);
         }
-        restoreRuntimeTerminalState("uncaught exception", { resumeStdinIfPaused: false });
+        restoreRuntimeTerminalState("uncaught exception");
         exitAfterSignalExitBarriers(1, "uncaught exception");
       });
 

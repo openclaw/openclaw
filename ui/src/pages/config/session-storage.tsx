@@ -87,13 +87,15 @@ export function SessionStorageSettings(props: SettingsProps) {
       }
     }, 2_000);
   }
-  function retireRequests() {
+  function retireRequests(identityChanged: boolean) {
     stopPolling();
-    followingRun = false;
-    setAgeDraft(null);
     setRunOperation(null);
-    setRunError(null);
-    setRunOutcome(null);
+    if (identityChanged) {
+      followingRun = false;
+      setAgeDraft(null);
+      setRunError(null);
+      setRunOutcome(null);
+    }
   }
   onSettled(() => stopPolling);
   function observeMaintenance(status: SessionsStorageStatusResult) {
@@ -320,7 +322,8 @@ export function SessionStorageSettings(props: SettingsProps) {
 
   const status = () => {
     const currentResult = result();
-    return requestStatus() !== "error" && currentResult?.isCurrent() ? currentResult.status : null;
+    // canRun checks live authority; the last loaded inventory remains displayable.
+    return requestStatus() !== "error" ? currentResult?.status : null;
   };
   return (
     <openclaw-session-storage-settings>

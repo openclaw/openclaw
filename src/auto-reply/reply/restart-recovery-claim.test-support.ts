@@ -1,9 +1,9 @@
 import { loadSessionEntryForAdmission } from "../../config/sessions/session-accessor.sqlite-entry-admission.js";
-import { createReplyOperation, type ReplyOperation } from "./reply-run-registry.js";
+import { createReplyOperation, type ReplyOperation } from "../../sessions/session-controller.js";
 import {
   acquireReplyOperationSessionActor,
   getReplyOperationSessionTarget,
-} from "./reply-run-registry.state.js";
+} from "../../sessions/session-controller.state.js";
 import { bindReplyOperationDatabaseAdmission } from "./reply-turn-database-admission.js";
 
 /** Real physical admission without adding ingress recovery policy to controller tests. */

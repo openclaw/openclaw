@@ -158,7 +158,7 @@ export async function selectUpdateRepairInference(params: {
           signal.throwIfAborted();
           const result = await runSetupInferenceTurn({
             route,
-            deps: { timeoutMs: Math.max(1, deadline - Date.now()) },
+            timeoutMs: Math.max(1, deadline - Date.now()),
             requireExecutionOwner: false,
             signal,
             runtime: params.runtime,

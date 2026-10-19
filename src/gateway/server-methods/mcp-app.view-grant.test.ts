@@ -48,6 +48,7 @@ import { createTestRuntimeSecretsActivator } from "../server-startup-config.test
 import { GatewayClientRegistry } from "../server/client-registry.js";
 import { mcpAppHandlers } from "./mcp-app.js";
 import { createPluginApprovalHandlers } from "./plugin-approval.js";
+import { expectRpcError } from "./rpc-response.test-support.js";
 import type { GatewayRequestHandlerOptions } from "./types.js";
 
 const mocks = vi.hoisted(() => ({
@@ -55,7 +56,6 @@ const mocks = vi.hoisted(() => ({
   loadConfig: vi.fn(),
   projection: vi.fn(),
   policy: vi.fn(),
-  native: vi.fn(),
   registered: vi.fn(),
 }));
 vi.mock("node:dns/promises", () => ({ lookup: mocks.lookup }));
@@ -94,6 +94,12 @@ vi.mock("../mcp-app-reconstruction.js", () => ({ restoreMcpAppView: async () => 
 
 const sessionKey = "agent:main:parts";
 const serverName = "parts";
+const resourceUri = "ui://parts/search";
+const resourceContent = {
+  mimeType: "text/html;profile=mcp-app",
+  text: "<html>Parts search</html>",
+};
+const toolResult = (text: string) => ({ content: [{ type: "text" as const, text }] });
 type ApprovalEvent = { id: string; request: PluginApprovalRequestPayload };
 type Path = "model-created" | "extension-runtime";
 let state: OpenClawTestState;
@@ -154,19 +160,12 @@ function createRuntime() {
     getCatalog: async () => catalog,
     peekCatalog: () => catalog,
     readResource: async (_serverName: string, uri: string) => ({
-      contents: [
-        {
-          uri,
-          mimeType: "text/html;profile=mcp-app",
-          text: "<html>Parts search</html>",
-          _meta: { ui: {} },
-        },
-      ],
+      contents: [{ uri, ...resourceContent, _meta: { ui: {} } }],
     }),
     callTool: vi.fn<SessionMcpRuntime["callTool"]>(
       async (_server, toolName, _input, callOptions) => {
         callOptions?.assertCurrent?.();
-        return { content: [{ type: "text", text: toolName }] };
+        return toolResult(toolName);
       },
     ),
   } satisfies SessionMcpRuntime;
@@ -218,7 +217,7 @@ async function openView(path: Path, params: { viewId?: string; requesterId?: str
     agentId: "main",
     serverName,
     toolName: "search",
-    uiResourceUri: "ui://parts/search",
+    uiResourceUri: resourceUri,
     toolInput: {},
     toolResult: { content: [] },
     allowedAppToolNames: new Set(["search", "details"]),
@@ -238,11 +237,10 @@ function call(
 ) {
   const request = options(
     {
-      sessionKey,
+      sessionKey: params.sessionKey || sessionKey,
       viewId,
       toolName,
       arguments: { query: "bolt" },
-      ...(params.sessionKey ? { sessionKey: params.sessionKey } : {}),
     },
     params.requesterId,
   );
@@ -287,6 +285,21 @@ async function approvedCall(
     expect.objectContaining({ content: [{ type: "text", text: toolName }] }),
   );
   return event;
+}
+
+function expectDenied(respond: unknown, message: string) {
+  expectRpcError(respond, { message: expect.stringContaining(message) });
+}
+
+async function expectUnprompted(pending: ReturnType<typeof call>, message: string) {
+  await awaitGateBeforeSettlement(pending, nextApproval.promise, message);
+  expect(await pending).toHaveBeenCalledWith(true, expect.anything());
+}
+
+function releaseViews() {
+  for (const viewId of views) {
+    releaseMcpAppView(viewId, runtime);
+  }
 }
 
 beforeAll(async () => {
@@ -335,17 +348,15 @@ beforeEach(() => {
     fingerprint: "view-grant-fixture",
     safeServerNamesByServer: new Map([[serverName, serverName]]),
   }));
-  const projection = {
+  mocks.projection.mockReturnValue({
     sharingTarget: () => ({ agentId: "main", canonicalKey: sessionKey, entry }),
-  };
-  mocks.projection.mockReturnValue(projection);
+  });
   mocks.policy.mockReset();
-  mocks.native.mockImplementation(async () => ({ runtime, releaseLease: () => {} }));
   mocks.registered.mockReturnValue({
     ownerPluginId: "codex",
     harness: {
       loadMcpToolCatalog: async () => runtime.peekCatalog(),
-      acquireMcpAppRuntime: mocks.native,
+      acquireMcpAppRuntime: async () => ({ runtime, releaseLease: () => {} }),
     },
   });
   reviewer.socket.send.mockImplementation((frame: string) => {
@@ -369,9 +380,7 @@ afterEach(async () => {
     await aux.pluginApprovalManager.resolve(record.id, "deny");
   }
   await Promise.allSettled(pendingCalls);
-  for (const viewId of views) {
-    releaseMcpAppView(viewId, runtime);
-  }
+  releaseViews();
   for (const authority of retained) {
     authority.release();
   }
@@ -407,13 +416,7 @@ describe.each<Path>(["model-created", "extension-runtime"])(
         ],
       });
       expect(first.request).not.toHaveProperty("mcpTool");
-      const second = call(viewId);
-      await awaitGateBeforeSettlement(
-        second,
-        nextApproval.promise,
-        "Same view/tool unexpectedly prompted again",
-      );
-      expect(await second).toHaveBeenCalledWith(true, expect.anything());
+      await expectUnprompted(call(viewId), "Same view/tool unexpectedly prompted again");
       expect(approvals).toHaveLength(1);
       await approvedCall(viewId, "allow-once", "details");
       const otherView = await openView(path);
@@ -440,11 +443,7 @@ describe.each<Path>(["model-created", "extension-runtime"])(
         }
         if (reason !== "replaced") {
           const failed = await call(viewId);
-          expect(failed).toHaveBeenCalledWith(
-            false,
-            undefined,
-            expect.objectContaining({ message: expect.stringContaining("view expired") }),
-          );
+          expectDenied(failed, "view expired");
           expect(runtime.callTool).toHaveBeenCalledOnce();
         }
         await openView(path, { viewId });
@@ -462,11 +461,7 @@ describe.each<Path>(["model-created", "extension-runtime"])(
       const pending = call(viewId);
       const denied = await promptFor(pending);
       await decide(denied, "deny");
-      expect(await pending).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("denied") }),
-      );
+      expectDenied(await pending, "denied");
       await approvedCall(viewId, "allow-once");
       expect(approvals).toHaveLength(3);
       expect(runtime.callTool).toHaveBeenCalledTimes(2);
@@ -478,15 +473,10 @@ describe.each<Path>(["model-created", "extension-runtime"])(
       await approvedCall(shared, "allow-once", "search", "bob");
       const bound = await openView(path, { requesterId: "alice" });
       await approvedCall(bound, "allow-always");
-      expect(await call(bound, "search", { requesterId: "bob" })).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("not authorized") }),
-      );
-      expect(await call(shared, "search", { sessionKey: "agent:main:other" })).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("not authorized") }),
+      expectDenied(await call(bound, "search", { requesterId: "bob" }), "not authorized");
+      expectDenied(
+        await call(shared, "search", { sessionKey: "agent:main:other" }),
+        "not authorized",
       );
       expect(approvals).toHaveLength(3);
       expect(runtime.callTool).toHaveBeenCalledTimes(3);
@@ -506,22 +496,14 @@ describe.each<Path>(["model-created", "extension-runtime"])(
         return committed;
       });
       await decide(event, "allow-always");
-      expect(await pending).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: expect.stringContaining("denied") }),
-      );
+      expectDenied(await pending, "denied");
       expect(runtime.callTool).not.toHaveBeenCalled();
       entry.toolOverrides = undefined;
       await approvedCall(viewId, "allow-always");
       mocks.policy.mockImplementation(() => {
         throw new Error("Current tool policy revoked");
       });
-      expect(await call(viewId)).toHaveBeenCalledWith(
-        false,
-        undefined,
-        expect.objectContaining({ message: "Current tool policy revoked" }),
-      );
+      expectRpcError(await call(viewId), { message: "Current tool policy revoked" });
       expect(runtime.callTool).toHaveBeenCalledOnce();
     });
 
@@ -530,13 +512,7 @@ describe.each<Path>(["model-created", "extension-runtime"])(
       async (mode) => {
         server.codex = { defaultToolsApprovalMode: mode };
         const viewId = await openView(path);
-        const pending = call(viewId);
-        await awaitGateBeforeSettlement(
-          pending,
-          nextApproval.promise,
-          "Existing server policy unexpectedly prompted",
-        );
-        expect(await pending).toHaveBeenCalledWith(true, expect.anything());
+        await expectUnprompted(call(viewId), "Existing server policy unexpectedly prompted");
         expect(approvals).toHaveLength(0);
         expect(runtime.callTool).toHaveBeenCalledOnce();
       },
@@ -558,18 +534,16 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
       {
         name: "search",
         inputSchema: { type: "object", properties: {} },
-        _meta: { ui: { visibility: ["app"], resourceUri: "ui://parts/search" } },
+        _meta: { ui: { visibility: ["app"], resourceUri } },
       },
     ],
   }));
   mcp.setRequestHandler(ReadResourceRequestSchema, async ({ params }) => ({
-    contents: [
-      { uri: params.uri, mimeType: "text/html;profile=mcp-app", text: "<html>Parts search</html>" },
-    ],
+    contents: [{ uri: params.uri, ...resourceContent }],
   }));
   mcp.setRequestHandler(CallToolRequestSchema, async () => {
     toolCalls += 1;
-    return { content: [{ type: "text", text: "search" }] };
+    return toolResult("search");
   });
   const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: randomUUID });
   await mcp.connect(transport);
@@ -614,17 +588,11 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
     await runtime.getCatalog();
     const viewId = await openView("model-created", { requesterId: "alice" });
     await approvedCall(viewId, "allow-always");
-    const reused = call(viewId);
-    await awaitGateBeforeSettlement(reused, nextApproval.promise, "Cached grant prompted again");
-    expect(await reused).toHaveBeenCalledWith(true, expect.anything());
+    await expectUnprompted(call(viewId), "Cached grant prompted again");
     expect(toolCalls).toBe(2);
     expect(approvals).toHaveLength(1);
     const beforeDenied = posts;
-    expect(await call(viewId, "search", { requesterId: "bob" })).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("not authorized") }),
-    );
+    expectDenied(await call(viewId, "search", { requesterId: "bob" }), "not authorized");
     expect(posts).toBe(beforeDenied);
 
     mocks.lookup.mockImplementationOnce(async () => {
@@ -643,17 +611,11 @@ it("revalidates a cached App grant after HTTP transport preparation before writi
     const response = await revoked;
     expect(posts).toBe(beforeDenied);
     expect(toolCalls).toBe(2);
-    expect(response).toHaveBeenCalledWith(
-      false,
-      undefined,
-      expect.objectContaining({ message: expect.stringContaining("denied") }),
-    );
+    expectDenied(response, "denied");
   } finally {
     resume.resolve();
     await Promise.allSettled(pendingCalls);
-    for (const viewId of views) {
-      releaseMcpAppView(viewId, runtime);
-    }
+    releaseViews();
     await runtime.dispose();
     await runtime.joinCleanup?.();
     await mcp.close();

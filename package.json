@@ -7,9 +7,15 @@
       "sqlite",
       "postgres"
     ],
-    "postgresFamilies": ["state", "agent", "workboard", "logbook", "team-reports"],
+    "postgresFamilies": [
+      "state",
+      "agent",
+      "workboard",
+      "logbook",
+      "team-reports"
+    ],
     "schemaVersions": {
-      "state": 27,
+      "state": 28,
       "agent": 31
     }
   },
@@ -474,7 +480,8 @@
     "!dist/plugin-sdk/collection-input-runtime.d.ts",
     "!dist/plugin-sdk/http-response-runtime.d.ts",
     "!dist/plugin-sdk/node-crypto-runtime.d.ts",
-    "!dist/plugin-sdk/path-existence-runtime.d.ts"
+    "!dist/plugin-sdk/path-existence-runtime.d.ts",
+    "!dist/plugin-sdk/provider-auth-markers.d.ts"
   ],
   "type": "module",
   "main": "dist/index.js",
@@ -1269,6 +1276,10 @@
     "./plugin-sdk/session-transcript-runtime": {
       "default": "./dist/plugin-sdk/session-transcript-runtime.js"
     },
+    "./plugin-sdk/context-engine-transcript-runtime": {
+      "types": "./dist/plugin-sdk/context-engine-transcript-runtime.d.ts",
+      "default": "./dist/plugin-sdk/context-engine-transcript-runtime.js"
+    },
     "./plugin-sdk/sqlite-runtime": {
       "default": "./dist/plugin-sdk/sqlite-runtime.js"
     },
@@ -1485,6 +1496,9 @@
     "./plugin-sdk/provider-auth": {
       "types": "./dist/plugin-sdk/provider-auth.d.ts",
       "default": "./dist/plugin-sdk/provider-auth.js"
+    },
+    "./plugin-sdk/provider-auth-markers": {
+      "default": "./dist/plugin-sdk/provider-auth-markers.js"
     },
     "./plugin-sdk/provider-auth-aliases": {
       "default": "./dist/plugin-sdk/provider-auth-aliases.js"
@@ -1750,6 +1764,7 @@
     "channels:catalog:gen": "node scripts/write-official-channel-catalog.mjs --write",
     "changed:lanes": "node scripts/changed-lanes.mjs",
     "check": "node --import ./scripts/tsx.mjs scripts/check.mts",
+    "check:agents-md-size": "node --import ./scripts/tsx.mjs scripts/check-agents-md-size.mts",
     "check:architecture": "pnpm check:import-cycles && pnpm check:madge-import-cycles && pnpm check:deprecated-api-usage && pnpm check:wrapper-shadowing && pnpm check:deprecated-jsdoc && pnpm db:kysely:check && pnpm db:postgres:check && pnpm lint:kysely && pnpm check:database-first-legacy-stores",
     "check:assertion-safety": "node --import ./scripts/tsx.mjs scripts/check-assertion-safety-ratchet.mts",
     "check:base-config-schema": "node --import ./scripts/tsx.mjs scripts/generate-base-config-schema.ts --check",
@@ -1857,13 +1872,13 @@
     "dup:check": "node scripts/check-duplicates.mjs",
     "dup:check:coverage": "node scripts/check-duplicates.mjs --coverage",
     "dup:check:json": "node scripts/check-duplicates.mjs --json",
-    "format": "oxfmt --write --threads=1",
+    "format": "node scripts/run-format.mts --write",
     "format:all": "pnpm format && pnpm format:swift",
-    "format:check": "oxfmt --check",
-    "format:diff": "oxfmt --write --threads=1 && git --no-pager diff",
+    "format:check": "node scripts/run-format.mts --check",
+    "format:diff": "pnpm format && git --no-pager diff",
     "format:docs": "node --import ./scripts/tsx.mjs scripts/format-docs.mts",
     "format:docs:check": "node --import ./scripts/tsx.mjs scripts/format-docs.mts --check",
-    "format:fix": "oxfmt --write --threads=1",
+    "format:fix": "pnpm format",
     "format:swift": "./scripts/format-swift.sh",
     "gateway:dev": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway",
     "gateway:dev:reset": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_SKIP_CHANNELS=1 -- node scripts/run-node.mjs --dev gateway --reset",
@@ -2107,6 +2122,7 @@
     "test:docker:local:all": "node --import ./scripts/tsx.mjs scripts/run-with-env.mts OPENCLAW_DOCKER_ALL_LIVE_MODE=skip -- node scripts/test-docker-all.mjs",
     "test:docker:cli-installer-distribution": "bash scripts/e2e/cli-installer-distribution-docker.sh",
     "test:docker:mcp-channels": "bash scripts/e2e/mcp-channels-docker.sh",
+    "test:docker:mcp-docker-custody": "bash scripts/e2e/mcp-docker-custody-docker.sh",
     "test:docker:mcp-code-mode-gateway": "bash scripts/e2e/mcp-code-mode-gateway-docker.sh",
     "test:docker:multi-node-update": "bash scripts/e2e/multi-node-update-docker.sh",
     "test:docker:codex-on-demand": "bash scripts/e2e/codex-on-demand-docker.sh",
@@ -2322,15 +2338,14 @@
     "@grammyjs/transformer-throttler": "1.2.1",
     "@homebridge/ciao": "1.3.12",
     "@lydell/node-pty": "1.2.0-beta.15",
-    "@modelcontextprotocol/client": "2.3.1",
     "@modelcontextprotocol/core": "2.3.1",
     "@modelcontextprotocol/node": "2.1.1",
     "@modelcontextprotocol/sdk": "1.32.1",
     "@modelcontextprotocol/server": "2.3.1",
     "@mozilla/readability": "0.6.0",
     "@openclaw/ai": "workspace:*",
-    "@openclaw/fs-safe": "0.26.7",
-    "@openclaw/proc-safe": "0.3.0",
+    "@openclaw/fs-safe": "0.26.8",
+    "@openclaw/proc-safe": "0.4.1",
     "@openclaw/proxyline": "0.4.0",
     "@opentelemetry/semantic-conventions": "1.43.0",
     "@resvg/resvg-js": "2.6.2",
@@ -2392,6 +2407,7 @@
     "@copilotkit/aimock": "1.44.0",
     "@mdx-js/mdx": "3.1.1",
     "@mistralai/mistralai": "2.7.0",
+    "@modelcontextprotocol/client": "2.3.1",
     "@openclaw/crabline": "0.1.29",
     "@openclaw/session-url-contract": "workspace:*",
     "@opentelemetry/sdk-node": "0.223.0",
@@ -2439,6 +2455,7 @@
     "tinyglobby": "0.2.17",
     "tree-sitter-bash": "0.25.1",
     "tsdown": "0.23.0",
+    "tsrs": "0.16.0-ts7.1.0-dev.20260929",
     "tsx": "4.23.15",
     "typescript": "7.1.0-dev.20260928.1",
     "unrun": "0.3.1",

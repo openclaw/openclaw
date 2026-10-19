@@ -51,6 +51,7 @@ beforeEach(() => {
     if (
       value === "/usr/bin/node" ||
       value === process.argv[1] ||
+      value === "/opt/openclaw/openclaw.mjs" ||
       value === "/opt/openclaw-wrapper"
     ) {
       return;
@@ -91,7 +92,7 @@ describe.skipIf(process.platform === "win32")("node-host runtime install boundar
     const plan = await install();
     expect(plan.programArguments).toEqual([
       "/usr/bin/node",
-      process.argv[1],
+      "/opt/openclaw/openclaw.mjs",
       "node",
       "run",
       "--host",

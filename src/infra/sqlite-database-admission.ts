@@ -134,6 +134,7 @@ const reader = createSqliteDatabaseAdmissionReader({
 });
 export const {
   getSqliteDatabaseAdmission,
+  getSqliteDatabaseSchemaRevision,
   getOrLoadSqliteDatabaseAdmissionForPath,
   hasSqliteDatabaseSchemaAdmissionForPath,
   getSqliteDatabaseAdmissionIdentityForPath,
@@ -723,16 +724,6 @@ export function retireSqliteDatabaseAdmissionForPath(
   if (state.registry.retireDescriptor(observed, options) && record) {
     exchange(record);
   }
-}
-
-export function getSqliteDatabaseSchemaRevision(connection: EngineConnection): number | undefined {
-  const database = sqlPublicationAnchor(connection);
-  const record = admission(database);
-  if (record) {
-    return readSqliteDatabaseGeneration(record, "schemaRevision");
-  }
-  const fileIdentity = state.openedIdentities.get(database);
-  return fileIdentity ? (state.localSchemaRevisions.get(fileIdentity) ?? 0) : undefined;
 }
 
 export function suspendSqliteDatabaseAdmission(database: DatabaseSync, suspended: boolean): void {

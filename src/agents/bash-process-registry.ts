@@ -437,7 +437,7 @@ function moveToFinished(session: ProcessSession) {
   if (stdin) {
     if (typeof stdin.destroy === "function") {
       stdin.destroy();
-    } else if (typeof stdin.end === "function") {
+    } else {
       stdin.end();
     }
     delete session.stdin;

@@ -284,6 +284,7 @@ async function runLegacyStateHealth(ctx: DoctorHealthFlowContext): Promise<void>
     if (migrate) {
       const migrated = await runLegacyStateMigrations({
         detected: legacyState,
+        integrityCheck: ctx.options.fullIntegrityCheck ? "full" : "quick",
         config: ctx.cfg,
         ...(doctorOnlyStateMigrations ? { doctorOnlyStateMigrations: true } : {}),
         legacySessionSurfaces,

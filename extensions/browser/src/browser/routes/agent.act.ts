@@ -1,6 +1,7 @@
 import { toErrorObject } from "openclaw/plugin-sdk/error-runtime";
 import { formatErrorMessage } from "openclaw/plugin-sdk/security-runtime";
 import { normalizeOptionalString } from "openclaw/plugin-sdk/string-coerce-runtime";
+import { BROWSER_ACT_KIND_FACTS, isActKind } from "../act-kinds.js";
 import { resolveExistingSessionActTimeouts } from "../act-policy.js";
 import type { ChromeMcpTargetOperation } from "../chrome-mcp-contracts.js";
 import {
@@ -30,7 +31,6 @@ import {
 } from "./agent.act.existing-session.js";
 import { registerBrowserAgentActHookRoutes } from "./agent.act.hooks.js";
 import { canonicalizeActTargetIds, normalizeActRequest } from "./agent.act.normalize.js";
-import { isActKind } from "./agent.act.shared.js";
 import { createTabRouteRegistrar } from "./agent.prepared.js";
 import {
   browserNavigationPolicyForProfile,
@@ -49,17 +49,6 @@ import { EXISTING_SESSION_LIMITS, admitExistingSessionAction } from "./existing-
 import { readRoutePositiveInteger, readRouteTimerTimeoutMs } from "./route-numeric.js";
 import type { BrowserResponse, BrowserRouteRegistrar } from "./types.js";
 import { jsonError, toStringOrEmpty } from "./utils.js";
-
-const SELECTOR_ALLOWED_KINDS: ReadonlySet<string> = new Set([
-  "batch",
-  "click",
-  "drag",
-  "hover",
-  "scrollIntoView",
-  "select",
-  "type",
-  "wait",
-]);
 
 function jsonActError(
   res: BrowserResponse,
@@ -101,7 +90,7 @@ export function registerBrowserAgentActRoutes(
       );
     }
     const targetId = normalizeOptionalString(body.targetId);
-    if (Object.hasOwn(body, "selector") && !SELECTOR_ALLOWED_KINDS.has(kind)) {
+    if (Object.hasOwn(body, "selector") && !BROWSER_ACT_KIND_FACTS[kind].selector) {
       return jsonActError(
         res,
         400,

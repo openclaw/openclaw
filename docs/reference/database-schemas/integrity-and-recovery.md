@@ -16,6 +16,12 @@ session operation does not initialize unrelated cron, secrets, transcript, or
 update handlers. The worker backend still owns database handles, write admission,
 and cleanup; lazy loading changes code residency, not database ownership.
 
+On Windows, path casing and extended-length prefixes do not create separate
+maintenance owners. An "undergoing offline maintenance" error identifies another
+process holding state. An "Internal state ownership error" instead means the
+current command lost its maintenance scope; retry the command and report the
+error if it persists.
+
 ## Integrity checks
 
 Admission validates SQLite format, schema, required indexes, and required
@@ -140,9 +146,9 @@ next full verification catches it. The seven-day admission interval bounds
 reuse of old full-verification evidence. The checksum protects the small seal
 against incomplete writes; it is not a hash of the database contents.
 
-Doctor, including `openclaw doctor --fix`, explicit copied-file verification,
-backup verification, and compaction retain their full checks regardless of any
-seal. Migration and repair owners validate before mutation, verify their
+Doctor migrations and repairs use the integrity policy below regardless of any
+seal. Explicit copied-file verification, backup verification, Doctor recovery,
+and compaction retain their full checks. Migration and repair owners validate before mutation, verify their
 changes, and publish new admitted facts only after successful settlement. They
 cannot reuse a seal for a changed schema. Backup and restore publish independent
 SQLite files; their new physical identities require fresh admission even if an
@@ -159,17 +165,24 @@ before checking the live source, then preserves that receipt through its
 committed version and additive schema phases. Only a full source verification
 can satisfy a later runtime full-integrity gate; a quick migration still needs
 that full check. Updater backups verify private images and do not supply a live
-source receipt; inline quick migrations also retain the later full-check requirement.
+full source receipt; inline quick migrations also retain the later full-check requirement.
 A separate Doctor invocation continues to inspect current bytes. These are
 candidate-side changes; the installed updater still runs first
 under its own version's behavior.
+
+During a native agent migration commit, SQLite maintenance retains the shared-state
+write lock. Its heartbeat waits for that fence instead of treating the blocked
+renewal as lease loss. Before releasing the lock, maintenance renews the unchanged
+owner and grant for the normal lease duration. A fence lasting longer than that
+duration produces a Doctor warning; a replaced owner still refuses settlement.
+Rollback releases the fence and restores ordinary expiry handling.
 
 | When                                                   | Check                                                                                                                                                                                      |
 | ------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Startup with a matching, recent clean-close seal       | Match checksum, schema identity, file metadata, and empty journals; reuse admitted facts without startup or post-ready scans                                                               |
 | Startup without a reusable seal                        | Run the normal full format, schema, canonical-index, integrity, and foreign-key validation                                                                                                 |
 | Same-process reopen or new worker                      | Reuse live file-bound facts or a matching seal; retain current ownership and durable quarantine-row checks                                                                                 |
-| Before a pending migration                             | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity |
+| Before a migration or ordinary same-version repair     | Run whole-database quick integrity, full integrity of affected tables, and existing foreign-key, role, schema, and index checks; `--full-integrity-check` requests full database integrity |
 | After a migration or repair                            | Verify changes and publish committed facts through the existing owner                                                                                                                      |
 | Explicit verification, Doctor recovery, and compaction | Retain full checks before accepting or rewriting the database; ordinary Doctor migrations use the migration policy above                                                                   |
 
@@ -177,8 +190,19 @@ The migration default does not compare every untouched index with its table.
 An index/table mismatch outside the declared migration scope therefore needs
 `--full-integrity-check` to be detected. Structural corruption still refuses
 migration through the whole-database quick check, and a quick result never
-publishes full-verification facts. See
+publishes full-verification facts. Recorded corruption still requires full
+verification before its quarantine is cleared. See
 [migration integrity checks](/install/updating#migration-integrity-checks).
+
+Within the same exclusive Doctor maintenance operation, a recovery-free raw
+backup can supply the pre-mutation QUICK proof once: capture must compare the
+private bytes with the source, and the source must remain unchanged until
+migration admission. Pending writes or recovery data prevent reuse. The
+transformed backup is verified independently, and touched tables still receive
+scoped FULL checks after migration, followed by foreign-key checks. This does not
+supply a runtime FULL receipt or change explicit `--full-integrity-check` behavior.
+The optimization runs in the candidate; the installed updater retains its own
+version's capture and verification behavior.
 
 Canonical index repair checks each rebuilt table and its indexes once after
 DDL, instead of scanning the whole database again. Its source integrity check
@@ -186,6 +210,15 @@ still follows the policy above, including a full scan when requested, and the
 migration finalizer keeps its data and foreign-key checks. This changes
 candidate-side Doctor and schema preparation; the installed updater still runs
 first under its own version's behavior.
+
+Once the schema is current, later Doctor admissions scope table integrity to
+their own repair callback. Read-only admissions do not inherit historical
+migration tables. Within one QUICK maintenance operation, passing table checks
+reuse the existing physical write receipt until a write occurs. Transaction-local
+checks also expire on row writes, DDL, or rollback and never authorize another
+connection. This reuse is conservative: an unrelated write can require another
+table check. Explicit FULL, foreign-key checks, private-image certification, and
+rollback validation retain their existing coverage.
 
 Gateway agent inspections share a five-second foreground wait. Unfinished stores
 remain unavailable while the startup admission owner completes their inspection
@@ -380,6 +413,14 @@ plugin migration obligations through the existing live shared-state reader or
 worker rather than copying the database and WAL. Each read sees current committed
 rows; it does not cache obligations or grant publication authority. Unobserved
 inspection and inherited artifact-preserving scopes retain private snapshots.
+For CLI plugin metadata (including `config validate` and plugin update inventory
+and ownership), the snapshot child checks the exact database's recorded Gateway
+or embedded-writer owner. A verified live process uses the existing online-backup
+owner in one read transaction while writes continue. Native SQLite may update SHM
+read marks; it does not change stored rows or the WAL. An absent, dead, or
+unverifiable owner retains the artifact-preserving copy path. Explicit inherited
+snapshots and offline maintenance/recovery remain byte-neutral. Snapshot failures
+remain errors with their original diagnostics; they never become empty inventory.
 Migration publication rechecks the current generation inside the same native
 write transaction that protects synchronous publication. Empty historical state
 retains its schema, and absent state remains absent.
@@ -590,7 +631,7 @@ repair warning includes the nested lease-loss cause when maintenance cannot sett
 
 Before draining heartbeats for a file capture, each state-lease owner attempts a final ordinary renewal. Capture remains bounded by the shortest durable expiry read after drainage; it cannot renew while files are excluded or revive an expired owner.
 
-Asynchronous agent-database admission runs the first full-file integrity check in a read-only child process when that check is outside a write transaction. Later ordinary opens reuse remembered verification. Maintenance retains its independent full check. The connection and owning scope remain held until the native reader closes; cancellation and timeout wait for process exit. Schema changes, index repairs, and compaction retain their synchronous phases.
+Asynchronous agent-database admission runs the first full-file integrity check in a read-only child process when that check is outside a write transaction. Later ordinary opens reuse remembered verification. Ordinary Doctor maintenance carries its requested QUICK or FULL policy into both synchronous and asynchronous admission; QUICK never supplies a later runtime FULL receipt. Explicit recovery and compaction retain FULL checks. The connection and owning scope remain held until the native reader closes; cancellation and timeout wait for process exit. Schema changes, index repairs, and compaction retain their synchronous phases.
 
 An agent maintenance lease reuses one integrity-check process across its queued
 checks. Each request opens and closes its own database, reads fresh file identity,
@@ -639,10 +680,10 @@ and different concurrency.
 Session startup certification reuses up to two worker threads for databases that
 need fresh session-validation proof. Valid receipts retain their existing fast path. Each
 certification task has fresh admission, its own commit gate, and full session
-validation. The task closes its database handles and leases and waits
-for the parent's close request to finish before releasing the thread for another
-database. If native cleanup is uncertain, writer admission and cleanup custody
-remain held until execution ends.
+validation. The parent's close request closes the task's database handles and
+leases. Task completion carries that cleanup and releases the thread for another
+database; the parent holds writer admission until completion. If native cleanup
+is uncertain, writer admission and cleanup custody remain held until execution ends.
 
 During startup, reaching the inspection's foreground deadline records pending
 preparation and marks that agent **degraded** while the Gateway continues with healthy agents.
@@ -764,12 +805,12 @@ uninstalled copies from its identity-marked staging directories, retains any
 exchanged originals, and skips files that already have NOCOW. Unmarked backups
 from older or unknown operations are never deleted automatically.
 
-The official Debian bookworm Docker image cannot perform this optional repair:
-its coreutils 9.1 `mv` lacks `--exchange`/`--no-copy`, and it does not include
-`fuser` (the `psmisc` package) or `getfacl`/`setfacl` (the `acl` package).
-A derived image needs those tools and an exchange-capable GNU `mv`, as well as
-kernel/filesystem support on the mounted state volume. Updates still proceed
-with the existing stores.
+The official Debian trixie Docker image includes an exchange-capable GNU `mv`,
+`fuser` (`psmisc`), `getfacl`/`setfacl` (`acl`), and `lsattr`/`chattr`
+(`e2fsprogs`). The mounted state volume still needs kernel/filesystem support.
+Older bookworm-based images lack the required tools; recreate the container
+with a current image before retrying. Unsupported hosts still proceed with
+updates using the existing stores.
 
 After publication, Doctor re-records the identity of each destination database
 it rewrites so `update cleanup` eligibility survives the rewrite. Recorded
@@ -832,6 +873,15 @@ Modern version migrations leave unrelated planner statistics unchanged.
 `SQLite read-only worker` failures append `code` and numeric SQLite `errcode` diagnostics when the underlying error supplies valid values, including through a bounded cause chain. Report the full code suffix when investigating a failure. Snapshot and integrity-child timeout errors include the applied budget and source file size; snapshot timeouts report an unknown size if the source stat failed. Integrity-child timeouts also retain `lastObservedPhase`. A generic `disk I/O error` or `SQLITE_IOERR` alone does not prove the disk is full.
 
 Shared-state database admission also preserves native SQLite result codes across worker transport. Lease and managed-worktree provisioning diagnostics retain the underlying storage failure even when acquisition fails before a lease is created.
+
+### A migrated agent remains unavailable with a serialization error
+
+`DataCloneError` or `Cannot serialize catalog.read request field input.env` during
+agent preparation indicates a worker request problem, not a failed SQLite
+migration. Update OpenClaw and restart the Gateway. Repeating `doctor --fix`
+cannot repair a request that contains a non-serializable value. Keep the operation
+and field names from the diagnostic when reporting the problem; do not include
+environment values or credentials.
 
 ### The state database is busy
 
@@ -1073,6 +1123,23 @@ are preserved. Page or b-tree damage, unreadable table data, and other integrity
 failures remain a refusal: preserve the database and its WAL, then restore a
 verified backup or use SQLite recovery. Runtime and startup never perform this
 repair automatically.
+
+FTS5-only `malformed inverted index` findings on canonical agent search tables
+are also repairable. A Node upgrade or downgrade can change SQLite's `unicode61`
+tokenization (for example, U+FFFE in SQLite 3.54), leaving intact content with an
+incompatible derived index. Stop the Gateway and run `openclaw doctor --fix` with
+the Node version that will run the Gateway, then restart it. Doctor preserves a
+backup and rebuilds only the affected, schema-validated FTS tables in one
+transaction. It verifies integrity and foreign keys before clearing quarantine;
+session recovery uses this same repair instead of moving the database aside.
+Unknown or changed FTS definitions and findings mixed with structural damage
+are not eligible for this repair.
+
+Startup does not rebuild FTS indexes automatically: the offline maintenance
+owner supplies the exclusive custody needed for backup and quarantine recovery.
+The admission error gives the `openclaw doctor --fix` command. Switching SQLite
+versions again may require another rebuild, without changing stored content or
+the database schema.
 
 <a id="downgrades-are-unsupported" />
 

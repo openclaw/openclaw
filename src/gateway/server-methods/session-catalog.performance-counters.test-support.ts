@@ -59,27 +59,12 @@ vi.mock("../../plugin-state/plugin-state-worker-client.js", async (importOrigina
   };
 });
 
-type Counts = {
-  sqliteReadCalls: number;
-  sqliteFreshnessReads: number;
-  sessionEntryReads: number;
-  sessionPayloadReads: number;
-  bindingAuthorityReads: number;
-  otherSqliteReads: number;
-  fileReadCalls: number;
-  ownershipFileReadCalls: number;
-  fileOpenCalls: number;
-  ownershipFileOpenCalls: number;
-  nativeRpcCalls: number;
-  nativeThreadListCalls: number;
-};
-const empty = (): Counts => ({
+const empty = () => ({
   sqliteReadCalls: 0,
   sqliteFreshnessReads: 0,
   sessionEntryReads: 0,
   sessionPayloadReads: 0,
   bindingAuthorityReads: 0,
-  otherSqliteReads: 0,
   fileReadCalls: 0,
   ownershipFileReadCalls: 0,
   fileOpenCalls: 0,
@@ -90,7 +75,6 @@ const empty = (): Counts => ({
 
 /** Call-through instrumentation records counts only, never SQLite or RPC result objects. */
 export function createCatalogIoCounters() {
-  let enabled = false;
   let counts = empty();
   let ownershipFile: Pick<fsSync.BigIntStats, "dev" | "ino"> | undefined;
   const catalogPersistence = createDeferredCore<string>();
@@ -119,7 +103,7 @@ export function createCatalogIoCounters() {
   for (const method of ["get", "all", "iterate"] as const) {
     const original = StatementSync.prototype[method];
     replace(StatementSync.prototype, method, function (this: StatementSync, ...args: unknown[]) {
-      if (enabled) {
+      if (workerCounter.enabled) {
         counts.sqliteReadCalls++;
         const sql = this.sourceSQL.toLowerCase();
         if (sql.includes("session_nodes") || sql.includes("session_participants")) {
@@ -131,8 +115,6 @@ export function createCatalogIoCounters() {
           counts.sqliteFreshnessReads++;
         } else if (sql.includes("entry_json") || sql.includes("entry_list_json")) {
           counts.sessionPayloadReads++;
-        } else {
-          counts.otherSqliteReads++;
         }
       }
       return Reflect.apply(original, this, args);
@@ -150,18 +132,15 @@ export function createCatalogIoCounters() {
   ] as const) {
     const original = Reflect.get(target, method);
     replace(target, method, function (this: unknown, ...args: unknown[]) {
-      if (enabled) {
-        if (method === "open" || method === "openSync") {
-          counts.fileOpenCalls++;
-        } else {
-          counts.fileReadCalls++;
-          if (isOwnershipFile(args[0])) {
-            counts.ownershipFileReadCalls++;
-          }
+      const opening = method === "open" || method === "openSync";
+      if (workerCounter.enabled) {
+        counts[opening ? "fileOpenCalls" : "fileReadCalls"]++;
+        if (!opening && isOwnershipFile(args[0])) {
+          counts.ownershipFileReadCalls++;
         }
       }
       const result = Reflect.apply(original, this, args);
-      if (enabled && method === "openSync" && isOwnershipFile(result)) {
+      if (workerCounter.enabled && method === "openSync" && isOwnershipFile(result)) {
         counts.ownershipFileOpenCalls++;
       }
       return result;
@@ -181,29 +160,24 @@ export function createCatalogIoCounters() {
     },
     catalogPersisted: catalogPersistence.promise,
     nativeRequest(method: string) {
-      if (!enabled) {
+      if (!workerCounter.enabled) {
         return;
       }
       counts.nativeRpcCalls++;
-      if (method === "thread/list") {
-        counts.nativeThreadListCalls++;
-      }
+      counts.nativeThreadListCalls += Number(method === "thread/list");
     },
     begin() {
       counts = empty();
       workerCounter.reads = 0;
       workerCounter.operations = 0;
       workerCounter.enabled = true;
-      enabled = true;
     },
     end() {
-      enabled = false;
       workerCounter.enabled = false;
       return snapshot();
     },
     close() {
       workerCounter.catalogPersisted = undefined;
-      enabled = false;
       workerCounter.enabled = false;
       for (const undo of restore.toReversed()) {
         undo();

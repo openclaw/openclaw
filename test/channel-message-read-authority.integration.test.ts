@@ -125,6 +125,47 @@ const current = "100000000000000003";
 const sibling = "100000000000000004";
 const slackTarget = "C0123456789";
 
+function registerProvider(
+  channel: "discord" | "slack",
+  registration: "official" | "bundled" | "legacy" | "unverified",
+) {
+  const owner = createPluginRegistry({
+    logger: { info() {}, warn() {}, error() {}, debug() {} },
+    runtime: {} as PluginRuntime,
+    activateGlobalSideEffects: false,
+  });
+  const record = createPluginRecord({
+    id: channel,
+    origin: registration === "bundled" ? "bundled" : "global",
+    trustedOfficialInstall: registration !== "unverified" && registration !== "bundled",
+  });
+  const provider = channel === "discord" ? discordPlugin : slackPlugin;
+  owner.registry.plugins.push(record);
+  owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({
+    plugin: {
+      ...provider,
+      // Status probes have provider-specific generics, unrelated to message dispatch.
+      status: undefined,
+      actions: {
+        ...provider.actions!,
+        readAuthorityActions:
+          registration === "legacy" ? undefined : provider.actions?.readAuthorityActions,
+      },
+    },
+  });
+  setActivePluginRegistry(owner.registry);
+  return record;
+}
+
+function commandSecrets(config: ChannelMessageActionContext["cfg"]) {
+  return {
+    resolvedConfig: config,
+    diagnostics: [],
+    targetStatesByPath: {},
+    hadUnresolvedTargets: false,
+  };
+}
+
 function confineProviderFetch(channel: "discord" | "slack", baseUrl: string): void {
   const realFetch = globalThis.fetch.bind(globalThis);
   vi.stubGlobal("fetch", async (input: RequestInfo | URL, init?: RequestInit) => {
@@ -194,26 +235,7 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
           "bundled-tool-run-claim-revoked" as const,
         ];
   it.each(cases)("routes a cross-conversation read through the provider (%s)", async (mode) => {
-    const owner = createPluginRegistry({
-      logger: { info() {}, warn() {}, error() {}, debug() {} },
-      runtime: {} as PluginRuntime,
-      activateGlobalSideEffects: false,
-    });
-    const bundledRegistration = mode.startsWith("bundled-");
-    const record = createPluginRecord({
-      id: channel,
-      origin: bundledRegistration ? "bundled" : "global",
-      trustedOfficialInstall: !bundledRegistration,
-    });
-    const provider = channel === "discord" ? discordPlugin : slackPlugin;
-    const plugin = {
-      ...provider,
-      // Status probes have provider-specific generics and are not part of message dispatch.
-      status: undefined,
-    };
-    owner.registry.plugins.push(record);
-    owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({ plugin });
-    setActivePluginRegistry(owner.registry);
+    const record = registerProvider(channel, mode.startsWith("bundled-") ? "bundled" : "official");
     const usesMessageTool = mode.includes("tool-");
     const runRevocation = mode.includes("run-");
     const resultRevocation = mode.includes("result");
@@ -335,12 +357,7 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
                 if (mode === "tool-run-preparation-revoked") {
                   run!.revoke();
                 }
-                return {
-                  resolvedConfig: config,
-                  diagnostics: [],
-                  targetStatesByPath: {},
-                  hadUnresolvedTargets: false,
-                };
+                return commandSecrets(config);
               },
             }),
           )
@@ -357,15 +374,9 @@ describe.each(["discord", "slack"] as const)("official %s provider read boundary
         expect(await invocation).not.toBeNull();
         expect(requests.filter(isContent)).toHaveLength(1);
       } else {
-        const outcome = await invocation.then(
-          () => ({ rejected: false, message: "" }),
-          (error: unknown) => ({
-            rejected: true,
-            message: error instanceof Error ? error.message : "non-Error rejection",
-          }),
+        await expect(invocation).rejects.toThrow(
+          mode === "denied" ? "not allowed" : "no longer active",
         );
-        expect(outcome.rejected).toBe(true);
-        expect(outcome.message).toContain(mode === "denied" ? "not allowed" : "no longer active");
         expect(requests.filter(isContent)).toHaveLength(
           mode === "result-revoked" || (runRevocation && resultRevocation) ? 1 : 0,
         );
@@ -423,30 +434,7 @@ async function withSlackMetadataHarness(
     claim?: boolean;
   } = {},
 ) {
-  const owner = createPluginRegistry({
-    logger: { info() {}, warn() {}, error() {}, debug() {} },
-    runtime: {} as PluginRuntime,
-    activateGlobalSideEffects: false,
-  });
-  const record = createPluginRecord({
-    id: "slack",
-    origin: options.registration === "bundled" ? "bundled" : "global",
-    trustedOfficialInstall:
-      options.registration !== "unverified" && options.registration !== "bundled",
-  });
-  owner.registry.plugins.push(record);
-  owner.createApi(record, { config: {}, registrationMode: "full" }).registerChannel({
-    plugin: {
-      ...slackPlugin,
-      status: undefined,
-      actions: {
-        ...slackPlugin.actions!,
-        readAuthorityActions:
-          options.registration === "legacy" ? undefined : slackPlugin.actions?.readAuthorityActions,
-      },
-    },
-  });
-  setActivePluginRegistry(owner.registry);
+  const record = registerProvider("slack", options.registration ?? "official");
   const cfg: ChannelMessageActionContext["cfg"] = {
     channels: {
       slack: {
@@ -510,12 +498,7 @@ async function withSlackMetadataHarness(
         ...run.toolOptions,
         config: cfg,
         getScopedChannelsCommandSecretTargets: () => ({ targetIds: new Set<string>() }),
-        resolveCommandSecretRefsViaGateway: async ({ config }) => ({
-          resolvedConfig: config,
-          diagnostics: [],
-          targetStatesByPath: {},
-          hadUnresolvedTargets: false,
-        }),
+        resolveCommandSecretRefsViaGateway: async ({ config }) => commandSecrets(config),
       }),
     );
     await exercise({

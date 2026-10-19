@@ -500,6 +500,9 @@ describe("node-local Ollama inference cancellation", () => {
     expect(list).not.toHaveBeenCalled();
   });
 
+  // Go through ollama.models without a timeout, because a timeout bypasses the
+  // cache on its own. Keep the cache key stable and prove both cancellation
+  // isolation and later successful reuse.
   it("does not poison shared model metadata after a canceled show request", async () => {
     await withAbortTestServer(
       "/api/show",

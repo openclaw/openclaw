@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getRuntimeConfig, type OpenClawConfig } from "../../config/config.js";
+import { lstatIfExists } from "../../infra/path-existence.js";
 import type { OpenClawStateWorkerContext } from "../../state/openclaw-state-worker-context.types.js";
 import type { WorktreeAllocationGuard } from "./allocation.js";
 import { estimateWorktreeCheckoutTransitionBytes, requireAllocationSpace } from "./capacity.js";
@@ -13,7 +14,6 @@ import {
   worktreePathExists,
   commandError,
   listGitWorktrees,
-  lstatIfExists,
   runGit,
   WORKTREE_CHECKOUT_TIMEOUT_MS,
 } from "./git.js";
@@ -487,7 +487,7 @@ async function restoreSnapshot(
       signal: params.signal,
       assertCurrent: params.commitGuard,
     });
-  const target = await lstatIfExists(record.path);
+  const target = await lstatIfExists(record.path, "ENOENT");
   const registrations = await listGitWorktrees(record.repoRoot, gitOptions);
   if (
     (target && (!target.isDirectory() || (await fs.readdir(record.path)).length > 0)) ||

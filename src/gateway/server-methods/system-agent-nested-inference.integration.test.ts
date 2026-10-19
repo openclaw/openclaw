@@ -14,6 +14,8 @@ import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js"
 import { runEmbeddedAgent } from "../../agents/embedded-agent-runner/run-orchestrator.js";
 import type { RunEmbeddedAgentParams } from "../../agents/embedded-agent-runner/run/params.js";
 import type { EmbeddedAgentRunResult } from "../../agents/embedded-agent-runner/types.js";
+import * as embeddedAgent from "../../agents/embedded-agent.js";
+import * as configModule from "../../config/config.js";
 import {
   clearRuntimeConfigSnapshot,
   setRuntimeConfigSnapshot,
@@ -35,7 +37,7 @@ import {
   closeOpenClawStateDatabaseAsync,
   closeOpenClawStateDatabaseForTest,
 } from "../../state/openclaw-state-db.js";
-import { runSystemAgentTurnWithDeps } from "../../system-agent/agent-turn.test-support.js";
+import { runSystemAgentTurn } from "../../system-agent/agent-turn.js";
 import { SystemAgentChatEngine } from "../../system-agent/chat-engine.js";
 import type { SystemAgentOverview } from "../../system-agent/overview.js";
 import {
@@ -51,6 +53,11 @@ const RESPONSE_TEXT = "Synthetic expert response; no action was executed.";
 const dispatch = vi.hoisted(() =>
   vi.fn<(params: RunEmbeddedAgentParams) => Promise<EmbeddedAgentRunResult>>(),
 );
+
+vi.mock("../../agents/embedded-agent.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../agents/embedded-agent.js")>()),
+  runEmbeddedAgent: vi.fn(),
+}));
 
 vi.mock("../../agents/embedded-agent-runner/cli-backend-dispatch.js", () => ({
   // This function is called inside run-orchestrator's admitted global-lane task.
@@ -107,6 +114,7 @@ const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
     resetCommandQueueStateForTest();
     vi.unstubAllEnvs();
     vi.clearAllMocks();
+    vi.restoreAllMocks();
     cleanup();
   }),
 );
@@ -185,10 +193,12 @@ async function createConversation() {
     },
   };
   const deps = {
-    ...proof.deps,
     readConfigFileSnapshot,
     loadOverview: async () => overview,
-    runEmbeddedAgent: async (runnerParams: RunEmbeddedAgentParams) =>
+  };
+  vi.spyOn(configModule, "readConfigFileSnapshot").mockImplementation(readConfigFileSnapshot);
+  vi.spyOn(embeddedAgent, "runEmbeddedAgent").mockImplementation(
+    async (runnerParams) =>
       await runEmbeddedAgent({
         ...runnerParams,
         onLaneWait: (wait) => {
@@ -197,7 +207,7 @@ async function createConversation() {
           }
         },
       }),
-  };
+  );
   const executeOperation = vi.fn(async () => {
     throw new Error("external operation");
   });
@@ -207,7 +217,7 @@ async function createConversation() {
       verifiedInference: proof.binding,
       operatorApprovalOnly: true,
       deps,
-      runAgentTurn: (params) => runSystemAgentTurnWithDeps(params, deps),
+      runAgentTurn: runSystemAgentTurn,
     },
     { executeOperation },
   );

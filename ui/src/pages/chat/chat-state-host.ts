@@ -22,7 +22,6 @@ import type { ChatProps } from "./chat-view.tsx";
 import type { SessionWorkspaceHost } from "./components/chat-session-workspace.ts";
 import type { SidebarSelection } from "./components/chat-sidebar-content-types.ts";
 import type { ChatInputHistoryKeyInput, ChatInputHistoryKeyResult } from "./input-history.ts";
-import type { RenderLifecycle } from "./render-lifecycle.ts";
 import type { handleAbortChat } from "./run-lifecycle.ts";
 import type { ChatMessageCache } from "./session-message-cache.ts";
 import type { SidebarLayout } from "./sidebar-layout.ts";
@@ -39,8 +38,6 @@ export type ChatPageHost = ChatHost &
   ChatRealtimeState &
   PullRequestRefreshHost &
   SessionWorkspaceHost & {
-    renderLifecycle: RenderLifecycle;
-    requestUpdate: () => void;
     reviewQueuedMessageEdit?: () => void;
     captureComposerRecoveryReload?: () => () => Promise<boolean>;
     chatMetadataIsPresented?: () => boolean;
@@ -134,7 +131,7 @@ export type ChatPageHost = ChatHost &
         persist?: boolean;
         dashboardPresentation?: "personal";
         geometryOnly?: boolean;
-        automaticResource?: "desktop" | "browser";
+        automaticResource?: "desktop";
       },
     ) => void;
     beginImageOpen: () => number;

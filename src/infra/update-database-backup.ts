@@ -98,6 +98,7 @@ type BackupInput = {
   additionalPaths?: readonly string[];
   additionalFiles?: readonly string[];
   preserveSourceArtifacts?: boolean;
+  integrityCheck?: "quick" | "full";
   /** Native migration owns the stopped Gateway until Doctor takes custody. */
   stopped?: boolean;
   postgresOffline?: boolean;
@@ -383,6 +384,10 @@ export async function createUpdateDatabaseBackupInProcess(
           },
           preserveRowIds: true,
           requireNonEmptySource: true,
+          integrity:
+            engines.get(sourcePath)?.engine === "sqlite" && input.integrityCheck
+              ? { check: input.integrityCheck }
+              : undefined,
         });
     const engine = engines.get(sourcePath)!;
     let postgres;

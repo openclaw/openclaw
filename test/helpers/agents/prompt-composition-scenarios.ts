@@ -9,15 +9,12 @@ import {
 import { resolveBootstrapContextForRun } from "../../../src/agents/bootstrap-files.js";
 import { buildCurrentInboundPrompt } from "../../../src/agents/embedded-agent-runner/run/runtime-context-prompt.js";
 import { buildAgentSystemPrompt } from "../../../src/agents/system-prompt.js";
-import { buildGroupChatContext } from "../../../src/auto-reply/reply/groups.js";
-import {
-  buildInboundMetaSystemPrompt,
-  buildInboundUserContextPrefix,
-} from "../../../src/auto-reply/reply/inbound-meta.js";
-import { buildReplyPromptEnvelope } from "../../../src/auto-reply/reply/prompt-prelude.js";
+import { buildSourceConversationContext } from "../../../src/auto-reply/reply/groups.js";
+import { buildInboundMetaSystemPrompt } from "../../../src/auto-reply/reply/inbound-meta.js";
 import type { TemplateContext } from "../../../src/auto-reply/templating.js";
 import type { OpenClawConfig } from "../../../src/config/config.js";
 import { makeTempWorkspace, writeWorkspaceFile } from "../../../src/test-helpers/workspace.js";
+import { preparePromptSnapshotReply } from "./prepared-reply-prompt.js";
 
 /** One turn in a prompt composition scenario. */
 type PromptScenarioTurn = {
@@ -84,17 +81,13 @@ function buildSystemPrompt(params: {
   });
 }
 
-function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string }): string {
-  const inboundUserContext = buildInboundUserContextPrefix(params.ctx);
-  const envelope = buildReplyPromptEnvelope({
-    ctx: params.ctx,
-    sessionCtx: params.ctx,
-    baseBody: params.body,
-    hasUserBody: true,
-    inboundUserContext,
-    isBareSessionReset: false,
-    startupAction: "new",
-  });
+async function buildAutoReplyModelPrompt(params: {
+  ctx: TemplateContext;
+  body: string;
+  workspaceDir: string;
+}): Promise<string> {
+  const prepared = await preparePromptSnapshotReply(params);
+  const envelope = prepared.buildPromptBodies({});
   return buildCurrentInboundPrompt({
     context: envelope.currentInboundContext,
     prompt: envelope.queuedBody,
@@ -104,7 +97,7 @@ function buildAutoReplyModelPrompt(params: { ctx: TemplateContext; body: string 
 function buildAutoReplySystemPrompt(params: { workspaceDir: string; sessionCtx: TemplateContext }) {
   const extraSystemPromptParts = [
     buildInboundMetaSystemPrompt(params.sessionCtx, {}),
-    buildGroupChatContext({
+    buildSourceConversationContext({
       sessionCtx: params.sessionCtx,
     }),
   ].filter(Boolean);
@@ -115,7 +108,7 @@ function buildAutoReplySystemPrompt(params: { workspaceDir: string; sessionCtx: 
   });
 }
 
-function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
+async function createDiscordBoundaryScenario(workspaceDir: string): Promise<PromptScenario> {
   const body = "Please summarize the deploy log.";
   const baseCtx: TemplateContext = {
     Provider: "discord",
@@ -152,9 +145,10 @@ function createDiscordBoundaryScenario(workspaceDir: string): PromptScenario {
           workspaceDir,
           sessionCtx: baseCtx,
         }),
-        bodyPrompt: buildAutoReplyModelPrompt({
+        bodyPrompt: await buildAutoReplyModelPrompt({
           ctx: baseCtx,
           body,
+          workspaceDir,
         }),
       },
     ],
@@ -268,7 +262,7 @@ export async function createPromptCompositionScenarios(): Promise<{
   const workspaceDir = await createWorkspaceWithPromptCompositionFiles();
   const warningWorkspaceDir = await makeTempWorkspace("openclaw-prompt-cache-warning-");
   const scenarios = [
-    createDiscordBoundaryScenario(workspaceDir),
+    await createDiscordBoundaryScenario(workspaceDir),
     await createBootstrapWarningScenario(warningWorkspaceDir),
   ];
   return {

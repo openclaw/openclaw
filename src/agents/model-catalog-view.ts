@@ -143,11 +143,14 @@ export function createModelCatalogView(params: {
       return row;
     },
     implicitNativeRuntime(entry: Pick<ModelCatalogEntry, "provider" | "id">) {
-      const variants = variantsOf(entry);
-      const runtime = variants?.[0]?.nativeRuntime;
-      return runtime && variants?.every((variant) => variant.nativeRuntime === runtime)
-        ? runtime
-        : undefined;
+      // An API metadata donor is not evidence of API credentials. Host bindings
+      // and credentials still take precedence in evaluateNative below.
+      const runtimes = new Set(
+        variantsOf(entry)?.flatMap((variant) =>
+          variant.nativeRuntime ? [variant.nativeRuntime] : [],
+        ),
+      );
+      return runtimes.size === 1 ? runtimes.values().next().value : undefined;
     },
     project(
       entry: ModelCatalogEntry,
@@ -291,7 +294,11 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
           config: params.cfg,
           agentScope: { kind: "prepared", agentId: params.agentId },
         });
-        if (!policy.forcedByEnvironment && policy.runtimeSource === "implicit") {
+        if (
+          !policy.forcedByEnvironment &&
+          policy.runtimeSource === "implicit" &&
+          policy.runtime === "auto"
+        ) {
           policy = { ...policy, runtime: routes.implicitNativeRuntime(entry) ?? policy.runtime };
         }
         prepared = { policy };
@@ -343,7 +350,8 @@ export function prepareModelCatalogView(params: ModelCatalogViewFacts) {
       // Native account evidence cannot replace an authored host binding or live host credentials.
       if (
         prepared.hostConfigured ||
-        (host.selectedAuthMode && (host.evidence !== "runtime" || !observedNative))
+        (host.selectedAuthMode &&
+          (host.selectedCredential?.source !== "harness" || !observedNative))
       ) {
         return host;
       }

@@ -20,6 +20,12 @@ export type TestSessionStore = {
   save(record: Record<string, unknown>): Promise<void>;
 };
 export const CODEX_ACP_WRAPPER_COMMAND = 'node "/tmp/openclaw/acpx/codex-acp-wrapper.mjs"';
+type RuntimeDelegate = {
+  shutdown(): Promise<void>;
+} & Pick<AcpRuntime, "cancel" | "close" | "ensureSession"> &
+  Pick<UpstreamRuntime, "getCapabilities"> & {
+    [K in "startTurn" | "getStatus" | "setMode" | "setConfigOption"]-?: NonNullable<AcpRuntime[K]>;
+  };
 
 export function makeRuntime(
   baseStore: TestSessionStore,
@@ -27,26 +33,7 @@ export function makeRuntime(
   testOptions?: ConstructorParameters<typeof AcpxRuntime>[1] & {
     openclawProcessCleanup?: AcpxProcessSystemFixture;
   },
-): {
-  runtime: AcpxRuntime;
-  probe: ReturnType<
-    typeof vi.fn<(options: AcpRuntimeOptions) => Promise<{ ok: boolean; message: string }>>
-  >;
-  wrappedStore: TestSessionStore & {
-    markFresh: (sessionKey: string) => void;
-  };
-  delegate: {
-    shutdown(): Promise<void>;
-    cancel: AcpRuntime["cancel"];
-    close: AcpRuntime["close"];
-    ensureSession: AcpRuntime["ensureSession"];
-    startTurn: NonNullable<AcpRuntime["startTurn"]>;
-    getCapabilities: UpstreamRuntime["getCapabilities"];
-    getStatus: NonNullable<AcpRuntime["getStatus"]>;
-    setMode: NonNullable<AcpRuntime["setMode"]>;
-    setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
-  };
-} {
+) {
   const { openclawProcessCleanup, ...delegateTestOptions } = testOptions ?? {};
   mockAcpxProcessSystem(openclawProcessCleanup);
   const probe = vi.fn(async (_options: AcpRuntimeOptions) => ({ ok: true, message: "ready" }));
@@ -64,32 +51,11 @@ export function makeRuntime(
     { probeRunner: probe, ...delegateTestOptions },
   );
 
-  return {
-    runtime,
-    probe,
-    wrappedStore: (
-      runtime as unknown as {
-        sessionStore: TestSessionStore & {
-          markFresh: (sessionKey: string) => void;
-        };
-      }
-    ).sessionStore,
-    delegate: (
-      runtime as unknown as {
-        delegate: {
-          shutdown(): Promise<void>;
-          cancel: AcpRuntime["cancel"];
-          close: AcpRuntime["close"];
-          ensureSession: AcpRuntime["ensureSession"];
-          startTurn: NonNullable<AcpRuntime["startTurn"]>;
-          getCapabilities: UpstreamRuntime["getCapabilities"];
-          getStatus: NonNullable<AcpRuntime["getStatus"]>;
-          setMode: NonNullable<AcpRuntime["setMode"]>;
-          setConfigOption: NonNullable<AcpRuntime["setConfigOption"]>;
-        };
-      }
-    ).delegate,
+  const { sessionStore: wrappedStore, delegate } = runtime as unknown as {
+    sessionStore: TestSessionStore & { markFresh: (sessionKey: string) => void };
+    delegate: RuntimeDelegate;
   };
+  return { runtime, probe, wrappedStore, delegate };
 }
 
 export function makeManagedRuntime() {
@@ -125,10 +91,8 @@ export function makeManagedRuntime() {
       record = structuredClone(next);
     }),
   };
-  const sleep = vi.fn(async () => {});
   mockAcpxProcessSystem({
     listProcesses: async () => [{ pid, ppid: 1, command: CODEX_ACP_WRAPPER_COMMAND }],
-    sleep,
   });
   const runtime = new AcpxRuntime({
     cwd: "/tmp",
@@ -142,9 +106,7 @@ export function makeManagedRuntime() {
   return {
     runtime,
     target,
-    resource,
     baseStore,
-    sleep,
     ensure: () => runtime.ensureSession({ ...target, agent: "fixture", mode: "persistent" }),
   };
 }
@@ -172,10 +134,7 @@ export function makeTurn(
 }
 
 export function runtimeCommand(runtime: AcpxRuntime): AcpxAgentCommand {
-  const registry: { resolve(agent: string): AcpxAgentCommand } = Reflect.get(
-    runtime,
-    "scopedAgentRegistry",
-  );
+  const registry: AcpRuntimeOptions["agentRegistry"] = Reflect.get(runtime, "scopedAgentRegistry");
   return registry.resolve("codex");
 }
 
@@ -232,14 +191,21 @@ export function makeLeaseStore() {
 export function makeLeasedRuntime(
   baseStore: TestSessionStore,
   leases: ReturnType<typeof makeLeaseStore>,
+  cleanup?: AcpxProcessSystemFixture,
+  command: AcpxAgentCommand = CODEX_ACP_WRAPPER_COMMAND,
+  wrapperRoot = "/tmp/openclaw/acpx",
 ) {
-  return makeRuntime(baseStore, {
-    openclawGatewayInstanceId: "gateway-test",
-    openclawProcessLeaseStore: leases.store,
-    openclawWrapperRoot: "/tmp/openclaw/acpx",
-    agentRegistry: {
-      resolve: (agent) => (agent === "codex" ? CODEX_ACP_WRAPPER_COMMAND : agent),
-      list: () => ["codex"],
+  return makeRuntime(
+    baseStore,
+    {
+      openclawGatewayInstanceId: "gateway-test",
+      openclawProcessLeaseStore: leases.store,
+      openclawWrapperRoot: wrapperRoot,
+      agentRegistry: {
+        resolve: (agent) => (agent === "codex" ? command : agent),
+        list: () => ["codex"],
+      },
     },
-  });
+    { openclawProcessCleanup: cleanup },
+  );
 }

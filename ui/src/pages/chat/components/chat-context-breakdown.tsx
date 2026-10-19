@@ -13,6 +13,9 @@ import {
 import { requestSessionUsage } from "../../../lib/sessions/usage.ts";
 import {
   buildChatContextCategories,
+  buildDeferredContextGroups,
+  type ContextEntry,
+  type ContextGroup,
   type ContextCategory,
 } from "./chat-context-breakdown-model.ts";
 import "../../../styles/chat/context-breakdown.css";
@@ -24,6 +27,61 @@ const labelKeys = {
   skills: "contextSkills",
   system: "contextSystem",
 } as const;
+
+const groupLabelKeys = {
+  "agent-workspace": "contextAgentWorkspace",
+  "execution-project": "contextProject",
+  personal: "contextPersonal",
+  other: "contextOtherFiles",
+  openclaw: "contextSystemTools",
+  mcp: "contextMcpTools",
+  client: "contextClientTools",
+  "unknown-tools": "contextTools",
+} as const;
+
+function ContextEntries(props: { entries: ContextEntry[] }) {
+  return (
+    <For each={props.entries} keyed={(entry) => entry.key}>
+      {(entry) => (
+        <div class="chat-context__entry">
+          <span title={entry().path ?? entry().name}>
+            <span>{entry().name}</span>
+            <Show when={entry().path}>
+              <small class="chat-context__path">{entry().path}</small>
+            </Show>
+          </span>
+          <span>
+            {entry().tokens === null
+              ? t("chat.sessionDetails.contextUnverified")
+              : "~" + formatCompactTokenCount(entry().tokens!)}
+          </span>
+        </div>
+      )}
+    </For>
+  );
+}
+
+function ContextGroups(props: { groups: ContextGroup[] }) {
+  return (
+    <For each={props.groups} keyed={(group) => group.key}>
+      {(group) => (
+        <section class="chat-context__source" data-context-source={group().kind}>
+          <div class="chat-context__source-heading">
+            <span title={group().path}>
+              {t("chat.sessionDetails." + groupLabelKeys[group().kind])}
+              <Show when={group().name}> · {group().name}</Show>
+            </span>
+            <small>
+              {group().entries.length} ·{" "}
+              {group().tokens === null ? "—" : "~" + formatCompactTokenCount(group().tokens!)}
+            </small>
+          </div>
+          <ContextEntries entries={group().entries} />
+        </section>
+      )}
+    </For>
+  );
+}
 
 function ContextRow(props: { category: ContextCategory; limit: number }) {
   const tokens = () => props.category.tokens;
@@ -62,18 +120,12 @@ function ContextRow(props: { category: ContextCategory; limit: number }) {
           <Icon name="chevronDown" />
         </summary>
         <div class="chat-context__entries">
-          <For each={props.category.entries} keyed={(entry) => entry.name}>
-            {(entry) => (
-              <div class="chat-context__entry">
-                <span title={entry().name}>{entry().name}</span>
-                <span>
-                  {entry().tokens === null
-                    ? t("chat.sessionDetails.contextUnverified")
-                    : "~" + formatCompactTokenCount(entry().tokens!)}
-                </span>
-              </div>
-            )}
-          </For>
+          <Show
+            when={props.category.groups}
+            fallback={<ContextEntries entries={props.category.entries} />}
+          >
+            {(groups) => <ContextGroups groups={groups()} />}
+          </Show>
         </div>
       </details>
     </Show>
@@ -189,6 +241,7 @@ export function ChatContextBreakdown(props: {
         >
           {(report) => {
             const categories = createMemo(() => buildChatContextCategories(report(), props.used));
+            const deferred = createMemo(() => buildDeferredContextGroups(report()));
             return (
               <>
                 <div class="chat-context__bar" aria-hidden="true">
@@ -221,6 +274,24 @@ export function ChatContextBreakdown(props: {
                     </span>
                   </div>
                 </div>
+                <Show when={deferred().length > 0}>
+                  <details
+                    class="chat-context__details chat-context__deferred"
+                    data-context-details="deferred"
+                  >
+                    <summary class="chat-context__source-heading">
+                      <span>{t("chat.sessionDetails.contextAvailableOnDemand")}</span>
+                      <small>{t("chat.sessionDetails.contextNotLoaded")}</small>
+                      <Icon name="chevronDown" />
+                    </summary>
+                    <p class="chat-context__note">
+                      {t("chat.sessionDetails.contextDeferredEstimate")}
+                    </p>
+                    <div class="chat-context__entries">
+                      <ContextGroups groups={deferred()} />
+                    </div>
+                  </details>
+                </Show>
                 <p class="chat-context__note">{t("chat.sessionDetails.contextEstimate")}</p>
               </>
             );

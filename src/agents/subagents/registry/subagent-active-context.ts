@@ -61,7 +61,7 @@ function formatPendingResult(entry: SubagentRunRecord): string {
     `session_json=${quotePromptData(entry.childSessionKey)};`,
     `outcome=${entry.execution.outcome?.status ?? "unknown"};`,
     `delivery=${entry.delivery?.status ?? "pending"};`,
-    `requester_continuation=${entry.requesterSettleWake?.status ?? "none"};`,
+    `requester_continuation=${entry.requesterSettleWake ? "pending" : "none"};`,
     `task_json=${quotePromptData(truncateUtf16Safe(entry.task, 96))};`,
     `result_json=${sanitizeForPromptLiteral(JSON.stringify(truncateUtf16Safe(result, PENDING_RESULT_MAX_CHARS)))};`,
     `result_truncated=${result.length > PENDING_RESULT_MAX_CHARS}`,

@@ -19,7 +19,7 @@ import { beginNativeWindowDragFromTopInset } from "../app/native-window-drag.ts"
 import { currentThemeBranding, subscribeThemeBranding } from "../app/theme-branding.ts";
 import { listSelectableAgents, normalizeAgentLabel } from "../lib/agents/display.ts";
 import type { AgentIdentityCapability } from "../lib/agents/identity.ts";
-import type { GatewayStatus } from "../lib/gateway-status.ts";
+import type { GatewayStatus as GatewayStatusKind } from "../lib/gateway-status.ts";
 import { isComposingKeyboardEvent } from "../lib/ime.ts";
 import { shouldHandleNavigationClick } from "../lib/navigation-click.ts";
 import { projectAgentSelection } from "../lib/reactive/application.ts";
@@ -35,8 +35,9 @@ import {
   settingsSearchTextMatches,
 } from "../lib/settings-navigation.ts";
 import { findSettingsSearchBlocks } from "../pages/config/settings-search.ts";
+import type { GatewayStatusProps } from "./gateway-status.ts";
 import type { SettingsSaveIndicatorProps } from "./settings-save-indicator.tsx";
-import { renderGatewayStatus } from "./solid/gateway-status.tsx";
+import { GatewayStatus } from "./solid/gateway-status.tsx";
 import { Icon } from "./solid/icon.tsx";
 import { Kbd } from "./solid/kbd.tsx";
 import { ThemeBrandingIcon } from "./theme-brand-icon.tsx";
@@ -57,7 +58,8 @@ export type SettingsSidebarProps = {
   activePathname?: string;
   activeSearch?: string;
   activeHash?: string;
-  connectionStatus: GatewayStatus | null;
+  connectionStatus: GatewayStatusKind | null;
+  footerStatus?: GatewayStatusProps | null;
   lastError: string | null;
   gatewayVersion: string;
   searchQuery: string;
@@ -358,11 +360,12 @@ function SettingsConnectionStatus(props: SettingsSidebarProps) {
       when={props.connectionStatus !== null}
       fallback={<openclaw-settings-save-indicator prop:props={props.saveIndicator} />}
     >
-      {renderGatewayStatus({
-        kind: props.connectionStatus,
-        lastError: props.lastError,
-        onRetry: props.onRetryConnect,
-      })}
+      <GatewayStatus
+        kind={props.connectionStatus}
+        lastError={props.lastError}
+        onRetry={props.onRetryConnect}
+        announce
+      />
     </Show>
   );
 }
@@ -535,8 +538,15 @@ export function renderSettingsSidebar(props: SettingsSidebarProps) {
           </div>
           <SettingsNavigation />
           <footer class="settings-sidebar__footer">
+            <Show when={props.footerStatus}>
+              {(status) => (
+                <div class="sidebar-shell__footer">
+                  <GatewayStatus {...status()} row />
+                </div>
+              )}
+            </Show>
             <div class="settings-sidebar__connection">
-              <SettingsConnectionStatus {...props} />
+              <openclaw-settings-save-indicator prop:props={props.saveIndicator} />
             </div>
             <openclaw-sidebar-build-chip
               prop:basePath={props.basePath}

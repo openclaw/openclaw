@@ -53,17 +53,18 @@ export async function terminateCodexAppServerOrphan(
       const snapshot = await readCodexAppServerProcessSnapshot(deadline, [expected.pid]).catch(
         () => undefined,
       );
-      if (!snapshot?.some((row) => row.pid === process.pid)) {
-        return false;
-      }
-      const current = snapshot.find((row) => row.pid === expected.pid);
-      if (!current || !hasSameIdentity(current, expected) || isDeadProcessState(current.state)) {
-        gone = true;
-        return true;
+      if (snapshot?.some((row) => row.pid === process.pid)) {
+        const current = snapshot.find((row) => row.pid === expected.pid);
+        if (!current || !hasSameIdentity(current, expected) || isDeadProcessState(current.state)) {
+          gone = true;
+          return true;
+        }
       }
       if (!contained) {
         return false;
       }
+      // macOS hides a killed process's topology until it is gone. Failed
+      // inspection proves neither exit nor survival, so observe again.
       await new Promise((resolve) => {
         setTimeout(resolve, 20);
       });
@@ -157,8 +158,16 @@ export async function terminateCodexAppServerDescendants(
         root.pid,
         ...remaining.keys(),
       ]).catch(() => undefined);
-      if (!terminationSnapshot || performance.now() >= deadline) {
+      if (performance.now() >= deadline) {
         return undefined;
+      }
+      if (!terminationSnapshot) {
+        // A just-killed descendant can be briefly uninspectable on macOS; the
+        // stopped root keeps custody, so observe again until the deadline.
+        await new Promise((resolve) => {
+          setTimeout(resolve, 20);
+        });
+        continue;
       }
       const currentRoot = terminationSnapshot.find((row) => row.pid === root.pid);
       if (!currentRoot || !isSameLiveRoot(currentRoot, root, true)) {

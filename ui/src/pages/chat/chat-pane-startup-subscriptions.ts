@@ -20,7 +20,6 @@ export function subscribeChatPaneStartup(
       if (!parseCatalogSessionKey(state.sessionKey)) {
         void resumeStoredChatOutboxes(state);
       }
-      state.requestUpdate?.();
     }
   });
 }
@@ -43,6 +42,5 @@ export function subscribeChatPaneSnapshotInvalidation(
     }
     onInvalidate?.();
     resetChatHistoryProjection(state);
-    state.requestUpdate?.();
   });
 }

@@ -169,6 +169,7 @@ describe("gateway chat metadata runtime", () => {
     async (surface) => {
       const harness = await preparedHarness();
       await harness.read();
+      const compact = await harness.read({ includeModels: false });
       const coldReads = [
         harness.getPreparedOwner,
         harness.getPreparedAuthStore,
@@ -192,6 +193,7 @@ describe("gateway chat metadata runtime", () => {
           commands: [{ name: "command-1-1" }],
           swarmEnabled: true,
         });
+        expect(first?.commandsRevision).toBe(compact.revision);
       }
       expect(harness.buildProjection).toHaveBeenCalledTimes(1);
       expect(coldReads.map((mock) => mock.mock.calls)).toEqual([[], [], [], []]);

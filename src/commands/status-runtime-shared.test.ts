@@ -201,7 +201,6 @@ describe("status-runtime-shared", () => {
     expect(mocks.loadProviderUsageSummary.mock.calls[0]?.[0]).not.toHaveProperty("auth");
     expect(mocks.resolveModelAuthLabelAsync).toHaveBeenCalledWith({
       provider: "openai",
-      acceptedProviderIds: ["openai"],
       cfg: expect.any(Object),
       agentDir: "/tmp/status-agent",
       includeExternalProfiles: false,

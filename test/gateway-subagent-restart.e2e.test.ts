@@ -288,7 +288,7 @@ it.skipIf(process.platform === "win32").for([
           url: instance.url,
           token: instance.gatewayToken,
           clientName: "gateway-client",
-          // Recovery needs the durable owner profile prepared for user clients.
+          // Recovery needs the original profiled operator; backend probes are unprofiled.
           mode: "test",
           scopes: ["operator.admin", "operator.read", "operator.write"],
           deviceIdentity: loadOrCreateDeviceIdentity({
@@ -417,6 +417,8 @@ it.skipIf(process.platform === "win32").for([
               slots: { memory: "none" },
             },
             models: {
+              // Keep this synthetic restart fixture independent of remote catalog adoption.
+              catalogRefresh: { enabled: false },
               mode: "replace",
               providers: {
                 [model.providerId]: { ...model.config, request: { allowPrivateNetwork: true } },
@@ -489,19 +491,16 @@ it.skipIf(process.platform === "win32").for([
               if (!entry) {
                 throw new Error("Child registry row is missing");
               }
+              expect(entry.operatorRecoverySource).toMatchObject({
+                sessionKey: PARENT_KEY,
+                sourceRunId: originalRunId,
+              });
               return entry;
             },
             { timeout: 30_000 },
           );
           observations.childKey = child.key;
           observations.beforeShutdown = persistedChild({ runId: childRunId });
-          expect(observations.beforeShutdown).toMatchObject({
-            operatorRecoverySource: {
-              agentId: "main",
-              sessionKey: PARENT_KEY,
-              sourceRunId: originalRunId,
-            },
-          });
           expect(
             JSON.stringify(await client.request("chat.history", { sessionKey: PARENT_KEY })),
           ).toContain(PARENT_FINAL);

@@ -12,7 +12,7 @@ export abstract class ChatPaneBrowserAnnotationRender extends ChatPaneHeader {
     }
     const sourceSessionKey = state.sessionKey;
     const focusAfterUpdate = (target: () => HTMLElement | null | undefined) => {
-      void this.updateComplete.then(() => {
+      void this.awaitDomCommit().then(() => {
         if (this.state === state && this.state.sessionKey === sourceSessionKey) {
           target()?.focus({ preventScroll: true });
         }

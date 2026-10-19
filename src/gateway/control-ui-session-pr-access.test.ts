@@ -35,7 +35,10 @@ import {
   snapshot,
   type Load,
 } from "./control-ui-session-pr-access.test-support.js";
-import { prepareControlUiSessionPrServiceTarget } from "./control-ui-session-pr-read.js";
+import {
+  createControlUiSessionPrRead,
+  prepareControlUiSessionPrServiceTarget,
+} from "./control-ui-session-pr-read.js";
 import { createControlUiSessionPullRequestSubscriptions } from "./control-ui-session-pr-subscriptions.js";
 import { githubJson, pullListItem, requestUrl } from "./control-ui-session-prs.test-support.js";
 import type { OperatorScope } from "./operator-scopes.js";
@@ -755,6 +758,23 @@ it("keeps warm default-loader SQL constant as readers join without a native row 
     await f.seedRepository();
     await f.subscribe();
     await f.subscriptions.pollNow();
+    const preparation = vi.spyOn(getSessionRowProjection(f.context)!, "withPreparedExactRows");
+    try {
+      const read = createControlUiSessionPrRead({
+        client: f.client,
+        sessionKey,
+        getRuntimeConfig: f.context.getRuntimeConfig,
+        getSessionRowProjection: () => getSessionRowProjection(f.context),
+        isCurrentClient: () => !f.client.invalidated,
+      });
+      expect(await read?.()).toMatchObject({ sessionId: f.sessionId });
+      expect(preparation).toHaveBeenCalledTimes(1);
+      preparation.mockClear();
+      await f.subscriptions.replace(f.client.connId!, [sessionKey]);
+      expect(preparation).toHaveBeenCalledTimes(2);
+    } finally {
+      preparation.mockRestore();
+    }
     const measure = async () => {
       const statements = observeSqliteReadSql(StatementSync.prototype);
       const executions = vi.spyOn(DatabaseSync.prototype, "exec");

@@ -65,7 +65,7 @@ describe("chat pane session access", () => {
     ]) {
       const patch = vi.fn(async () => ({}));
       const sessions = { patch } as unknown as SessionCapability;
-      const { pane, state, requestUpdate } = createTestChatPane({
+      const { pane, state } = createTestChatPane({
         client: {} as GatewayBrowserClient,
         sessions,
       });
@@ -79,9 +79,8 @@ describe("chat pane session access", () => {
 
       pane.beginHeaderRename(session);
 
-      expect(Boolean(pane.headerRenameSession)).toBe(false);
+      expect(Boolean(pane.headerPresentation.renameSession)).toBe(false);
       expect(state.chatError).toBeTruthy();
-      expect(requestUpdate).toHaveBeenCalledOnce();
       expect(patch).not.toHaveBeenCalled();
     }
   });
@@ -100,7 +99,7 @@ describe("chat pane session access", () => {
     } satisfies GatewaySessionRow;
 
     pane.beginHeaderRename(session);
-    pane.headerRenameValue = "Blocked rename";
+    pane.headerPresentation.renameValue = "Blocked rename";
     pane.context.gateway.snapshot.hello = {
       auth: { role: "operator", scopes: ["operator.read"] },
       features: { methods: ["sessions.patch"] },
@@ -129,7 +128,7 @@ describe("chat pane session access", () => {
     } satisfies GatewaySessionRow;
 
     pane.beginHeaderRename(session);
-    pane.headerRenameValue = "Replacement Gateway title";
+    pane.headerPresentation.renameValue = "Replacement Gateway title";
     pane.applyGatewaySnapshot({
       ...pane.context.gateway.snapshot,
       client: { request: vi.fn(async () => ({})) } as unknown as GatewayBrowserClient,
@@ -139,14 +138,14 @@ describe("chat pane session access", () => {
     });
     pane.commitHeaderRename();
 
-    expect(Boolean(pane.headerRenameSession)).toBe(false);
+    expect(Boolean(pane.headerPresentation.renameSession)).toBe(false);
     expect(patch).not.toHaveBeenCalled();
   });
 
   it("refuses archived-session restore without exact sessions.patch access", async () => {
     const patch = vi.fn(async () => ({}));
     const sessions = { patch } as unknown as SessionCapability;
-    const { pane, state, requestUpdate } = createTestChatPane({
+    const { pane, state } = createTestChatPane({
       client: {} as GatewayBrowserClient,
       sessions,
     });
@@ -159,7 +158,6 @@ describe("chat pane session access", () => {
 
     expect(state.chatError).toBeTruthy();
     expect(state.lastError).toBe(state.chatError);
-    expect(requestUpdate).toHaveBeenCalledOnce();
     expect(patch).not.toHaveBeenCalled();
   });
 

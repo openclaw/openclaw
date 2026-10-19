@@ -189,6 +189,9 @@ function renderStabilityBundleSummary(params: {
   const { bundle, path, rich, snapshot } = params;
   const processDetails = [
     `pid=${bundle.process.pid}`,
+    ...(bundle.process.openclawVersion ? [`openclaw=${bundle.process.openclawVersion}`] : []),
+    ...(bundle.process.buildId ? [`build=${bundle.process.buildId}`] : []),
+    ...(bundle.process.commit ? [`commit=${bundle.process.commit}`] : []),
     `node=${bundle.process.node}`,
     `${bundle.process.platform}/${bundle.process.arch}`,
     `uptime=${Math.round(bundle.process.uptimeMs / 1000)}s`,

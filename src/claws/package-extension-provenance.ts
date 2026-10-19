@@ -9,8 +9,8 @@ import type {
 
 export const CLAW_PACKAGE_REF_SCHEMA_VERSION = "openclaw.clawPackageRef.v1" as const;
 export type ClawPackageRefStatus = "pending" | "complete" | "failed" | "rolled_back";
-export type ClawPackageRelationship = "managed" | "referenced";
-export type ClawPackageOrigin = "claw-introduced" | "pre-existing";
+type ClawPackageRelationship = "managed" | "referenced";
+type ClawPackageOrigin = "claw-introduced" | "pre-existing";
 
 export type PersistedClawPackageRef = {
   schemaVersion: typeof CLAW_PACKAGE_REF_SCHEMA_VERSION;

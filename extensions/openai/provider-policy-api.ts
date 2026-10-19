@@ -1,6 +1,9 @@
 import type { ProviderDefaultThinkingPolicyContext } from "openclaw/plugin-sdk/core";
 import type { ProviderNormalizeResolvedModelContext } from "openclaw/plugin-sdk/plugin-entry";
-import { supportsOpenAIResponsesFastMode } from "openclaw/plugin-sdk/provider-model-metadata";
+import {
+  normalizeModelCatalog,
+  supportsOpenAIResponsesFastMode,
+} from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
   ModelApi,
   ModelProviderConfig,
@@ -28,6 +31,7 @@ import {
   OPENAI_GPT_56_MODEL_ID,
   OPENAI_GPT_56_SOL_MODEL_ID,
 } from "./model-route-contract.js";
+import manifest from "./openclaw.plugin.json" with { type: "json" };
 import { isOpenAIGptLiveModel, isSupportedOpenAIGptLiveModel } from "./realtime-quicksilver.js";
 import { resolveOpenAIModelServiceTiers } from "./service-tier-policy.js";
 import { resolveUnifiedOpenAIThinkingProfile } from "./thinking-policy.js";
@@ -54,6 +58,9 @@ const OPENAI_RESPONSES_API = "openai-responses";
 const OPENAI_COMPLETIONS_API = "openai-completions";
 const OPENAI_CHATGPT_RESPONSES_API = "openai-chatgpt-responses";
 const OPENAI_PROVIDER_ID = "openai";
+const OPENAI_MODEL_CATALOG = normalizeModelCatalog(manifest.modelCatalog, {
+  ownedProviders: new Set([OPENAI_PROVIDER_ID]),
+});
 const OPENAI_AGENT_RUNTIME_ID = "openclaw";
 const CODEX_AGENT_RUNTIME_ID = "codex";
 const OPENCLAW_RUNTIME_COMPATIBLE_IDS = [OPENAI_AGENT_RUNTIME_ID] as const;
@@ -606,6 +613,47 @@ function resolveModelRouteCandidates(
 export function resolveModelRoutes(
   context: ProviderResolveModelRoutesContext,
 ): ProviderModelRouteResolution {
+  if (context.capability === "decision") {
+    // Decisions uses Platform auth even when the model's chat route prefers Codex.
+    // Authored destinations still win; never reinterpret a ChatGPT endpoint as Platform.
+    const baseUrl =
+      firstRouteBaseUrl(context.configuredModel?.baseUrl) ??
+      firstRouteBaseUrl(context.configuredProvider?.baseUrl) ??
+      firstRouteBaseUrl((context.env ?? process.env).OPENAI_BASE_URL) ??
+      OPENAI_API_BASE_URL;
+    const kind = classifyOpenAIBaseUrl(baseUrl);
+    const model = OPENAI_MODEL_CATALOG?.providers?.openai?.models.find(
+      (entry) => entry.id === context.modelId,
+    );
+    if (
+      context.provider !== OPENAI_PROVIDER_ID ||
+      kind === "chatgpt" ||
+      kind === "invalid" ||
+      !model?.inference?.decision
+    ) {
+      return {
+        kind: "incompatible",
+        code: "unsupported-openai-decision-route",
+        message:
+          "OpenAI Decisions requires a supported model and a Platform or custom API endpoint.",
+      };
+    }
+    return {
+      kind: "routes",
+      routes: [
+        {
+          api: OPENAI_RESPONSES_API,
+          baseUrl:
+            kind === "platform"
+              ? OPENAI_API_BASE_URL
+              : concreteBaseUrl(baseUrl, OPENAI_API_BASE_URL),
+          authRequirement: "api-key",
+          requestTransportOverrides: context.requestTransportOverrides ?? "none",
+          inference: model.inference,
+        },
+      ],
+    };
+  }
   const resolution = resolveModelRouteCandidates(context);
   if (resolution.kind !== "routes" || resolution.routes.length < 2) {
     return resolution;

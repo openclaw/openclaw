@@ -6,9 +6,11 @@ import type {
   ProjectsSearchRemoteResult,
   WorktreesBranchesResult,
 } from "../../../../packages/gateway-protocol/src/index.js";
+import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import type { ApplicationContext } from "../../app/context.ts";
 import { formatUiError } from "../../lib/format-error.ts";
 import { canCallGatewayMethod } from "../../lib/gateway-methods.ts";
+import { createPageRequest } from "../../lib/page-request.ts";
 import { pathDisplayName } from "../../lib/path-display.ts";
 import { projectsForGateway, type ProjectCatalog } from "../../lib/projects.ts";
 import type { DraftGatewayState } from "./draft-gateway-state.ts";
@@ -62,10 +64,21 @@ export class DraftPlaceBrowser {
   readonly browser: PlaceBrowserState;
 
   private projectSearchArgs: readonly unknown[] = [];
-  private projectSearchRequest: AbortController | undefined;
   private projectSearchStatus: "initial" | "pending" | "complete" | "error" = "initial";
   private projectSearchValue: ProjectsSearchRemoteResult | null = null;
   private projectSearchFailure: unknown;
+  private readonly projectSearchRequest = createPageRequest(() => this.callbacks.changed(), {
+    task: ([client, query]: readonly [GatewayBrowserClient, string], { signal }) =>
+      client.request<ProjectsSearchRemoteResult>("projects.searchRemote", { query }, { signal }),
+    onComplete: (result) => {
+      this.projectSearchStatus = "complete";
+      this.projectSearchValue = result;
+    },
+    onError: (error) => {
+      this.projectSearchStatus = "error";
+      this.projectSearchFailure = error;
+    },
+  });
 
   constructor(
     private readonly gateway: DraftGatewayState,
@@ -136,8 +149,7 @@ export class DraftPlaceBrowser {
 
   private searchProjects(args = this.projectSearchInput()) {
     this.projectSearchArgs = args;
-    this.projectSearchRequest?.abort();
-    this.projectSearchRequest = undefined;
+    this.projectSearchRequest.cancel();
     this.projectSearchStatus = "initial";
     this.projectSearchValue = null;
     this.projectSearchFailure = undefined;
@@ -145,33 +157,8 @@ export class DraftPlaceBrowser {
     if (!client || !advertised || query.length < 2 || projectCloneInput(query)) {
       return;
     }
-    const request = new AbortController();
-    this.projectSearchRequest = request;
     this.projectSearchStatus = "pending";
-    void client
-      .request<ProjectsSearchRemoteResult>(
-        "projects.searchRemote",
-        { query },
-        { signal: request.signal },
-      )
-      .then((result) => {
-        if (!request.signal.aborted) {
-          this.projectSearchStatus = "complete";
-          this.projectSearchValue = result;
-        }
-      })
-      .catch((error: unknown) => {
-        if (!request.signal.aborted) {
-          this.projectSearchStatus = "error";
-          this.projectSearchFailure = error;
-        }
-      })
-      .finally(() => {
-        if (this.projectSearchRequest === request) {
-          this.projectSearchRequest = undefined;
-          this.callbacks.changed();
-        }
-      });
+    void this.projectSearchRequest.run([client, query]);
   }
 
   get projects(): readonly ProjectRecord[] {

@@ -138,6 +138,9 @@ describe("Control UI refresh nudge", () => {
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 
     harness.update({ phase: "reconnecting", hello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
+    harness.update({ phase: "offline", hello });
+    expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
     harness.update({ client: null, phase: "stopped", hello: null });
     expect(overlays.snapshot.controlUiRefreshRequired).toBe(false);
 

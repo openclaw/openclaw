@@ -1,8 +1,7 @@
 /* @vitest-environment jsdom */
 
 import { GatewayProtocolRequestError } from "@openclaw/gateway-client/browser";
-import type { RouteLocation } from "@openclaw/uirouter";
-import { createComponent, createEffect, createSignal } from "solid-js";
+import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { AuditRunInspectResult } from "../../../../packages/gateway-protocol/src/schema/audit-run.js";
 import { createDeferred } from "../../../../test/helpers/promise.js";
@@ -12,41 +11,29 @@ import {
   type GatewayHelloOk,
 } from "../../api/gateway.ts";
 import type { GatewaySessionRow, SessionsListResult } from "../../api/types.ts";
+import { createAgentSelectionCapability } from "../../app/agent-selection.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
 import {
   createGatewayEvent,
   createGatewayStoreTestStore,
 } from "../../app/gateway-store.test-support.ts";
 import { loadSettings } from "../../app/settings.ts";
+import { i18n } from "../../i18n/index.ts";
+import { createAgentIdentityCapability } from "../../lib/agents/identity.ts";
 import { createAgentCapability } from "../../lib/agents/index.ts";
 import { setAvatarGatewayOrigin } from "../../lib/identity-avatar-context.ts";
 import { createTestSessionCapability } from "../../lib/sessions/session-capability.test-support.ts";
 import { createTestGatewayClient } from "../../test-helpers/gateway-client.ts";
-import { cleanupSolid, mountSolid } from "../../test-helpers/mount-solid.ts";
+import { cleanupSolid } from "../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../test-helpers/solid-settle.ts";
-import { createActivityPageState } from "./activity-page-state.ts";
-import { ActivityPageView } from "./activity-page-view.tsx";
-
-type TestActivityPage = ReturnType<typeof createActivityPage>;
-
-function createActivityPage(context: ApplicationContext, initial?: RouteLocation) {
-  const [location, setLocation] = createSignal(initial);
-  const mounted = mountSolid(() => {
-    const page = createActivityPageState(context);
-    createEffect(location, (next) => page.setRouteLocation(next));
-    return createComponent(ActivityPageView, { page });
-  });
-  flush();
-  return {
-    context,
-    container: mounted.container,
-    dispose: mounted.unmount,
-    setRouteLocation(next: RouteLocation | undefined) {
-      setLocation(next);
-      flush();
-    },
-  };
-}
+import {
+  createActivityPage,
+  expandFirst,
+  mountActivityPage,
+  previews,
+  toolEvent,
+  type TestActivityPage,
+} from "./activity-page.test-support.ts";
 
 function inspectorGateway(client: GatewayBrowserClient) {
   const source = gateway();
@@ -59,26 +46,6 @@ function inspectorGateway(client: GatewayBrowserClient) {
     },
   });
   return source;
-}
-
-function previews(page: TestActivityPage) {
-  flush();
-  return [...page.container.querySelectorAll(".activity-entry__preview")].map(
-    (entry) => entry.textContent,
-  );
-}
-
-function expandFirst(page: TestActivityPage) {
-  flush();
-  const row = page.container.querySelector<HTMLDetailsElement>(".activity-entry")!;
-  row.open = true;
-  row.dispatchEvent(new Event("toggle"));
-  flush();
-  return row;
-}
-
-function mountActivityPage(page: TestActivityPage) {
-  return page.container;
 }
 
 function gateway(): ApplicationContext["gateway"] {
@@ -106,8 +73,12 @@ function gateway(): ApplicationContext["gateway"] {
 const activeGateways = new Set<ApplicationContext["gateway"]>();
 const activeSessions = new Map<ApplicationContext["gateway"], ApplicationContext["sessions"]>();
 const activeAgents = new Map<ApplicationContext["gateway"], ApplicationContext["agents"]>();
+const activeIdentities = new Map<
+  ApplicationContext["gateway"],
+  ApplicationContext["agentIdentity"]
+>();
 
-function activityContext(source: ApplicationContext["gateway"]): ApplicationContext {
+function activityContext(source: ApplicationContext["gateway"], basePath = ""): ApplicationContext {
   let sessions = activeSessions.get(source);
   if (!sessions) {
     sessions = createTestSessionCapability(source);
@@ -118,11 +89,17 @@ function activityContext(source: ApplicationContext["gateway"]): ApplicationCont
     agents = createAgentCapability(source);
     activeAgents.set(source, agents);
   }
+  let agentIdentity = activeIdentities.get(source);
+  if (!agentIdentity) {
+    agentIdentity = createAgentIdentityCapability(source);
+    activeIdentities.set(source, agentIdentity);
+  }
   return {
     gateway: source,
     sessions,
     agents,
-    basePath: "",
+    agentIdentity,
+    basePath,
     resourceBasePath: "",
     replace: vi.fn(),
     navigate: vi.fn(),
@@ -137,9 +114,6 @@ function activityContext(source: ApplicationContext["gateway"]): ApplicationCont
     },
     get connectionBootstrap(): never {
       throw new Error("Activity fixture does not provide connectionBootstrap");
-    },
-    get agentIdentity(): never {
-      throw new Error("Activity fixture does not provide agentIdentity");
     },
     get agentSelection(): never {
       throw new Error("Activity fixture does not provide agentSelection");
@@ -223,9 +197,12 @@ function activityGateway() {
   return store;
 }
 
-async function bindActivity(source: ApplicationContext["gateway"]): Promise<TestActivityPage> {
-  const page = createActivityPage(activityContext(source), {
-    pathname: "/activity",
+async function bindActivity(
+  source: ApplicationContext["gateway"],
+  basePath = "",
+): Promise<TestActivityPage> {
+  const page = createActivityPage(activityContext(source, basePath), {
+    pathname: `${basePath}/activity`,
     search: "?view=live",
     hash: "",
   });
@@ -269,20 +246,6 @@ async function syncActivityRoster(page: TestActivityPage) {
   );
 }
 
-function toolEvent(id: string, sessionKey = "main") {
-  return createGatewayEvent("session.tool", {
-    stream: "tool",
-    runId: `run-${id}`,
-    sessionKey,
-    data: {
-      toolCallId: id,
-      name: "read",
-      phase: "result",
-      result: { text: `${id} output` },
-    },
-  });
-}
-
 afterEach(async () => {
   cleanupSolid();
   for (const sessions of activeSessions.values()) {
@@ -299,12 +262,329 @@ afterEach(async () => {
   activeGateways.clear();
   activeSessions.clear();
   activeAgents.clear();
+  activeIdentities.clear();
   setAvatarGatewayOrigin(null);
   localStorage.clear();
   sessionStorage.clear();
 });
 
 describe("ActivityPage gateway lifecycle", () => {
+  it.each(["complete", "omitted"])(
+    "preserves live and History routing for a %s roster message body",
+    async (body) => {
+      const active: GatewaySessionRow = {
+        key: "agent:main:roster",
+        agentId: "main",
+        sessionId: "roster-session",
+        kind: "direct",
+        label: "Roster task",
+        updatedAt: 100,
+        status: "running",
+        hasActiveRun: true,
+        activeRunIds: ["roster-run"],
+      };
+      const { gateway: source, current } = activityGateway();
+      current().request.mockImplementation(async (method, params) =>
+        method === "sessions.list" ? activityRoster([active]) : activityResponse(method, params),
+      );
+      const context = activityContext(source);
+      const selection = createAgentSelectionCapability(source, context.agents);
+      Object.defineProperty(context, "agentSelection", { value: selection });
+      const page = createActivityPage(context, {
+        pathname: "/activity",
+        search: "?view=live",
+        hash: "",
+      });
+      await syncActivityRoster(page);
+      vi.useFakeTimers();
+      try {
+        const message = (session: GatewaySessionRow) =>
+          current().opts.onEvent?.(
+            createGatewayEvent("session.message", {
+              sessionKey: active.key,
+              agentId: "main",
+              messageId: "roster-message",
+              messageSeq: 2,
+              session,
+              ancestorSessions: [],
+              ...(body === "complete" ? { message: { role: "assistant", content: "Ready" } } : {}),
+            }),
+          );
+        const listReads = () =>
+          current().request.mock.calls.filter(
+            ([method, params]) =>
+              method === "sessions.list" && asOptionalRecord(params)?.source === "activity",
+          ).length;
+        const before = listReads();
+        message({ ...active, updatedAt: 200 });
+        await vi.advanceTimersByTimeAsync(10_000);
+        expect(page.container.querySelectorAll(".activity-current-work__row")).toHaveLength(1);
+        expect(listReads()).toBe(before);
+        message({
+          ...active,
+          updatedAt: 300,
+          status: "done",
+          hasActiveRun: false,
+          activeRunIds: [],
+        });
+        await vi.advanceTimersByTimeAsync(0);
+        flush();
+        expect(page.container.querySelectorAll(".activity-current-work__row")).toHaveLength(0);
+        expect(listReads()).toBe(before);
+
+        page.setRouteLocation({ pathname: "/activity", search: "", hash: "" });
+        await vi.advanceTimersByTimeAsync(0);
+        flush();
+        const historyReads = listReads();
+        expect(page.container.querySelector(".activity-feed__session-title")?.textContent).toBe(
+          "Roster task",
+        );
+        message({ ...active, updatedAt: 400, label: "Unexpected History update" });
+        await vi.advanceTimersByTimeAsync(10_000);
+        flush();
+        expect(page.container.querySelector(".activity-feed__session-title")?.textContent).toBe(
+          "Roster task",
+        );
+        expect(listReads()).toBe(historyReads);
+      } finally {
+        page.dispose();
+        selection.dispose();
+        vi.useRealTimers();
+      }
+    },
+  );
+
+  it("renders localized summaries and timestamps across locale changes", async () => {
+    const previousLocale = i18n.getLocale();
+    const timestamp = Date.UTC(2026, 0, 2, 15, 4, 55);
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    const now = vi.spyOn(Date, "now");
+    try {
+      for (const [index, updatedAt] of [
+        0,
+        timestamp,
+        Number.NaN,
+        Number.POSITIVE_INFINITY,
+        8_640_000_000_000_001,
+      ].entries()) {
+        now.mockReturnValue(updatedAt);
+        current().opts.onEvent?.(
+          createGatewayEvent("session.tool", {
+            stream: "tool",
+            runId: `time-${index}`,
+            sessionKey: "main",
+            ts: updatedAt - 119_900,
+            data: {
+              toolCallId: `time-${index}`,
+              name: "exec",
+              phase: "result",
+              result: { text: "ok" },
+            },
+          }),
+        );
+      }
+    } finally {
+      now.mockRestore();
+    }
+    const options: Intl.DateTimeFormatOptions = {
+      hour: "numeric",
+      minute: "2-digit",
+      second: "2-digit",
+    };
+    const container = page.container;
+    try {
+      for (const [locale, summary] of [
+        ["en", "0 arguments hidden"],
+        ["de", "0 Argumente ausgeblendet"],
+      ] as const) {
+        await i18n.setLocale(locale);
+        flush();
+        expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(summary);
+        expect(container.querySelector(".activity-entry__meta")?.textContent).toContain("2m");
+        expect(
+          Array.from(
+            container.querySelectorAll(".activity-entry__meta > span:first-child"),
+            (element) => element.textContent,
+          ),
+        ).toEqual([
+          new Date(0).toLocaleTimeString(locale, options),
+          new Date(timestamp).toLocaleTimeString(locale, options),
+          "",
+          "",
+          "",
+        ]);
+      }
+    } finally {
+      await i18n.setLocale(previousLocale);
+    }
+  });
+
+  it("keeps primary live filters visible and moves the tool picker into the filter disclosure", async () => {
+    await i18n.setLocale("en");
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source, "/control");
+    current().opts.onEvent?.(toolEvent("exec", "main", "exec", "live run:a/b"));
+    current().opts.onEvent?.(toolEvent("read"));
+    flush();
+    const container = page.container;
+    const toolbar = container.querySelector(".activity-live-toolbar");
+    expect(
+      toolbar?.querySelectorAll('.activity-status-filter input[type="checkbox"]'),
+    ).toHaveLength(3);
+    expect(
+      toolbar?.querySelector(".activity-live-autofollow input.settings-toggle__input"),
+    ).not.toBeNull();
+    const filterTrigger = toolbar?.querySelector<HTMLButtonElement>(
+      "#activity-live-filter-trigger",
+    );
+    expect(filterTrigger?.getAttribute("aria-haspopup")).toBe("dialog");
+    expect(filterTrigger?.getAttribute("aria-expanded")).toBe("false");
+    expect(
+      container.querySelector<HTMLAnchorElement>(".activity-entry__run-link")?.getAttribute("href"),
+    ).toBe("/control/activity?view=run&run=live%20run%3Aa%2Fb");
+    filterTrigger?.click();
+    expect(document.activeElement).toBe(container.querySelector(".activity-live-filter-popover"));
+
+    const done = toolbar?.querySelectorAll<HTMLInputElement>(
+      '.activity-status-filter input[type="checkbox"]',
+    )[1];
+    done?.click();
+    flush();
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(0);
+    done?.click();
+    flush();
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
+
+    const follow = toolbar?.querySelector<HTMLInputElement>(
+      ".activity-live-autofollow input.settings-toggle__input",
+    );
+    follow?.click();
+    flush();
+    expect(follow?.checked).toBe(false);
+    follow?.click();
+    flush();
+    expect(follow?.checked).toBe(true);
+
+    const [expand, collapse] = container.querySelectorAll<HTMLButtonElement>(
+      ".activity-page .settings-section__actions button",
+    );
+    expand?.click();
+    flush();
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
+        (row) => row.open,
+      ),
+    ).toEqual([true, true]);
+    collapse?.click();
+    flush();
+    expect(
+      Array.from(
+        container.querySelectorAll<HTMLDetailsElement>(".activity-entry"),
+        (row) => row.open,
+      ),
+    ).toEqual([false, false]);
+
+    const search = toolbar?.querySelector<HTMLInputElement>('input[type="search"]');
+    if (!search) {
+      throw new Error("Expected the live activity search input");
+    }
+    search.value = "no matching activity";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(0);
+    search.value = "run";
+    search.dispatchEvent(new Event("input", { bubbles: true }));
+    flush();
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
+
+    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
+    if (!tool) {
+      throw new Error("Expected the live activity tool filter");
+    }
+    tool.value = "read";
+    tool.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    expect(
+      Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
+        entry.textContent?.trim(),
+      ),
+    ).toEqual(["read"]);
+  });
+
+  it("retains the selected tool when Live entries change", async () => {
+    await i18n.setLocale("en");
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    current().opts.onEvent?.(toolEvent("exec", "main", "exec"));
+    current().opts.onEvent?.(toolEvent("read"));
+    flush();
+    const container = page.container;
+    const tool = container.querySelector<HTMLSelectElement>(".activity-live-filter-popover select");
+    if (!tool) {
+      throw new Error("Expected the live activity tool filter");
+    }
+    tool.value = "read";
+    tool.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    expect(tool?.value).toBe("read");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(
+      Array.from(container.querySelectorAll(".activity-entry__tool"), (entry) =>
+        entry.textContent?.trim(),
+      ),
+    ).toEqual(["read"]);
+
+    container.querySelector<HTMLButtonElement>(".activity-page button.danger")?.click();
+    current().opts.onEvent?.(toolEvent("read"));
+    flush();
+    expect(tool?.value).toBe("read");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("read");
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(1);
+
+    current().opts.onEvent?.(toolEvent("exec", "main", "exec"));
+    tool.value = "";
+    tool.dispatchEvent(new Event("change", { bubbles: true }));
+    flush();
+    expect(tool?.value).toBe("");
+    expect(tool?.selectedOptions[0]?.textContent).toBe("All tools");
+    expect(container.querySelectorAll(".activity-entry")).toHaveLength(2);
+  });
+
+  it("renders selected answer candidates without tool-only facts", async () => {
+    await i18n.setLocale("en");
+    const { gateway: source, current } = activityGateway();
+    const page = await bindActivity(source);
+    current().opts.onEvent?.(
+      createGatewayEvent("agent", {
+        stream: "item",
+        runId: "run-1",
+        sessionKey: "main",
+        data: {
+          kind: "answer_candidate",
+          itemId: "answer-1",
+          status: "selected",
+          progressText: "Final answer",
+        },
+      }),
+    );
+    flush();
+    const container = page.container;
+    expect(container.querySelector(".activity-entry__tool")?.textContent?.trim()).toBe(
+      "Answer candidate",
+    );
+    expect(container.querySelector(".activity-entry__text")?.textContent?.trim()).toBe(
+      "Selected answer",
+    );
+    expect(container.querySelector(".activity-entry__facts")?.textContent).toContain(
+      "Item: answer-1",
+    );
+    expect(container.querySelector(".activity-entry__facts")?.textContent).not.toContain(
+      "arguments hidden",
+    );
+  });
+
   it.each(["sessions", "run"] as const)("skips Live Activity rendering in %s mode", (mode) => {
     const page = createActivityPage(activityContext(gateway()), {
       pathname: "/activity",
@@ -740,18 +1020,38 @@ describe("ActivityPage gateway lifecycle", () => {
         message: "decision cursor is no longer retained",
       }),
       "restart",
+      true,
+    ],
+    [
+      "unknown inspection method without a cursor",
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "unknown method: audit.run.inspect",
+      }),
+      "retry",
+      false,
+    ],
+    [
+      "unexpected admin scope without a cursor",
+      new GatewayRequestError({
+        code: "INVALID_REQUEST",
+        message: "missing scope: operator.admin",
+      }),
+      "retry",
+      false,
     ],
     [
       "non-invalid request",
       new GatewayProtocolRequestError({ code: "UNAVAILABLE", message: "gateway unavailable" }),
       "retry",
+      true,
     ],
-  ] as const)("classifies a %s cursor failure", async (_label, error, recovery) => {
+  ] as const)("classifies a %s failure", async (_label, error, recovery, hasCursor) => {
     const client = createTestGatewayClient(vi.fn(() => Promise.reject(error)));
     const activeGateway = inspectorGateway(client);
     const page = createActivityPage(activityContext(activeGateway), {
       pathname: "/activity",
-      search: "?view=run&run=run-1&receipt=receipt-1&decision=cursor-1",
+      search: `?view=run&run=run-1${hasCursor ? "&receipt=receipt-1&decision=cursor-1" : ""}`,
       hash: "",
     });
     await waitForSolid(() =>

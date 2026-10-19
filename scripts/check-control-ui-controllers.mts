@@ -13,7 +13,7 @@ import {
   resolveRatchetBase,
 } from "./lib/shrink-ratchet.mts";
 
-function retiredControllerHostUsers(root: string, sources: ReadonlyMap<string, string>) {
+function retiredControllerUsers(root: string, sources: ReadonlyMap<string, string>) {
   using parser = createNativeTypeScriptParser({ cwd: root });
   const files = [...sources]
     .filter(
@@ -22,7 +22,8 @@ function retiredControllerHostUsers(root: string, sources: ReadonlyMap<string, s
         text.includes("subscriptions-controller") ||
         text.includes("SolidController") ||
         text.includes("addController") ||
-        text.includes("removeController"),
+        text.includes("removeController") ||
+        text.includes("requestUpdate"),
     )
     .map(([fileName, text]) => ({ fileName, text }));
   const users = new Set(
@@ -31,8 +32,19 @@ function retiredControllerHostUsers(root: string, sources: ReadonlyMap<string, s
       "ui/src/lib/subscriptions-controller.ts",
     ].filter((file) => sources.has(file)),
   );
+  const redrawUsers = new Set<string>();
   for (const tree of parser.parseSourceFiles(files)) {
+    const file = path.relative(root, tree.fileName).split(path.sep).join("/");
     const visit = (node: ts.Node): void => {
+      // Test adapters and computed property names must not preserve the retired API.
+      if (
+        (ts.isIdentifier(node) ||
+          ts.isStringLiteral(node) ||
+          ts.isNoSubstitutionTemplateLiteral(node)) &&
+        node.text === "requestUpdate"
+      ) {
+        redrawUsers.add(file);
+      }
       const specifier =
         ts.isImportDeclaration(node) || ts.isExportDeclaration(node)
           ? node.moduleSpecifier
@@ -53,13 +65,13 @@ function retiredControllerHostUsers(root: string, sources: ReadonlyMap<string, s
             specifier.text,
           ))
       ) {
-        users.add(path.relative(root, tree.fileName).split(path.sep).join("/"));
+        users.add(file);
       }
       node.forEachChild(visit);
     };
     visit(tree);
   }
-  return users;
+  return { hosts: users, redraws: redrawUsers };
 }
 
 export function main(root = process.cwd(), argv = process.argv.slice(2)) {
@@ -74,6 +86,7 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
     }
     const previous = readInventorySources(root, { ref: base, roots: ["ui/src"] });
     const current = readInventorySources(root, { staged: args.staged, roots: ["ui/src"] });
+    const retiredUsers = retiredControllerUsers(root, current);
     // Parse candidates so comments and strings cannot keep the retirement gate open.
     const candidates = (sources: ReadonlyMap<string, string>) =>
       new Map(
@@ -97,7 +110,11 @@ export function main(root = process.cwd(), argv = process.argv.slice(2)) {
           {
             title:
               "Retired Control UI controller host modules and contracts must not be reintroduced:",
-            entries: [...retiredControllerHostUsers(root, current)],
+            entries: [...retiredUsers.hosts],
+          },
+          {
+            title: "Retired Control UI requestUpdate contracts must not be reintroduced:",
+            entries: [...retiredUsers.redraws],
           },
           {
             title: "Retired Control UI controller patterns must not be reintroduced:",

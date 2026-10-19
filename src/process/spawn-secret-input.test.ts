@@ -131,48 +131,45 @@ function expectDescriptorReleased(fd: number, original: ReturnType<typeof fstatS
 describe.skipIf(process.platform === "win32")("POSIX secret input ownership", () => {
   const descriptorPath = process.platform === "linux" ? "/proc/self/fd/3" : "/dev/fd/3";
 
-  it.each(["path"])(
-    "delivers once through a %s reader without replay to descendants",
-    async (reader) => {
-      const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];
-      const data = Buffer.from("private-fixture");
-      using prepared = prepareSecretInputStdio(stdio, { fd: 3, createData: () => data });
-      const original = fstatSync(stdio[3] as number);
-      const child = spawn(
-        process.execPath,
-        [
-          "-e",
-          `
+  it("delivers once through a path reader without replay to descendants", async () => {
+    const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];
+    const data = Buffer.from("private-fixture");
+    using prepared = prepareSecretInputStdio(stdio, { fd: 3, createData: () => data });
+    const original = fstatSync(stdio[3] as number);
+    const child = spawn(
+      process.execPath,
+      [
+        "-e",
+        `
       const fs = require("node:fs");
-      const value = fs.readFileSync(${JSON.stringify(reader === "path" ? descriptorPath : 3)}, "utf8");
+      const value = fs.readFileSync(${JSON.stringify(descriptorPath)}, "utf8");
       const descendant = require("node:child_process").spawnSync(process.execPath,
         ["-e", 'process.stdout.write(String(require("node:fs").readFileSync(3).length))'],
         {stdio: ["ignore", "pipe", "inherit", 3]});
       process.stdout.write(JSON.stringify({value, descendant: descendant.stdout.toString()}));
     `,
-        ],
-        { stdio },
-      );
-      const output = new Promise<string>((resolve, reject) => {
-        let text = "";
-        child.stdout!.on("data", (chunk) => {
-          text += chunk;
-        });
-        child.on("error", reject);
-        child.once("close", (code) =>
-          code === 0 ? resolve(text) : reject(new Error(`child exited ${code}`)),
-        );
+      ],
+      { stdio },
+    );
+    const output = new Promise<string>((resolve, reject) => {
+      let text = "";
+      child.stdout!.on("data", (chunk) => {
+        text += chunk;
       });
-      try {
-        await prepared!.deliverTo(child);
-        expect(JSON.parse(await output)).toEqual({ value: "private-fixture", descendant: "0" });
-        expect(data.every((byte) => byte === 0)).toBe(true);
-        expectDescriptorReleased(stdio[3] as number, original);
-      } finally {
-        child.kill("SIGKILL");
-      }
-    },
-  );
+      child.on("error", reject);
+      child.once("close", (code) =>
+        code === 0 ? resolve(text) : reject(new Error(`child exited ${code}`)),
+      );
+    });
+    try {
+      await prepared!.deliverTo(child);
+      expect(JSON.parse(await output)).toEqual({ value: "private-fixture", descendant: "0" });
+      expect(data.every((byte) => byte === 0)).toBe(true);
+      expectDescriptorReleased(stdio[3] as number, original);
+    } finally {
+      child.kill("SIGKILL");
+    }
+  });
 
   it("closes both untransferred ends when spawning throws", () => {
     const stdio: SpawnStdioEntry[] = ["ignore", "pipe", "pipe"];

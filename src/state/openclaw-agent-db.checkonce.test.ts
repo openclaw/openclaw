@@ -71,6 +71,16 @@ it.each(["transaction", "implicit snapshot"] as const)(
           writer.exec("CREATE TABLE metadata_migration (id INTEGER); PRAGMA user_version=2");
           persistMetadata(writer, "main", 2);
         });
+        {
+          using observed = observeReads();
+          expect(readMetadata(reader)).toEqual({
+            agentId: "main",
+            role: "agent",
+            schemaVersion: 1,
+          });
+          // Only the explicit schema cursor proves its catalog before the sibling DDL.
+          expect(observed.queries).toHaveLength(snapshot === "transaction" ? 4 : 0);
+        }
         expectCachedMetadata(reader, 1);
         expect(reader.prepare("SELECT schema_version FROM schema_meta").get()).toEqual({
           schema_version: 1,

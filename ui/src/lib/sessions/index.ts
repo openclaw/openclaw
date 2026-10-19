@@ -7,7 +7,7 @@ import type { ConnectionBootstrapCoordinator } from "../../app/connection-bootst
 import { type SelectedAgentSource, watchSelectedAgent } from "../agents/watch-selected-agent.ts";
 import { formatUiError } from "../format-error.ts";
 import { createGatewayConnectionLifecycle } from "../gateway-connection-lifecycle.ts";
-import { isSessionRunActive } from "../session-run-state.ts";
+import { isSessionRunStateActive } from "../session-run-state.ts";
 import type { SessionCreateOutcome } from "./create.ts";
 import { captureBootRoster } from "./session-boot-roster.ts";
 import { createSessionBootSnapshot } from "./session-boot-snapshot.ts";
@@ -615,7 +615,6 @@ export function createSessionCapability(
       primarySnapshotApplied,
       affectsPrimary: eventObservation.affectsPrimary,
       affectedLists: eventObservation.lists,
-      immediate: event.event === "sessions.changed" && eventReason === "create",
     });
     notifyEvent?.(event);
   });
@@ -669,7 +668,7 @@ export function createSessionCapability(
     projectRows: roster.observations.projectRows,
     // Answer/finishing progress can precede the final stream tail. Only the
     // shared run owner settles roster activity, including passive sessions.
-    isRunVisuallyActive: isSessionRunActive,
+    isRunVisuallyActive: isSessionRunStateActive,
     reconcileRunTerminal,
     refresh: roster.refresh,
     invalidate: roster.scheduleEvent,

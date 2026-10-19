@@ -45,8 +45,8 @@ function CodePointCount2(value) {
 // <stdin>
 var isChatHistoryState = /* @__PURE__ */ (() => {
   let External = [
-      new RegExp("(^stateRevision$|^pendingInputs$|^sessionInfo$)", "u"),
-      new RegExp("(^pendingInputs$|^sessionInfo$)", "u"),
+      new RegExp("(^stateRevision$|^pendingInputs$|^sessionInfo$|^commands$)", "u"),
+      new RegExp("(^pendingInputs$|^sessionInfo$|^commands$)", "u"),
       new RegExp("(^items$|^total$|^queuedCount$|^nextBefore$)", "u"),
       new RegExp("(^id$|^runId$|^message$|^acceptedAt$|^state$|^queued$)", "u"),
       new RegExp("(^canEnsure$|^text$|^updatedAt$|^state$)", "u"),
@@ -65,6 +65,11 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
       new RegExp("^.*$", "u"),
       new RegExp("^.*$", "u"),
       new RegExp("^.*$", "u"),
+      new RegExp(
+        "(^name$|^nativeName$|^textAliases$|^description$|^category$|^source$|^skillDisplayName$|^skillModelVisible$|^scope$|^acceptsArgs$|^args$|^clientPresentation$)",
+        "u",
+      ),
+      new RegExp("(^name$|^description$|^type$|^required$|^choices$|^dynamic$)", "u"),
     ],
     check_0 = (value) =>
       typeof value == "object" &&
@@ -98,6 +103,15 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
           (value.stateRevision.sessionInfo.length <= 64 ||
             (value.stateRevision.sessionInfo.length <= 128 &&
               CodePointCount2(value.stateRevision.sessionInfo) <= 64)))) &&
+      (value.stateRevision.commands === void 0 ||
+        !("commands" in value.stateRevision) ||
+        (typeof value.stateRevision.commands == "string" &&
+          (value.stateRevision.commands.length >= 2 ||
+            (value.stateRevision.commands.length >= 1 &&
+              CodePointCount2(value.stateRevision.commands) >= 1)) &&
+          (value.stateRevision.commands.length <= 64 ||
+            (value.stateRevision.commands.length <= 128 &&
+              CodePointCount2(value.stateRevision.commands) <= 64)))) &&
       (value.pendingInputs === void 0 ||
         !("pendingInputs" in value) ||
         (typeof value.pendingInputs == "object" &&
@@ -1721,7 +1735,153 @@ var isChatHistoryState = /* @__PURE__ */ (() => {
                   ))) &&
               (value.sessionInfo.toolOverrides.webSearch === void 0 ||
                 !("webSearch" in value.sessionInfo.toolOverrides) ||
-                typeof value.sessionInfo.toolOverrides.webSearch == "boolean")))));
+                typeof value.sessionInfo.toolOverrides.webSearch == "boolean"))))) &&
+      (value.commands === void 0 ||
+        !("commands" in value) ||
+        (Array.isArray(value.commands) &&
+          value.commands.every(
+            (element, index) =>
+              typeof element == "object" &&
+              element !== null &&
+              !Array.isArray(element) &&
+              "name" in element &&
+              "description" in element &&
+              "source" in element &&
+              "scope" in element &&
+              "acceptsArgs" in element &&
+              Object.getOwnPropertyNames(element).every(
+                (var_222, var_223) => External[20].test(var_222) || !1,
+              ) &&
+              typeof element.name == "string" &&
+              (element.name.length >= 2 ||
+                (element.name.length >= 1 && CodePointCount2(element.name) >= 1)) &&
+              (element.name.length <= 200 ||
+                (element.name.length <= 400 && CodePointCount2(element.name) <= 200)) &&
+              (element.nativeName === void 0 ||
+                !("nativeName" in element) ||
+                (typeof element.nativeName == "string" &&
+                  (element.nativeName.length >= 2 ||
+                    (element.nativeName.length >= 1 && CodePointCount2(element.nativeName) >= 1)) &&
+                  (element.nativeName.length <= 200 ||
+                    (element.nativeName.length <= 400 &&
+                      CodePointCount2(element.nativeName) <= 200)))) &&
+              (element.textAliases === void 0 ||
+                !("textAliases" in element) ||
+                (Array.isArray(element.textAliases) &&
+                  element.textAliases.every(
+                    (element2, index2) =>
+                      typeof element2 == "string" &&
+                      (element2.length >= 2 ||
+                        (element2.length >= 1 && CodePointCount2(element2) >= 1)) &&
+                      (element2.length <= 200 ||
+                        (element2.length <= 400 && CodePointCount2(element2) <= 200)),
+                  ) &&
+                  element.textAliases.length <= 20)) &&
+              typeof element.description == "string" &&
+              (element.description.length <= 2e3 ||
+                (element.description.length <= 4e3 &&
+                  CodePointCount2(element.description) <= 2e3)) &&
+              (element.category === void 0 ||
+                !("category" in element) ||
+                (typeof element.category == "string" && element.category === "session") ||
+                (typeof element.category == "string" && element.category === "options") ||
+                (typeof element.category == "string" && element.category === "status") ||
+                (typeof element.category == "string" && element.category === "management") ||
+                (typeof element.category == "string" && element.category === "media") ||
+                (typeof element.category == "string" && element.category === "tools")) &&
+              ((typeof element.source == "string" && element.source === "native") ||
+                (typeof element.source == "string" && element.source === "skill") ||
+                (typeof element.source == "string" && element.source === "plugin")) &&
+              (element.skillDisplayName === void 0 ||
+                !("skillDisplayName" in element) ||
+                (typeof element.skillDisplayName == "string" &&
+                  (element.skillDisplayName.length >= 2 ||
+                    (element.skillDisplayName.length >= 1 &&
+                      CodePointCount2(element.skillDisplayName) >= 1)) &&
+                  (element.skillDisplayName.length <= 200 ||
+                    (element.skillDisplayName.length <= 400 &&
+                      CodePointCount2(element.skillDisplayName) <= 200)))) &&
+              (element.skillModelVisible === void 0 ||
+                !("skillModelVisible" in element) ||
+                typeof element.skillModelVisible == "boolean") &&
+              ((typeof element.scope == "string" && element.scope === "text") ||
+                (typeof element.scope == "string" && element.scope === "native") ||
+                (typeof element.scope == "string" && element.scope === "both")) &&
+              typeof element.acceptsArgs == "boolean" &&
+              (element.args === void 0 ||
+                !("args" in element) ||
+                (Array.isArray(element.args) &&
+                  element.args.every(
+                    (element2, index2) =>
+                      typeof element2 == "object" &&
+                      element2 !== null &&
+                      !Array.isArray(element2) &&
+                      "name" in element2 &&
+                      "description" in element2 &&
+                      "type" in element2 &&
+                      Object.getOwnPropertyNames(element2).every(
+                        (var_224, var_225) => External[21].test(var_224) || !1,
+                      ) &&
+                      typeof element2.name == "string" &&
+                      (element2.name.length >= 2 ||
+                        (element2.name.length >= 1 && CodePointCount2(element2.name) >= 1)) &&
+                      (element2.name.length <= 200 ||
+                        (element2.name.length <= 400 && CodePointCount2(element2.name) <= 200)) &&
+                      typeof element2.description == "string" &&
+                      (element2.description.length <= 500 ||
+                        (element2.description.length <= 1e3 &&
+                          CodePointCount2(element2.description) <= 500)) &&
+                      ((typeof element2.type == "string" && element2.type === "string") ||
+                        (typeof element2.type == "string" && element2.type === "number") ||
+                        (typeof element2.type == "string" && element2.type === "boolean")) &&
+                      (element2.required === void 0 ||
+                        !("required" in element2) ||
+                        typeof element2.required == "boolean") &&
+                      (element2.choices === void 0 ||
+                        !("choices" in element2) ||
+                        (Array.isArray(element2.choices) &&
+                          element2.choices.every(
+                            (element3, index3) =>
+                              typeof element3 == "object" &&
+                              element3 !== null &&
+                              !Array.isArray(element3) &&
+                              "value" in element3 &&
+                              "label" in element3 &&
+                              Object.getOwnPropertyNames(element3).length === 2 &&
+                              typeof element3.value == "string" &&
+                              (element3.value.length <= 200 ||
+                                (element3.value.length <= 400 &&
+                                  CodePointCount2(element3.value) <= 200)) &&
+                              typeof element3.label == "string" &&
+                              (element3.label.length <= 200 ||
+                                (element3.label.length <= 400 &&
+                                  CodePointCount2(element3.label) <= 200)),
+                          ) &&
+                          element2.choices.length <= 50)) &&
+                      (element2.dynamic === void 0 ||
+                        !("dynamic" in element2) ||
+                        typeof element2.dynamic == "boolean"),
+                  ) &&
+                  element.args.length <= 20)) &&
+              (element.clientPresentation === void 0 ||
+                !("clientPresentation" in element) ||
+                (typeof element.clientPresentation == "object" &&
+                  element.clientPresentation !== null &&
+                  !Array.isArray(element.clientPresentation) &&
+                  "when" in element.clientPresentation &&
+                  "action" in element.clientPresentation &&
+                  Object.getOwnPropertyNames(element.clientPresentation).length === 2 &&
+                  typeof element.clientPresentation.when == "string" &&
+                  element.clientPresentation.when === "no-arguments" &&
+                  typeof element.clientPresentation.action == "object" &&
+                  element.clientPresentation.action !== null &&
+                  !Array.isArray(element.clientPresentation.action) &&
+                  "kind" in element.clientPresentation.action &&
+                  Object.getOwnPropertyNames(element.clientPresentation.action).length === 1 &&
+                  typeof element.clientPresentation.action.kind == "string" &&
+                  element.clientPresentation.action.kind === "device-pairing")),
+          ) &&
+          value.commands.length <= 500));
   return (value) => check_0(value);
 })();
 export { isChatHistoryState };

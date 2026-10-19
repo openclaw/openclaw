@@ -23,6 +23,7 @@ import {
   type SessionSourceAssertion,
 } from "../../config/sessions/session-source-authority.js";
 import { resolveSessionStorePathForScope } from "../../config/sessions/session-store-path.js";
+import { sameSessionTranscriptStorePath } from "../../config/sessions/transcript-store-identity.js";
 import { SessionTranscriptWriterClaimReboundError } from "../../config/sessions/transcript-write-context.js";
 import type { InternalSessionEntry } from "../../config/sessions/types.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
@@ -409,7 +410,10 @@ function assertSameSessionBinding(
   if (
     successorTarget.agentId !== currentTarget.agentId ||
     successorTarget.sessionKey !== currentTarget.sessionKey ||
-    path.resolve(successorTarget.storePath) !== path.resolve(currentTarget.storePath)
+    !sameSessionTranscriptStorePath(
+      path.resolve(successorTarget.storePath),
+      path.resolve(currentTarget.storePath),
+    )
   ) {
     throw new Error(`${label} successor target changed the active session binding`);
   }

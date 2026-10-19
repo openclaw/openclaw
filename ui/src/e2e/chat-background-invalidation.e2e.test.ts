@@ -21,7 +21,7 @@ type MeasuredPane = HTMLElement & {
     ChatPageHost,
     "sessionKey" | "chatMessages" | "chatAvatarStatus" | "modelAuthStatusResult"
   >;
-  presencePayload?: PresencePayload;
+  presence: { readonly snapshot: PresencePayload | undefined };
   render: () => unknown;
   updateComplete: Promise<boolean>;
 };
@@ -62,7 +62,7 @@ async function observePaneRenders(page: Page) {
                 ?.label,
               selectedKey: pane.state.sessionKey,
               messages: pane.state.chatMessages.length,
-              panePresenceTs: pane.presencePayload?.presence[0]?.ts,
+              panePresenceTs: pane.presence.snapshot?.presence[0]?.ts,
             };
           },
           restore() {
@@ -174,7 +174,7 @@ suite.define(() => {
         expect.soft(counts.foreign.slice(1)).toEqual([0, 0]);
 
         const heartbeat = await probe.evaluate((owner) => ({
-          presence: owner.pane.presencePayload!.presence.map((entry) =>
+          presence: owner.pane.presence.snapshot!.presence.map((entry) =>
             Object.assign({}, entry, {
               ts: 1_900_000_000_010,
               lastInputSeconds: (entry.lastInputSeconds ?? 0) + 10,

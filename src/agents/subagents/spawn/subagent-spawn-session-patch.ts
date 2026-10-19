@@ -33,6 +33,10 @@ import {
   prepareSessionWorktreeCreation,
   resolveSessionProjectRoot,
 } from "../../../gateway/session-worktree-preparation.js";
+import {
+  captureSessionTarget,
+  type SessionTarget,
+} from "../../../sessions/session-controller.target.js";
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../../state/openclaw-agent-db.js";
 import { resolveUserPath } from "../../../utils.js";
 import {
@@ -86,7 +90,13 @@ export async function createInitialSubagentSession(input: {
   outputSchema?: Record<string, unknown>;
   firstAdmission?: { delivery?: DeliveryContext; group: TrustedGroupMetadata };
 }): Promise<
-  | { status: "ok"; entry?: SessionEntry; freshChild?: FreshChildSession }
+  | {
+      status: "ok";
+      storePath: string;
+      controllerTarget: SessionTarget;
+      entry?: SessionEntry;
+      freshChild?: FreshChildSession;
+    }
   | { status: "error"; error: string }
 > {
   const params = {
@@ -311,6 +321,13 @@ export async function createInitialSubagentSession(input: {
             : await commit();
           return {
             status: "ok" as const,
+            storePath: physicalStorePath,
+            controllerTarget: captureSessionTarget({
+              storeScope: storePath,
+              sessionKey: params.childSessionKey,
+              agentId: params.targetAgentId,
+              incarnation: entry?.sessionId,
+            }),
             entry: entry ?? undefined,
             ...(params.firstAdmission && entry
               ? {

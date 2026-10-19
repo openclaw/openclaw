@@ -5,13 +5,23 @@ import {
   maintenanceLane,
   type SessionHistoryWorkerLane,
 } from "../config/sessions/session-transcript-worker-resources.js";
-import { createHookRunner } from "../plugins/hooks.js";
 import { createEmptyPluginRegistry } from "../plugins/registry-empty.js";
 import { resetGatewayWorkAdmission } from "../process/gateway-work-admission.js";
 import { runGatewayStartupObservers } from "./server-startup-observers.js";
 
 const mocks = vi.hoisted(() => ({
   prewarm: vi.fn<(database: unknown, lane?: SessionHistoryWorkerLane) => Promise<void>>(),
+  activate: vi.fn(async () => {}),
+  refresh: vi.fn(async () => null),
+}));
+
+// mock-isolation: Reader custody does not start the restored-run or update owners.
+vi.mock("../agents/subagents/registry/subagent-registry.js", () => ({
+  activateSubagentRegistry: mocks.activate,
+}));
+vi.mock("./server-update-sentinel.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./server-update-sentinel.js")>()),
+  prepareLatestUpdateRestartSentinel: mocks.refresh,
 }));
 
 vi.mock("node:fs/promises", () => ({
@@ -39,6 +49,8 @@ vi.mock("../sessions/session-state-events.js", () => ({
 
 beforeEach(() => {
   mocks.prewarm.mockReset();
+  mocks.activate.mockClear();
+  mocks.refresh.mockClear();
 });
 afterEach(() => resetGatewayWorkAdmission());
 
@@ -52,6 +64,11 @@ it.each([
   async ({ lane: blockedLane, outcome }) => {
     const entered = createDeferred();
     const prepared = createDeferred();
+    const refreshed = createDeferred();
+    mocks.refresh.mockImplementation(async () => {
+      refreshed.resolve();
+      return null;
+    });
     mocks.prewarm.mockImplementation(async (_database, lane = historyLane) => {
       if (lane === blockedLane) {
         entered.resolve();
@@ -59,14 +76,20 @@ it.each([
       }
     });
     const controller = new AbortController();
-    const activate = vi.fn();
-    const refresh = vi.fn(async () => undefined);
+    const activate = mocks.activate;
+    const refresh = mocks.refresh;
     const registry = createEmptyPluginRegistry();
     const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn() };
     const observers = runGatewayStartupObservers({
       registry,
       resolveGatewayContext: () => undefined,
-      loadSubagentRegistryActivation: () => activate,
+      loadSubagentRegistryActivation: async () =>
+        (await import("../agents/subagents/registry/subagent-registry.js"))
+          .activateSubagentRegistry,
+      createHookRunner: async (...args) =>
+        (await import("../plugins/hooks.js")).createHookRunner(...args),
+      refreshLatestUpdateRestartSentinel: async () =>
+        (await import("./server-update-sentinel.js")).prepareLatestUpdateRestartSentinel({}),
       signal: controller.signal,
       port: 0,
       config: {},
@@ -75,14 +98,17 @@ it.each([
       isClosing: () => controller.signal.aborted,
       log,
       logHooks: log,
-      createHookRunner,
-      refreshLatestUpdateRestartSentinel: refresh,
     });
     try {
       await awaitGateBeforeSettlement(
         entered.promise,
         observers,
         "restored recovery settled before preparing its transcript reader",
+      );
+      await awaitGateBeforeSettlement(
+        refreshed.promise,
+        observers,
+        "startup observers settled before refreshing the restart sentinel",
       );
       expect(activate).not.toHaveBeenCalled();
       expect(refresh).toHaveBeenCalledOnce();

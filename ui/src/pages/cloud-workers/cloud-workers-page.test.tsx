@@ -326,12 +326,18 @@ describe("Cloud Workers mutation requests", () => {
         } else {
           gatewayHarness.publish(false);
           flush();
-          await waitForSolid(() => {
+          const deleteButton = await waitForSolid(() => {
             const retainedRow = [...page.querySelectorAll(".settings-row")].find(
               (entry) => entry.querySelector("code")?.textContent === "retained",
             );
-            expect(retainedRow?.textContent).toContain("Unavailable");
+            expect(retainedRow?.textContent).toContain("Advertised");
+            expect(retainedRow?.textContent).not.toContain("Unavailable");
+            const button = actionButton(expectDefined(retainedRow, "Retained profile"), "Delete");
+            expect(button.disabled).toBe(true);
+            return button;
           });
+          deleteButton.click();
+          expect(patches).toHaveLength(1);
         }
       } finally {
         view.unmount();

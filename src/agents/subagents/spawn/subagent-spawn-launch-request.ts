@@ -51,8 +51,8 @@ export function buildSubagentLaunchRequest(params: {
       ? {}
       : {
           channel: params.childSessionOrigin?.channel,
-          to: params.childSessionOrigin?.to ?? undefined,
-          accountId: params.childSessionOrigin?.accountId ?? undefined,
+          to: params.childSessionOrigin?.to,
+          accountId: params.childSessionOrigin?.accountId,
           threadId:
             params.childSessionOrigin?.threadId != null
               ? stringifyRouteThreadId(params.childSessionOrigin.threadId)

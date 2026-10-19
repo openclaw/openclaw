@@ -1,10 +1,6 @@
 import path from "node:path";
 import { expect, it, vi } from "vitest";
-import {
-  buildSourceConversationContext,
-  buildGroupChatContext,
-  buildGroupIntro,
-} from "../../auto-reply/reply/groups.js";
+import { buildSourceConversationContext, buildGroupIntro } from "../../auto-reply/reply/groups.js";
 import { buildInboundMetaSystemPrompt } from "../../auto-reply/reply/inbound-meta.js";
 import type { TemplateContext } from "../../auto-reply/templating.js";
 import type { ChannelPlugin } from "../../channels/plugins/types.public.js";
@@ -36,8 +32,9 @@ import {
   prepareEmbeddedSessionState,
 } from "./session-preparation.js";
 
+// mock-isolation: session preparation projects run state without loading the embedded runner owner.
 vi.mock("../embedded-agent-runner/runs.js", () => ({
-  resolveEmbeddedAgentSessionProgressState: () => undefined,
+  resolveSessionRunProgressState: () => undefined,
 }));
 vi.mock("../subagents/registry/subagent-registry-read.js", () => ({
   getLatestLiveSubagentRunByChildSessionKey: () => undefined,
@@ -269,7 +266,7 @@ it.each([
     const lifecycleGeneration = getAgentRunLifecycleGeneration();
     const state = () =>
       resolveVisibleActiveSessionRunState({
-        context: {},
+        storePath: "/unused/command.sqlite",
         requestedKey: sessionKey,
         canonicalKey: sessionKey,
         sessionId,
@@ -380,13 +377,7 @@ it.each([
     };
     const normalContext = [
       buildInboundMetaSystemPrompt(ctx, {}),
-      shared
-        ? buildGroupChatContext({
-            sessionCtx: ctx,
-          })
-        : buildSourceConversationContext({
-            sessionCtx: ctx,
-          }),
+      buildSourceConversationContext({ sessionCtx: ctx }),
       shared && buildGroupIntro({ activation: "always", defaultActivation: "mention" }),
     ]
       .filter(Boolean)

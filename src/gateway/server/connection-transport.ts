@@ -1,5 +1,8 @@
 import type { Result } from "@openclaw/normalization-core/result";
-import type { GatewayWsSessionEventAttribution } from "../../infra/diagnostic-rpc-types.js";
+import type {
+  GatewayWsPresenceMode,
+  GatewayWsSessionEventAttribution,
+} from "../../infra/diagnostic-rpc-types.js";
 import type { GatewayRole } from "../role-policy.types.js";
 
 export type GatewayConnectionFrame = Buffer | ArrayBuffer | Buffer[];
@@ -11,11 +14,12 @@ export type GatewayConnectionTransport = {
   readonly bufferedAmount: number;
   /** Installed codec can reuse worker-produced raw deflate with the default 15-bit window. */
   readonly acceptsDeflatedSegments?: boolean;
-  /** Physical WebSockets record accepted event frames using their encoded UTF-8 length. */
+  /** Physical WebSockets record accepted event frames and their encoded payload size. */
   recordEventSent?(
     event: string,
-    bytes: number,
+    frame: Buffer,
     sessionEvent?: GatewayWsSessionEventAttribution,
+    presenceMode?: GatewayWsPresenceMode,
   ): void;
   /** Combine writes until the next tick without changing frame order or callbacks. */
   batchWrites?(): void;

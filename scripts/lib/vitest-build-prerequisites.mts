@@ -281,6 +281,7 @@ const runtimeConsumers = [
   })),
   ...[
     "src/infra/database-engine/cli-oneshot.postgres.test.ts",
+    "src/infra/database-engine/interactive-setup.integration.test.ts",
     "src/infra/update-candidate-canary.integration.test.ts",
     "src/infra/update-managed-service-handoff-lifecycle.test.ts",
     "src/plugin-state/plugin-state-store.runtime.test.ts",
@@ -371,6 +372,7 @@ const runtimeConsumers = [
     "src/gateway/gateway-cron-process-identity.windows.test.ts",
     "src/gateway/gateway-route-model-reuse.test.ts",
     "src/gateway/gateway-ssh-upload-signal.test.ts",
+    "src/gateway/github-publication-draft.test.ts",
     "src/gateway/github-publication-requester-aliases.test.ts",
     "src/gateway/github-publication-requester.test.ts",
   ].map((file) => ({

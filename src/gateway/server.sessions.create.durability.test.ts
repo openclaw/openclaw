@@ -18,7 +18,11 @@ import * as workerAdmission from "../infra/sqlite-worker-operation-admission.js"
 import { sqliteWorkerOwnerProbe as probe } from "../infra/sqlite-worker-owner-probe.test-support.js";
 import { readLoggingConfig } from "../logging/config.js";
 import { applyLoggingConfig } from "../logging/logger.js";
-import { getSessionWorkAdmissionRelease } from "../sessions/session-lifecycle-admission.js";
+import { captureSessionControllerSettlement } from "../sessions/session-controller.lifecycle.js";
+import {
+  getRpcSource,
+  requestRpcSourceCancellation,
+} from "../sessions/session-controller.rpc-sources.js";
 import { onSessionTranscriptUpdate } from "../sessions/transcript-events.js";
 import { runOutsideStoreWriterContext } from "../shared/store-writer-queue.js";
 import { invalidateGatewayDeviceRevocation } from "./device-revocation.js";
@@ -102,14 +106,13 @@ afterEach(() => {
 
 function releaseDispatches() {
   for (const [turn] of dispatch.start.mock.calls) {
-    turn.replyAdmissionTicket?.release();
     turn.admission.cleanupAdmittedRun();
     clearAgentRunContext(turn.session.clientRunId, turn.admission.lifecycleGeneration);
   }
 }
 
 async function drainDispatches(storePath: string, identities: string[]) {
-  const released = getSessionWorkAdmissionRelease({ scope: storePath, identities });
+  const released = captureSessionControllerSettlement({ scope: storePath, identities });
   releaseDispatches();
   await released;
 }
@@ -321,9 +324,9 @@ test.for([
         }
         const options = expectDefined(initial, "initial request");
         const runId = String(options.params.idempotencyKey);
-        const run = expectDefined(options.context.chatAbortControllers.get(runId), "admitted run");
-        run.abortStopReason = "restart";
-        run.controller.abort(failure);
+        const run = expectDefined(getRpcSource(runId), "admitted run");
+        run.adapter.abortStopReason = "restart";
+        requestRpcSourceCancellation(run, failure);
       };
     }
     dispatch.start.mockClear();
@@ -343,7 +346,7 @@ test.for([
             JSON.stringify({ type: "req", id: requestId, method: "sessions.create", params }),
           );
           await withinTest(initialSettled.promise, signal);
-          await getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
+          await captureSessionControllerSettlement({ scope: storePath, identities: [key] });
           const closed = once(ws, "close");
           ws.close();
           await withinTest(closed, signal);
@@ -428,9 +431,9 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
         return;
       }
       hit();
-      const run = expectDefined(options.context.chatAbortControllers.get(runId), "committed run");
-      run.abortStopReason = "restart";
-      run.controller.abort();
+      const run = expectDefined(getRpcSource(runId), "committed run");
+      run.adapter.abortStopReason = "restart";
+      requestRpcSourceCancellation(run);
     });
     if (fault === "lost-worker-response") {
       turnBoundary.afterCommit = () => {
@@ -473,12 +476,11 @@ test.for(["lost-worker-response", "restart-before-ack"] as const)(
         options.context.dedupe.delete(`chat:${runId}`);
         await fixture.retry(message, runId);
         expect(dispatch.start).toHaveBeenCalledOnce();
-        const retriedRelease = getSessionWorkAdmissionRelease({
+        const retriedRelease = captureSessionControllerSettlement({
           scope: storePath,
           identities: [key],
         });
         const [turn] = dispatch.start.mock.calls[0]!;
-        turn.replyAdmissionTicket?.release();
         turn.admission.cleanupAdmittedRun();
         clearAgentRunContext(runId, turn.admission.lifecycleGeneration);
         await retriedRelease;
@@ -520,7 +522,7 @@ test("retries idle chat input after its atomic commit is refused", async () => {
     await fixture.create();
     const sent = await fixture.send(message, runId);
     expect(sent.ok).toBe(false);
-    await getSessionWorkAdmissionRelease({ scope: storePath, identities: [key] });
+    await captureSessionControllerSettlement({ scope: storePath, identities: [key] });
     expect(refused).toHaveBeenCalledOnce();
     expect(dispatch.start).not.toHaveBeenCalled();
     const scope = await expectUncommittedInput(target, fixture.read());

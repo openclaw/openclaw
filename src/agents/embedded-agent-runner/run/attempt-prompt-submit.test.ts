@@ -43,12 +43,13 @@ import {
   beginPromptCacheObservation,
   completePromptCacheObservation,
 } from "../prompt-cache-observability.js";
+import { getEmbeddedRunAttachment } from "../run-state.js";
+import { getActiveEmbeddedRunSnapshot } from "../runs.js";
 import {
-  clearActiveEmbeddedRun,
-  getActiveEmbeddedRunSnapshot,
-  setActiveEmbeddedRun,
-} from "../runs.js";
-import { createEmbeddedRunHandle } from "../runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+} from "../runs.test-support.js";
 import { clearEmbeddedSessionPromptStates } from "../session-prompt-state.js";
 import { normalizeMessagesForLlmBoundary } from "./attempt-llm-boundary.js";
 import { prepareEmbeddedAttemptPromptAssembly } from "./attempt-prompt-build.js";
@@ -562,7 +563,8 @@ describe("submitEmbeddedAttemptPrompt", () => {
         expect(activeSession.messages).toEqual(expectedSnapshotMessages);
         expect(sessionManager.getLeafId()).toBe(appended.entryId);
         const persistedBefore = loadTranscriptEventsSync(target);
-        setActiveEmbeddedRun(sessionId, handle, target.sessionKey);
+        const sessionFile = path.join(path.dirname(target.storePath), `${sessionId}.jsonl`);
+        setActiveEmbeddedRun(sessionId, handle, target.sessionKey, sessionFile);
         const assembly = await prepareEmbeddedAttemptPromptAssembly({
           attempt,
           activeSession,
@@ -582,13 +584,14 @@ describe("submitEmbeddedAttemptPrompt", () => {
         await submitEmbeddedAttemptPrompt({
           ...input,
           attempt,
+          registration: getEmbeddedRunAttachment(handle),
           activeSession,
           transcriptLeafId: assembly.transcriptLeafId,
           transcriptPrompt: currentUser.content,
           modelPrompt: currentUser.content,
           promptActiveSession: async () => undefined,
         });
-        const snapshot = getActiveEmbeddedRunSnapshot(sessionId);
+        const snapshot = getActiveEmbeddedRunSnapshot(sessionFile);
         if (!snapshot) {
           throw new Error("Expected the submitted main-run snapshot");
         }

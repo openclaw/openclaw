@@ -23,7 +23,6 @@ import { prepareChannelRunAdmission } from "./channel-run-admission.js";
 import { createQueueCase } from "./queue.case.test-support.js";
 import { enqueueFollowupRun, scheduleFollowupDrain } from "./queue.js";
 import {
-  clearFollowupQueueForTest,
   createQueueTestRun as createRun,
   createQueueSettings,
   installQueueRuntimeErrorSilencer,
@@ -96,7 +95,7 @@ describe("followup queue authority", () => {
         expect(q.calls[1]?.forceRestartSafeTools).not.toBe(true);
         expect(q.calls[1]?.forceCodeModeTools).not.toBe(true);
       } finally {
-        clearFollowupQueueForTest(q.key);
+        clearFollowupQueue(q.key);
       }
     },
   );
@@ -175,7 +174,7 @@ describe("followup queue authority", () => {
         },
       ]);
     } finally {
-      clearFollowupQueueForTest(q.key);
+      clearFollowupQueue(q.key);
     }
   });
 
@@ -327,21 +326,27 @@ describe("followup queue authority", () => {
 
   it.each(["old", "new", "summarize"] as const)(
     "releases original source holds exactly once across %s overflow and queue clearing",
-    (dropPolicy) => {
+    async (dropPolicy) => {
       const key = `test-operator-overflow-${dropPolicy}`;
       const source = createOperatorAuthority();
+      const runs: ReturnType<typeof createRun>[] = [];
       try {
         for (let index = 0; index < 5; index += 1) {
-          enqueueFollowupRun(
-            key,
-            { ...createRun({ prompt: `request ${index}` }), operatorAuthority: source.authority },
-            createQueueSettings({ cap: 1, dropPolicy }),
-          );
+          const run = createRun({ prompt: "request " + index });
+          run.operatorAuthority = source.authority;
+          runs.push(run);
+          enqueueFollowupRun(key, run, createQueueSettings({ cap: 1, dropPolicy }));
         }
         source.releaseRequest();
+        await Promise.all(
+          runs
+            .filter((run) => run.controllerInput?.custody.completed)
+            .map((run) => run.controllerInput!.settlement.promise),
+        );
         expect(source.references()).toBe(dropPolicy === "summarize" ? 3 : 1);
         clearFollowupQueue(key);
         clearFollowupQueue(key);
+        await Promise.all(runs.map((run) => run.controllerInput!.settlement.promise));
         expect(source.references()).toBe(0);
       } finally {
         clearFollowupQueue(key);
@@ -374,6 +379,7 @@ describe("followup queue authority", () => {
     try {
       enqueueFollowupRun(key, recovery.run, createQueueSettings());
       completeFollowupRunLifecycle(parent);
+      await parent.controllerInput!.settlement.promise;
       expect(source.references()).toBe(1);
       scheduleFollowupDrain(key, async (run) => {
         try {
@@ -532,17 +538,21 @@ describe("followup queue authority", () => {
   }) => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const sessionKey = "agent:main:collect-policy";
-      const firstStore = state.statePath("collect-first.sqlite");
-      const secondStore = state.statePath("collect-second.sqlite");
+      const policySessionKey = "agent:policy:collect-policy";
+      const firstStore = state.statePath("collect-main.sqlite");
+      const secondStore = state.statePath("collect-policy.sqlite");
+      const storeTemplate = state.statePath("collect-{agentId}.sqlite");
       for (const storePath of [firstStore, secondStore]) {
         await upsertSessionEntryCore(
-          { agentId: "main", sessionKey, storePath, env: state.env },
+          { agentId: "policy", sessionKey: policySessionKey, storePath, env: state.env },
           { sessionId: "collect-policy", updatedAt: 1, sandboxMode: "off" },
         );
       }
       // Settle setup owners before observing reads, including their WAL maintenance.
       await cleanupSessionStateForTest({ stateDir: state.stateDir, rootPath: state.root });
-      const sources = [firstStore, secondStore].map((storePath, index) => {
+      // Both executions belong to main's physical store. Independent policy lookup
+      // resolves the template for the policy agent, retaining the second-store wait.
+      const sources = [firstStore, storeTemplate].map((storePath, index) => {
         const run = createRun({
           prompt: `policy selection ${index}`,
           originatingChannel: "webchat",
@@ -550,13 +560,13 @@ describe("followup queue authority", () => {
         Object.assign(run.run, {
           agentId: "main",
           sessionKey,
-          runtimePolicySessionKey: sessionKey,
+          runtimePolicySessionKey: policySessionKey,
           senderIsOwner: true,
           gatewayUiCommandTarget: { connId: "shared-browser", profileId: "viewer" },
           clientCaps: ["ui-commands"],
           config: {
             session: { store: storePath },
-            agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {} } },
+            agents: { defaults: { sandbox: { mode: "all" } }, entries: { main: {}, policy: {} } },
             tools: {
               sandbox: { tools: { allow: ["*"], deny: index === 0 ? ["screen", "theme"] : [] } },
             },
@@ -611,7 +621,7 @@ describe("followup queue authority", () => {
             .prepare(
               "UPDATE session_nodes SET entry_json = json_remove(entry_json, '$.sandboxMode') WHERE session_key = ?",
             )
-            .run(sessionKey);
+            .run(policySessionKey);
         } finally {
           foreign.close();
         }

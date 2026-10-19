@@ -20,6 +20,13 @@ import {
 } from "./workspace-result-staging.js";
 import { writeWorkspaceFiles } from "./workspace-sync-scripts.test-support.js";
 
+const workerPackage = ".artifacts/vitest-workers/run-cache-0/package.json";
+const packageCaches = [
+  ".local/share/pnpm/store/v11/files/10/package-content",
+  ".cache/openclaw/bun/pinned/linux-x64/bin/bun",
+  ".cache/ms-playwright/chromium-1248/chrome-linux64/chrome",
+];
+
 function legacyManifest(manifest: WorkerWorkspaceManifest) {
   // Preserve historical generated entries, independently of today's serializer.
   const entries = [
@@ -34,7 +41,9 @@ export async function proveGeneratedWorkspaceExpiry(owner: LocalWorkspaceOwner) 
   const projection = await withLocalWorkspaceProjection(owner, (state) => state.prepare());
   await writeWorkspaceFiles(projection, {
     ".cache/vitest/results.json": "old cache",
+    ...Object.fromEntries(packageCaches.map((name) => [name, "old cache"])),
     ".artifacts/dist-artifacts.lock/owner.json": "old owner",
+    [workerPackage]: '{"type":"module"}\n',
   });
   const row = (await readLocalWorkspaceProjection(owner.worktree.id))!;
   const legacy = legacyManifest({
@@ -46,7 +55,12 @@ export async function proveGeneratedWorkspaceExpiry(owner: LocalWorkspaceOwner) 
   });
   await closeOpenClawStateDatabaseAsync();
   await fs.writeFile(path.join(projection, ".cache/vitest/results.json"), "new cache");
+  await writeWorkspaceFiles(
+    projection,
+    Object.fromEntries(packageCaches.map((name) => [name, "new cache"])),
+  );
   await fs.rm(path.join(projection, ".artifacts/dist-artifacts.lock"), { recursive: true });
+  await fs.rm(path.join(projection, ".artifacts/vitest-workers"), { recursive: true });
   await fs.writeFile(path.join(projection, "source.txt"), "unaccepted source");
   await expect(withLocalWorkspaceProjection(owner, (state) => state.expire())).rejects.toThrow(
     "unaccepted edits",
@@ -66,10 +80,12 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
   const cache = ".cache/vitest/results.json";
   const lock = ".artifacts/dist-artifacts.lock/owner.json";
   const projectFiles = {
-    ".gitignore": ".env.local\n.artifacts/\n.cache/\n",
+    ".gitignore": ".env.local\n.artifacts/\n.cache/\n.local/\n",
     "source.txt": "guest source edit\n",
     ".artifacts/report.md": "guest report\n",
+    ".artifacts/vitest-workers-notes.md": "guest notes\n",
     ".cache/user-data.json": "user data\n",
+    ".local/share/user-data.json": "user data\n",
   };
   if (copied) {
     await writeWorkspaceFiles(projection, projectFiles);
@@ -80,7 +96,9 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
   const files = {
     ...projectFiles,
     [cache]: "captured cache\n",
+    ...Object.fromEntries(packageCaches.map((name) => [name, "captured cache\n"])),
     [lock]: "departed owner\n",
+    [workerPackage]: '{"type":"module"}\n',
   };
   await writeWorkspaceFiles(projection, files);
   const current = { ...(await manifestFor(projection)), baseCommit: row.base_commit };
@@ -114,10 +132,17 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
       pending_target: "canonical",
     });
   });
-  await writeWorkspaceFiles(owner.worktree.path, { [cache]: "local cache churn\n" });
+  await writeWorkspaceFiles(
+    owner.worktree.path,
+    Object.fromEntries([cache, ...packageCaches].map((name) => [name, "local cache churn\n"])),
+  );
   await fs.rm(path.join(owner.worktree.path, lock), { force: true });
   await fs.rm(path.join(projection, lock));
-  await fs.writeFile(path.join(projection, cache), "guest cache churn\n");
+  await fs.rm(path.join(projection, ".artifacts/vitest-workers"), { recursive: true });
+  await writeWorkspaceFiles(
+    projection,
+    Object.fromEntries([cache, ...packageCaches].map((name) => [name, "guest cache churn\n"])),
+  );
   await closeOpenClawStateDatabaseAsync();
 
   await withLocalWorkspaceProjection(owner, (state) => state.settle());
@@ -131,12 +156,16 @@ export async function proveGeneratedWorkspaceRecovery(owner: LocalWorkspaceOwner
     for (const [name, content] of Object.entries(projectFiles)) {
       expect(await fs.readFile(path.join(directory, name), "utf8")).toBe(content);
     }
-    await expect(fs.stat(path.join(directory, lock))).rejects.toMatchObject({ code: "ENOENT" });
+    for (const name of [lock, workerPackage]) {
+      await expect(fs.stat(path.join(directory, name))).rejects.toMatchObject({ code: "ENOENT" });
+    }
   }
-  expect(await fs.readFile(path.join(owner.worktree.path, cache), "utf8")).toBe(
-    "local cache churn\n",
-  );
-  expect(await fs.readFile(path.join(projection, cache), "utf8")).toBe("guest cache churn\n");
+  for (const name of [cache, ...packageCaches]) {
+    expect(await fs.readFile(path.join(owner.worktree.path, name), "utf8")).toBe(
+      "local cache churn\n",
+    );
+    expect(await fs.readFile(path.join(projection, name), "utf8")).toBe("guest cache churn\n");
+  }
   expect(await fs.readFile(path.join(owner.worktree.path, ".env.local"), "utf8")).toBe(
     "host-only-secret",
   );

@@ -19,6 +19,7 @@ type NodePendingWorkItem = {
 };
 
 type NodePendingWorkState = {
+  pairingGeneration: string | undefined;
   revision: number;
   itemsById: Map<string, NodePendingWorkItem>;
 };
@@ -46,21 +47,14 @@ const PRIORITY_RANK: Record<NodePendingWorkPriority, number> = {
   default: 1,
 };
 
-const stateByNodeId = new Map<string, Map<string | undefined, NodePendingWorkState>>();
+const stateByNodeId = new Map<string, NodePendingWorkState>();
 
 function getOrCreateState(nodeId: string, pairingGeneration?: string): NodePendingWorkState {
-  let states = stateByNodeId.get(nodeId);
-  if (!states) {
-    states = new Map();
-    stateByNodeId.set(nodeId, states);
-  }
-  let state = states.get(pairingGeneration);
-  if (!state) {
-    state = {
-      revision: 0,
-      itemsById: new Map(),
-    };
-    states.set(pairingGeneration, state);
+  let state = stateByNodeId.get(nodeId);
+  if (!state || state.pairingGeneration !== pairingGeneration) {
+    // A newly admitted pairing replaces work that its retired predecessor cannot consume.
+    state = { pairingGeneration, revision: 0, itemsById: new Map() };
+    stateByNodeId.set(nodeId, state);
   }
   return state;
 }
@@ -79,40 +73,9 @@ function pruneExpired(state: NodePendingWorkState, nowMs: number): void {
   }
 }
 
-function pruneExpiredRetiredGenerations(
-  nodeId: string,
-  currentPairingGeneration: string | undefined,
-  nowMs: number,
-): void {
-  const states = stateByNodeId.get(nodeId);
-  if (!states) {
-    return;
-  }
-  for (const [pairingGeneration, state] of states) {
-    if (pairingGeneration === currentPairingGeneration) {
-      continue;
-    }
-    pruneExpired(state, nowMs);
-    if (state.itemsById.size === 0) {
-      states.delete(pairingGeneration);
-    }
-  }
-  if (states.size === 0) {
-    stateByNodeId.delete(nodeId);
-  }
-}
-
-function pruneStateIfEmpty(
-  nodeId: string,
-  pairingGeneration: string | undefined,
-  state: NodePendingWorkState,
-) {
+function pruneStateIfEmpty(nodeId: string, state: NodePendingWorkState) {
   if (state.itemsById.size === 0) {
-    const states = stateByNodeId.get(nodeId);
-    states?.delete(pairingGeneration);
-    if (states?.size === 0) {
-      stateByNodeId.delete(nodeId);
-    }
+    stateByNodeId.delete(nodeId);
   }
 }
 
@@ -148,9 +111,6 @@ export function enqueueNodePendingWork(params: {
   }
   const rawNowMs = Date.now();
   const nowMs = resolveDateTimestampMs(rawNowMs);
-  // Generation changes stop touching old buckets, so sweep their TTLs from
-  // every active-generation access instead of retaining retired work forever.
-  pruneExpiredRetiredGenerations(nodeId, params.pairingGeneration, nowMs);
   const state = getOrCreateState(nodeId, params.pairingGeneration);
   pruneExpired(state, nowMs);
   // Keep one outstanding item per type so repeated status/location requests
@@ -178,15 +138,10 @@ export function clearNodePendingWork(nodeId: string, pairingGeneration?: string)
   if (!normalizedNodeId) {
     return false;
   }
-  if (pairingGeneration === undefined) {
-    return stateByNodeId.delete(normalizedNodeId);
-  }
-  const states = stateByNodeId.get(normalizedNodeId);
-  const deleted = states?.delete(pairingGeneration) ?? false;
-  if (states?.size === 0) {
-    stateByNodeId.delete(normalizedNodeId);
-  }
-  return deleted;
+  const state = stateByNodeId.get(normalizedNodeId);
+  return pairingGeneration === undefined || state?.pairingGeneration === pairingGeneration
+    ? stateByNodeId.delete(normalizedNodeId)
+    : false;
 }
 
 /** Removes one exact item without disturbing concurrent work in the same generation. */
@@ -199,12 +154,16 @@ export function removeNodePendingWorkItem(params: {
   if (!normalizedNodeId || !params.itemId) {
     return false;
   }
-  const state = stateByNodeId.get(normalizedNodeId)?.get(params.pairingGeneration);
-  if (!state || !state.itemsById.delete(params.itemId)) {
+  const state = stateByNodeId.get(normalizedNodeId);
+  if (
+    !state ||
+    state.pairingGeneration !== params.pairingGeneration ||
+    !state.itemsById.delete(params.itemId)
+  ) {
     return false;
   }
   state.revision += 1;
-  pruneStateIfEmpty(normalizedNodeId, params.pairingGeneration, state);
+  pruneStateIfEmpty(normalizedNodeId, state);
   return true;
 }
 
@@ -215,12 +174,12 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
     return { revision: 0, items: [], hasMore: false };
   }
   const nowMs = resolveDateTimestampMs(opts.nowMs ?? Date.now());
-  pruneExpiredRetiredGenerations(normalizedNodeId, opts.pairingGeneration, nowMs);
-  const state = stateByNodeId.get(normalizedNodeId)?.get(opts.pairingGeneration);
-  if (state) {
-    pruneExpired(state, nowMs);
-    pruneStateIfEmpty(normalizedNodeId, opts.pairingGeneration, state);
+  const retained = stateByNodeId.get(normalizedNodeId);
+  if (retained) {
+    pruneExpired(retained, nowMs);
+    pruneStateIfEmpty(normalizedNodeId, retained);
   }
+  const state = retained?.pairingGeneration === opts.pairingGeneration ? retained : undefined;
   const revision = state?.revision ?? 0;
   const maxItems = Math.min(MAX_ITEMS, Math.max(1, Math.trunc(opts.maxItems ?? DEFAULT_MAX_ITEMS)));
   const explicitItems = state ? sortedItems(state) : [];
@@ -233,7 +192,7 @@ export function drainNodePendingWork(nodeId: string, opts: DrainOptions = {}): D
       state.itemsById.delete(item.id);
     }
     state.revision += 1;
-    pruneStateIfEmpty(normalizedNodeId, opts.pairingGeneration, state);
+    pruneStateIfEmpty(normalizedNodeId, state);
   }
   const baselineIncluded = includeBaseline && items.length < maxItems;
   if (baselineIncluded) {

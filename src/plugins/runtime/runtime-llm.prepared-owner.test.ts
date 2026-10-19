@@ -406,10 +406,6 @@ it.each([
         finish(requests[index]!, index);
         await expect(completion).resolves.toMatchObject(expectedResult(index, changed));
       };
-      const expectSeparateForks = (previous: number) => {
-        expect(fork.mock.calls).toHaveLength(previous + 1);
-        expect(fork.mock.calls[previous - 1]![0]).not.toBe(fork.mock.calls[previous]![0]);
-      };
       const publishAuth = (key: string) =>
         setRuntimeAuthProfileStoreSnapshot(
           {
@@ -690,6 +686,7 @@ it.each([
             ? parentWork.track(() => start(0, abortController?.signal))
             : start(0, abortController?.signal);
         await waitForRequest(0, first);
+        const firstResolved = await resolver.mock.results.at(-1)!.value;
         const firstBuilds = create.mock.calls.length;
         expect(firstBuilds).toBeGreaterThan(0);
         if (mode === "provider-error" || mode === "abort") {
@@ -740,14 +737,20 @@ it.each([
           }
         }
         const buildsBeforeSecond = create.mock.calls.length;
-        const forksBeforeSecond = fork.mock.calls.length;
         const second = start(1);
         await waitForRequest(1, second);
+        const secondResolved = await resolver.mock.results.at(-1)!.value;
         const secondBuilds = create.mock.calls.length;
         if (mode === "overlap" || mode === "lru" || drainMode) {
           expect.soft(secondBuilds).toBe(sdk || drainMode ? firstBuilds : buildsBeforeSecond);
         }
-        expectSeparateForks(sdk || drainMode ? 1 : forksBeforeSecond);
+        // Published catalog overlays may fork twice while retaining one completion's auth store.
+        expect(firstResolved.authStorage).toBeDefined();
+        expect(firstResolved.modelRegistry).toBeDefined();
+        expect(secondResolved.authStorage).toBeDefined();
+        expect(secondResolved.modelRegistry).toBeDefined();
+        expect(secondResolved.authStorage).not.toBe(firstResolved.authStorage);
+        expect(secondResolved.modelRegistry).not.toBe(firstResolved.modelRegistry);
         if (drainMode) {
           expect.soft(parentDrained).toBe(false);
           if (anthropicReadCancel) {

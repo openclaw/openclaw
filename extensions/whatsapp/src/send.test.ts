@@ -17,9 +17,7 @@ let sendPollWhatsApp: typeof import("./send.js").sendPollWhatsApp;
 let sendReactionWhatsApp: typeof import("./send.js").sendReactionWhatsApp;
 let sendTypingWhatsApp: typeof import("./send.js").sendTypingWhatsApp;
 
-const WHATSAPP_TEST_CFG: OpenClawConfig = {
-  channels: { whatsapp: {} },
-};
+const WHATSAPP_TEST_CFG: OpenClawConfig = { channels: { whatsapp: {} } };
 
 vi.mock("./connection-controller-runtime-context.js", async () => {
   const actual = await vi.importActual<typeof import("./connection-controller-runtime-context.js")>(
@@ -29,11 +27,7 @@ vi.mock("./connection-controller-runtime-context.js", async () => {
     ...actual,
     getWhatsAppConnectionController: vi.fn((accountId: string) => {
       const listener = hoisted.controllerListeners.get(accountId) ?? null;
-      return listener
-        ? {
-            getActiveListener: () => listener,
-          }
-        : null;
+      return listener ? { getActiveListener: () => listener } : null;
     }),
   };
 });
@@ -58,6 +52,14 @@ vi.mock("openclaw/plugin-sdk/media-runtime", async () => {
   };
 });
 
+function sendOptions(overrides: Partial<Parameters<typeof sendWhatsAppUploadFile>[2]> = {}) {
+  return { verbose: false, cfg: WHATSAPP_TEST_CFG, ...overrides };
+}
+
+function sendText(body: string, overrides: Parameters<typeof sendOptions>[0] = {}) {
+  return sendMessageWhatsApp("+1555", body, sendOptions(overrides));
+}
+
 describe("web outbound", () => {
   const sendComposingTo = vi.fn(async () => {});
   const sendMessage = vi.fn(async () => createAcceptedWhatsAppSendResult("text", "msg123"));
@@ -65,6 +67,25 @@ describe("web outbound", () => {
   const sendReaction = vi.fn(async () =>
     createAcceptedWhatsAppSendResult("reaction", "reaction123"),
   );
+
+  function listener(overrides: Partial<ActiveWebListener> = {}) {
+    return { sendComposingTo, sendMessage, sendPoll, sendReaction, ...overrides };
+  }
+  function rejectReachout() {
+    const assertSendReady = vi.fn(async () => {
+      throw new Error("WhatsApp reachout timelock is active");
+    });
+    hoisted.controllerListeners.set("default", listener({ assertSendReady }));
+    return assertSendReady;
+  }
+  function media(buffer: Buffer, contentType: string, kind: string, fileName?: string) {
+    loadWebMediaMock.mockResolvedValueOnce({
+      buffer,
+      contentType,
+      kind,
+      ...(fileName ? { fileName } : {}),
+    });
+  }
 
   beforeAll(async () => {
     ({
@@ -101,12 +122,7 @@ describe("web outbound", () => {
         }),
     );
     hoisted.controllerListeners.clear();
-    hoisted.controllerListeners.set("default", {
-      sendComposingTo,
-      sendMessage,
-      sendPoll,
-      sendReaction,
-    });
+    hoisted.controllerListeners.set("default", listener());
   });
 
   afterEach(() => {
@@ -114,12 +130,10 @@ describe("web outbound", () => {
   });
 
   it("delivers an image without alt text instead of reporting an unsent success", async () => {
-    await expect(
-      sendMessageWhatsApp("+1555", "![](https://example.com/diagram.png)", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-      }),
-    ).resolves.toEqual({ messageId: "msg123", toJid: "1555@s.whatsapp.net" });
+    await expect(sendText("![](https://example.com/diagram.png)")).resolves.toEqual({
+      messageId: "msg123",
+      toJid: "1555@s.whatsapp.net",
+    });
     expect(sendMessage).toHaveBeenCalledExactlyOnceWith(
       "+1555",
       "![](https://example.com/diagram.png)",
@@ -129,11 +143,7 @@ describe("web outbound", () => {
   });
 
   it("rejects provider-unaccepted voice sends without synthetic delivery progress", async () => {
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("voice"),
-      contentType: "audio/ogg",
-      kind: "audio",
-    });
+    media(Buffer.from("voice"), "audio/ogg", "audio");
     sendMessage.mockResolvedValueOnce({
       kind: "media",
       messageId: "unknown",
@@ -142,12 +152,7 @@ describe("web outbound", () => {
     });
     const onDeliveryResult = vi.fn();
     await expect(
-      sendMessageWhatsApp("+1555", "hello", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-        mediaUrl: "/tmp/voice.ogg",
-        onDeliveryResult,
-      }),
+      sendText("hello", { mediaUrl: "/tmp/voice.ogg", onDeliveryResult }),
     ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(sendMessage).toHaveBeenCalledOnce();
     expect(onDeliveryResult).not.toHaveBeenCalled();
@@ -156,17 +161,17 @@ describe("web outbound", () => {
   it("still sends when composing presence fails", async () => {
     sendComposingTo.mockRejectedValueOnce(new Error("presence update unavailable"));
 
-    await expect(
-      sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg: WHATSAPP_TEST_CFG }),
-    ).resolves.toEqual({ messageId: "msg123", toJid: "1555@s.whatsapp.net" });
+    await expect(sendText("hi")).resolves.toEqual({
+      messageId: "msg123",
+      toJid: "1555@s.whatsapp.net",
+    });
     expect(sendComposingTo).toHaveBeenCalledWith("+1555");
     expect(sendMessage).toHaveBeenCalledWith("+1555", "hi", undefined, undefined);
   });
 
   it("re-chunks after WhatsApp marker expansion", async () => {
     const onDeliveryResult = vi.fn();
-    await sendMessageWhatsApp("+1555", Array.from({ length: 8 }, () => "`x`").join(" "), {
-      verbose: false,
+    await sendText(Array.from({ length: 8 }, () => "`x`").join(" "), {
       cfg: { channels: { whatsapp: { textChunkLimit: 20 } } },
       onDeliveryResult,
     });
@@ -181,23 +186,9 @@ describe("web outbound", () => {
   });
 
   it("checks send readiness before composing or sending direct messages", async () => {
-    const assertSendReady = vi.fn(async () => {
-      throw new Error("WhatsApp reachout timelock is active");
-    });
-    hoisted.controllerListeners.set("default", {
-      assertSendReady,
-      sendComposingTo,
-      sendMessage,
-      sendPoll,
-      sendReaction,
-    });
+    const assertSendReady = rejectReachout();
 
-    await expect(
-      sendMessageWhatsApp("+1555", "hi", {
-        verbose: false,
-        cfg: WHATSAPP_TEST_CFG,
-      }),
-    ).rejects.toThrow("WhatsApp reachout timelock is active");
+    await expect(sendText("hi")).rejects.toThrow("WhatsApp reachout timelock is active");
 
     expect(assertSendReady).toHaveBeenCalledWith("+1555");
     expect(sendComposingTo).not.toHaveBeenCalled();
@@ -208,68 +199,35 @@ describe("web outbound", () => {
     sendMessage.mockResolvedValueOnce({
       kind: "text",
       messageId: "msg-lid",
-      keys: [
-        {
-          id: "msg-lid",
-          remoteJid: "123456789@lid",
-          fromMe: true,
-        },
-      ],
+      keys: [{ id: "msg-lid", remoteJid: "123456789@lid", fromMe: true }],
       providerAccepted: true,
     });
 
-    const result = await sendMessageWhatsApp("+1555", "hi", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-    });
+    const result = await sendText("hi");
 
-    expect(result).toEqual({
-      messageId: "msg-lid",
-      toJid: "123456789@lid",
-    });
+    expect(result).toEqual({ messageId: "msg-lid", toJid: "123456789@lid" });
   });
 
   it("preserves intentional indentation when the caller opts out of transport trimming", async () => {
-    await sendMessageWhatsApp("+1555", "    indented", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      preserveLeadingWhitespace: true,
-    });
+    await sendText("    indented", { preserveLeadingWhitespace: true });
 
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "    indented", undefined, undefined);
   });
 
   it("skips whitespace-only text sends without media", async () => {
-    const result = await sendMessageWhatsApp("+1555", "\n \t", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-    });
+    const result = await sendText("\n \t");
 
-    expect(result).toEqual({
-      messageId: "",
-      toJid: "1555@s.whatsapp.net",
-    });
+    expect(result).toEqual({ messageId: "", toJid: "1555@s.whatsapp.net" });
     expect(sendComposingTo).not.toHaveBeenCalled();
     expect(sendMessage).not.toHaveBeenCalled();
   });
 
   it("checks send readiness before standalone direct typing", async () => {
-    const assertSendReady = vi.fn(async () => {
-      throw new Error("WhatsApp reachout timelock is active");
-    });
-    hoisted.controllerListeners.set("default", {
-      assertSendReady,
-      sendComposingTo,
-      sendMessage,
-      sendPoll,
-      sendReaction,
-    });
+    const assertSendReady = rejectReachout();
 
-    await expect(
-      sendTypingWhatsApp("+1555", {
-        cfg: WHATSAPP_TEST_CFG,
-      }),
-    ).rejects.toThrow("WhatsApp reachout timelock is active");
+    await expect(sendTypingWhatsApp("+1555", { cfg: WHATSAPP_TEST_CFG })).rejects.toThrow(
+      "WhatsApp reachout timelock is active",
+    );
 
     expect(assertSendReady).toHaveBeenCalledWith("+1555");
     expect(sendComposingTo).not.toHaveBeenCalled();
@@ -277,11 +235,7 @@ describe("web outbound", () => {
 
   it("throws a helpful error when no active listener exists", async () => {
     hoisted.controllerListeners.clear();
-    const error = await sendMessageWhatsApp("+1555", "hi", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      accountId: "work",
-    }).catch((err: unknown) => err);
+    const error = await sendText("hi", { accountId: "work" }).catch((err: unknown) => err);
 
     expect(error).toBeInstanceOf(PlatformMessageNotDispatchedError);
     expect(error).toMatchObject({
@@ -295,25 +249,14 @@ describe("web outbound", () => {
   it("does not retry transient outbound send failures to avoid duplicate sends", async () => {
     sendMessage.mockRejectedValueOnce({ error: { message: "connection closed" } });
 
-    await expect(
-      sendMessageWhatsApp("+1555", "hi", { verbose: false, cfg: WHATSAPP_TEST_CFG }),
-    ).rejects.toEqual({ error: { message: "connection closed" } });
+    await expect(sendText("hi")).rejects.toEqual({ error: { message: "connection closed" } });
     expect(sendMessage).toHaveBeenCalledTimes(1);
   });
 
   it("marks gif playback for video when requested", async () => {
     const buf = Buffer.from("gifvid");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: "video/mp4",
-      kind: "video",
-    });
-    await sendMessageWhatsApp("+1555", "gif", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/anim.mp4",
-      gifPlayback: true,
-    });
+    media(buf, "video/mp4", "video");
+    await sendText("gif", { mediaUrl: "/tmp/anim.mp4", gifPlayback: true });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "gif", buf, "video/mp4", {
       gifPlayback: true,
     });
@@ -322,21 +265,18 @@ describe("web outbound", () => {
   it("infers opaque image uploads from the requested filename", async () => {
     const buffer = Buffer.from("attachment");
     const mediaReadFile = vi.fn(async () => buffer);
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer,
-      contentType: "application/octet-stream",
-      kind: "document",
-      fileName: "blob",
-    });
-    await sendWhatsAppUploadFile("+1555", "attachment", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "https://example.com/blob",
-      fileName: "Receipt.png",
-      forceDocument: true,
-      mediaLocalRoots: ["/tmp/approved"],
-      mediaReadFile,
-    });
+    media(buffer, "application/octet-stream", "document", "blob");
+    await sendWhatsAppUploadFile(
+      "+1555",
+      "attachment",
+      sendOptions({
+        mediaUrl: "https://example.com/blob",
+        fileName: "Receipt.png",
+        forceDocument: true,
+        mediaLocalRoots: ["/tmp/approved"],
+        mediaReadFile,
+      }),
+    );
     expect(loadWebMediaMock).toHaveBeenCalledWith("https://example.com/blob", {
       maxBytes: 50 * 1024 * 1024,
       localRoots: ["/tmp/approved"],
@@ -351,19 +291,16 @@ describe("web outbound", () => {
 
   it("uses explicit upload MIME metadata to deliver a remote PDF as a document", async () => {
     const buffer = Buffer.from("attachment");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer,
-      contentType: "application/octet-stream",
-      kind: "document",
-      fileName: "download.bin",
-    });
-    await sendWhatsAppUploadFile("+1555", "attachment", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "https://example.com/opaque-document",
-      contentType: "application/pdf",
-      fileName: "report.pdf",
-    });
+    media(buffer, "application/octet-stream", "document", "download.bin");
+    await sendWhatsAppUploadFile(
+      "+1555",
+      "attachment",
+      sendOptions({
+        mediaUrl: "https://example.com/opaque-document",
+        contentType: "application/pdf",
+        fileName: "report.pdf",
+      }),
+    );
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "attachment", buffer, "application/pdf", {
       fileName: "report.pdf",
     });
@@ -371,9 +308,7 @@ describe("web outbound", () => {
 
   it("keeps explicit document delivery for prehydrated video payloads", async () => {
     const buf = Buffer.from("visual-as-document");
-    await sendMessageWhatsApp("+1555", "doc", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
+    await sendText("doc", {
       mediaPayload: {
         buffer: buf,
         contentType: "video/mp4",
@@ -389,16 +324,8 @@ describe("web outbound", () => {
 
   it("maps documents without fileName to MIME-aware default filename", async () => {
     const buf = Buffer.from("pdf");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: "application/pdf",
-      kind: "document",
-    });
-    await sendMessageWhatsApp("+1555", "doc", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "media://generated",
-    });
+    media(buf, "application/pdf", "document");
+    await sendText("doc", { mediaUrl: "media://generated" });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "doc", buf, "application/pdf", {
       fileName: "file.pdf",
     });
@@ -406,18 +333,8 @@ describe("web outbound", () => {
 
   it("forces document branch when forceDocument is true with video media", async () => {
     const buf = Buffer.from("video");
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: buf,
-      contentType: "video/mp4",
-      kind: "video",
-      fileName: "clip.mp4",
-    });
-    await sendMessageWhatsApp("+1555", "watch", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
-      mediaUrl: "/tmp/clip.mp4",
-      forceDocument: true,
-    });
+    media(buf, "video/mp4", "video", "clip.mp4");
+    await sendText("watch", { mediaUrl: "/tmp/clip.mp4", forceDocument: true });
     expect(sendMessage).toHaveBeenLastCalledWith("+1555", "watch", buf, "video/mp4", {
       asDocument: true,
       fileName: "clip.mp4",
@@ -425,33 +342,14 @@ describe("web outbound", () => {
   });
 
   it("uses account-aware WhatsApp media caps for outbound uploads", async () => {
-    hoisted.controllerListeners.set("work", {
-      sendComposingTo,
-      sendMessage,
-      sendPoll,
-      sendReaction,
-    });
-    loadWebMediaMock.mockResolvedValueOnce({
-      buffer: Buffer.from("img"),
-      contentType: "image/jpeg",
-      kind: "image",
-    });
+    hoisted.controllerListeners.set("work", listener());
+    media(Buffer.from("img"), "image/jpeg", "image");
 
-    const cfg = {
-      channels: {
-        whatsapp: {
-          mediaMaxMb: 25,
-          accounts: {
-            work: {
-              mediaMaxMb: 100,
-            },
-          },
-        },
-      },
-    } as OpenClawConfig;
+    const cfg: OpenClawConfig = {
+      channels: { whatsapp: { mediaMaxMb: 25, accounts: { work: { mediaMaxMb: 100 } } } },
+    };
 
-    await sendMessageWhatsApp("+1555", "pic", {
-      verbose: false,
+    await sendText("pic", {
       accountId: "work",
       cfg,
       mediaUrl: "/tmp/pic.jpg",
@@ -475,34 +373,17 @@ describe("web outbound", () => {
     });
 
     await expect(
-      sendPollWhatsApp(
-        "+1555",
-        { question: "Lunch?", options: ["Pizza", "Sushi"] },
-        { verbose: false, cfg: WHATSAPP_TEST_CFG },
-      ),
+      sendPollWhatsApp("+1555", { question: "Lunch?", options: ["Pizza", "Sushi"] }, sendOptions()),
     ).rejects.toBeInstanceOf(PlatformMessageNotDispatchedError);
 
     expect(sendPoll).toHaveBeenCalledOnce();
   });
 
   it("checks send readiness before sending direct polls", async () => {
-    const assertSendReady = vi.fn(async () => {
-      throw new Error("WhatsApp reachout timelock is active");
-    });
-    hoisted.controllerListeners.set("default", {
-      assertSendReady,
-      sendComposingTo,
-      sendMessage,
-      sendPoll,
-      sendReaction,
-    });
+    const assertSendReady = rejectReachout();
 
     await expect(
-      sendPollWhatsApp(
-        "+1555",
-        { question: "Lunch?", options: ["Pizza", "Sushi"] },
-        { verbose: false, cfg: WHATSAPP_TEST_CFG },
-      ),
+      sendPollWhatsApp("+1555", { question: "Lunch?", options: ["Pizza", "Sushi"] }, sendOptions()),
     ).rejects.toThrow("WhatsApp reachout timelock is active");
 
     expect(assertSendReady).toHaveBeenCalledWith("+1555");
@@ -511,8 +392,7 @@ describe("web outbound", () => {
 
   it("sends reactions via active listener", async () => {
     await sendReactionWhatsApp("1555@s.whatsapp.net", "msg123", "✅", {
-      verbose: false,
-      cfg: WHATSAPP_TEST_CFG,
+      ...sendOptions(),
       fromMe: false,
     });
     expect(sendReaction).toHaveBeenCalledWith(

@@ -6,6 +6,12 @@ import { fileURLToPath } from "node:url";
 import { collectNestedErrorCandidates } from "@openclaw/normalization-core/error-coercion";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../../test/helpers/fixture-lifetime.js";
+import { openFixtureReceiptChannel } from "../../../test/helpers/fixture-receipts.js";
+import {
+  awaitGateBeforeSettlement,
+  createDeferred,
+  withinTest,
+} from "../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
 import { asResolvedSourceConfig, asRuntimeConfig } from "../../config/materialize.js";
 import { readDaemonRuntimePin } from "../../daemon/runtime-pin-state.js";
@@ -32,6 +38,7 @@ import {
   CommandProcessCleanupError,
   hasCommandProcessCleanupError,
 } from "../../process/exec-result.js";
+import * as childCommandBuffers from "../../process/exec-runner.js";
 import * as childCommands from "../../process/exec.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_AGENT_SCHEMA_VERSION } from "../../state/openclaw-agent-db-contract.js";
@@ -125,6 +132,9 @@ it.each<MigratedPackageFinalizationCase>([
   { pending: false, status: "error", candidateStartAttempted: false, backup: true, windows: true },
   { pending: false, status: "ok", completion: "success" },
   { pending: false, status: "ok", completion: "failure" },
+  { pending: false, status: "error", diagnostics: "interrupted" },
+  { pending: false, status: "error", diagnostics: "truncated" },
+  { pending: false, status: "error", diagnostics: "incomplete" },
   {
     pending: false,
     status: "error",
@@ -134,13 +144,13 @@ it.each<MigratedPackageFinalizationCase>([
     recovered: true,
   },
 ])(
-  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows, completion=$completion, recovered=$recovered)",
+  "retains the backup across migrated finalization (pending=$pending, status=$status, start=$candidateStartAttempted, backup=$backup, windows=$windows, completion=$completion, recovered=$recovered, diagnostics=$diagnostics)",
   async (scenario) => {
     await expectMigratedPackageFinalization(dirs.make("migrated-readiness-pending-"), scenario);
   },
 );
 
-it.each([
+it.for([
   { json: false, legacy: false, parentOwns: false, replay: "settled" },
   { json: true, legacy: false, parentOwns: true, replay: "refused" },
   { json: true, legacy: false, parentOwns: true },
@@ -160,18 +170,22 @@ it.each([
   { json: true, legacy: false, parentOwns: true, settlement: "uncertain-cleanup" },
 ])(
   "fences migrated candidate finalization (json=$json, legacy=$legacy, parentOwns=$parentOwns, foreground=$foreground, retained=$retained, original=$original, check=$checkWorkMs, budget=$stepBudgetMs, settlement=$settlement, replay=$replay)",
-  async ({
-    json,
-    legacy,
-    parentOwns,
-    foreground,
-    retained,
-    original,
-    checkWorkMs,
-    stepBudgetMs,
-    settlement,
-    replay,
-  }) => {
+  { timeout: 30_000 },
+  async (
+    {
+      json,
+      legacy,
+      parentOwns,
+      foreground,
+      retained,
+      original,
+      checkWorkMs,
+      stepBudgetMs,
+      settlement,
+      replay,
+    },
+    { signal },
+  ) => {
     const stateDir = await fs.realpath(dirs.make("migrated-update-"));
     const env = {
       ...process.env,
@@ -265,6 +279,22 @@ it.each([
     let terminalFromCandidate: unknown;
     let stdoutAtCleanup: string | undefined;
     let stdoutAtExecutorSettlement: string | undefined;
+    const progressGate =
+      settlement === "healthy"
+        ? await runtimeFixture.acquire(async () => {
+            const receipts = await openFixtureReceiptChannel();
+            return { ...receipts, cleanup: () => receipts.close() };
+          })
+        : undefined;
+    const progressSeen = createDeferred();
+    let stderr = "";
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      stderr += String(chunk);
+      if (stderr.includes("fixture-finalizer-progress")) {
+        progressSeen.resolve();
+      }
+      return true;
+    });
     const oldRuntimeOpens: string[] = [];
     const onResult = vi.fn();
     let settledResult: Awaited<ReturnType<typeof continueMigratedUpdateInFreshProcess>> | undefined;
@@ -299,41 +329,49 @@ it.each([
         ),
       );
     const before = legacy ? await family() : undefined;
-    const nativeCommand = childCommands.runUtf8CommandWithTimeout;
-    let replayChild: Awaited<ReturnType<typeof nativeCommand>> | undefined;
+    const nativeProbe = childCommands.runUtf8CommandWithTimeout;
     vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
+      async (argv, options) => {
+        const child = legacy ? await nativeProbe(argv, options) : candidateContract;
+        const allowance = typeof options === "number" ? options : options.timeoutMs;
+        // Keep the native admission/cleanup flow; model cold-start work in this phase only.
+        return checkWorkMs !== undefined && (allowance ?? Infinity) < checkWorkMs
+          ? { ...child, code: 124, stdout: "", killed: true, termination: "timeout" }
+          : child;
+      },
+    );
+    const nativeCommand = childCommandBuffers.runUtf8CommandBuffersWithTimeout;
+    let replayChild: Awaited<ReturnType<typeof nativeCommand>> | undefined;
+    vi.spyOn(childCommandBuffers, "runUtf8CommandBuffersWithTimeout").mockImplementation(
       async (argv, options): ReturnType<typeof nativeCommand> => {
-        const child =
-          !legacy && argv.at(-1) === "--check"
-            ? candidateContract
-            : await nativeCommand(
-                legacy
-                  ? argv
-                  : [
-                      process.execPath,
-                      ...resolveRuntimeWorkerArgv(
-                        resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint),
-                      ),
-                      JSON.stringify({
-                        readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly,
-                        ...(replay
-                          ? {
-                              replay: {
-                                path: replayEvents,
-                                refuseStep: replay === "refused" ? "receiver-second" : undefined,
-                              },
-                            }
-                          : {}),
-                      }),
-                      ...argv.slice(2),
-                    ],
-                options,
-              );
-        if (replay && argv.at(-1) !== "--check") {
+        const child = await nativeCommand(
+          legacy
+            ? argv
+            : [
+                process.execPath,
+                ...resolveRuntimeWorkerArgv(
+                  resolveRuntimeWorkerUrl(migratedFinalizeFixtureEntrypoint),
+                ),
+                JSON.stringify({
+                  readOnlyEntrypoint: runtimeProcessEntrypoints.sqliteReadOnly,
+                  progressGate: progressGate?.endpoint,
+                  ...(replay
+                    ? {
+                        replay: {
+                          path: replayEvents,
+                          refuseStep: replay === "refused" ? "receiver-second" : undefined,
+                        },
+                      }
+                    : {}),
+                }),
+                ...argv.slice(2),
+              ],
+          options,
+        );
+        if (replay) {
           replayChild = child;
         }
-        const allowance = typeof options === "number" ? options : options.timeoutMs;
-        if (settlement && argv.at(-1) !== "--check") {
+        if (settlement) {
           terminalFromCandidate = inspectTerminal();
           const open = nodeSqlite.openNodeSqliteDatabase;
           const migratedStateLocation = nodeSqlite.resolveNodeSqliteLocation(database.path);
@@ -349,12 +387,7 @@ it.each([
             return open(...args);
           });
         }
-        // Keep the native admission/cleanup flow; model cold-start work in this phase only.
-        return checkWorkMs !== undefined &&
-          argv.at(-1) === "--check" &&
-          (allowance ?? Infinity) < checkWorkMs
-          ? { ...child, code: 124, stdout: "", killed: true, termination: "timeout" }
-          : child;
+        return child;
       },
     );
     const uncertainCleanup = new CommandProcessCleanupError();
@@ -525,7 +558,25 @@ it.each([
       : withUpdateCommandTerminalResult(execute, { json, onResult });
     void runtimeFixture.track(work);
     if (settlement) {
+      if (progressGate) {
+        try {
+          await withinTest(
+            awaitGateBeforeSettlement(
+              Promise.all([progressGate.waitFor("finalizer", "waiting"), progressSeen.promise]),
+              work,
+              "Finalizer settled before forwarding live progress",
+            ),
+            signal,
+          );
+          expect(stdout).toBe("");
+          expect(terminalFromCandidate).toBeUndefined();
+        } finally {
+          progressGate.release("finalizer", "finish");
+        }
+      }
       const failure = await work.catch((error: unknown) => error);
+      await progressGate?.cleanup();
+      expect.soft(stderr.match(/fixture-finalizer-progress/g)).toHaveLength(1);
       expect.soft(stdoutAtCleanup).toBe(settlement === "no-owner" ? undefined : "");
       if (
         settlement === "healthy" ||
@@ -586,7 +637,7 @@ it.each([
       if (replay === "refused") {
         expect(outcome).toHaveProperty("error");
         expect(replayChild).toMatchObject({ code: 1, termination: "exit", cleanup: "normal" });
-        expect(replayChild?.stderr).toContain("receiver replay commit refused");
+        expect(replayChild?.stderr.toString("utf8")).toContain("receiver replay commit refused");
         expect(events).not.toContainEqual({ event: "service" });
         expect(terminalAtCleanup).toBeUndefined();
         expect(rollback).not.toHaveBeenCalled();
@@ -686,5 +737,4 @@ it.each([
       inspected.close();
     }
   },
-  30_000,
 );

@@ -1,32 +1,22 @@
 import type { Message } from "grammy/types";
-import { createPluginRuntimeMock } from "openclaw/plugin-sdk/channel-test-helpers";
-import type { PluginStateKeyedStore } from "openclaw/plugin-sdk/plugin-state-runtime";
 import {
-  createPluginStateKeyedStoreForTests,
-  createPluginStateKeyedStoreV2ForTests,
   importPluginStateEntriesForDoctorForTests,
   resetPluginStateStoreForTests,
 } from "openclaw/plugin-sdk/plugin-state-test-runtime";
-import { createOpenClawTestState, type OpenClawTestState } from "openclaw/plugin-sdk/test-state";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import { resolveProviderObservedTelegramThreadSpec } from "./message-cache-codec.js";
 import {
   type PersistedTelegramMessageCacheValue,
   resolveTelegramMessageCachePersistentScopeKey,
   TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
-  TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
 } from "./message-cache-persistence.js";
 import {
   buildTelegramReplyChain,
   createTelegramMessageCache,
-  type TelegramMessageCache,
+  type TelegramMessageCache as Cache,
 } from "./message-cache.js";
-import { setTelegramRuntime } from "./runtime.js";
-import {
-  clearTelegramRuntimeForTest,
-  resetTelegramMessageCacheForTest,
-} from "./runtime.test-support.js";
-import type { TelegramRuntime } from "./runtime.types.js";
+import { photo, useMessageCacheFixture } from "./message-cache.test-support.js";
+import { resetTelegramMessageCacheForTest } from "./runtime.test-support.js";
 
 const chatId = -1007;
 const accountId = "default";
@@ -46,10 +36,6 @@ function message(messageId: number, fields: Record<string, unknown> = {}): Messa
   } as Message;
 }
 
-function photo(fileId: string) {
-  return [{ file_id: fileId, file_unique_id: `${fileId}-unique`, width: 640, height: 480 }];
-}
-
 const media = {
   id: "saved-photo.png",
   fileUniqueId: "photo-1-unique",
@@ -60,136 +46,82 @@ const media = {
   fileName: "private-name.png",
 };
 
-function record(cache: TelegramMessageCache, msg: Message, historyEligible = true) {
-  return cache.record({ accountId, chatId, msg, historyEligible });
+type RecordOptions = Partial<Parameters<Cache["record"]>[0]>;
+function observedThread(kind: "forum" | "direct-messages", threadId = 77): RecordOptions {
+  return { threadId, historyEligible: undefined, providerObservedThread: { scope: kind, id: 77 } };
+}
+const createCache = () => createTelegramMessageCache({ scope });
+function record(cache: Cache, msg: Message, options: RecordOptions = {}) {
+  return cache.record({ accountId, chatId, msg, historyEligible: true, ...options });
 }
 
-function history(
-  cache: TelegramMessageCache,
-  options: Partial<Parameters<TelegramMessageCache["readHistory"]>[0]> = {},
-) {
+function history(cache: Cache, options: Partial<Parameters<Cache["readHistory"]>[0]> = {}) {
   return cache.readHistory({ accountId, chatId, limit: 10, ...options });
 }
 
-function get(cache: TelegramMessageCache, messageId: number) {
-  return cache.get({ accountId, chatId, messageId: String(messageId) });
+function get(cache: Cache, messageId: number, targetChat = chatId) {
+  return cache.get({ accountId, chatId: targetChat, messageId: String(messageId) });
 }
 
-describe("Telegram retained message history", () => {
-  let state: OpenClawTestState;
-  let beforeCompare: ((key: string) => Promise<void>) | undefined;
-  let beforeMove: (() => Promise<void>) | undefined;
-  let afterMove: (() => Promise<void>) | undefined;
+async function historyIds(cache: Cache, options: Parameters<typeof history>[1] = {}) {
+  return (await history(cache, options)).messages.map((node) => node.messageId);
+}
 
+const legacyRow = (sourceMessage: Message): PersistedTelegramMessageCacheValue => ({
+  version: 1,
+  sourceMessage,
+});
+const photoMessage = (id: number, caption?: string, file = "photo-1", edit_date?: number) =>
+  message(id, {
+    photo: photo(file),
+    ...(caption === undefined ? {} : { caption }),
+    ...(edit_date === undefined ? {} : { edit_date }),
+  });
+const reply = (id: number, reply_to_message: Message, fields = {}) =>
+  message(id, { reply_to_message, ...fields });
+
+describe("Telegram retained message history", () => {
+  const fixture = useMessageCacheFixture("telegram-history-", true);
   function openStores() {
     return {
-      bounded: createPluginStateKeyedStoreForTests<unknown>("telegram", {
-        namespace: TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
-        maxEntries: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
-        env: state.env,
-      }),
-      retained: createPluginStateKeyedStoreForTests<PersistedTelegramMessageCacheValue>(
-        "telegram",
-        {
-          namespace: TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
-          retention: "retained",
-          env: state.env,
-        },
-      ),
+      bounded: fixture.store<unknown>(),
+      retained: fixture.store<PersistedTelegramMessageCacheValue>(true),
     };
   }
-
-  beforeEach(async () => {
-    state = await createOpenClawTestState({ prefix: "telegram-history-", layout: "state-only" });
-    beforeCompare = undefined;
-    beforeMove = undefined;
-    afterMove = undefined;
-    const openKeyedStore: TelegramRuntime["state"]["openKeyedStoreV2"] = <T>(
-      options: Parameters<TelegramRuntime["state"]["openKeyedStore"]>[0],
-    ): PluginStateKeyedStore<T, 2> => {
-      const store = createPluginStateKeyedStoreV2ForTests<T>(
-        "telegram",
-        { ...options, env: state.env },
-        { assertCurrent() {} },
-      );
-      if (options.retention !== "retained") {
-        return store;
-      }
-      return {
-        ...store,
-        async compareAndApply(key, comparison, intent) {
-          const interrupt = beforeCompare;
-          beforeCompare = undefined;
-          await interrupt?.(key);
-          return store.compareAndApply(key, comparison, intent);
-        },
-        async moveEntriesFrom(source) {
-          await beforeMove?.();
-          const moved = await store.moveEntriesFrom(source);
-          const interrupt = afterMove;
-          afterMove = undefined;
-          await interrupt?.();
-          return moved;
-        },
-      };
-    };
-    setTelegramRuntime(
-      createPluginRuntimeMock({ state: { openKeyedStore, openKeyedStoreV2: openKeyedStore } }),
-    );
-  });
-
-  afterEach(async () => {
-    resetTelegramMessageCacheForTest();
-    clearTelegramRuntimeForTest();
-    resetPluginStateStoreForTests();
-    await state.cleanup();
-  });
+  async function counts() {
+    const { bounded, retained } = openStores();
+    return [await bounded.count(), await retained.count()];
+  }
 
   function seedFullLegacyNamespace() {
     const stores = openStores();
     const otherScope = "retained-cache-other";
     const otherPrefix = `${resolveTelegramMessageCachePersistentScopeKey(otherScope)}:${accountId}:${chatId}:`;
     const privateChat = { id: 7, type: "private", first_name: "Ada" };
-    importPluginStateEntriesForDoctorForTests(
-      "telegram",
-      {
-        namespace: TELEGRAM_MESSAGE_CACHE_PERSISTENT_NAMESPACE,
-        maxEntries: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES,
-        env: state.env,
-      },
-      [
-        { key: `${keyPrefix}1`, value: { version: 1, sourceMessage: message(1) }, createdAt: 1000 },
-        {
-          key: `${otherPrefix}2`,
-          value: { version: 1, sourceMessage: message(2) },
-          createdAt: 2000,
-        },
-        ...Array.from(
-          { length: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES - 2 },
-          (_, index) => ({
-            key: `${scopeKey}:${accountId}:7:${100 + index}`,
-            value: {
-              version: 1,
-              sourceMessage: message(100 + index, {
-                chat: privateChat,
-                ...(index === 0 ? { photo: photo("photo-1") } : {}),
-              }),
-            },
-            createdAt: 3000 + index,
+    importPluginStateEntriesForDoctorForTests("telegram", fixture.options(), [
+      { key: `${keyPrefix}1`, value: legacyRow(message(1)), createdAt: 1000 },
+      { key: `${otherPrefix}2`, value: legacyRow(message(2)), createdAt: 2000 },
+      ...Array.from({ length: TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES - 2 }, (_, index) => ({
+        key: `${scopeKey}:${accountId}:7:${100 + index}`,
+        value: legacyRow(
+          message(100 + index, {
+            chat: privateChat,
+            ...(index === 0 ? { photo: photo("photo-1") } : {}),
           }),
         ),
-      ],
-    );
+        createdAt: 3000 + index,
+      })),
+    ]);
     return { ...stores, otherScope, otherPrefix, privateChat };
   }
 
   it("keeps failed promotion nonfatal for ordinary DMs without allowing bounded writes to evict history", async () => {
-    const { bounded, retained, otherPrefix, privateChat } = seedFullLegacyNamespace();
+    const { bounded, otherPrefix, privateChat } = seedFullLegacyNamespace();
     const originalMediaRow = await bounded.lookup(`${scopeKey}:${accountId}:7:100`);
-    beforeMove = async () => {
+    fixture.beforeMove = async () => {
       throw new Error("promotion unavailable");
     };
-    const cache = createTelegramMessageCache({ scope });
+    const cache = createCache();
     await expect(
       cache.record({
         accountId,
@@ -198,7 +130,7 @@ describe("Telegram retained message history", () => {
       }),
     ).resolves.toMatchObject({ body: "Memory-only DM" });
     await cache.recordResolvedMedia({ accountId, chatId: 7, messageId: "100", media });
-    expect(await cache.get({ accountId, chatId: 7, messageId: "100" })).toMatchObject({
+    expect(await get(cache, 100, 7)).toMatchObject({
       resolvedMedia: { id: media.id },
     });
     expect(await bounded.lookup(`${scopeKey}:${accountId}:7:5000`)).toBeUndefined();
@@ -219,7 +151,7 @@ describe("Telegram retained message history", () => {
         },
       }),
     ).rejects.toThrow("promotion unavailable");
-    expect(await cache.get({ accountId, chatId: 7, messageId: "5001" })).toMatchObject({
+    expect(await get(cache, 5001, 7)).toMatchObject({
       promptContextProjectionMarker: {
         kind: "invalid",
         transcriptMessageId: "uncommitted-projection",
@@ -231,23 +163,19 @@ describe("Telegram retained message history", () => {
     expect(await bounded.lookup(`${otherPrefix}2`)).toMatchObject({
       sourceMessage: { message_id: 2 },
     });
-    expect(await bounded.count()).toBe(TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES);
-    expect(await retained.count()).toBe(0);
+    expect(await counts()).toEqual([TELEGRAM_MESSAGE_CACHE_PERSISTENT_MAX_MESSAGES, 0]);
   });
 
   it("pages numerically through other topics while excluding unobserved snapshots and exact foreign scopes", async () => {
-    const cache = createTelegramMessageCache({ scope });
+    const cache = createCache();
     await record(cache, message(9));
     for (const id of [10, 99, 100]) {
       await record(cache, message(id, { message_thread_id: 77 }));
     }
-    await record(cache, message(101, { message_thread_id: 77 }), false);
+    await record(cache, message(101, { message_thread_id: 77 }), { historyEligible: false });
     await record(
       cache,
-      message(102, {
-        message_thread_id: 77,
-        reply_to_message: message(8, { text: "Embedded only" }),
-      }),
+      reply(102, message(8, { text: "Embedded only" }), { message_thread_id: 77 }),
     );
     for (let id = 200; id < 500; id += 50) {
       await Promise.all(
@@ -256,13 +184,8 @@ describe("Telegram retained message history", () => {
         ),
       );
     }
-    await cache.record({ accountId: "other", chatId, msg: message(600), historyEligible: true });
-    await cache.record({
-      accountId,
-      chatId: -1008,
-      msg: message(600, { chat: { ...chat, id: -1008 } }),
-      historyEligible: true,
-    });
+    await record(cache, message(600), { accountId: "other" });
+    await record(cache, message(600, { chat: { ...chat, id: -1008 } }), { chatId: -1008 });
     const otherScope = createTelegramMessageCache({ scope: "another-session-store" });
     await record(otherScope, message(601));
     const page = await history(cache, { threadId: 77, limit: 2 });
@@ -271,12 +194,8 @@ describe("Telegram retained message history", () => {
     const older = await history(cache, { threadId: 77, before: "100", limit: 2 });
     expect(older.messages.map((node) => node.messageId)).toEqual(["10", "99"]);
     expect(older.hasMore).toBe(false);
-    expect(
-      (await history(cache, { threadId: 77, after: "10", limit: 2 })).messages.map(
-        (node) => node.messageId,
-      ),
-    ).toEqual(["99", "100"]);
-    expect((await history(cache)).messages.map((node) => node.messageId)).toEqual(["9"]);
+    expect(await historyIds(cache, { threadId: 77, after: "10", limit: 2 })).toEqual(["99", "100"]);
+    expect(await historyIds(cache)).toEqual(["9"]);
     expect((await get(cache, 8))?.historyEligible).toBeUndefined();
     expect((await history(cache, { threadId: Number.NaN })).messages).toEqual([]);
     expect(
@@ -288,74 +207,55 @@ describe("Telegram retained message history", () => {
 
   it("atomically promotes legacy roots once without trusting their embedded observations", async () => {
     const { bounded, retained } = openStores();
-    const legacy = {
-      version: 1,
-      sourceMessage: message(9, { reply_to_message: message(8) }),
-    };
-    await bounded.register(`${keyPrefix}9`, legacy);
-    await bounded.register(`${keyPrefix}10`, {
-      version: 1,
-      sourceMessage: message(10, { text: "Old copy" }),
-    });
+    const root = legacyRow(reply(9, message(8)));
+    await bounded.register(`${keyPrefix}9`, root);
+    await bounded.register(`${keyPrefix}10`, legacyRow(message(10, { text: "Old copy" })));
     await retained.register(`${keyPrefix}0000000010`, {
-      version: 1,
-      sourceMessage: message(10, { text: "Canonical copy" }),
+      ...legacyRow(message(10, { text: "Canonical copy" })),
       historyEligible: true,
     });
-    await bounded.register(`${scopeKey}:default:7:11`, {
-      version: 1,
-      sourceMessage: message(11, { chat: { id: 7, type: "private", first_name: "Ada" } }),
-    });
-    await bounded.register(`other-scope:default:${chatId}:12`, {
-      version: 1,
-      sourceMessage: message(12),
-    });
-    const cache = createTelegramMessageCache({ scope });
+    await bounded.register(
+      `${scopeKey}:default:7:11`,
+      legacyRow(message(11, { chat: { id: 7, type: "private", first_name: "Ada" } })),
+    );
+    await bounded.register(`other-scope:default:${chatId}:12`, legacyRow(message(12)));
+    const cache = createCache();
     expect(await get(cache, 9)).toMatchObject({ messageId: "9" });
-    expect(await retained.lookup(`${keyPrefix}0000000009`)).toEqual(legacy);
+    expect(await retained.lookup(`${keyPrefix}0000000009`)).toEqual(root);
     expect(await bounded.lookup(`${keyPrefix}9`)).toBeUndefined();
     expect(await bounded.lookup(`${keyPrefix}10`)).toBeUndefined();
     expect(await get(cache, 10)).toMatchObject({ body: "Canonical copy" });
-    expect((await history(cache)).messages.map((node) => node.messageId)).toEqual(["10"]);
+    expect(await historyIds(cache)).toEqual(["10"]);
     expect(await get(cache, 8)).toBeNull();
     resetTelegramMessageCacheForTest();
-    const reopened = createTelegramMessageCache({ scope });
+    const reopened = createCache();
     expect(await get(reopened, 9)).toMatchObject({ messageId: "9" });
-    expect(await bounded.count()).toBe(1);
-    expect(await retained.count()).toBe(3);
+    expect(await counts()).toEqual([1, 3]);
     expect(await bounded.lookup(`other-scope:default:${chatId}:12`)).toBeUndefined();
     expect(await retained.lookup(`other-scope:default:${chatId}:0000000012`)).toMatchObject({
       sourceMessage: { message_id: 12 },
     });
     await record(reopened, message(9));
     await record(reopened, message(20, { text: "/reset" }));
-    expect(
-      (await history(reopened, { before: "20" })).messages.map((node) => node.messageId),
-    ).toEqual(["9", "10"]);
+    expect(await historyIds(reopened, { before: "20" })).toEqual(["9", "10"]);
   });
 
   it("preserves embedded-only reply ancestry after legacy promotion and database reopen", async () => {
     const legacy = {
-      version: 1,
-      sourceMessage: message(9, {
-        message_thread_id: 77,
-        reply_to_message: message(8, { caption: "Original photo", photo: photo("photo-1") }),
-      }),
+      ...legacyRow(reply(9, photoMessage(8, "Original photo"), { message_thread_id: 77 })),
       threadId: "77",
     };
     await openStores().bounded.register(`${keyPrefix}9`, legacy);
-    expect(await get(createTelegramMessageCache({ scope }), 9)).toMatchObject({
-      messageId: "9",
-    });
+    expect(await get(createCache(), 9)).toMatchObject({ messageId: "9" });
     resetTelegramMessageCacheForTest();
     resetPluginStateStoreForTests();
 
-    const reopened = createTelegramMessageCache({ scope });
+    const reopened = createCache();
     const chain = await buildTelegramReplyChain({
       cache: reopened,
       accountId,
       chatId,
-      msg: message(10, { message_thread_id: 77, reply_to_message: message(9) }),
+      msg: reply(10, message(9), { message_thread_id: 77 }),
     });
     expect(chain.map((node) => node.messageId)).toEqual(["9", "8"]);
     expect(chain[1]).toMatchObject({
@@ -364,95 +264,75 @@ describe("Telegram retained message history", () => {
       threadId: "77",
     });
     expect(chain.map((node) => node.historyEligible)).toEqual([undefined, undefined]);
-    expect(await history(reopened, { threadId: 77 })).toEqual({
-      messages: [],
-      hasMore: false,
-    });
+    expect(await history(reopened, { threadId: 77 })).toEqual({ messages: [], hasMore: false });
     expect(await get(reopened, 8)).toBeNull();
-    const { bounded, retained } = openStores();
-    expect(await bounded.count()).toBe(0);
-    expect(await retained.count()).toBe(1);
+    const { retained } = openStores();
+    expect(await counts()).toEqual([0, 1]);
     expect(await retained.lookup(`${keyPrefix}0000000009`)).toEqual(legacy);
   });
 
   it("recovers a committed promotion whose completion was interrupted", async () => {
     const { bounded, retained } = openStores();
-    await bounded.register(`${keyPrefix}9`, { version: 1, sourceMessage: message(9) });
-    afterMove = async () => {
+    await bounded.register(`${keyPrefix}9`, legacyRow(message(9)));
+    fixture.afterMove = async () => {
       throw new Error("promotion receipt interrupted");
     };
-    const cache = createTelegramMessageCache({ scope });
+    const cache = createCache();
     await expect(get(cache, 9)).rejects.toThrow("promotion receipt interrupted");
     expect(await bounded.lookup(`${keyPrefix}9`)).toBeUndefined();
     expect(await retained.count()).toBe(1);
     resetTelegramMessageCacheForTest();
-    const reopened = createTelegramMessageCache({ scope });
+    const reopened = createCache();
     expect(await get(reopened, 9)).toMatchObject({ body: "Message 9" });
     expect(await history(reopened)).toEqual({ messages: [], hasMore: false });
   });
 
   it("persists an explicit topicless correction while preserving genuinely unknown thread observations", async () => {
-    const cache = createTelegramMessageCache({ scope });
-    await cache.record({
-      accountId,
-      chatId,
-      msg: message(9, { message_thread_id: 77 }),
+    const cache = createCache();
+    await record(cache, message(9, { message_thread_id: 77 }), {
       providerObservedThread: { scope: "forum", id: 77 },
-      historyEligible: true,
     });
     await record(cache, message(9, { text: "Unknown thread update", edit_date: 1_736_380_720 }));
-    expect((await history(cache, { threadId: 77 })).messages.map((node) => node.messageId)).toEqual(
-      ["9"],
-    );
-    await cache.record({
-      accountId,
-      chatId,
-      msg: message(9, {
+    expect(await historyIds(cache, { threadId: 77 })).toEqual(["9"]);
+    await record(
+      cache,
+      message(9, {
         message_thread_id: 77,
         text: "Corrected to topicless",
         edit_date: 1_736_380_721,
       }),
-      threadId: 77,
-      providerObservedThread: { scope: "none" },
-      historyEligible: true,
-    });
+      {
+        threadId: 77,
+        providerObservedThread: { scope: "none" },
+      },
+    );
     resetTelegramMessageCacheForTest();
-    const reopened = createTelegramMessageCache({ scope });
-    expect((await history(reopened)).messages.map((node) => node.messageId)).toEqual(["9"]);
+    const reopened = createCache();
+    expect(await historyIds(reopened)).toEqual(["9"]);
     expect((await history(reopened, { threadId: 77 })).messages).toEqual([]);
     expect((await get(reopened, 9))?.threadId).toBeUndefined();
     expect(await openStores().retained.count()).toBe(1);
   });
 
   it("preserves authenticated native thread precedence across database reopen", async () => {
-    const cache = createTelegramMessageCache({ scope });
-    await cache.record({
-      accountId,
-      chatId,
-      msg: message(30, {
-        message_thread_id: 999,
-        reply_to_message: message(29, {
-          message_thread_id: 88,
-          reply_to_message: message(28),
-        }),
-      }),
-      threadId: 77,
-      providerObservedThread: { scope: "forum", id: 77 },
-    });
-    await cache.record({
-      accountId,
-      chatId,
-      msg: message(31, {
+    const cache = createCache();
+    await record(
+      cache,
+      reply(30, reply(29, message(28), { message_thread_id: 88 }), { message_thread_id: 999 }),
+      observedThread("forum"),
+    );
+    await record(
+      cache,
+      message(31, {
         chat: { ...chat, is_direct_messages: true },
         direct_messages_topic: { topic_id: 77 },
         message_thread_id: 999,
       }),
-      threadId: 999,
-      providerObservedThread: { scope: "direct-messages", id: 77 },
-    });
+      observedThread("direct-messages", 999),
+    );
     resetTelegramMessageCacheForTest();
     resetPluginStateStoreForTests();
-    const reopened = createTelegramMessageCache({ scope });
+    const reopened = createCache();
     expect(resolveProviderObservedTelegramThreadSpec(await get(reopened, 30))).toEqual({
       scope: "forum",
       id: 77,
@@ -466,11 +346,11 @@ describe("Telegram retained message history", () => {
   });
 
   it("merges late media against a concurrently edited canonical source", async () => {
-    const first = createTelegramMessageCache({ scope });
-    const second = createTelegramMessageCache({ scope });
-    await record(first, message(22, { photo: photo("photo-1"), caption: "Old caption" }));
-    beforeCompare = async () => {
-      await record(second, message(22, { photo: photo("photo-1"), edit_date: 1_736_380_720 }));
+    const first = createCache();
+    const second = createCache();
+    await record(first, photoMessage(22, "Old caption"));
+    fixture.beforeCompare = async () => {
+      await record(second, photoMessage(22, undefined, "photo-1", 1_736_380_720));
     };
     await first.recordResolvedMedia({ accountId, chatId, messageId: "22", media });
     const resolved = await get(second, 22);
@@ -479,36 +359,21 @@ describe("Telegram retained message history", () => {
     expect(resolved?.resolvedMedia).toMatchObject({ id: media.id });
     expect(resolved?.resolvedMedia).not.toHaveProperty("path");
     expect(resolved?.resolvedMedia).not.toHaveProperty("fileName");
-    await record(
-      first,
-      message(23, {
-        reply_to_message: message(22, {
-          photo: photo("photo-1"),
-          caption: "Stale caption",
-        }),
-      }),
-    );
+    await record(first, reply(23, photoMessage(22, "Stale caption")));
     expect((await get(first, 22))?.body).toBeUndefined();
   });
 
   it.each(["deleted", "replaced"] as const)(
     "does not resurrect or overwrite a %s message with late media",
     async (change) => {
-      const cache = createTelegramMessageCache({ scope });
+      const cache = createCache();
       const { retained } = openStores();
-      await record(cache, message(22, { photo: photo("photo-1") }));
-      beforeCompare = async (key) => {
+      await record(cache, photoMessage(22));
+      fixture.beforeCompare = async (key) => {
         if (change === "deleted") {
           await retained.delete(key);
         } else {
-          await record(
-            createTelegramMessageCache({ scope }),
-            message(22, {
-              photo: photo("photo-2"),
-              caption: "Replacement",
-              edit_date: 1_736_380_720,
-            }),
-          );
+          await record(createCache(), photoMessage(22, "Replacement", "photo-2", 1_736_380_720));
         }
       };
       await expect(
@@ -525,14 +390,14 @@ describe("Telegram retained message history", () => {
   );
 
   it("does not recreate an embedded target deleted while its partial observation commits", async () => {
-    const cache = createTelegramMessageCache({ scope });
+    const cache = createCache();
     const { retained } = openStores();
     await record(cache, message(22));
-    beforeCompare = async (key) => {
+    fixture.beforeCompare = async (key) => {
       await retained.delete(key);
     };
-    await record(cache, message(23, { reply_to_message: message(22) }));
+    await record(cache, reply(23, message(22)));
     expect(await get(cache, 22)).toBeNull();
-    expect((await history(cache)).messages.map((node) => node.messageId)).toEqual(["23"]);
+    expect(await historyIds(cache)).toEqual(["23"]);
   });
 });

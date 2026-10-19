@@ -5,10 +5,12 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
 import { useAutoCleanupTempDirTracker } from "../../test/helpers/temp-dir.js";
+import * as configEnv from "../config/config-env-vars.js";
 import { openNodeSqliteDatabase } from "../infra/node-sqlite.js";
 import { SQLITE_WORKER_TRANSFER_FRAME_BYTES } from "../infra/sqlite-worker-transfer.js";
 import * as workerCpu from "../infra/worker-cpu.js";
 import { drainGlobalSingletonLifecycleState } from "../shared/global-singleton.js";
+import { createAgentDatabaseInspectionRefusal } from "../state/agent-database-admission.js";
 import { closeOpenClawAgentDatabasesAsync } from "../state/openclaw-agent-db.js";
 import { createCurrentOpenClawAgentDatabaseFixtures } from "../state/openclaw-agent-db.test-support.js";
 import { clearOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-store.js";
@@ -16,6 +18,7 @@ import { seedOpenClawDatabaseQuarantine } from "../state/openclaw-quarantine-sto
 import { closeOpenClawStateDatabaseAsync } from "../state/openclaw-state-db-cache.js";
 import { resolveOpenClawStateSqlitePath } from "../state/openclaw-state-db.paths.js";
 import { loadPersistedPluginModelCatalogs } from "./plugin-model-catalog-execution.js";
+import { readPluginModelCatalogsInWorker } from "./plugin-model-catalog-read.js";
 import {
   encodePluginModelCatalogRelativePath,
   PLUGIN_MODEL_CATALOG_GENERATED_BY,
@@ -94,6 +97,75 @@ function observeCatalogWorkers(onMessage?: (message: unknown) => void) {
   });
   return { workers, frames };
 }
+
+it.each(["read", "write"] as const)(
+  "can %s model catalogs with a Windows environment Proxy",
+  async (operation) => {
+    const first = catalogContents("first");
+    const fixture = createFixture(first);
+    const clone = configEnv.cloneEnvWithPlatformSemantics;
+    const windowsEnv = vi
+      .spyOn(configEnv, "cloneEnvWithPlatformSemantics")
+      .mockImplementation((env) => {
+        const source: NodeJS.ProcessEnv = { ...env, openclaw_state_dir: env.OPENCLAW_STATE_DIR };
+        delete source.OPENCLAW_STATE_DIR;
+        // Use Windows environment semantics without changing native paths or worker execution.
+        const platform = Object.getOwnPropertyDescriptor(process, "platform")!;
+        Object.defineProperty(process, "platform", { value: "win32" });
+        try {
+          return clone(source);
+        } finally {
+          Object.defineProperty(process, "platform", platform);
+        }
+      });
+    try {
+      expect(() => structuredClone(configEnv.cloneEnvWithPlatformSemantics(fixture.env))).toThrow(
+        expect.objectContaining({ name: "DataCloneError" }),
+      );
+      const expected = operation === "read" ? first : catalogContents("replaced");
+      if (operation === "write") {
+        await expect(
+          replacePersistedPluginModelCatalogs({
+            agentDir: fixture.agentDir,
+            pluginCatalogWrites: { [encodePluginModelCatalogRelativePath("fixture")]: expected },
+            env: fixture.env,
+          }),
+        ).resolves.toMatchObject({ changed: true });
+      }
+      await expect(fixture.read()).resolves.toEqual([{ pluginId: "fixture", contents: expected }]);
+    } finally {
+      windowsEnv.mockRestore();
+    }
+  },
+);
+
+it("identifies the rejected protocol field without exposing values or suggesting migration", async () => {
+  const fixture = createFixture(catalogContents("diagnostic"));
+  const failure = await readPluginModelCatalogsInWorker(
+    {
+      agentId: "main",
+      path: fixture.databasePath,
+      env: new Proxy({ ...fixture.env, PRIVATE_VALUE: "synthetic-private" }, {}),
+    },
+    new AbortController().signal,
+  ).catch((error: unknown) => error);
+  expect(failure).toMatchObject({
+    name: "PluginModelCatalogInputError",
+    code: "failed",
+    operation: "catalog.read",
+    field: "input.env",
+    message: "Cannot serialize catalog.read request field input.env",
+  });
+  const refusal = createAgentDatabaseInspectionRefusal({
+    agentId: "main",
+    paths: [fixture.databasePath],
+    reason: String(failure),
+    cause: failure,
+  });
+  expect(refusal.repairHint).toContain("Update OpenClaw and restart the Gateway");
+  expect(refusal.repairHint).not.toContain("doctor --fix");
+  expect(refusal.reason).not.toContain("synthetic-private");
+});
 
 it("reads without creating shared state and observes canonical replacements on the same worker", async () => {
   const first = catalogContents("first");

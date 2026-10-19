@@ -28,6 +28,7 @@ import {
   type createRunEntry as createLifecycleRunEntry,
   type LifecycleControllerFixtureOptions,
 } from "./subagent-registry-lifecycle-controller.test-support.js";
+import { registerRequesterAdmissionRetryTests } from "./subagent-registry-lifecycle-delivery.test-support.js";
 import type {
   SubagentLifecycleController,
   SubagentLifecycleOptions,
@@ -412,7 +413,7 @@ export function registerDeliveryRetryOwnerTests({
       );
     } finally {
       helperMocks.safeRemoveAttachmentsDir.mockReset().mockResolvedValue(undefined);
-      controller.clearScheduledResumeTimers();
+      controller.clearRuntimeState();
       vi.useRealTimers();
     }
   });
@@ -493,17 +494,24 @@ export function registerDeliveryRetryOwnerTests({
       expect(runSubagentAnnounceFlow).toHaveBeenCalledTimes(2);
     } finally {
       await join();
-      controller.clearScheduledResumeTimers();
+      controller.clearRuntimeState();
       decision.mockRestore();
       vi.useRealTimers();
     }
   });
 
+  registerRequesterAdmissionRetryTests({
+    createRunEntry,
+    createLifecycleController,
+    useRetryTimers,
+  });
+
   it("keeps the current retry when a stale cleanup continuation schedules late", async () => {
-    await useRetryTimers();
     const entry = createRunEntry({ endedAt: Date.now(), expectsCompletionMessage: true });
     const resumeSubagentRun = vi.fn();
     const controller = createLifecycleController({ entry, resumeSubagentRun });
+    // Requester storage setup owns idle timers; fake only the delivery retry clock.
+    await useRetryTimers();
     const staleGeneration = controller.bumpCleanupGeneration(entry);
     const currentGeneration = controller.bumpCleanupGeneration(entry);
     try {
@@ -515,7 +523,7 @@ export function registerDeliveryRetryOwnerTests({
       expect(resumeSubagentRun).toHaveBeenCalledOnce();
       expect(vi.getTimerCount()).toBe(0);
     } finally {
-      controller.clearScheduledResumeTimers();
+      controller.clearRuntimeState();
       vi.useRealTimers();
     }
   });
@@ -523,7 +531,6 @@ export function registerDeliveryRetryOwnerTests({
   it.each(["current", "completed cleanup", "replaced", "cancelled"] as const)(
     "resumes one scheduled delivery only for its current owner (%s)",
     async (state) => {
-      await useRetryTimers();
       const entry = createRunEntry({
         endedAt: Date.now(),
         expectsCompletionMessage: true,
@@ -538,6 +545,7 @@ export function registerDeliveryRetryOwnerTests({
       const runs = new Map([[entry.runId, entry]]);
       const resumeSubagentRun = vi.fn();
       const controller = createLifecycleController({ entry, runs, resumeSubagentRun });
+      await useRetryTimers();
       try {
         controller.scheduleResume(entry, 1_000);
         controller.scheduleResume(entry, 1_000);
@@ -545,7 +553,7 @@ export function registerDeliveryRetryOwnerTests({
         if (state === "replaced") {
           runs.set(entry.runId, createRunEntry({ ...entry, generation: 2 }));
         } else if (state === "cancelled") {
-          controller.clearScheduledResumeTimers();
+          controller.clearRuntimeState();
         }
         await vi.advanceTimersByTimeAsync(1_000);
         expect(resumeSubagentRun).toHaveBeenCalledTimes(
@@ -553,19 +561,14 @@ export function registerDeliveryRetryOwnerTests({
         );
         expect(vi.getTimerCount()).toBe(0);
       } finally {
-        controller.clearScheduledResumeTimers();
+        controller.clearRuntimeState();
         resetGatewayWorkAdmission();
         vi.useRealTimers();
       }
     },
   );
 
-  it.each([
-    "delivered",
-    "expired",
-    "expired during preparation",
-    "expired during failure recovery",
-  ] as const)(
+  it.each(["delivered", "expired", "expired during preparation"] as const)(
     "keeps a required final scheduled after detached cleanup failures (%s)",
     async (outcome) => {
       await useRetryTimers();
@@ -590,15 +593,6 @@ export function registerDeliveryRetryOwnerTests({
         entry,
         countPendingDescendantRuns,
         runSubagentAnnounceFlow,
-        beforeWrite: ({ postimages }) => {
-          if (
-            outcome === "expired during failure recovery" &&
-            countPendingDescendantRuns.mock.calls.length === 5 &&
-            postimages.get(entry.runId)?.cleanupHandled === false
-          ) {
-            vi.setSystemTime(entry.delivery!.deadlineAt!);
-          }
-        },
         resumeSubagentRun: () =>
           controller.startSubagentAnnounceCleanupFlow(readLifecycleRun(entry)),
       });
@@ -654,7 +648,7 @@ export function registerDeliveryRetryOwnerTests({
       } finally {
         await join();
         clearTimeout(maintenance);
-        controller.clearScheduledResumeTimers();
+        controller.clearRuntimeState();
         vi.useRealTimers();
       }
     },
@@ -683,7 +677,7 @@ export function registerDeliveryRetryOwnerTests({
       expect(vi.getTimerCount()).toBe(0);
     } finally {
       helperMocks.safeRemoveAttachmentsDir.mockReset().mockResolvedValue(undefined);
-      controller.clearScheduledResumeTimers();
+      controller.clearRuntimeState();
       vi.useRealTimers();
     }
   });

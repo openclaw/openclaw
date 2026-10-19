@@ -434,6 +434,7 @@ it.each(["known", "unknown", "wrapped-unknown"] as const)(
       assertResponsive: vi.fn(),
       verify: async () => fixture.expiresAt,
       renew: fixture.forbiddenNative,
+      holdOwnerFence: fixture.forbiddenNative,
       close: fixture.forbiddenNative,
       stop: async () => 0,
     });

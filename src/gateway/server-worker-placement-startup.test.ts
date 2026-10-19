@@ -13,10 +13,10 @@ import {
   resetGatewayWorkAdmission,
 } from "../process/gateway-work-admission.js";
 import {
-  beginSessionWorkAdmission,
-  runExclusiveSessionLifecycleMutation,
-  startSessionWorkAdmissionInterruption,
-} from "../sessions/session-lifecycle-admission.js";
+  beginSessionEffect,
+  runSessionMutation,
+  startSessionControllerInterruption,
+} from "../sessions/session-controller.lifecycle.js";
 import { trackAsyncWork } from "../shared/async-work-scope.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { closeOpenClawAgentDatabaseByPathAsync } from "../state/openclaw-agent-db-lifecycle.js";
@@ -559,10 +559,11 @@ describe("worker placement startup recovery authority", () => {
       const events: string[] = [];
       const controller = new AbortController();
       const identity = {
+        agentId: request.agentId,
         scope: storePath,
         identities: [request.sessionKey, request.sessionId],
       };
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         ...identity,
         assertAllowed: () => {},
         onInterrupt: (reason) => controller.abort(reason),
@@ -584,7 +585,8 @@ describe("worker placement startup recovery authority", () => {
         )
         .finally(() => admission.release());
       await vi.waitFor(() => expect(events).toEqual(["recovery:/gateway/workspace"]));
-      const contender = runExclusiveSessionLifecycleMutation("placement-activate", {
+      const contender = runSessionMutation({
+        agentId: request.agentId,
         scope: storePath,
         identities: [
           request.sessionKey,
@@ -596,13 +598,13 @@ describe("worker placement startup recovery authority", () => {
           events.push("contender");
         },
       });
-      const interruption = startSessionWorkAdmissionInterruption(identity);
+      const interruption = startSessionControllerInterruption(identity);
       const admissionReleased = vi.fn();
       void interruption.released.then(admissionReleased);
       try {
         expect(controller.signal.aborted).toBe(true);
         await setImmediate();
-        expect(admission.isActive()).toBe(true);
+        expect(admission.isActive()).toBe(false);
         expect(events).toEqual(["recovery:/gateway/workspace"]);
         expect(admissionReleased).not.toHaveBeenCalled();
       } finally {

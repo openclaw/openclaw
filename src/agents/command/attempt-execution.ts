@@ -53,7 +53,6 @@ import {
   hasNewGeneratedMediaTaskForSessionKey,
 } from "../media-generation-activity.js";
 import { isCliProvider } from "../model-selection.js";
-import { resolveOpenAIRuntimeProvider } from "../openai-routing.js";
 import { resolveCommandReplyExpectation } from "../reply-completion.js";
 import { hasVerifiedRequesterCompletionHandoff } from "../requester-tool-policy.js";
 import { buildAgentRuntimeAuthPlan } from "../runtime-plan/auth.js";
@@ -310,15 +309,6 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     allowCliAuthProfileForwarding && !cliAuthNeedsSessionBinding
       ? await resolveCliExecutionAuthProfileId(buildCliAuthContext())
       : runtimeAuthPlan.forwardedAuthProfileId;
-  const embeddedAgentProvider = resolveOpenAIRuntimeProvider({
-    provider: params.providerOverride,
-    harnessRuntime: agentHarnessPolicy.runtime,
-    agentHarnessId: requestedAgentHarnessId,
-    authProfileProvider: runtimeAuthPlan.authProfileProviderForAuth,
-    authProfileId,
-    config: params.cfg,
-    workspaceDir: params.workspaceDir,
-  });
   const embeddedAgentHarnessOverride =
     requestedAgentHarnessId ??
     sessionRuntimeOverride ??
@@ -721,7 +711,7 @@ export async function runAgentAttempt(params: AgentAttemptParams) {
     imageOrder: shouldForwardImagesToEmbedded ? params.opts.imageOrder : undefined,
     clientTools: params.opts.clientTools,
     toolBindings: params.opts.toolBindings,
-    provider: embeddedAgentProvider,
+    provider: params.providerOverride,
     requestedRouteResolution: "resolved",
     resolvedModelSelection: params.resolvedModelSelection,
     modelThinkingCapability: params.modelThinkingCapability,

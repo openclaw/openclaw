@@ -653,6 +653,7 @@ describe("post-activation failure settlement without inference", () => {
     "database-restored",
     "source-rollback-failed",
     "migration-required",
+    "migration-verified",
     "migration-incomplete",
     "migration-refused",
     "current-core-parked",
@@ -664,14 +665,19 @@ describe("post-activation failure settlement without inference", () => {
     "recovers the installed Gateway only for an owned stop and settled Doctor (%s)",
     async (receipt) => {
       const params = fixture();
-      mocks.version = "2026.9.7";
-      const root = path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "candidate");
+      const swap =
+        receipt === "migration-verified"
+          ? await createRetainedPackageSwap(params.opts.run!.env!.OPENCLAW_STATE_DIR!)
+          : undefined;
+      mocks.version = swap ? "2.0.0" : "2026.9.7";
+      const root =
+        swap?.packageRoot ?? path.join(params.opts.run!.env!.OPENCLAW_STATE_DIR!, "candidate");
       await fs.mkdir(root, { recursive: true });
       await fs.writeFile(
         path.join(root, "package.json"),
         JSON.stringify({ name: "openclaw", version: mocks.version }),
       );
-      await fs.mkdir(path.join(root, "dist"));
+      await fs.mkdir(path.join(root, "dist"), { recursive: true });
       await fs.writeFile(path.join(root, "dist/index.js"), "export {};\n");
       const scratch = path.join(root, "tmp");
       await fs.mkdir(scratch);
@@ -682,9 +688,10 @@ describe("post-activation failure settlement without inference", () => {
       const recovered =
         receipt === "settled" ||
         receipt === "migration-required" ||
+        receipt === "migration-verified" ||
         receipt === "current-core-parked" ||
         receipt === "current-core-rollback-refused";
-      let agentVersion = 21;
+      let agentVersion = receipt === "migration-verified" ? 23 : 21;
       const doctor = vi.spyOn(freshDoctor, "runUpdateFinalizationDoctorInFreshProcess");
       if (migration) {
         params.candidateSchemaVersions = { state: 18, agent: 23 };
@@ -750,6 +757,18 @@ describe("post-activation failure settlement without inference", () => {
           },
         ],
       };
+      if (receipt === "migration-verified") {
+        params.packageTransaction = swap?.transaction;
+        params.result.steps = [
+          {
+            name: "verifying",
+            command: "gateway verification",
+            cwd: root,
+            durationMs: 1,
+            exitCode: null,
+          },
+        ];
+      }
       const settledStep = {
         name: "doctor process settlement",
         command: "settle doctor process groups",
@@ -765,7 +784,7 @@ describe("post-activation failure settlement without inference", () => {
                   "Doctor timed out; all tracked process groups stopped. Run `openclaw update repair`.",
               },
       };
-      if (receipt !== "missing") {
+      if (receipt !== "missing" && receipt !== "migration-verified") {
         params.result.steps.push(settledStep);
       }
       const unsettledReason =
@@ -938,7 +957,7 @@ describe("post-activation failure settlement without inference", () => {
         );
       }
       if (migration) {
-        expect(doctor).toHaveBeenCalledOnce();
+        expect(doctor).toHaveBeenCalledTimes(receipt === "migration-verified" ? 0 : 1);
       }
       const report = getUpdateRun(params.opts.run!.runId, { env: params.opts.run!.env });
       expect(report?.verification).toMatchObject({
@@ -948,9 +967,15 @@ describe("post-activation failure settlement without inference", () => {
       const rendered = renderUpdateRunReport(report!).lines.join("\n");
       if (migration) {
         expect(report?.status).toBe("failed");
-        expect(
-          report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
-        ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
+        if (receipt === "migration-verified") {
+          expect(report?.steps).toContainEqual(
+            expect.objectContaining({ step: "package-backup-retention", exitCode: 1 }),
+          );
+        } else {
+          expect(
+            report?.steps.find((step) => step.step === "post-install verification")?.failureFacts,
+          ).toContainEqual(expect.objectContaining({ code: "authority-check-failed" }));
+        }
       }
       if (migration && !recovered) {
         expect(rendered).toContain("openclaw doctor --fix");

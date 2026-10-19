@@ -317,10 +317,10 @@ export default definePluginEntry({
           throw new VoiceCallCommandInputError("operationId required");
         }
         const operation = continueOperationStore.read(operationId);
-        if (!operation.ok) {
-          throw new VoiceCallCommandInputError(operation.error);
+        if (!operation) {
+          throw new VoiceCallCommandInputError("operation not found");
         }
-        return operation.payload;
+        return operation;
       },
       VOICE_CALL_READ_METHOD_SCOPE,
     );

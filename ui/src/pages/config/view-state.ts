@@ -1,6 +1,23 @@
 import { pathKey } from "../../components/config-form.shared.ts";
 import type { ConfigProps, ConfigViewState } from "./view-types.ts";
 
+export function createMediaDeviceState(): Omit<
+  NonNullable<ConfigProps["microphone"]>,
+  "selectedDeviceId"
+> & {
+  loaded: boolean;
+  requestsPermission: boolean;
+} {
+  return {
+    devices: [],
+    permissionRequired: true,
+    loading: false,
+    error: null,
+    loaded: false,
+    requestsPermission: false,
+  };
+}
+
 export function createConfigViewState(): ConfigViewState {
   return {
     rawRevealed: false,

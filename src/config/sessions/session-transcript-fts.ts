@@ -186,7 +186,6 @@ export function createSessionTranscriptFtsInserter(db: EngineConnection, session
   const inserts = new Map<number, ReturnType<typeof prepare>>();
   return (entries: readonly TranscriptFtsEntry[]): void => {
     withSqliteDatabaseWriteScope(db, [sqliteSessionIdWriteScope(sessionId)], () => {
-      // At most 4 * 64 + 2 binds, below both engines' limits.
       for (let offset = 0; offset < entries.length; offset += TRANSCRIPT_INSERT_BATCH_SIZE) {
         const chunk = entries.slice(offset, offset + TRANSCRIPT_INSERT_BATCH_SIZE);
         const write = inserts.get(chunk.length) ?? prepare(chunk.length);

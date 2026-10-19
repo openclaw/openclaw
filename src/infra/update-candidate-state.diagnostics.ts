@@ -164,18 +164,25 @@ export function createUpdateStateInspectionDiagnostics(params: {
     stderr: () => `${tail}${pending}`.trim(),
     failure(reason: unknown, termination?: string) {
       const detail = formatErrorMessageWithCode(reason ?? "").trim();
+      const outputLimited =
+        termination === "output-limit" || termination?.startsWith("output-limit,");
       // Worker causes may follow warnings or a generic first line. Promote only closed public facts.
-      const summary = detail
-        ? redactPublicSupportDiagnosticLine(detail, { env: {}, stateDir: "" })
-        : "Worker exited without diagnostic output";
+      const summary = outputLimited
+        ? "Worker output exceeded its capture limit"
+        : detail
+          ? redactPublicSupportDiagnosticLine(detail, { env: {}, stateDir: "" })
+          : "Worker exited without diagnostic output";
       const elapsed = Math.max(0, Date.now() - startedAt) / 1000;
       const scope = params.paths.slice(0, 3).join(", ");
       const source =
         progress.path ?? `source scope [${scope}${params.paths.length > 3 ? ", …" : ""}]`;
       const signaled = termination === "signal" || termination?.startsWith("signal,");
       // Storage remediation and retries are next steps only for callers that stop on failure.
-      const advice =
-        params.retryAdvice === false
+      const advice = outputLimited
+        ? params.retryAdvice === false
+          ? ""
+          : " Report this update failure with its run ID."
+        : params.retryAdvice === false
           ? signaled
             ? " The worker was terminated by a signal during the reported step."
             : ""
@@ -183,10 +190,13 @@ export function createUpdateStateInspectionDiagnostics(params: {
             ? " The worker was terminated by a signal during the reported step. Check the host crash report or process supervisor, then retry the update."
             : " Check access to the reported source, free space, and storage performance, then retry the update.";
       // Path redaction discards raw detail; only the closed summary precedes source context.
-      return new Error(
+      const error = new Error(
         `${params.operation} failed${termination ? ` (${termination})` : ""}: ${summary}; after ${elapsed.toFixed(3)} seconds during ${progress.phase} for ${source} (scope: ${params.paths.length} source paths): ${detail}.${advice}`,
         reason instanceof Error ? { cause: reason } : undefined,
       );
+      // The supervisor's SIGTERM is a consequence of this recorded stop reason.
+      // Keep the public code even when warning text and private paths are redacted.
+      return outputLimited ? Object.assign(error, { code: "output-limit" }) : error;
     },
   };
 }

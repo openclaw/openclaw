@@ -61,7 +61,7 @@ export async function finalizeCommittedConfigWrite(params: {
   let envAfterCanonicalRead: Record<string, string | undefined>;
   let canonicalReadFailure: ConfigRuntimeRefreshError | null = null;
   try {
-    let stableEnvGeneration = !deferRuntimeActivation;
+    let stableEnvPublication = !deferRuntimeActivation;
     for (let attempt = 0; attempt < 3; attempt += 1) {
       const baseline = resolveManagedRuntimeEnvBaseline();
       if (deferRuntimeActivation) {
@@ -95,13 +95,13 @@ export async function finalizeCommittedConfigWrite(params: {
       }
       if (
         !deferRuntimeActivation ||
-        resolveManagedRuntimeEnvBaseline().generation === baseline.generation
+        resolveManagedRuntimeEnvBaseline().publication === baseline.publication
       ) {
-        stableEnvGeneration = true;
+        stableEnvPublication = true;
         break;
       }
     }
-    if (!stableEnvGeneration) {
+    if (!stableEnvPublication) {
       canonicalReadFailure = new ConfigRuntimeRefreshError(
         "the active config environment changed during every canonical reread",
       );

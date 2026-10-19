@@ -577,6 +577,7 @@ describe("native hook relay registry", () => {
         },
         ...(cause === "abort" ? { signal: controller.signal } : { ttlMs: 5 }),
       });
+      await relay.ready;
 
       closeAdmittedRunDelegatedAuthority(admittedRunContext);
       expect(validateAgentRunDelegatedAuthority(delegatedAuthority)).toBe(false);
@@ -595,6 +596,8 @@ describe("native hook relay registry", () => {
         await vi.advanceTimersByTimeAsync(6);
       }
       expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+      // Authority closes synchronously; locator removal completes with the bridge work.
+      await relay.drain();
       expect(await testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
       await expect(
         invokeRelay(relay.relayId, "pre_tool_use", {
@@ -1480,16 +1483,17 @@ describe("native hook relay registry", () => {
   });
 
   it("rejects expired relay ids", async () => {
-    const relay = registerRelay({
+    const relay = registerOwnedRelay({
       ttlMs: 5_000,
     });
-    await waitForNativeHookRelayBridgeRecord(relay.relayId);
+    await relay.ready;
 
     vi.useFakeTimers();
     vi.setSystemTime(new Date(relay.expiresAtMs + 1));
 
     await expect(invokeRelay(relay.relayId, "pre_tool_use", {})).rejects.toThrow("expired");
     expect(testing.getNativeHookRelayRegistrationForTests(relay.relayId)).toBeUndefined();
+    await relay.drain();
     expect(await testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();
     relay.unregister();
     expect(await testing.getNativeHookRelayBridgeRecordForTests(relay.relayId)).toBeUndefined();

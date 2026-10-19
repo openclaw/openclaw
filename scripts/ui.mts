@@ -9,6 +9,10 @@ import { isPidDefinitelyDead } from "../src/shared/pid-alive.ts";
 import { normalizeControlUiBuildInfo } from "../ui/src/build-info-normalizers.ts";
 import { resolveBuildIdentityEnvironment } from "./lib/build-identity.mts";
 import {
+  distArtifactEntryArgs,
+  withDistArtifactOwnership,
+} from "./lib/dist-artifact-ownership.mts";
+import {
   assertRealOutputRoot,
   CONTROL_UI_BUILD_PREFIX,
   controlUiBuildSiblingPid,
@@ -440,10 +444,7 @@ async function buildAndPublishUi(
       script,
     ];
     const cache =
-      env.OPENCLAW_BUILD_CACHE !== "0" &&
-      env.BUILD_ALL_CACHE_ROOT?.trim() &&
-      toolCall.args.length === 2 &&
-      toolCall.args[1] === "build"
+      env.OPENCLAW_BUILD_CACHE !== "0" && toolCall.args.length === 2 && toolCall.args[1] === "build"
         ? await import("./lib/build-artifact-cache.mts")
         : undefined;
     const sourcePluginInventory =
@@ -552,7 +553,17 @@ async function buildAndPublishUi(
     const calls: [UiSpawnCall, string][] = [
       ...(!reuseOutput
         ? ([
-            [{ ...toolCall, args: [...toolCall.args, "--outDir", staging] }, "Control UI build"],
+            [
+              {
+                ...toolCall,
+                args: distArtifactEntryArgs(
+                  toolCall.args[0]!,
+                  [...toolCall.args.slice(1), "--outDir", staging],
+                  { native: true },
+                ),
+              },
+              "Control UI build",
+            ],
           ] satisfies [UiSpawnCall, string][])
         : []),
       validator("check-control-ui-precompressed-assets.mts", staging),
@@ -669,7 +680,7 @@ export async function runUiCli(argv: string[] = process.argv.slice(2)): Promise<
     exitForSpawnResult(
       rest.some((arg) => arg === "--help" || arg === "-h")
         ? runSpawnCallSync(toolCall, "Control UI build")
-        : await buildAndPublishUi(toolCall, env),
+        : await withDistArtifactOwnership(repoRoot, () => buildAndPublishUi(toolCall, env)),
     );
     return;
   }

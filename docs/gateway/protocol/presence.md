@@ -43,9 +43,7 @@ For opted-in readers, the same `presence` event carries one of two payloads:
 {
   "base": 12,
   "version": 13,
-  "upsert": [
-    { "key": "entry:connection-a", "presence": { "connectionId": "connection-a", "ts": 2000 } }
-  ],
+  "upsert": [{ "key": "entry:connection-a", "set": { "ts": 2000 }, "unset": ["watchedSessions"] }],
   "remove": [],
   "order": ["entry:connection-a"]
 }
@@ -53,11 +51,17 @@ For opted-in readers, the same `presence` event carries one of two payloads:
 
 Keys are opaque, stable identities assigned by the presence owner, independent
 of display names and recipient visibility. A reset replaces the complete roster;
-`keys` parallels `presence`. Each upsert replaces a whole row, including omitted
-fields. Apply removals and upserts, then select rows in the complete `order` array.
+`keys` parallels `presence`. For an existing row, an upsert's `set` contains only
+changed top-level fields and `unset` names removed fields. Nested objects and arrays
+are replaced as fields, not merged. A new row uses `{ key, presence }` with its
+complete contents. A field patch requires an existing row; otherwise recover with
+a snapshot. Apply removals and upserts, then select rows in the complete `order` array.
 This preserves the full snapshot's ordering even when only one row changes.
 All rows are projected for that recipient before comparison, including watched
 session visibility changes.
+
+Heartbeat and activity timestamps are included in patches, so freshness remains
+identical to a full snapshot without retransmitting each connection's metadata.
 
 `version` uses `stateVersion.presence`. Apply a delta only when `base` matches
 the last accepted version. On mismatch, request `system-presence` with

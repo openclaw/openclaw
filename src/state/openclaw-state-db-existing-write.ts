@@ -55,6 +55,7 @@ type ExistingWriteContract = Pick<SqliteTransactionOptions, "beginLockFailureRep
   schemaCompatibility?: SqliteSchemaCompatibility;
   operationLabel: string;
   busyTimeoutMs?: number;
+  integrityCheck?: "quick" | "full";
 };
 type OneShotWriteContract = ExistingWriteContract & {
   initializeAdditiveSchema?: boolean;
@@ -87,10 +88,18 @@ function assertExistingOpenClawStateSchema(
   pathname: string,
   schemaSql: string | undefined,
   compatibility?: SqliteSchemaCompatibility,
+  integrityCheck: "quick" | "full" = "full",
 ): number {
   const version = assertSupportedStateSchemaVersion(db, pathname);
   assertExistingOpenClawStateSchemaMetadata(db, pathname, version);
-  assertStateDatabaseIntegrityOnce(db, pathname);
+  if (integrityCheck === "quick") {
+    assertSqliteIntegrity(db, pathname, {
+      check: "quick",
+      tables: schemaSql === undefined ? undefined : getCanonicalSqliteTableNames(schemaSql),
+    });
+  } else {
+    assertStateDatabaseIntegrityOnce(db, pathname);
+  }
   if (schemaSql !== undefined) {
     assertSqliteSchemaContains(db, pathname, schemaSql, compatibility);
   }
@@ -175,7 +184,9 @@ function createExistingOpenClawStateWriter(
   });
   const admission = createStateSchemaAdmission(
     `state.subset:${createHash("sha256")
-      .update(JSON.stringify([contract.schemaSql, contract.schemaCompatibility]))
+      .update(
+        JSON.stringify([contract.schemaSql, contract.schemaCompatibility, contract.integrityCheck]),
+      )
       .digest("hex")}`,
     (value) => (typeof value === "number" ? value : undefined),
   );
@@ -223,6 +234,7 @@ function createExistingOpenClawStateWriter(
               pathname,
               needsAdmission && contract.initializeAdditiveSchema ? undefined : contract.schemaSql,
               contract.schemaCompatibility,
+              contract.integrityCheck,
             );
           let version: number;
           let recoveryChanges: string[] = [];

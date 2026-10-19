@@ -73,6 +73,7 @@ export async function prepareDoctorSessionSqliteTargets(
       authority: params.authority,
       targets: projectExistingAgentDatabaseTargets(targets, params.env, params.cfg),
       deferSchemaRepair: params.mode === "import",
+      integrityCheck: params.mode === "import" ? params.integrityCheck : "full",
     });
   };
   if (params.mode === "import") {

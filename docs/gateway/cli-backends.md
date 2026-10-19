@@ -138,7 +138,9 @@ call. The execution-start event still waits for complete arguments; input
 progress does not mean the tool has begun executing. If input generation is
 interrupted, a later text block does not mark the abandoned tool as started.
 
-Direct agent calls and child-completion updates share the same session reply policy.
+Direct agent calls, child-completion updates, and cron wakes targeting an existing
+chat share the same session reply policy. Announce wakes still require an explicit
+message target for that turn; isolated cron runs keep their own delivery policy.
 A completion turn's delivery override does not by itself start a fresh CLI session;
 authentication, workspace, and tool compatibility checks still apply.
 Each turn receives delivery instructions for its current mode and available tools,
@@ -347,6 +349,8 @@ Normal agent turns can also use a saved subscription token without a native logi
 openclaw models auth paste-token --provider anthropic
 ```
 
+A native login alone is an opaque CLI login for saved-history recovery: OpenClaw sees no account identity for it, and `--method cli` saves no auth profile. When a chat on it needs a fresh Claude session (an invalidated binding or a missing native transcript), OpenClaw logs `cli session history refused across auth boundary: reason=auth-unknown` and the new session receives only the metadata notice about earlier messages, not the saved transcript. Native resume of the same Claude session is unaffected. A saved subscription token is a resolved static credential, so chats started while it is selected recover their saved history in a fresh Claude session. See [History account boundaries](#history-account-boundaries).
+
 New sessions select saved subscription credentials through the configured account
 order and forward them to the CLI through a protected file descriptor. Existing
 sessions keep their account until you select another or remove its saved profile.
@@ -426,6 +430,8 @@ Native session compatibility and permission to replay saved OpenClaw history are
 
 Automatic durable recovery requires a resolved static credential or a named OAuth account. Opaque CLI logins, identity-less OAuth credentials, legacy transcripts without provenance, imported or otherwise unaccounted content, and incompatible provenance versions cannot authorize automatic replay. Native resume remains available under the backend’s existing rules. Switching accounts makes mixed history ineligible even after a successful replacement, a later clear, or a switch back to the original account. A new session or an empty reset can establish a new boundary. A reset that retains messages cannot relabel them.
 
+A native `claude auth login` registered with `--method cli` is an opaque CLI login and cannot authorize automatic replay. A subscription token saved with `openclaw models auth paste-token --provider anthropic` gives new `claude-cli` chats a recoverable owner. Chats that already hold history without a recorded boundary stay refused after the token is saved; a new chat establishes the boundary.
+
 This uses existing session metadata and transcript generation/sequence counters. No SQLite schema migration or transcript deletion occurs. Existing conversations are not backfilled from their latest native binding. Older binaries do not enforce this new recovery boundary. After a downgrade and subsequent transcript writes, upgrading again refuses automatic replay because those writes are not covered. Do not rely on a downgrade to preserve the new security behavior.
 
 Explicit caller-owned in-memory context remains caller-supplied input, not permission to read a durable conversation carrying the same identifiers. Authentication invalidations still refuse its recovery prompt and saved session notes. When automatic recovery is refused, the saved transcript remains intact. The next CLI process receives the current request without the saved history or notes.
@@ -435,6 +441,13 @@ An admitted resume of the same native Claude session can still receive the count
 The notice prefixes only that native user turn. OpenClaw keeps the original user text; native-history imports correlate the prefixed turn with its existing local row instead of adding a duplicate.
 
 Serialization: `serialize: true` keeps same-lane runs ordered (most CLIs serialize on one provider lane). OpenClaw also drops stored CLI session reuse when the selected auth identity changes. A changed auth profile id, static API key, static token, or OAuth account identity all count, when the CLI exposes one. OAuth access and refresh token rotation alone does not cut the session. If a CLI has no stable OAuth account id, OpenClaw lets that CLI enforce its own resume permissions.
+
+When the resolved MCP tool names change, OpenClaw starts a fresh native CLI session
+and logs `cli session reset: provider=<backend> reason=prompt-tools`. This refreshes
+the CLI's cached tool catalog; resending prompt text alone cannot refresh it.
+The OpenClaw chat remains intact, and saved-history recovery follows the
+[history account boundaries](#history-account-boundaries) above. System-prompt-only
+changes continue to reuse the native session when the backend can resend the prompt.
 
 ## Fallback prelude from claude-cli sessions
 

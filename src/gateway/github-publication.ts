@@ -162,6 +162,10 @@ export function createGitHubPublicationCoordinator(params: {
       idempotencyKey: request.idempotencyKey,
       title: request.title,
       body: request.body,
+      draft:
+        existing && existing.draft == null && request.draft === undefined
+          ? undefined
+          : (request.draft ?? false),
     });
     const now = Date.now();
     const requestId = randomUUID();
@@ -172,6 +176,7 @@ export function createGitHubPublicationCoordinator(params: {
         idempotencyKey: request.idempotencyKey,
         title: request.title,
         body: request.body,
+        draft: request.draft ?? false,
       },
       requestId,
       requestDigest,

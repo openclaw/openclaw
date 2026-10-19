@@ -13,6 +13,9 @@ export function useStreamAutoFollow(options: {
     }
   });
   return {
+    reset() {
+      atBottom = true;
+    },
     schedule(force = false) {
       if (frame !== undefined) {
         cancelAnimationFrame(frame);

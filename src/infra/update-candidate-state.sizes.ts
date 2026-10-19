@@ -151,9 +151,8 @@ export async function readUpdateStateDatabaseSizes(
   options.signal?.throwIfAborted();
   if (result.code !== 0 || result.termination !== "exit" || result.outputLimitExceeded) {
     throw inspection.failure(
-      inspection.stderr() ||
-        (result.outputLimitExceeded ? "Worker output exceeded its capture limit" : ""),
-      result.termination,
+      inspection.stderr(),
+      result.outputLimitExceeded ? "output-limit" : result.termination,
     );
   }
   try {

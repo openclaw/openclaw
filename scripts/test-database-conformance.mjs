@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 import { spawn, spawnSync } from "node:child_process";
-import { readdirSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { createInterface } from "node:readline";
 import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
+import { assignWeightedTestFiles } from "./lib/weighted-test-shards.mts";
 
 const usage =
-  "Usage: node scripts/test-database-conformance.mjs --engine postgres [--connection <dsn> | --list] [--shard infra|integrations] [-- <targets and test options>]";
+  "Usage: node scripts/test-database-conformance.mjs --engine postgres [--connection <dsn> | --list] [--shard <index>/<count>] [-- <targets and test options>]";
 const separator = process.argv.indexOf("--", 2);
 const forwarded = separator < 0 ? [] : process.argv.slice(separator + 1);
 const explicitTargets = forwarded.length > 0 && !forwarded[0].startsWith("-");
 let values;
+let shardIndex;
+let shardCount;
 try {
   ({ values } = parseArgs({
     args: process.argv.slice(2, separator < 0 ? undefined : separator),
@@ -30,11 +33,16 @@ try {
   ) {
     throw new Error();
   }
-  if (
-    values.shard !== undefined &&
-    (!["infra", "integrations"].includes(values.shard) || explicitTargets)
-  ) {
-    throw new Error();
+  if (values.shard !== undefined) {
+    const match = /^([1-9]\d*)\/([1-9]\d*)$/u.exec(values.shard);
+    if (!match || explicitTargets) {
+      throw new Error();
+    }
+    shardIndex = Number(match[1]);
+    shardCount = Number(match[2]);
+    if (!Number.isSafeInteger(shardCount) || shardIndex > shardCount) {
+      throw new Error();
+    }
   }
 } catch {
   console.error(usage);
@@ -54,6 +62,7 @@ let targets = explicitTargets
         .map((file) => `src/infra/database-engine/${file.replaceAll("\\", "/")}`)
         .toSorted(),
       "src/commands/doctor-database-diagnostics.postgres.test.ts",
+      "src/config/sessions/session-turn-resident.postgres.test.ts",
       "src/infra/update-candidate-state.postgres.test.ts",
       "src/state/openclaw-state-db.postgres.test.ts",
       "src/state/openclaw-agent-db.postgres.test.ts",
@@ -69,15 +78,23 @@ let targets = explicitTargets
       "src/gateway/server-database-engine.postgres.test.ts",
       "src/transcripts/meeting-chronology.postgres.test.ts",
     ];
-if (values.shard) {
-  targets = targets.filter((target) => {
-    // Real command integrations share the integration shard; newly added suites inherit it.
-    const commandIntegration =
-      target.startsWith("src/infra/database-engine/") && target.endsWith(".integration.test.ts");
-    const infra =
-      !commandIntegration && (target.startsWith("src/infra/") || target.startsWith("src/state/"));
-    return values.shard === "infra" ? infra : !infra;
-  });
+if (shardCount) {
+  if (shardCount > targets.length) {
+    console.error(usage);
+    process.exit(2);
+  }
+  // All jobs read the same committed weights; missing samples never remove a target.
+  const { targetSeconds } = JSON.parse(
+    readFileSync(new URL("../config/postgres-conformance-timings.json", import.meta.url), "utf8"),
+  );
+  const shards = Array.from({ length: shardCount }, (_, index) => ({
+    checkName: String(index + 1),
+    includePatterns: [],
+    weight: 0,
+  }));
+  assignWeightedTestFiles(shards, targets, (target) => targetSeconds[target] ?? 30);
+  const selected = new Set(shards[shardIndex - 1].includePatterns);
+  targets = targets.filter((target) => selected.has(target));
 }
 if (values.list) {
   console.log(JSON.stringify(explicitTargets ? forwarded : [...targets, ...forwarded], null, 2));

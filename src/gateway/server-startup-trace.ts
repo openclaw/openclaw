@@ -71,7 +71,23 @@ const RECOVERY_TIMINGS = new Map([
   ["sidecars.exec-recovery", "execMs"],
   ["sidecars.subagent-load", "registryLoadMs"],
   ["sidecars.subagent-activation", "registryActivationMs"],
+  ["sidecars.subagent-bind", "registryActivationBindMs"],
+  ["sidecars.subagent-requesters", "registryActivationRequestersMs"],
+  ["sidecars.subagent-reserve", "registryActivationReserveMs"],
+  ["sidecars.subagent-resume", "registryActivationResumeMs"],
+  ["sidecars.subagent-interrupted", "registryActivationInterruptedMs"],
 ]);
+
+const RECOVERY_DETAILS = [
+  "registryActivationAuthorityRestoreMs",
+  "registryActivationPublishMs",
+  "registryActivationSessionReadMs",
+  "registryActivationYieldMs",
+  "registryActivationRuns",
+  "registryActivationActiveRuns",
+  "registryActivationRecoveredRuns",
+  "registryActivationPublishedRuns",
+] as const;
 
 export type GatewayStartupTrace = {
   detail: (name: string, metrics: ReadonlyArray<readonly [string, number | string]>) => void;
@@ -179,7 +195,9 @@ export function createGatewayStartupTrace(
     }
     const recoverySummary =
       name === RECOVERY_PHASE
-        ? [...RECOVERY_TIMINGS.values()].map((key) => [key, recoveryTimings.get(key) ?? 0] as const)
+        ? [...RECOVERY_TIMINGS.values(), ...RECOVERY_DETAILS].map(
+            (key) => [key, recoveryTimings.get(key) ?? 0] as const,
+          )
         : [];
     const metrics = [
       ["eventLoopMax", `${(eventLoopSample?.maxMs ?? 0).toFixed(1)}ms`] as const,
@@ -253,6 +271,14 @@ export function createGatewayStartupTrace(
       }
     },
     detail(name: string, metrics: ReadonlyArray<readonly [string, number | string]>) {
+      if (name === "sidecars.subagent-activation") {
+        for (const key of RECOVERY_DETAILS) {
+          const value = metrics.find(([metricName]) => metricName === key)?.[1];
+          if (typeof value === "number") {
+            recoveryTimings.set(key, (recoveryTimings.get(key) ?? 0) + value);
+          }
+        }
+      }
       const attributes = Object.fromEntries(metrics);
       recordGatewayRestartTraceDetail(`restart.ready.${name}`, metrics);
       if (logEnabled) {

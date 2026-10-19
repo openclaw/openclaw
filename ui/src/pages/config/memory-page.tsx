@@ -2,15 +2,7 @@ import type { JSX } from "@solidjs/web";
 // Controller for the Memory destination page. The URL owns the active tab;
 // this element projects Settings agent selection into Overview status and
 // consumes the global configuration controllers used by Settings.
-import {
-  createEffect,
-  createMemo,
-  createSignal,
-  onCleanup,
-  onSettled,
-  Show,
-  untrack,
-} from "solid-js";
+import { createEffect, createMemo, createSignal, onCleanup, onSettled, Show } from "solid-js";
 import type { ControlUiSettingsSnapshot } from "../../../../src/plugin-sdk/control-ui-settings.js";
 import { pathForMemoryTab } from "../../app-route-paths.ts";
 import type { ApplicationContext, ApplicationGatewaySnapshot } from "../../app/context.ts";
@@ -511,7 +503,7 @@ export function MemorySettingsPage(props: MemorySettingsPageProps) {
       // Retire pending reads on every connection transition, even within one render.
       gateway.subscribe(() => syncGateway(application.gateway.snapshot)),
       // Config receipts retire obsolete support probes before their results can settle.
-      runtime.subscribe(() => untrack(() => syncSupport(application.runtimeConfig))),
+      runtime.subscribe(() => syncSupport(application.runtimeConfig)),
     ];
     syncRouteAgent();
     syncGateway(gateway.read().snapshot);

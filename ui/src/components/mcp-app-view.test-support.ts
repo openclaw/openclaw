@@ -12,8 +12,10 @@ export function mountView(props: Parameters<typeof McpAppView>[0], context: obje
     ...supplied,
     gateway: {
       subscribe: () => () => {},
-      snapshot: { client: null, phase: "stopped" },
       ...supplied.gateway,
+      get snapshot() {
+        return supplied.gateway?.snapshot ?? { client: null, phase: "stopped", hello: null };
+      },
     },
   } as ApplicationContext);
   const mounted = mountSolid(() => createComponent(McpAppView, props), {

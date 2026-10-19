@@ -1643,7 +1643,11 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
     ).rejects.toThrow(/is archived/i);
 
     expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
-    expect(sessionBindingMocks.touch).not.toHaveBeenCalled();
+    expect(sessionBindingMocks.touch).toHaveBeenCalledExactlyOnceWith(
+      "binding-archived",
+      undefined,
+      expect.objectContaining({ channel: "discord", accountId: "default" }),
+    );
     expect(hookMocks.runner.runInboundClaimForPluginOutcome).not.toHaveBeenCalled();
     expect(replyResolver).not.toHaveBeenCalled();
     expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
@@ -1941,39 +1945,22 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
   it.each<{
     name: string;
     commands?: OpenClawConfig["commands"];
-    admitted: boolean;
     command?: "/new" | "/reset";
     tombstoneDuringDispatch?: boolean;
   }>([
-    { name: "ordinary channel-authorized reset", admitted: true },
+    { name: "ordinary channel-authorized reset" },
     {
       name: "channel-admitted non-owner reset",
       commands: { ownerAllowFrom: ["owner"] },
-      admitted: true,
     },
-    {
-      name: "explicit command denial remains authoritative",
-      commands: { ownerAllowFrom: ["owner"], allowFrom: { matrix: [] } },
-      admitted: false,
-    },
-    ...(["/new", "/reset"] as const).flatMap((command) => [
-      {
-        name: `authorized ${command} after recovery commits`,
-        command,
-        tombstoneDuringDispatch: true,
-        admitted: true,
-      },
-      {
-        name: `denied ${command} after recovery commits`,
-        command,
-        tombstoneDuringDispatch: true,
-        commands: { allowFrom: { matrix: [] } },
-        admitted: false,
-      },
-    ]),
+    ...(["/new", "/reset"] as const).map((command) => ({
+      name: `authorized ${command} after recovery commits`,
+      command,
+      tombstoneDuringDispatch: true,
+    })),
   ])(
-    "gates hard reset admission without pre-unarchiving the tombstone: $name",
-    async ({ commands, admitted, command = "/new", tombstoneDuringDispatch }) => {
+    "hands hard reset to the command owner without pre-unarchiving the tombstone: $name",
+    async ({ commands, command = "/new", tombstoneDuringDispatch }) => {
       setNoAbort();
       const sessionId = "restart-tombstone-session";
       const sessionKey = "agent:main:matrix:channel:room-a";
@@ -2046,15 +2033,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
             }
           : {}),
       });
-      if (!admitted) {
-        await expect(dispatch).rejects.toMatchObject({
-          code: "SESSION_RESTART_RECOVERY_TOMBSTONE",
-        });
-        expect(sessionStoreMocks.currentEntry).toEqual(tombstoneBefore);
-        expect(replyResolver).not.toHaveBeenCalled();
-        expect(dispatcher.sendFinalReply).not.toHaveBeenCalled();
-        return;
-      }
       const result = await dispatch;
 
       expect(result.queuedFinal).toBe(true);
@@ -2062,91 +2040,6 @@ describe("sendPolicy deny — suppress delivery, not processing (#53328)", () =>
       expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "reset handled" });
     },
   );
-
-  it("admits an authorized native reset only when it owns the tombstoned source", async () => {
-    setNoAbort();
-    const sessionId = "restart-tombstone-session";
-    const sessionKey = "agent:main:matrix:channel:room-a";
-    const archivedAt = Date.now() - 1_000;
-    sessionStoreMocks.currentEntry = {
-      sessionId,
-      updatedAt: Date.now(),
-      archivedAt,
-      status: "failed",
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
-    };
-    const dispatcher = createDispatcher();
-    const replyResolver = vi.fn(async () => {
-      expect(sessionStoreMocks.currentEntry?.archivedAt).toBe(archivedAt);
-      return { text: "native reset handled" } satisfies ReplyPayload;
-    });
-    const ctx = buildTestCtx({
-      Provider: "matrix",
-      Surface: "matrix",
-      OriginatingChannel: "matrix",
-      OriginatingTo: "!room-a:example.test",
-      ChatType: "channel",
-      From: "@owner:example.test",
-      To: "!room-a:example.test",
-      AccountId: "default",
-      SessionKey: sessionKey,
-      Body: "/new",
-      CommandBody: "/new",
-      RawBody: "/new",
-      CommandSource: "native",
-      CommandAuthorized: true,
-      CommandTargetSessionKey: sessionKey,
-      CommandTurn: {
-        kind: "native",
-        source: "native",
-        authorized: true,
-        commandName: "new",
-        body: "/new",
-      },
-      InboundAccessAuthorized: true,
-      InboundEventKind: "user_request",
-      InputProvenance: { kind: "external_user", sourceChannel: "matrix" },
-    });
-
-    const result = await dispatchReplyFromConfig({
-      ctx,
-      cfg: emptyConfig,
-      dispatcher,
-      replyResolver,
-    });
-
-    expect(result.queuedFinal).toBe(true);
-    expect(replyResolver).toHaveBeenCalledTimes(1);
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({ text: "native reset handled" });
-
-    sessionStoreMocks.currentEntry = {
-      sessionId,
-      updatedAt: Date.now(),
-      archivedAt,
-      status: "failed",
-      mainRestartRecovery: {
-        cycleId: "cycle-1",
-        revision: 4,
-        chargedAttempts: 3,
-        tombstone: { reason: "automatic recovery exhausted" },
-      },
-    };
-    const differentSourceResolver = vi.fn(async () => ({ text: "must not run" }));
-    await expect(
-      dispatchReplyFromConfig({
-        ctx: { ...ctx, SessionKey: "agent:main:matrix:channel:room-b" },
-        cfg: emptyConfig,
-        dispatcher: createDispatcher(),
-        replyResolver: differentSourceResolver,
-      }),
-    ).rejects.toThrow(/ended during restart recovery/i);
-    expect(differentSourceResolver).not.toHaveBeenCalled();
-  });
 
   it("skips plugin-bound claim hook under deny and falls through to suppressed agent dispatch", async () => {
     // Plugin-bound inbound handlers can emit outbound replies we cannot

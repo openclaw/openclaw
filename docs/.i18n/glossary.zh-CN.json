@@ -2904,6 +2904,10 @@
     "target": "会话管理"
   },
   {
+    "source": "Session controller",
+    "target": "会话控制器"
+  },
+  {
     "source": "Transcript hygiene",
     "target": "转录净化"
   },

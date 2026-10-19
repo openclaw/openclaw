@@ -19,7 +19,6 @@ function createHost(overrides: Partial<DevicesDialogHost> = {}): DevicesDialogHo
   return {
     canManagePairing: () => true,
     gatewayConnected: () => true,
-    requestGeneration: () => 0,
     gatewayClient: () => null,
     gatewayUrl: () => "http://gateway.test",
     runPageTask: async (task) => task(state),

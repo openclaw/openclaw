@@ -357,7 +357,6 @@ export function replaceWorkspaceAttestationInDatabase(
   // Capture the comparison clock only after BEGIN IMMEDIATE acquires the
   // writer lock, so a newer committed row cannot look future-dated.
   const updatedAtMs = params.nowMs ?? Date.now();
-  assertCanonicalIntegerTimestamp(updatedAtMs, "attestation update");
   const resolution = resolveWorkspaceIdentityFromDatabase({
     workspaceDir: params.workspaceDir,
     database,

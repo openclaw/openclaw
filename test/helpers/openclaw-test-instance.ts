@@ -1441,7 +1441,6 @@ export const testing = {
   appendLogChunk,
   createBoundedStringLog,
   formatLogs,
-  isGatewayMigrationConvergenceRefusal,
   stopWindowsGatewayProcess,
   waitForGatewayReady,
 };

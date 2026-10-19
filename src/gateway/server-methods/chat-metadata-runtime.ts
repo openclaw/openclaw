@@ -65,7 +65,7 @@ import type {
   PreparedModelsListRequest,
 } from "./models-list-context.js";
 
-type PreparedAgentMetadata = PreparedChatMetadataProjection["agent"] & { revision: string };
+type PreparedAgentMetadata = PreparedChatMetadataProjection["agent"];
 
 type PreparedProjection<T> = { read: () => T; isCurrent: () => boolean };
 
@@ -586,6 +586,8 @@ export function createGatewayChatMetadataRuntime(params: {
         ...(readParams.readPolicy === "ready"
           ? {}
           : {
+              // Command receipts must not give session worker policy a catalog lifetime.
+              commandsRevision: session.agent.revision,
               metadata: {
                 commands: session.agent.commands,
                 swarmEnabled: session.agent.swarmEnabled,

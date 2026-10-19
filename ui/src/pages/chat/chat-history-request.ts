@@ -50,7 +50,7 @@ const CHAT_HISTORY_PREFETCH_BUDGET = { limit: 20, maxBytes: 64 * 1024 };
 // Keep startup small, then amortize older-history reads and prepend work across
 // larger pages. The Gateway owns the response byte and single-message limits.
 const CHAT_HISTORY_OLDER_PAGE_LIMIT = 1000;
-const CHAT_HISTORY_OLDER_PAGE_MAX_BYTES = 1024 * 1024;
+const CHAT_HISTORY_OLDER_PAGE_MAX_BYTES = 2 * 1024 * 1024;
 
 export function attachHistoryActivity<Result extends ChatHistoryResponse>(result: Result): Result {
   if (isHistoryCursor(result) && result.kind === "reset") {
@@ -149,6 +149,9 @@ export function requestSharedHistory(
           ...(historyState.sessionInfo
             ? { sessionInfo: historyState.stateRevision.sessionInfo }
             : {}),
+          ...(method === "chat.startup" && historyState.commands
+            ? { commands: historyState.stateRevision.commands }
+            : {}),
         }
       : {};
   requestKey += JSON.stringify(knownState);
@@ -211,6 +214,13 @@ export function requestSharedHistory(
       );
       if (!(isHistoryCursor(response) && response.kind === "reset") && historyState) {
         // Resolve omissions against this request's exact payload, never a later cache write.
+        if (
+          response.metadata &&
+          response.stateRevision?.commands &&
+          response.stateRevision.commands === historyState.stateRevision.commands
+        ) {
+          response.metadata.commands ??= historyState.commands;
+        }
         if (
           response.stateRevision?.pendingInputs &&
           response.stateRevision.pendingInputs === historyState.stateRevision.pendingInputs

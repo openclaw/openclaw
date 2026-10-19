@@ -87,6 +87,7 @@ import {
 } from "./managed-image-record-store.js";
 import { withManagedImageSessionRead } from "./managed-image-session-read.js";
 import { readImageThumbnailFromFile } from "./managed-image-thumbnail-cache.js";
+import { handleManagedImageThumbnailResponse } from "./managed-image-thumbnail-response.js";
 import {
   MANAGED_OUTGOING_ATTACHMENT_ID_RE,
   buildManagedOutgoingArtifactId,
@@ -1456,12 +1457,11 @@ export async function handleManagedOutgoingMediaHttpRequest(
               respondNotFound();
               return true;
             }
-            const sourceName = path.parse(responseFilename ?? "generated-image").name;
-            res.statusCode = 200;
-            res.setHeader("content-length", String(thumbnail.byteLength));
-            writeMediaHeaders("image/webp", `${sourceName}-thumbnail.webp`);
-            res.end(req.method === "HEAD" ? undefined : thumbnail);
-            return true;
+            return handleManagedImageThumbnailResponse(req, res, {
+              thumbnail,
+              filename: responseFilename,
+              cacheControl: immutableCacheControl,
+            });
           }
 
           const isPlayback =

@@ -62,7 +62,8 @@ import type { SessionEntryWritePostimages } from "./session-entry-write-postimag
 import type { SessionParticipantRecord } from "./session-membership-facts.types.js";
 import { readStagedSessionTranscriptAuthority } from "./session-transcript-authority.js";
 import { prepareSessionTurnPredicates } from "./session-turn-predicate.js";
-import { prepareVoiceTranscriptCommit } from "./session-turn.worker.js";
+import type { SessionTurnPlan } from "./session-turn.types.js";
+import { prepareSessionTurn, prepareVoiceTranscriptCommit } from "./session-turn.worker.js";
 import { collectSessionEntryLookupKeys } from "./store-entry.js";
 
 type Command = SqliteWorkerCommand<SessionActorOperations>;
@@ -196,8 +197,6 @@ export function createSessionActorWorker(
         working.hot.version = version;
         if (singleStatement) {
           stageSqliteTransactionState(sqlPublicationAnchor(database.db), {
-            stage() {},
-            rollback() {},
             commit() {
               const committedToken = token(
                 database,
@@ -279,7 +278,7 @@ export function createSessionActorWorker(
         captureSessionEntrySnapshot({
           entry: structuredClone(previousEntry),
           row: {
-            ...structuredClone(selected.row),
+            ...selected.row,
             window: before.window ? structuredClone(before.window) : null,
             member_ids_json: JSON.stringify(before.hot.members.map((member) => member.identityId)),
             board_present: before.hasBoard ? 1 : 0,
@@ -338,8 +337,6 @@ export function createSessionActorWorker(
           const mutationRevision = readSqliteNativeMutationRevision(opened.db);
           if (
             !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
-              stage() {},
-              rollback() {},
               commit() {
                 // A later nested writer must not install this intermediate transcript.
                 if (readSqliteNativeMutationRevision(opened.db) === mutationRevision) {
@@ -405,6 +402,21 @@ export function createSessionActorWorker(
     return hydrated;
   };
   return {
+    prepareTurn(input: SessionTurnPlan) {
+      const database = context.open();
+      const resident = retainedState(database, input.sessionKey);
+      // Only the exact current window proves runtime selection. Moved, cold, or
+      // evicted sessions retain canonical preparation, without hydrating an actor.
+      const reusable =
+        input.options.resolveRuntimeTarget &&
+        !input.options.sessionTurnMutation &&
+        resident?.hot.entry?.sessionId === input.options.expectedSessionId &&
+        resident.window?.session_id === input.options.expectedSessionId &&
+        resident.window.session_key === input.sessionKey &&
+        resident.entryRows.get(input.sessionKey) &&
+        !resident.transcript.coldArchive;
+      return prepareSessionTurn(input, context, undefined, reusable ? resident : undefined);
+    },
     async prepare(command: Command) {
       if (command.type === "session.actor.read") {
         return;
@@ -538,8 +550,6 @@ export function createSessionActorWorker(
             });
             if (
               !stageSqliteTransactionState(sqlPublicationAnchor(opened.db), {
-                stage() {},
-                rollback() {},
                 commit() {
                   committed = true;
                   residents.remember(working);

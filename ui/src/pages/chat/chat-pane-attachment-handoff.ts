@@ -21,6 +21,7 @@ import {
   loadChatComposerState,
   storedChatOutboxScopeKey,
 } from "./composer-persistence.ts";
+import { publishQueuedMessageEdit } from "./queued-message-edit.ts";
 import type { ChatSplitLayout } from "./split-layout-types.ts";
 import { visiblePanesOf } from "./split-layout.ts";
 
@@ -224,8 +225,10 @@ export class ChatPaneComposerHandoff {
     target.custody = this.custody;
     target.scope = target.currentScope();
     target.host.resume();
-    sourceState.requestUpdate?.();
-    targetState.requestUpdate?.();
+    publishQueuedMessageEdit(sourceState);
+    publishQueuedMessageEdit(targetState);
+    sourceState.composerDraftChanged?.();
+    targetState.composerDraftChanged?.();
   }
 }
 
@@ -354,7 +357,7 @@ export function replacePaneStagedAttachmentGatewayOwner(
     for (const fallback of Object.values(state.chatComposerFallbackByScope)) {
       fallback.attachments = dropAnnotations(fallback.attachments);
     }
-    state.requestUpdate?.();
+    state.composerDraftChanged?.();
   }
   context.chatAttachmentHandoff.clearPane(paneId);
   return nextOwner;

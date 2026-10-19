@@ -111,9 +111,8 @@ describe("runConversationalOnboarding", () => {
     };
     metadata = createSystemAgentPluginMetadataTestSnapshot(config);
     const fixture = await metadata.run(() => createSystemAgentVerifiedInferenceTestFixture(config));
-    // Keep the handoff's actual registry lookup and artifact validation; the binding
-    // factory's validator override is only for constructing synthetic probe evidence.
-    const { validateAgentHarnessRuntimeArtifact: _fixtureValidator, ...ownerDeps } = fixture.deps;
+    // The handoff must use the actual registered harness and artifact validator.
+    fixture.harnessMock.mockRestore();
     mocks.readConfigFileSnapshot.mockImplementation(async () =>
       createConfigFileSnapshot({
         path: path.join(home.home, "openclaw.json"),
@@ -128,10 +127,8 @@ describe("runConversationalOnboarding", () => {
         legacyIssues: [],
       }),
     );
-    const fingerprintPluginRuntimeArtifact = vi.fn(ownerDeps.fingerprintPluginRuntimeArtifact);
+    const fingerprintPluginRuntimeArtifact = fixture.fingerprintPluginRuntimeArtifact;
     const deps = {
-      ...ownerDeps,
-      fingerprintPluginRuntimeArtifact,
       readConfigFileSnapshot: mocks.readConfigFileSnapshot,
     };
     let artifactCurrent = true;

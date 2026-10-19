@@ -10,12 +10,12 @@ import {
   withinTest,
 } from "../../../test/helpers/promise.js";
 import { createAgent } from "../../agents/agent-create.js";
+import { getActiveNativeAttempt } from "../../agents/embedded-agent-runner/run-state.js";
 import {
-  clearActiveEmbeddedRun,
-  resolveEmbeddedAgentRunProgressState,
-  setActiveEmbeddedRun,
-} from "../../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  createEmbeddedRunHandle,
+} from "../../agents/embedded-agent-runner/runs.test-support.js";
 import {
   captureRuntimeConfigAsyncReader,
   getRuntimeConfig,
@@ -41,7 +41,10 @@ import { createPluginStateRuntimeStores } from "../../plugin-state/plugin-state-
 import { registerMemoryCapability } from "../../plugins/memory-state.js";
 import { getPluginRegistryState } from "../../plugins/runtime-state.js";
 import { disposePluginRegistryInstances } from "../../plugins/runtime.js";
+import { withPluginRuntimeGatewayContextResolver } from "../../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../../plugins/status.test-helpers.js";
+import { closeAgentWorkAdmissions } from "../../sessions/session-controller.lifecycle.js";
+import { resolveSessionRunProgressState } from "../../sessions/session-controller.queries.js";
 import * as agentDatabases from "../../state/openclaw-agent-db.js";
 import { runOpenClawAgentWriteTransaction } from "../../state/openclaw-agent-db.js";
 import * as agentExecutions from "../../state/openclaw-agent-execution.js";
@@ -65,6 +68,7 @@ import { createDirectChatContext } from "../server-chat.agent-events.test-helper
 import { createGatewayMemoryCloseRegistryFactory } from "../server-close.memory.test-support.js";
 import { startGatewayServer } from "../server.js";
 import { connectGatewayClient, disconnectGatewayClient } from "../test-helpers.e2e.js";
+import type { GatewayContextResolver, GatewayRequestContext } from "./types.js";
 
 const nativeApi = await loadBundledPluginFacade<NativeBindingTestApi & NativeBindingClientTestApi>({
   pluginId: "codex",
@@ -84,8 +88,9 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
   agentId: string;
   workspace: string;
   signal: AbortSignal;
+  resolveGatewayContext: GatewayContextResolver;
 }): Promise<void> {
-  const { state, client, agentId, workspace, signal } = params;
+  const { state, client, agentId, workspace, signal, resolveGatewayContext } = params;
   const databasePath = path.join(state.agentDir(agentId), "openclaw-agent.sqlite");
   const storePath = path.join(state.sessionsDir(agentId), "sessions.json");
   let session = await client.request<{ key: string; sessionId: string }>("sessions.create", {
@@ -150,7 +155,13 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
         `iteration ${iteration}, ${checkpoint} must not acquire an executor`,
       ).toHaveLength(capturesBefore);
     };
-    setActiveEmbeddedRun(session.sessionId, handle, session.key, undefined, agentId);
+    const operation = withPluginRuntimeGatewayContextResolver(resolveGatewayContext, () =>
+      setActiveEmbeddedRun(session.sessionId, handle, session.key, undefined, agentId),
+    );
+    let ownerSettled = false;
+    void operation.ownerSettlement.then(() => {
+      ownerSettled = true;
+    });
     // The test owns the deadline while deliberately holding all three deletion phases.
     const deleting = client.request(
       "agents.delete",
@@ -164,7 +175,10 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
         signal,
       );
       expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
-      expect(resolveEmbeddedAgentRunProgressState(session.sessionId)).toBeDefined();
+      expect(operation.result).toMatchObject({ kind: "aborted" });
+      expect(resolveSessionRunProgressState(session.sessionId)).toBeUndefined();
+      expect(getActiveNativeAttempt(session.sessionId)).toBe(handle);
+      expect(ownerSettled).toBe(false);
       await refuseLatePatch("before-run-settlement");
       clearActiveEmbeddedRun(session.sessionId, handle, session.key);
 
@@ -197,6 +211,7 @@ async function exerciseLateSessionWritesDuringDeletion(params: {
         removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
       });
       expect(await deleting).not.toHaveProperty("purgeFailed");
+      expect(ownerSettled).toBe(true);
       expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
       for (const pathname of [
         workspace,
@@ -332,13 +347,16 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             const hotReloadRecovery = vi.fn(() => {
               throw new Error("Synthetic Gateway hot reload unexpectedly required recovery");
             });
-            const startupRecovery = createDeferred();
+            const startupRecovery = createDeferred<GatewayRequestContext>();
             const resumeDeletions = deletionRecovery.resumeAgentDeletions;
             const recovery = vi
               .spyOn(deletionRecovery, "resumeAgentDeletions")
               .mockImplementation(async (...args) => {
                 const recovering = resumeDeletions(...args);
-                void recovering.then(startupRecovery.resolve, startupRecovery.reject);
+                void recovering.then(
+                  () => startupRecovery.resolve(args[0]),
+                  startupRecovery.reject,
+                );
                 await recovering;
               });
             const server = await startGatewayServer(claim.port, {
@@ -350,7 +368,10 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
             try {
               await server.startupSettled;
               // Recovery starts after sidecar readiness; join it before creating a pending journal.
-              await withinTest(startupRecovery.promise, signal);
+              const { resolveGatewayContext } = await withinTest(startupRecovery.promise, signal);
+              if (!resolveGatewayContext) {
+                throw new Error("Gateway did not publish its runtime context resolver");
+              }
               recovery.mockRestore();
               signal.throwIfAborted();
               const client = await connectGatewayClient({
@@ -399,6 +420,67 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
               registry.plugins.push(plugin);
               registry.agentHarnesses.push(registration);
               try {
+                const keeperSession = await client.request<{ key: string }>("sessions.create", {
+                  agentId: "keeper",
+                  key: "agent:keeper:injection-isolation",
+                });
+                await expect(
+                  client.request("chat.inject", {
+                    sessionKey,
+                    message: "Accepted before agent deletion.",
+                  }),
+                ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
+                const selectedMessages = (
+                  await client.request<{ messages: unknown[] }>("chat.history", { sessionKey })
+                ).messages;
+                expect(selectedMessages).toContainEqual(
+                  expect.objectContaining({
+                    role: "assistant",
+                    content: [{ type: "text", text: "Accepted before agent deletion." }],
+                  }),
+                );
+                const assertInjectionRefused = async (phase: string, reason: string) => {
+                  await expect(
+                    client.request("chat.inject", {
+                      sessionKey,
+                      message: `Refused during ${phase}.`,
+                    }),
+                  ).rejects.toThrow(reason);
+                  const message = `Keeper accepts injection during ${phase}.`;
+                  await expect(
+                    client.request("chat.inject", { sessionKey: keeperSession.key, message }),
+                  ).resolves.toMatchObject({ ok: true, messageId: expect.any(String) });
+                  expect(
+                    (
+                      await client.request<{ messages: unknown[] }>("chat.history", {
+                        sessionKey: keeperSession.key,
+                      })
+                    ).messages,
+                  ).toContainEqual(
+                    expect.objectContaining({
+                      role: "assistant",
+                      content: [{ type: "text", text: message }],
+                    }),
+                  );
+                };
+                expect(readAgentDeletionJournal(agentId)).toBeUndefined();
+                const reopen = closeAgentWorkAdmissions({
+                  agentId,
+                  env: state.env,
+                  reason: new Error("Selected agent admission is closed."),
+                });
+                try {
+                  await assertInjectionRefused(
+                    "closed admission",
+                    "Selected agent admission is closed.",
+                  );
+                  expect(
+                    (await client.request<{ messages: unknown[] }>("chat.history", { sessionKey }))
+                      .messages,
+                  ).toEqual(selectedMessages);
+                } finally {
+                  reopen();
+                }
                 const readSummaries = sessionInventory.readSessionEntrySummariesInWorker;
                 const inventory = vi
                   .spyOn(sessionInventory, "readSessionEntrySummariesInWorker")
@@ -428,12 +510,27 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     "deletion cleanup is still pending",
                   );
                 }
+                await assertInjectionRefused(
+                  "pending deletion",
+                  "deletion cleanup is still pending",
+                );
+                // Deleting agents leave the discovery roster while their owners settle.
+                await expect(client.request("chat.history", { sessionKey })).rejects.toThrow(
+                  `Session "${sessionKey}" was not found.`,
+                );
                 const aborted = createDeferred();
                 const handle = createEmbeddedRunHandle({
                   runId: "deletion-active-run",
                   abort: () => aborted.resolve(),
                 });
-                setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, agentId);
+                const operation = withPluginRuntimeGatewayContextResolver(
+                  resolveGatewayContext,
+                  () => setActiveEmbeddedRun(sessionId, handle, sessionKey, undefined, agentId),
+                );
+                let ownerSettled = false;
+                void operation.ownerSettlement.then(() => {
+                  ownerSettled = true;
+                });
                 const deleting = client.request(
                   "agents.delete",
                   { agentId, deleteFiles: true },
@@ -449,7 +546,10 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     signal,
                   );
                   expect(readAgentDeletionJournal(agentId)?.phase).toBe("draining");
-                  expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeDefined();
+                  expect(operation.result).toMatchObject({ kind: "aborted" });
+                  expect(resolveSessionRunProgressState(sessionId)).toBeUndefined();
+                  expect(getActiveNativeAttempt(sessionId)).toBe(handle);
+                  expect(ownerSettled).toBe(false);
                   const relocatedWorkspace = state.path("workspace-relocated");
                   await expect(
                     client.request("agents.update", { agentId, workspace: relocatedWorkspace }),
@@ -486,10 +586,11 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   removed: expect.arrayContaining([{ path: workspace, method: "trash" }]),
                 });
                 expect(await deleting).not.toHaveProperty("purgeFailed");
+                expect(ownerSettled).toBe(true);
                 expect(native.store.lookup(native.key)).toBeUndefined();
                 expect(finishedNative.store.lookup(finishedNative.key)).toBeUndefined();
                 expect(nativeClient.subscribed()).toBe(false);
-                expect(resolveEmbeddedAgentRunProgressState(sessionId)).toBeUndefined();
+                expect(resolveSessionRunProgressState(sessionId)).toBeUndefined();
                 expect(readAgentDeletionJournal(agentId)?.cleanupCompleted).toBe(true);
                 await expect(
                   client.request("sessions.create", { agentId, key: `agent:${agentId}:gone` }),
@@ -524,9 +625,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                     message,
                   });
                 }
-                expect(
-                  resolveEmbeddedAgentRunProgressState(recreatedSession.sessionId),
-                ).toBeUndefined();
+                expect(resolveSessionRunProgressState(recreatedSession.sessionId)).toBeUndefined();
                 const memoryConfig: OpenClawConfig = {
                   ...getRuntimeConfig(),
                   memory: {
@@ -647,6 +746,7 @@ it.for(["active", "restart-draining", "legacy-retiring"] as const)(
                   agentId,
                   workspace,
                   signal,
+                  resolveGatewayContext,
                 });
                 expect(hotReloadRecovery).not.toHaveBeenCalled();
               } finally {

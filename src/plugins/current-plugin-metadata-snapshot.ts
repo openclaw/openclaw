@@ -464,9 +464,8 @@ export function getCurrentPluginMetadataSnapshot(
   return compatible === NEEDS_PREPARED_POLICY ? undefined : compatible;
 }
 
-// Light bridges (plugin-metadata-snapshot.runtime.ts) serve reads through this
-// instance whenever the metadata system is loaded; the require fallback only
-// covers cold processes.
+// Register before callers can publish a snapshot; current-only light bridge
+// reads consume this owner without loading a cold metadata graph.
 registerPluginMetadataSnapshotReaders({
   adoptCurrentPluginMetadataSnapshotIfAbsent,
   getCurrentPluginMetadataSnapshot,

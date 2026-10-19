@@ -305,6 +305,7 @@ export async function prepareCodexAttemptTurnRequest(
           withCurrent: connection.withCurrent,
           assertCurrent: () => {
             assertTurnCurrent();
+            runtime.nativeExecutionPolicy.source?.();
             continuation?.dispatch();
           },
         }),

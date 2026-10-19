@@ -1,5 +1,4 @@
 import type { HealthFinding } from "../flows/health-checks.js";
-// Reports a checkout whose dist was built from a different commit than HEAD.
 import { isTruthyEnvValue } from "../infra/env.js";
 import { gitCommitPrefixesMatch, resolveCommitHash } from "../infra/git-commit.js";
 import { readInstallOwner } from "../infra/install-owner.js";

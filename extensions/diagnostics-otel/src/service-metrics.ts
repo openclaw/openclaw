@@ -63,6 +63,15 @@ export function createDiagnosticsMetrics(
       "Encoded outbound session event bytes by reason and exact message subscription per socket",
       "By",
     ),
+    gatewayWsPresenceFramesCounter: createCounter(
+      "gateway.ws.presence_frames",
+      "Outbound presence frames accepted by the sender per socket, by delivery mode",
+    ),
+    gatewayWsPresenceBytesCounter: createCounter(
+      "gateway.ws.presence_bytes",
+      "Encoded outbound presence bytes before framing or compression per socket, by delivery mode",
+      "By",
+    ),
     gatewayWsEventsCounter: createCounter(
       "gateway.ws.events",
       "Outbound Gateway WebSocket event frames accepted by the sender per socket",
@@ -71,6 +80,15 @@ export function createDiagnosticsMetrics(
       "gateway.ws.event_bytes",
       "Encoded outbound Gateway WebSocket event bytes before framing or compression per socket",
       "By",
+    ),
+    gatewayWsEventWireBytesCounter: createCounter(
+      "gateway.ws.event_wire_bytes",
+      "Outbound Gateway WebSocket payload bytes after compression per socket, excluding framing",
+      "By",
+    ),
+    gatewayWsEventFrameBytesCounter: createCounter(
+      "gateway.ws.event_frame_bytes",
+      "Cumulative counts of accepted raw Gateway event frames by byte-size upper bound",
     ),
     gatewayWsOperatorConnectionsGauge: meter.createGauge(
       `${metricNamePrefix}gateway.ws.operator_connections`,
@@ -97,6 +115,10 @@ export function createDiagnosticsMetrics(
         unit: "1",
         description: "Session-event field-hash vectors retained across all connections",
       },
+    ),
+    sessionEventRowsResetCounter: createCounter(
+      "session_event_rows_reset",
+      "Retained session-event wire baselines retired by cause",
     ),
     sessionEventRowsRetainedBytesGauge: meter.createGauge(
       `${metricNamePrefix}session_event_rows_retained_bytes`,

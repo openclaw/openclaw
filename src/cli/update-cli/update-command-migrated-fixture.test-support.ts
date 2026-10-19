@@ -1,4 +1,5 @@
 import { registerHooks } from "node:module";
+import { fixtureReceiptClientSource } from "../../../test/helpers/fixture-receipts.js";
 import { MIGRATED_FIXTURE_NO_SERVICE } from "./update-command-migrated-fixture-entrypoint.test-support.js";
 
 const scratch = process.env.OPENCLAW_STATE_DIR;
@@ -11,9 +12,11 @@ if (!scratch || !runtimeEntry) {
 const {
   readOnlyEntrypoint,
   replay,
+  progressGate,
 }: {
   readOnlyEntrypoint: unknown;
   replay?: { path: string; refuseStep?: string };
+  progressGate?: string;
 } = JSON.parse(runtimeEntry);
 const source = (relative: string) =>
   new URL(
@@ -28,8 +31,11 @@ const overrides = new Map([
   ],
   [
     source("./update-command-service-plan.ts"),
-    `export async function readManagedGatewayServiceForUpdate(env) {
+    `${progressGate ? fixtureReceiptClientSource(progressGate) : ""}
+     export async function readManagedGatewayServiceForUpdate(env) {
        if (env.OPENCLAW_STATE_DIR !== ${JSON.stringify(scratch)}) throw new Error("Non-fixture service environment");
+       process.stderr.write('fixture-finalizer-progress\\n');
+       ${progressGate ? "sendReceipt('finalizer', 'waiting'); await awaitRelease('finalizer', 'finish');" : ""}
        throw new Error(${JSON.stringify(MIGRATED_FIXTURE_NO_SERVICE)});
      }`,
   ],

@@ -27,8 +27,7 @@ function mount(
   sessionKey = "agent:main:source",
 ) {
   const controller = createChatState<ChatPageHost>({
-    invalidate: () => undefined,
-    updateComplete: Promise.resolve(true),
+    awaitDomCommit: async () => true,
   });
   const dispose = controller.dispose;
   const state = createPageState(

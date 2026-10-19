@@ -10,7 +10,6 @@ import {
 import type { AdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import { normalizeOptionalAgentRuntimeId } from "../agents/agent-runtime-id.js";
 import { resolveAgentWorkspaceDir } from "../agents/agent-scope.js";
-import { isEmbeddedAgentRunActive } from "../agents/embedded-agent-runner/active-run-projections.js";
 import type { ModelCatalogSnapshot } from "../agents/model-catalog.types.js";
 import {
   resolveDefaultModelForAgent,
@@ -56,11 +55,11 @@ import {
   isAgentHarnessSessionKeyOwnedBy,
 } from "../sessions/agent-harness-session-key.js";
 import { isModelSelectionLocked } from "../sessions/model-overrides.js";
-import { recordSessionCreated } from "../sessions/session-created.js";
 import {
-  isSessionWorkAdmissionActive,
-  runExclusiveSessionLifecycleMutation,
-} from "../sessions/session-lifecycle-admission.js";
+  isSessionControllerWorkActive,
+  runSessionMutation,
+} from "../sessions/session-controller.lifecycle.js";
+import { recordSessionCreated } from "../sessions/session-created.js";
 import { normalizeSessionDeliveryState } from "../utils/delivery-context.shared.js";
 import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "./operator-role-policy.js";
 import { ADMIN_SCOPE } from "./operator-scopes.js";
@@ -493,11 +492,11 @@ async function createGatewaySessionInScope(
       }
       const parentHasActiveWork =
         (params.emitCommandHooks === true || params.fork === true) &&
-        (isEmbeddedAgentRunActive(currentParentEntry.sessionId) ||
-          isSessionWorkAdmissionActive(parentSessionTarget.storePath, [
-            canonicalParentSessionKey,
-            currentParentEntry.sessionId,
-          ]));
+        isSessionControllerWorkActive(
+          parentSessionTarget.storePath,
+          [canonicalParentSessionKey, currentParentEntry.sessionId],
+          parentSessionTarget.agentId,
+        );
       if (
         parentHasActiveWork &&
         (params.emitCommandHooks === true ||
@@ -1179,6 +1178,7 @@ async function createGatewaySessionInScope(
   ];
   const lifecycleTargets = buildSessionCreateLifecycleTargets({
     target,
+    targetSessionId: initialTargetEntry?.sessionId,
     targetLifecycleIdentities,
     canonicalParentSessionKey,
     parentSessionEntry,
@@ -1189,7 +1189,9 @@ async function createGatewaySessionInScope(
   // lifecycle owner's canonical identity order and one active mutation fence.
   onPhase?.("lifecycleAdmission");
   try {
-    const result = await runExclusiveSessionLifecycleMutation("create", {
+    const result = await runSessionMutation({
+      diagnosticLabel: "create",
+      policy: "allow-live",
       targets: lifecycleTargets,
       run: createChildSession,
       finalize: async () => {

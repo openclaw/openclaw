@@ -1,4 +1,3 @@
-// Doctor config-flow steps for legacy compatibility and unknown-key cleanup.
 import { isDeepStrictEqual } from "node:util";
 import { asOptionalObjectRecord, isRecord } from "@openclaw/normalization-core/record-coerce";
 import {
@@ -26,7 +25,6 @@ import { applyLegacyDoctorMigrations } from "./legacy-config-compat.js";
 import { migrateLegacyConfig } from "./legacy-config-migrate.js";
 import { applyProviderRenames, planProviderRenames } from "./provider-rename.js";
 
-/** Apply legacy config migrations and update preview/fix state for doctor config flow. */
 export function applyLegacyCompatibilityStep(params: {
   snapshot: ConfigFileSnapshot;
   state: DoctorConfigMutationState;

@@ -31,7 +31,6 @@ import { setTelegramPluginStateRuntimeForTests } from "./runtime-state.test-supp
 import {
   clearTelegramRuntimeForTest,
   resetTelegramAccountThrottlersForTest,
-  resetTelegramReplyFenceForTest,
 } from "./runtime.test-support.js";
 
 type RecordedBotApiCall = { method: string; fields: Record<string, unknown> };
@@ -290,7 +289,6 @@ export function createTelegramDispatchHttpFixture() {
     rejectNextQuote = false;
     nextMessageId = 0;
     resetPluginStateStoreForTests({ closeDatabase: false });
-    resetTelegramReplyFenceForTest();
     setTelegramPluginStateRuntimeForTests();
   });
 

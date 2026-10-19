@@ -554,6 +554,9 @@ async function buildTalkCatalog(
           if (capabilities?.voicesByModel) {
             entry.voicesByModel = capabilities.voicesByModel;
           }
+          if (capabilities?.modelFamilySettings) {
+            entry.modelFamilySettings = capabilities.modelFamilySettings;
+          }
           if (provider.aliases?.length) {
             entry.aliases = [...provider.aliases];
           }

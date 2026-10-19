@@ -5,27 +5,21 @@ import type {
   SetupInferenceFailureStatus,
 } from "../../packages/gateway-protocol/src/schema/setup-inference.js";
 import type { AgentRunResultView } from "../agents/agent-run-result.js";
-import type { loadAuthProfileStoreForRuntimeAsync } from "../agents/auth-profiles/store-runtime.js";
 import type { AgentExecutionAuthBinding } from "../agents/execution-auth-binding.js";
 import { describeFailoverError } from "../agents/failover-error.js";
 import { FAILOVER_PROBE_STATUS as SETUP_STATUS_BY_FAILOVER_REASON } from "../agents/failover/probe-status.js";
 import { DEFAULT_AGENT_WORKSPACE_DIR } from "../agents/workspace-default.js";
-import type {
-  detectInferenceBackends,
-  InferenceBackendKind,
-} from "../commands/onboard-inference.js";
+import type { InferenceBackendKind } from "../commands/onboard-inference.js";
 import { normalizeAgentModelRefForConfig } from "../config/model-input.js";
 import type { ConfigFileSnapshot, OpenClawConfig } from "../config/types.openclaw.js";
 import type { PluginInstallRecord } from "../config/types.plugins.js";
 import { racePromiseWithAbortSignal } from "../infra/abort-signal.js";
 import { createSubsystemLogger } from "../logging/subsystem.js";
-import type { enablePluginInConfig } from "../plugins/enable.js";
 import type {
   ProviderAuthChoiceMetadata,
   resolveManifestProviderAuthChoice,
   resolveManifestProviderAuthChoices,
 } from "../plugins/provider-auth-choices.js";
-import type { resolvePluginProvidersCore } from "../plugins/providers.runtime.js";
 import type { SetupRecommendedInstall } from "../plugins/recommended-tool-installs.js";
 import type { ProviderAuthResult } from "../plugins/types.js";
 import type { RuntimeEnv } from "../runtime.js";
@@ -38,12 +32,7 @@ import type {
   SetupInferencePrepareOption,
 } from "./setup-inference-auth-options.js";
 import type { SetupNativeSessionCatalogOption } from "./setup-native-session-catalogs.js";
-import type {
-  captureSystemAgentOwnerPluginArtifacts,
-  createSystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceBinding,
-  SystemAgentVerifiedInferenceDeps,
-} from "./verified-inference.js";
+import type { SystemAgentVerifiedInferenceBinding } from "./verified-inference.js";
 
 export const setupInferenceLog = createSubsystemLogger("system-agent/setup-inference");
 
@@ -259,28 +248,8 @@ export async function waitForProviderAuth<T>(
 
 export type ActivateSetupInferenceDeps = {
   readConfigFileSnapshot?: typeof import("../config/config.js").readConfigFileSnapshot;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
   resolveManifestProviderAuthChoice?: typeof resolveManifestProviderAuthChoice;
   resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  loadAuthProfileStoreForRuntimeAsync?: typeof loadAuthProfileStoreForRuntimeAsync;
-  resolveCliAuthBindingFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliAuthBindingFingerprint;
-  resolveCliRuntimeArtifactFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeArtifactFingerprint;
-  resolveCliRuntimeOwnerFingerprint?: typeof import("../agents/cli-auth-epoch.js").resolveCliRuntimeOwnerFingerprint;
-  resolveApiKeyForProvider?: typeof import("../agents/model-auth.js").resolveApiKeyForProviderCore;
-  loadPluginRegistrySnapshot?: SystemAgentVerifiedInferenceDeps["loadPluginRegistrySnapshot"];
-  fingerprintPluginRuntimeArtifact?: SystemAgentVerifiedInferenceDeps["fingerprintPluginRuntimeArtifact"];
-  captureSystemAgentOwnerPluginArtifacts?: typeof captureSystemAgentOwnerPluginArtifacts;
-  createSystemAgentVerifiedInferenceBinding?: typeof createSystemAgentVerifiedInferenceBinding;
-  timeoutMs?: number;
-};
-
-export type DetectSetupInferenceDeps = {
-  /** Supplies prepared setup choices before native or provider discovery starts. */
-  onPartial?: (detection: SetupInferenceDetection) => void;
-  detectInferenceBackends?: typeof detectInferenceBackends;
-  resolveManifestProviderAuthChoices?: typeof resolveManifestProviderAuthChoices;
-  resolvePluginProviders?: typeof resolvePluginProvidersCore;
-  enablePluginInConfig?: typeof enablePluginInConfig;
 };
 
 export function toProviderAutoSetupKind(choiceId: string): ProviderAutoSetupInferenceKind {

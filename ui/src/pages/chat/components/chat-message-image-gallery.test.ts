@@ -8,6 +8,7 @@ import { createImageLightboxGallery } from "../../../components/image-lightbox-g
 import type { ImageLightboxItem } from "../../../components/image-lightbox.types.ts";
 import { cleanupSolid } from "../../../test-helpers/mount-solid.ts";
 import { mountSolid } from "../../../test-helpers/solid-render.tsx";
+import { waitForSolid } from "../../../test-helpers/solid-settle.ts";
 import { MessageGroup } from "./chat-message-group-view.tsx";
 import { MessageImages, type MessageImagesProps } from "./chat-message-images-solid.tsx";
 import {
@@ -353,15 +354,17 @@ describe("message attachment image gallery projection", () => {
         { onOpenImage },
       );
 
-      expect(
-        Array.from(
-          container.querySelectorAll(".chat-text strong, .chat-message-image"),
-          (element) =>
-            element instanceof HTMLImageElement
-              ? new URL(element.src).pathname
-              : element.textContent?.replace(/\s+/g, " ").trim(),
-        ),
-      ).toEqual(["Before", "/before.png", "After", "/after.png"]);
+      await waitForSolid(() =>
+        expect(
+          Array.from(
+            container.querySelectorAll(".chat-text strong, .chat-message-image"),
+            (element) =>
+              element instanceof HTMLImageElement
+                ? new URL(element.src).pathname
+                : element.textContent?.replace(/\s+/g, " ").trim(),
+          ),
+        ).toEqual(["Before", "/before.png", "After", "/after.png"]),
+      );
       const text = container.querySelector(".chat-text")?.textContent?.trim() ?? "";
       expect(text.startsWith("Introduction")).toBe(true);
       expect(text.endsWith("Closing paragraph")).toBe(true);
@@ -415,11 +418,16 @@ describe("message attachment image gallery projection", () => {
       }),
       index: 0,
     },
-  ])("projects $name into the gallery", ({ message, index }) => {
+  ])("projects $name into the gallery", async ({ message, index }) => {
     const onOpenImage = vi.fn<(item: ImageLightboxItem) => void>();
     renderMessage(message, "assistant", { onOpenImage });
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-message-image-button")).toHaveLength(2),
+    );
+    await waitForSolid(() =>
+      expect(container.querySelectorAll(".chat-message-image")).toHaveLength(2),
+    );
     const tiles = container.querySelectorAll<HTMLButtonElement>(".chat-message-image-button");
-    expect(tiles).toHaveLength(2);
     tiles[index]?.click();
     expect(onOpenImage.mock.calls[0]?.[0].gallery).toMatchObject({
       index,

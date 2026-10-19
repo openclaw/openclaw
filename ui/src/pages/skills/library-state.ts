@@ -22,7 +22,6 @@ import { observeSkillState } from "./observe-state.ts";
 export type LibraryView = "workspace" | "mine" | "team" | "all";
 export type LibraryDraft = {
   importedFiles?: boolean;
-  connection: GatewayConnectionScope;
   entry: SkillLibraryEntry | null;
   slug: string;
   content: string;
@@ -34,12 +33,8 @@ export type LibraryDraft = {
   dirty: boolean;
 };
 
-function libraryDraft(
-  connection: GatewayConnectionScope,
-  read?: SkillsLibraryReadResult,
-): LibraryDraft {
+function libraryDraft(read?: SkillsLibraryReadResult): LibraryDraft {
   return {
-    connection,
     entry: read ? read.entry : null,
     slug: read ? read.entry.slug : "",
     content: read ? read.content : "",
@@ -125,7 +120,13 @@ export function createSkillLibrary(
 
   async function load() {
     const connection = gateway.capture();
-    if (!connection || data.loading) {
+    if (
+      !connection ||
+      data.loading ||
+      !canCallGatewayMethod(gateway.snapshot, "skills.library.list", "operator.read", {
+        requireAdvertisement: false,
+      })
+    ) {
       return;
     }
     data.loading = true;
@@ -141,9 +142,13 @@ export function createSkillLibrary(
       data.list = result;
       data.view ??= result.defaultTarget === "personal" ? "mine" : "workspace";
     } catch (error) {
-      data.error = formatUiError(error);
+      if (gateway.isCurrent(connection)) {
+        data.error = formatUiError(error);
+      }
     } finally {
-      data.loading = false;
+      if (gateway.isCurrent(connection)) {
+        data.loading = false;
+      }
     }
   }
 
@@ -152,14 +157,14 @@ export function createSkillLibrary(
     if (!connection || !canCreate()) {
       return;
     }
-    data.draft = libraryDraft(connection);
+    data.draft = libraryDraft();
     clearFeedback();
     setLocal((state) => {
       state.newFilePath = "";
     });
   }
 
-  async function perform(action: () => Promise<void>) {
+  async function perform(action: (connection: GatewayConnectionScope) => Promise<void>) {
     if (data.busy || data.loading) {
       return;
     }
@@ -171,7 +176,7 @@ export function createSkillLibrary(
     data.busy = true;
     clearFeedback();
     try {
-      await action();
+      await action(connection);
     } catch (error) {
       if (gateway.isCurrent(connection)) {
         const code =
@@ -218,7 +223,12 @@ export function createSkillLibrary(
     canEdit,
     load,
     create,
+    invalidateRequests() {
+      data.loading = false;
+      data.busy = false;
+    },
     reset() {
+      clearFeedback();
       data.list = null;
       data.view = null;
       data.loading = false;
@@ -258,7 +268,7 @@ export function createSkillLibrary(
         if (!gateway.isCurrent(connection)) {
           return;
         }
-        data.draft = libraryDraft(connection, read);
+        data.draft = libraryDraft(read);
       });
     },
     async save() {
@@ -266,14 +276,11 @@ export function createSkillLibrary(
       if (!draft || !canEdit()) {
         return;
       }
-      await perform(async () => {
-        if (!gateway.isCurrent(draft.connection)) {
-          throw new Error(t("skillLibrary.connectionChanged"));
-        }
+      await perform(async (connection) => {
         if (draft.importedFiles) {
           assertUploadsEnabled(config());
         }
-        const client = draft.connection.client;
+        const client = connection.client;
         const savedFiles = draft.files;
         const baseFiles = new Map(draft.baseFiles.map((file) => [file.path, file]));
         const retainFiles: string[] = [];
@@ -301,7 +308,7 @@ export function createSkillLibrary(
           files,
           ...(retainFiles.length ? { retainFiles } : {}),
         });
-        if (!gateway.isCurrent(draft.connection)) {
+        if (!gateway.isCurrent(connection)) {
           return;
         }
         draft.entry = receipt.entry;
@@ -327,11 +334,8 @@ export function createSkillLibrary(
       ) {
         return;
       }
-      await perform(async () => {
-        if (!gateway.isCurrent(draft.connection)) {
-          throw new Error(t("skillLibrary.connectionChanged"));
-        }
-        const receipt = await draft.connection.client.request<SkillsLibraryReceipt>(
+      await perform(async (connection) => {
+        const receipt = await connection.client.request<SkillsLibraryReceipt>(
           "skills.library.mutate",
           {
             skillId: entry.skillId,
@@ -340,7 +344,7 @@ export function createSkillLibrary(
             ...(action === "rollback" ? { revision: draft.rollbackRevision } : {}),
           },
         );
-        if (!gateway.isCurrent(draft.connection)) {
+        if (!gateway.isCurrent(connection)) {
           return;
         }
         if (action === "remove") {
@@ -352,10 +356,13 @@ export function createSkillLibrary(
           return;
         }
         if (action === "rollback") {
-          const read = await draft.connection.client.request<SkillsLibraryReadResult>(
+          const read = await connection.client.request<SkillsLibraryReadResult>(
             "skills.library.read",
             { skillId: receipt.entry.skillId, revision: receipt.entry.revision },
           );
+          if (!gateway.isCurrent(connection)) {
+            return;
+          }
           draft.content = read.content;
           draft.files = read.files;
           draft.baseFiles = read.files;

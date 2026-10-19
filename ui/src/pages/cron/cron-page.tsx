@@ -90,7 +90,7 @@ export function CronPageContent(props: { page: ReturnType<typeof createCronPage>
       runsSortDir: page.cron().cronRunsSortDir,
       eventSource,
       fieldErrors,
-      canSubmit: !hasCronFormErrors(fieldErrors),
+      canSubmit: page.cron().connected && !hasCronFormErrors(fieldErrors),
       agentSuggestions: suggestions.agentSuggestions,
       modelSuggestions: suggestions.modelSuggestions,
       thinkingSuggestions: THINKING_SUGGESTIONS,

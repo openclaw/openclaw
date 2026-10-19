@@ -10,6 +10,7 @@ import { Icon } from "../../../components/solid/icon.tsx";
 import { PanelLoadingSkeleton } from "../../../components/solid/panel-loading-skeleton.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { defineSolidBridge, type SolidBridgeElement } from "../../../lib/solid-bridge.ts";
+import { nativeListener } from "../../../lib/solid-native-listener.ts";
 import { AttachmentFileIcon } from "./chat-attachment-file-icon-solid.tsx";
 import type { SessionWorkspacePreview } from "./chat-session-workspace-types.ts";
 import type { SidebarContent } from "./chat-sidebar-content-types.ts";
@@ -36,6 +37,7 @@ defineSolidBridge<Props, Methods>(
   "openclaw-chat-files-panel",
   (props, host) => {
     const contentId = `chat-files-content-${++filesPanelSequence}`;
+    const pages = new Map<string, HTMLElement>();
     let completeCommit = () => {};
     const appUnmount = createMcpAppUnmountGate<Props>(
       () => void refresh(rendered),
@@ -63,8 +65,8 @@ defineSolidBridge<Props, Methods>(
         JSON.stringify([...appKeys]),
         () => snapshot,
         () =>
-          [...host.querySelectorAll<HTMLElement>("[data-app-tab-id]")].filter(
-            (element) => !appKeys.has(element.dataset.appTabId ?? ""),
+          [...pages].flatMap(([id, element]) =>
+            element.hasAttribute("data-app-tab-id") && !appKeys.has(id) ? [element] : [],
           ),
       );
     });
@@ -107,12 +109,10 @@ defineSolidBridge<Props, Methods>(
     );
     let browseAction!: HTMLButtonElement;
     const showBrowser = () => props.onSelect(null);
+    // The hosted header moves this action outside the panel's delegated event root.
+    const browseClick = nativeListener("click", showBrowser);
     <button
-      ref={(element) => {
-        browseAction = element;
-        // The hosted header mounts this action outside this panel's delegated event root.
-        browseAction.addEventListener("click", showBrowser);
-      }}
+      ref={[(element) => (browseAction = element), browseClick]}
       class="rail-header__action"
       type="button"
       aria-label={t("chat.sidePanel.files")}
@@ -120,7 +120,6 @@ defineSolidBridge<Props, Methods>(
     >
       <Icon name="folder" />
     </button>;
-    onCleanup(() => browseAction.removeEventListener("click", showBrowser));
     const hostedActions = () => browseAction;
     Object.defineProperties(host, {
       hostedTabs: { configurable: true, get: hostedTabs },
@@ -169,6 +168,7 @@ defineSolidBridge<Props, Methods>(
           </div>
           <For each={rendered().previews} keyed={(preview) => preview.id}>
             {(preview) => {
+              onCleanup(() => pages.delete(preview().id));
               const entry = () => {
                 rendered();
                 return preview();
@@ -181,6 +181,7 @@ defineSolidBridge<Props, Methods>(
               };
               return (
                 <div
+                  ref={(element) => pages.set(preview().id, element)}
                   class="chat-files-panel__page"
                   data-app-tab-id={entry().content.kind === "mcp-app" ? entry().id : undefined}
                   hidden={rendered().activeId !== entry().id}

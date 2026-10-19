@@ -41,6 +41,26 @@ export {
 } from "@openclaw/ai/internal/anthropic";
 export { createDeferredEventBuffer } from "@openclaw/ai/internal/runtime";
 export { notifyLlmRequestActivity, onLlmRequestActivity } from "@openclaw/ai/internal/runtime";
+// Native stream primitives must not initialize the full agent/plugin transport host.
+// Keep these on their canonical owners, not the provider-transport-runtime barrel.
+export { buildAssistantMessage } from "../agents/stream-message-shared.js";
+export {
+  describeUnsupportedToolResultMedia,
+  extractToolResultText,
+  formatToolResultText,
+  isImageWithMediaPayload,
+  sortPromptCacheToolsByName,
+  splitSystemPromptRelocatableBoundary,
+  stripSystemPromptCacheBoundary,
+} from "@openclaw/ai/internal/shared";
+export {
+  createEmptyTransportUsage,
+  createProviderWaitObserver,
+  failTransportStream,
+  MALFORMED_STREAMING_FRAGMENT_ERROR_MESSAGE,
+  notifyProviderHttpResponse,
+  parseTerminalToolCallArguments,
+} from "@openclaw/ai/transports";
 
 type ProviderWrapStreamFnContext = import("../plugins/types.js").ProviderWrapStreamFnContext;
 

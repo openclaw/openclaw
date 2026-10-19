@@ -1,4 +1,3 @@
-// Gateway agent list projection.
 // Combines configured agents and existing on-disk agent state for lightweight UI use.
 import fs from "node:fs/promises";
 import path from "node:path";

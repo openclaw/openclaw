@@ -13,6 +13,13 @@ awaits operations, retains owner-published facts, and checks current authority
 before effects. Moving a query to a worker is not enough: reuse those facts and
 batch related work so ordinary requests do not repeat database calls.
 
+## Rules for code changes
+
+- Kysely for ordinary SQLite; raw SQL only for schema, migrations, bootstrap, justified primitives. Write transactions synchronous: plan async work first, reread authoritative rows, then write; no Promise or `await` in transaction callbacks.
+- Database access: worker threads (read-only worker scope, SQLite writer broker), never Gateway main thread; main thread only awaits results and installs published facts. Exceptions: boot admission, migrations, Doctor/CLI one-shots, lock primitives. Existing main-thread access = legacy: never add more; migrate what you touch.
+- SQLite format/schema/integrity/index/table checks: once per physical DB per process load, shared across workers/handles; never add repeats, remove when touched. Clean-close seals skip startup validation; Doctor/explicit verification keep checks. [Lifecycle](/reference/database-schemas/integrity-and-recovery#integrity-checks).
+- Gateway owns every DB/state; writer receipts invalidate caches, uncovered reads stay direct. No foreign-commit probes; remove when touched. Outside writers use Gateway or exclusive offline custody. Keep live authority/snapshots; [contract](/reference/database-schemas/integrity-and-recovery#gateway-database-ownership).
+
 ## Choose the execution owner
 
 Actor-backed session managers serialize append preparation and committed view
@@ -57,6 +64,14 @@ and the agent's
 The lifecycle owner closes its read scope and drains accepted writes before
 retiring the store.
 
+On Node 26.8 and later, the synchronous query owner explicitly disposes private
+statements after execution or iterator completion, and cached statements on
+eviction or invalidation. Large string bindings otherwise remain native allocations
+until V8 collects their small JavaScript wrappers. Active reentrant statements
+finish before disposal. Supported runtimes without statement disposal retain
+their native garbage-collection and connection-close behavior. Page-cache
+budgets, schemas, transactions, and stored bytes are unchanged.
+
 Manual legacy compaction prepares its transcript, current session entry, persisted
 window owner, and primary conversation in one worker snapshot. The held session
 lifecycle carries those facts through execution. Its existing compaction-boundary
@@ -65,6 +80,13 @@ checked before commit. Aliases that share a transcript retain their own accounti
 row; a changed final token estimate updates accounting without counting compaction
 twice. Shared-state events follow the agent-store commit, and memory indexing keeps
 its existing post-compaction policy.
+
+Compaction and transcript writers compare already admitted database identities
+when a state directory has multiple path spellings, such as a symlink and its
+canonical path. SQLite uses physical file identity and birthtime; PostgreSQL uses
+namespace and store ID. These comparisons do not probe the filesystem or admit a
+new store. Agent, session, key, storage environment, lifecycle, and writer-claim
+checks still bind each write to its original target.
 
 Public GitHub coauthor attribution reads merge aliases, verified accounts, and
 credit preferences in one worker-owned snapshot statement. Enterprise attribution
@@ -171,11 +193,13 @@ it cannot return a Promise, and a retained connection does not extend it.
 PostgreSQL rejects construction and SQL on the Gateway main thread outside that
 scope. The CLI entry records an immutable process role before state access;
 one-shot CLI and Doctor processes may use the synchronous PostgreSQL bridge.
-An unset role still refuses main-thread access. Gateway-capable interactive
-onboarding, `setup` (including `crestodian`), and bare-root launch use the Gateway
-role; non-interactive onboarding uses the one-shot role. The embedded Gateway
-entry also requires the Gateway role and refuses a process already classified
-as a one-shot.
+An unset role still refuses main-thread access. Interactive onboarding and
+`setup` (including `crestodian`) keep the CLI role through their prompts and
+local setup console. Any Gateway they start runs in a separate process with
+the Gateway role. The setup console supplies its own in-memory TUI backend;
+rendering an interactive console does not turn the CLI into a Gateway.
+Bare-root launch retains its conservative Gateway role. The embedded Gateway
+entry requires that role and refuses a process already classified as a one-shot.
 Each `openEngineStore` caller supplies `inspectSqlite()` with explicit
 `hasExistingData` and `hasEngineAnchor` facts; table-name prefixes cannot decide
 whether an engine switch is safe. See
@@ -387,6 +411,12 @@ remain with the history owner. See
 [`session-actor.worker.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor.worker.ts)
 and [`session-actor-replica.ts`](https://github.com/openclaw/openclaw/blob/main/src/config/sessions/session-actor-replica.ts).
 
+Replica lookups resolve configured path spellings through the existing admission
+registry: SQLite uses the admitted physical identity and birthtime; PostgreSQL
+uses the admitted namespace and store ID. Symlinked and canonical paths therefore
+share warm state without a filesystem probe. Scoped write receipts still reject
+stale transcript facts and facts from a different store.
+
 Durable actor residency retains only tree links (`type`, `id`, `parentId`,
 `targetId`, `appendParentId`, and `appendMode`) and exact byte accounting.
 Cold hydration projects those fields in SQL; model-context navigation belongs
@@ -520,6 +550,13 @@ acknowledgments; larger candidates retain bounded intermediate frames. The host
 validates the complete candidate and current caller authority before granting
 COMMIT, then publishes only a confirmed native receipt. FIFO ordering, durability,
 schemas, stored formats, and update behavior are unchanged.
+
+Closed entry operations whose callers discard the result can omit the returned
+entry from that candidate. Commit observers still receive their entry, and required
+publication facts and final authority checks remain unchanged. Exact-row queries
+share one retained row per connection, capped at 1 MiB of estimated string storage.
+A different query or observed admission revision retires that row; oversized rows
+remain readable without caching. Compiled queries survive payload eviction.
 
 Durable heartbeat outcome claims check the current row in their existing worker FIFO.
 Persistence and claims retain the agent executor directly, without opening a native
@@ -2130,6 +2167,14 @@ Both stages still read the exact stored payload bytes, and the conditional updat
 rejects concurrent edits. Missing residency uses the existing worker readers.
 Admission- and projection-preserving rewrites publish through the same actor owner;
 resets, cold archives, and incompatible writes invalidate its retained facts.
+SQLite and PostgreSQL turn preparation in the serialized execution worker reuse the actor's
+committed exact entry, window, pending-input rows, and transcript version. Existing
+write receipts keep these facts current; missing residency, moved keys, cold
+archives, and turn mutations retain canonical readers. A complete resident identity
+index proves a fresh idempotency key is absent without reading SQL. Truncated
+indexes, matching keys, and assistant-body scans retain canonical lookups.
+Source validation, pending-input custody, and final write authority remain with
+their existing owners.
 Bounded context reads inside the actor transaction also derive logical parents
 from its active positions and identities and reuse its projection, reset, and
 prefix facts; standalone reads retain their SQL lookups. Hydration does not
@@ -2676,7 +2721,9 @@ Workers inherit completed native SQLite capability checks, required schema
 comparison definitions, and physical-database admission facts through the existing
 worker launcher. Runtime facts remain bound to the originating process,
 executable, runtime, and selected library; comparison definitions also bind their
-original source and format. Physical-database facts belong to their admitted file
+original source and format. Runtime initialization probes the loaded SQLite library
+before starting workers; later module generations and sibling workers reuse that
+process-owned result. Physical-database facts belong to their admitted file
 identity. Missing facts request that identity's first admission. A SQLite writer returns its
 completed native capability fact with an existing successful reply, so later
 sibling workers can inherit it without another probe. The native runtime owner
@@ -6293,6 +6340,11 @@ writes retain their interval through the existing writer's commit and settlement
 Synchronous guards perform no receipt SQL or worker submission. Agent database
 admission refusals remain with their in-memory admission owner.
 
+Cron mutation preparation uses the service's complete resident store and existing
+write-receipt invalidation. The shared planner runs locally without a worker request
+or preparation transaction. The committing worker rereads authoritative rows,
+replans, and retains definition, precondition, and final authority checks.
+
 Cron mutations share host-owned receipt-authority custody for the physical shared
 database, across store partitions and approval writers. Runtime mutations, raw
 saves, mutable-load repairs, grant consumption, and agent-deletion
@@ -6404,12 +6456,13 @@ their transaction-local append cursor. Root checks read metadata without saved
 prompt payloads. No cross-transaction root cache is introduced.
 
 Bulk appends resolve prepared arrays' identity and idempotency-key conflicts in
-one read, then insert payloads, identities, and active projection rows in bounded
-groups. Streaming imports retain per-row acceptance feedback and buffer only the
-accepted writes. Payloads precede their dependent rows, preserving immediate
-foreign keys. The cursor flushes its watermark once and folds final recency into
-the transcript mutation write. Rejected identities still update attempt recency
-without advancing the mutation watermark. If an iterator fails, its accepted
+one read, then insert payloads, identities, and active projection rows in groups
+of up to 512 rows, flushing earlier when buffered payloads reach 1 MiB. Streaming
+imports retain per-row acceptance feedback and buffer only the accepted writes.
+Payloads precede their dependent rows, preserving immediate foreign keys. The
+cursor reuses its initial context-classification fact, flushes its watermark once,
+and folds final recency into the transcript mutation write. Rejected identities
+still update attempt recency without advancing the mutation watermark. If an iterator fails, its accepted
 prefix settles before the error escapes; the enclosing transaction owns rollback.
 Scalar appends without complete actor facts fold identity rejection into the
 payload insertion. Rewrite generations, stored payloads, and commit boundaries

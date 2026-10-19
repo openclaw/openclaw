@@ -33,10 +33,6 @@ import {
   releaseOpenClawAgentDatabaseLease,
 } from "./openclaw-agent-db-lease.js";
 import { closeCachedOpenClawAgentDatabase } from "./openclaw-agent-db-lifecycle.js";
-import {
-  openOpenClawAgentDatabaseReadOnly,
-  hasOpenClawAgentReadOnlySchema,
-} from "./openclaw-agent-db-readonly-open.js";
 import * as validationCache from "./openclaw-agent-db-validation-cache.js";
 import {
   getOpenClawAgentDatabaseValidation as getValidation,
@@ -204,38 +200,6 @@ it.each(["before handoff", "after handoff"] as const)(
   },
 );
 
-it("adopts worker admission after a retained reader observes an already-revalidated schema", async () => {
-  const options = makeOptions("agent-reader-readmission-");
-  const database = await writeAgent(options, (opened) => opened);
-  const reader = openOpenClawAgentDatabaseReadOnly(options);
-  assert(reader.found);
-  expect(validationCache.hasOpenClawAgentCanonicalValidation(reader.database)).toBe(true);
-  const foreign = openNodeSqliteDatabase(database.path);
-  foreign.exec("CREATE TABLE late_reader_fixture(value TEXT)");
-  foreign.close();
-  closeCachedOpenClawAgentDatabase(database);
-  const observeReader = vi.fn(() => {
-    expect(hasOpenClawAgentReadOnlySchema(reader.database)).toBe(true);
-  });
-  const publication = observePublications((_path, publish) => {
-    publish();
-    // A retained read can run before the awaiting host adopts the worker publication.
-    observeReader();
-  });
-  try {
-    await expect(
-      writeAgent(options, ({ db }) => {
-        expect(schemaFacts(db)?.tables.has("late_reader_fixture")).toBe(true);
-        return countSessions({ db });
-      }),
-    ).resolves.toBe(0);
-    expect(observeReader).toHaveBeenCalled();
-  } finally {
-    publication.mockRestore();
-    reader.database.close();
-  }
-});
-
 it("keeps a worker recreation private until its host creation claim joins native close", async () => {
   const env = { OPENCLAW_STATE_DIR: tempDirs.make("agent-admit-creation-") };
   const options = { agentId: "recreated", env };
@@ -367,7 +331,6 @@ it.each([
   "warm-additive-table",
   "warm-missing-index",
   "warm-rollback",
-  "foreign-missing-index",
   "idle-missing-index",
   "idle-revoked",
 ] as const)("readmits a host handle with its retained worker after %s", async (change) => {
@@ -379,7 +342,7 @@ it.each([
       opened.db.exec("INSERT INTO auth_profile_state VALUES ('retained', '{}', 1)");
       if (change.endsWith("additive-table")) {
         opened.db.exec("CREATE TABLE coldadmit_fixture(value TEXT)");
-      } else if (change.endsWith("missing-index") && !change.startsWith("foreign-")) {
+      } else if (change.endsWith("missing-index")) {
         opened.db.exec("DROP INDEX idx_agent_cache_expiry");
       } else if (change === "warm-rollback") {
         opened.db.exec("BEGIN; CREATE TABLE rolled_back_fixture(value TEXT); ROLLBACK;");
@@ -412,10 +375,6 @@ it.each([
       closeCachedOpenClawAgentDatabase(database);
     }
     expect(database.db.isOpen).toBe(change.startsWith("warm-"));
-    if (change === "foreign-missing-index") {
-      using foreign = openNodeSqliteDatabase(database.path);
-      foreign.exec("DROP INDEX idx_agent_cache_expiry");
-    }
     nativeClaim.assertCurrent();
     const observed = observeCallerSchemaInspections(database.path, acquisitionPath);
     let prepareRequests = 0;
@@ -461,21 +420,6 @@ it.each([
       nativeClaim.assertCurrent();
       expect(observed.inspections).toEqual([]);
       if (change === "eviction") {
-        expect(prepareRequests).toBe(0);
-      }
-      if (change === "foreign-missing-index") {
-        prepareRequests = 0;
-        const repaired = await writeAgent(options, (opened) => opened);
-        closeCachedOpenClawAgentDatabase(repaired);
-        await expect(
-          writeAgent(
-            options,
-            ({ db }) =>
-              db
-                .prepare("SELECT updated_at FROM auth_profile_state WHERE state_key='retained'")
-                .get()?.updated_at,
-          ),
-        ).resolves.toBe(2);
         expect(prepareRequests).toBe(0);
       }
     } finally {
@@ -577,8 +521,8 @@ it.each([
   },
 );
 
-it.each(["once", "always", "source-revoked", "after-entry"] as const)(
-  "recovers schema publication before execution without replaying admitted work: %s",
+it.each(["before-entry", "source-revoked", "after-entry"] as const)(
+  "reports schema publication refusal without replaying work: %s",
   async (failure) => {
     const options = makeOptions("agent-schema-publication-");
     const database = openAgent(options);
@@ -594,7 +538,7 @@ it.each(["once", "always", "source-revoked", "after-entry"] as const)(
     let publications = 0;
     observePublications((pathname, publish) => {
       publications += 1;
-      if (failure !== "after-entry" && (failure === "always" || publications === 1)) {
+      if (failure !== "after-entry") {
         // Revoke actual captured proof at the worker-to-host publication boundary.
         invalidateValidation(pathname);
         if (failure === "source-revoked") {
@@ -611,19 +555,9 @@ it.each(["once", "always", "source-revoked", "after-entry"] as const)(
     });
     try {
       const result = execution.runExisting(source, operation);
-      if (failure === "once") {
-        await expect(result).resolves.toBe("executed");
-      } else {
-        await expect(result).rejects.toThrow(
-          failure === "source-revoked"
-            ? "Fixture request authority revoked"
-            : "Agent schema admission changed before publication",
-        );
-      }
-      expect(operation).toHaveBeenCalledTimes(
-        failure === "once" || failure === "after-entry" ? 1 : 0,
-      );
-      expect(publications).toBe(failure === "once" || failure === "always" ? 2 : 1);
+      await expect(result).rejects.toThrow("Agent schema admission changed before publication");
+      expect(operation).toHaveBeenCalledTimes(failure === "after-entry" ? 1 : 0);
+      expect(publications).toBe(1);
       expect(`file:${execution.fileIdentity?.physicalIdentity}`).toBe(expectedIdentity.key);
     } finally {
       await execution.release();

@@ -5,7 +5,7 @@ import type { SessionProjectionState } from "../../packages/gateway-client/src/s
 import type { TuiBackend } from "./tui-backend.js";
 import { createCommandHandlers } from "./tui-command-handlers.js";
 import type { TuiPendingSubmit } from "./tui-submit-state.js";
-import type { SessionInfo, TuiOptions } from "./tui-types.js";
+import type { SessionInfo, TuiOptions, TuiStateAccess } from "./tui-types.js";
 
 export type LoadHistoryMock = ReturnType<typeof vi.fn> & (() => Promise<void>);
 type RunAuthFlow = NonNullable<Parameters<typeof createCommandHandlers>[0]["runAuthFlow"]>;
@@ -80,6 +80,7 @@ export function firstMockArg(mock: MockWithCalls, label: string) {
 }
 
 export function createTuiCommandHandlersHarness(params?: {
+  state?: TuiStateAccess;
   sendChat?: ReturnType<typeof vi.fn>;
   getGatewayStatus?: ReturnType<typeof vi.fn>;
   listSessions?: ReturnType<typeof vi.fn>;
@@ -181,21 +182,23 @@ export function createTuiCommandHandlersHarness(params?: {
           commandArgv: '["codex","login"]',
         }) as unknown as RunAuthFlow)
       : undefined);
-  const state = {
-    agentDefaultId: params?.agentDefaultId ?? "main",
-    agents: params?.agents ?? [],
-    currentAgentId: params?.currentAgentId ?? "main",
-    currentSessionKey: params?.currentSessionKey ?? "agent:main:main",
-    currentSessionId: params?.currentSessionId ?? null,
-    sessionGeneration: params?.sessionGeneration ?? 0,
-    sessionProjection: params?.sessionProjection,
-    activeChatRunId: params?.activeChatRunId ?? null,
-    pendingSubmit: params?.pendingSubmit ?? null,
-    activityStatus: params?.activityStatus ?? "idle",
-    isConnected: params?.isConnected ?? true,
-    historyLoaded: params?.historyLoaded ?? true,
-    sessionInfo: params?.sessionInfo ?? {},
-  };
+  const state = params?.state
+    ? Object.assign(params.state, { sessionGeneration: params.state.sessionGeneration ?? 0 })
+    : {
+        agentDefaultId: params?.agentDefaultId ?? "main",
+        agents: params?.agents ?? [],
+        currentAgentId: params?.currentAgentId ?? "main",
+        currentSessionKey: params?.currentSessionKey ?? "agent:main:main",
+        currentSessionId: params?.currentSessionId ?? null,
+        sessionGeneration: params?.sessionGeneration ?? 0,
+        sessionProjection: params?.sessionProjection,
+        activeChatRunId: params?.activeChatRunId ?? null,
+        pendingSubmit: params?.pendingSubmit ?? null,
+        activityStatus: params?.activityStatus ?? "idle",
+        isConnected: params?.isConnected ?? true,
+        historyLoaded: params?.historyLoaded ?? true,
+        sessionInfo: params?.sessionInfo ?? {},
+      };
 
   const modelEvents: Pick<TuiBackend, "onModelsChanged"> = {};
   const client = {

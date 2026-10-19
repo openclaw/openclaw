@@ -146,12 +146,13 @@ it("does not publish when a status check cannot find its prior receipt", async (
 it.each(["attempt", "authority"] as const)("fences %s at persist", async (change) => {
   const fixture = await setup();
   let current = true;
-  const finalizeReceipt = vi
-    .fn(finalizeUpdateFailureReportReceipt)
-    .mockImplementationOnce(async () => {
+  const finalizeReceipt = vi.fn(
+    async (...args: Parameters<typeof finalizeUpdateFailureReportReceipt>) => {
+      const finalized = await finalizeUpdateFailureReportReceipt(...args);
       current = false;
-      return false;
-    });
+      return finalized;
+    },
+  );
   const result = await fixture.outcome({
     publicationMode: "browser",
     finalizeReceipt,

@@ -7,7 +7,8 @@ import { runQuickstartForegroundGateway } from "./onboard-quickstart-host.js";
 
 const mocks = vi.hoisted(() => ({
   readConfigSnapshot: vi.fn(),
-  runGateway: vi.fn<typeof import("../cli/gateway-cli/run.js").runGatewayCommand>(),
+  startGateway:
+    vi.fn<typeof import("./onboard-gateway-process.js").startOnboardingGatewayProcess>(),
   waitForGateway: vi.fn<typeof import("./onboard-helpers.js").waitForGatewayReachable>(),
   runBrowserHandoff: vi.fn<typeof import("./onboard-browser-handoff.js").runBrowserHatchHandoff>(),
 }));
@@ -17,7 +18,9 @@ vi.mock("../config/config.js", async (importOriginal) => ({
   readConfigFileSnapshot: mocks.readConfigSnapshot,
 }));
 // mock-isolation: Keep foreground Gateway process-lifecycle state outside this handoff fixture.
-vi.mock("../cli/gateway-cli/run.js", () => ({ runGatewayCommand: mocks.runGateway }));
+vi.mock("./onboard-gateway-process.js", () => ({
+  startOnboardingGatewayProcess: mocks.startGateway,
+}));
 vi.mock("./onboard-helpers.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("./onboard-helpers.js")>()),
   waitForGatewayReachable: mocks.waitForGateway,
@@ -43,9 +46,10 @@ function createHostHarness(config: OpenClawConfig = { gateway: { auth: { mode: "
     exit: vi.fn(),
   };
   mocks.readConfigSnapshot.mockResolvedValue({ config });
-  mocks.runGateway.mockImplementation(() => {
+  const close = vi.fn(async () => {});
+  mocks.startGateway.mockImplementation(async () => {
     events.push("gateway started");
-    return gateway.promise;
+    return { wait: gateway.promise, close };
   });
   mocks.waitForGateway.mockImplementation(() => {
     events.push("readiness probe");
@@ -56,7 +60,7 @@ function createHostHarness(config: OpenClawConfig = { gateway: { auth: { mode: "
     events.push("browser handoff");
     return true;
   });
-  return { config, events, gateway, readiness, probing, summary, runtime };
+  return { config, events, gateway, readiness, probing, summary, runtime, close };
 }
 
 describe("runQuickstartForegroundGateway", () => {
@@ -121,17 +125,20 @@ describe("runQuickstartForegroundGateway", () => {
       h.gateway.resolve();
       await host;
       expect(h.runtime.exit).not.toHaveBeenCalled();
+      expect(h.close).toHaveBeenCalledOnce();
     },
   );
 
-  it("surfaces startup failure without waiting for the readiness timeout", async () => {
+  it("preserves startup failure when process cleanup also fails", async () => {
     const h = createHostHarness();
+    h.close.mockRejectedValueOnce(new Error("cleanup failed"));
     const host = runQuickstartForegroundGateway({ runtime: h.runtime });
     const failed = expect(host).rejects.toThrow("startup failed");
     await h.probing.promise;
     h.gateway.reject(new Error("startup failed"));
 
     await failed;
+    expect(h.runtime.error).toHaveBeenCalledWith("cleanup failed");
     expect(mocks.runBrowserHandoff).not.toHaveBeenCalled();
   });
 

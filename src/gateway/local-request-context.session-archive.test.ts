@@ -3,11 +3,11 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import { createOpenClawCodingTools } from "../agents/agent-tools.js";
+import type { EmbeddedAgentQueueHandle } from "../agents/embedded-agent-runner/runs.js";
 import {
-  setActiveEmbeddedRun,
-  clearActiveEmbeddedRun,
-  type EmbeddedAgentQueueHandle,
-} from "../agents/embedded-agent-runner/runs.js";
+  registerTestEmbeddedRun as setActiveEmbeddedRun,
+  clearTestEmbeddedRun as clearActiveEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import {
   seedSubagentRunForReadTest,
   resetSubagentRegistryForTests,
@@ -24,7 +24,10 @@ import {
   getPluginRuntimeGatewayRequestScope,
   withPluginRuntimeGatewayRequestScope,
 } from "../plugins/runtime/gateway-request-scope.js";
-import { beginSessionWorkAdmission } from "../sessions/session-lifecycle-admission.js";
+import {
+  beginSessionEffect,
+  captureSessionTarget,
+} from "../sessions/session-controller.lifecycle.js";
 import { createDeferredCore } from "../shared/deferred.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { registerChatAbortController } from "./chat-abort.js";
@@ -118,10 +121,14 @@ describe("scoped session archive tools", () => {
                 );
                 expect(tool.parameters).toMatchObject({
                   properties: {
-                    action: { enum: ["patch", "assign_owner"] },
+                    action: { enum: expect.arrayContaining(["patch", "assign_owner"]) },
                     archived: { type: "boolean" },
                   },
                 });
+                expect(tool.parameters).not.toHaveProperty(
+                  "properties.action.enum",
+                  expect.arrayContaining(["stop"]),
+                );
                 expect(tool.parameters).not.toHaveProperty("properties.runId");
                 await expect(
                   tool.execute("collector-stop", { action: "stop", sessionKey: TARGET }),
@@ -153,14 +160,10 @@ describe("scoped session archive tools", () => {
             createOpenClawCodingTools(options).find((tool) => tool.name === "sessions"),
             "assignment-only tool",
           );
+          // The definition is the same for every caller; the archive call is refused.
           expect(assignment.parameters).toMatchObject({
-            properties: {
-              action: {
-                enum: caller === "session-writer" ? ["patch", "assign_owner"] : ["assign_owner"],
-              },
-            },
+            properties: { action: { enum: expect.arrayContaining(["patch", "assign_owner"]) } },
           });
-          expect(assignment.parameters).not.toHaveProperty("properties.archived");
           await expect(
             assignment.execute("no-archive", { action: "patch", archived: true }),
           ).rejects.toThrow(
@@ -237,7 +240,12 @@ describe("scoped session archive tools", () => {
           );
         }
         const run = registerChatAbortController({
-          chatAbortControllers: request.context.chatAbortControllers,
+          target: captureSessionTarget({
+            storeScope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
+            sessionKey: targetKey,
+            incarnation: TARGET_ID,
+            agentId: "main",
+          }),
           runId: "ordinary-stop-run",
           sessionKey: targetKey,
           sessionId: TARGET_ID,
@@ -412,7 +420,7 @@ describe("scoped session archive tools", () => {
           archived.resolve();
         }
       };
-      const admission = await beginSessionWorkAdmission({
+      const admission = await beginSessionEffect({
         scope: resolveSessionStorePathCore(cfg.session?.store, { agentId: "main" }),
         identities: [sessionKey, sessionId],
         assertAllowed: () => {},
@@ -445,7 +453,7 @@ describe("scoped session archive tools", () => {
                 );
                 expect(tool.parameters).toMatchObject({
                   properties: {
-                    action: { enum: ["patch", "stop", "assign_owner"] },
+                    action: { enum: expect.arrayContaining(["patch", "stop", "assign_owner"]) },
                     archived: { type: "boolean" },
                   },
                   required: ["action"],

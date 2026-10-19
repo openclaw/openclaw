@@ -16,8 +16,9 @@ import { prepareSessionNavigationHandoff } from "../lib/sessions/navigation-hand
 import { SESSION_NAVIGATION_KEY_PARAM } from "../lib/sessions/route-navigation.ts";
 import { parseAgentSessionKey, resolveUiConfiguredMainKey } from "../lib/sessions/session-key.ts";
 import type { NewSessionTarget } from "../pages/new-session/location.ts";
+import type { GatewayStatusProps } from "./gateway-status.ts";
 import type { SessionOwnerFilter } from "./session-owner-filter.ts";
-import type { ContextualSidebar } from "./sidebar-context-state.ts";
+import { selectSidebarContext, type ContextualSidebar } from "./sidebar-context-state.ts";
 import type { SidebarSnapshotModel } from "./sidebar-snapshot-model.ts";
 
 export type AppSidebarProps = {
@@ -28,7 +29,10 @@ export type AppSidebarProps = {
   enabledRouteIds: readonly NavigationRouteId[] | undefined;
   connected: boolean;
   connectionStatus: GatewayStatus | null;
-  lastError: string | null;
+  gatewayStatus: GatewayStatusProps | null;
+  connectionRecovery: boolean;
+  connectionFlagVisible: boolean;
+  connectionFlagAllowed: boolean;
   storedOutboxes: SidebarOutboxSummary | undefined;
   terminalAvailable: boolean;
   catalogOpenTarget: CatalogOpenTarget;
@@ -65,7 +69,10 @@ export const appSidebarProperties = {
   enabledRouteIds: { default: undefined, attribute: false },
   connected: { default: false, attribute: false },
   connectionStatus: { default: null, attribute: false },
-  lastError: { default: null, attribute: false },
+  gatewayStatus: { default: null, attribute: false },
+  connectionRecovery: { default: false, attribute: false },
+  connectionFlagVisible: { default: false, attribute: false },
+  connectionFlagAllowed: { default: false, attribute: false },
   storedOutboxes: { default: undefined, attribute: false },
   terminalAvailable: { default: false, attribute: false },
   catalogOpenTarget: { default: "viewer", attribute: false },
@@ -107,7 +114,10 @@ export abstract class AppSidebarBase {
   declare enabledRouteIds: AppSidebarProps["enabledRouteIds"];
   declare connected: AppSidebarProps["connected"];
   declare connectionStatus: AppSidebarProps["connectionStatus"];
-  declare lastError: AppSidebarProps["lastError"];
+  declare gatewayStatus: AppSidebarProps["gatewayStatus"];
+  declare connectionRecovery: AppSidebarProps["connectionRecovery"];
+  declare connectionFlagVisible: AppSidebarProps["connectionFlagVisible"];
+  declare connectionFlagAllowed: AppSidebarProps["connectionFlagAllowed"];
   declare storedOutboxes: AppSidebarProps["storedOutboxes"];
   declare terminalAvailable: AppSidebarProps["terminalAvailable"];
   declare catalogOpenTarget: AppSidebarProps["catalogOpenTarget"];
@@ -144,25 +154,25 @@ export abstract class AppSidebarBase {
   private attached = false;
   private complete: Promise<boolean> = Promise.resolve(true);
   private finishUpdate: ((value: boolean) => void) | undefined;
-  readContextualSidebar: () => ContextualSidebar | undefined = () => undefined;
   get contextualSidebar(): ContextualSidebar | undefined {
-    return this.isConnected ? this.readContextualSidebar() : undefined;
+    return this.isConnected && this.router
+      ? selectSidebarContext(this.router.getState())
+      : undefined;
   }
 
   sidebarSnapshot: SidebarSnapshotModel | null = null;
   sidebarPluginSnapshot: Pick<SidebarSnapshotModel, "entries" | "plugins"> | null = null;
 
   constructor(
-    private props: AppSidebarProps,
     protected context: ApplicationContext,
-    readonly hostElement: HTMLElement,
+    readonly hostElement: HTMLElement & AppSidebarProps,
   ) {
     for (const key of Object.keys(appSidebarProperties)) {
       Object.defineProperty(this, key, {
         get: () =>
           key === "sidebarAgentsMode"
-            ? (this.sidebarSnapshot?.mode ?? Reflect.get(this.props, key))
-            : Reflect.get(this.props, key),
+            ? (this.sidebarSnapshot?.mode ?? Reflect.get(hostElement, key))
+            : Reflect.get(hostElement, key),
         set: (value: unknown) => {
           Reflect.set(hostElement, key, value);
         },
@@ -184,8 +194,7 @@ export abstract class AppSidebarBase {
     }
   }
 
-  bindInputs(props: AppSidebarProps, context: ApplicationContext): void {
-    this.props = props;
+  bindContext(context: ApplicationContext): void {
     this.context = context;
     this.invalidate();
   }

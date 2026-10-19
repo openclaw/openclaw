@@ -1,10 +1,11 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
 import { steerActiveSessionWithOptionalDeliveryWait } from "../agents/embedded-agent-runner/run/attempt-queue-message.js";
+import { abortEmbeddedAgentRun } from "../agents/embedded-agent-runner/runs.js";
 import {
-  abortEmbeddedAgentRun,
-  clearActiveEmbeddedRun,
-  setActiveEmbeddedRun,
-} from "../agents/embedded-agent-runner/runs.js";
-import { createEmbeddedRunHandle } from "../agents/embedded-agent-runner/runs.test-support.js";
+  clearTestEmbeddedRun,
+  createEmbeddedRunHandle,
+  registerTestEmbeddedRun,
+} from "../agents/embedded-agent-runner/runs.test-support.js";
 import { guardSessionManager } from "../agents/session-tool-result-guard-wrapper.js";
 import { persistAgentSessionMessage } from "../agents/sessions/agent-session-transcript.js";
 import type { AgentSessionEvent } from "../agents/sessions/agent-session-types.js";
@@ -48,18 +49,20 @@ export async function seedSessionToolsFixtureSession({
   sessionKey,
   sessionId,
   creatorId = "other-person",
+  visibility = "shared",
 }: {
   agentId?: string;
   sessionKey: string;
   sessionId: string;
   creatorId?: string;
+  visibility?: "shared" | "draft";
 }) {
   await upsertSessionEntryCore(
     { agentId, sessionKey },
     {
       sessionId,
       updatedAt: 1,
-      visibility: "shared",
+      visibility,
       createdVia: "operator",
       createdActor: { type: "human", source: "profile", id: creatorId },
     },
@@ -120,10 +123,7 @@ export function withParticipantSessionToolsFixture(
   return withSessionToolsFixture(async (cfg) => {
     const person = (name: string) => {
       const client = roleClient("write", `${name.toLowerCase()}-participant`);
-      const profileId = client.authenticatedUserProfile?.profileId;
-      if (!profileId) {
-        throw new Error("expected participant profile");
-      }
+      const { profileId } = expectDefined(client.authenticatedUserProfile, "participant profile");
       return {
         profileId,
         senderId: `${name.toLowerCase()}-sender`,
@@ -137,16 +137,12 @@ export function withParticipantSessionToolsFixture(
       [PARTICIPANT_DRAFT, PARTICIPANT_DRAFT_ID, "draft", "Alice's distinctive draft marker"],
       [PARTICIPANT_SHARED, "participant-shared-id", "shared", "Shared participant marker"],
     ] as const) {
-      await upsertSessionEntryCore(
-        { agentId: "main", sessionKey },
-        {
-          sessionId,
-          updatedAt: 1,
-          visibility,
-          createdVia: "operator",
-          createdActor: { type: "human", source: "profile", id: alice.profileId },
-        },
-      );
+      await seedSessionToolsFixtureSession({
+        sessionKey,
+        sessionId,
+        visibility,
+        creatorId: alice.profileId,
+      });
       await appendTranscriptMessage(
         { agentId: "main", sessionKey, sessionId },
         { message: { role: "user", content: marker } },
@@ -263,9 +259,11 @@ export async function withDelayedSessionToolsSteering(
         },
       ),
   };
-  withoutGatewayToolCallerIdentity(() =>
-    setActiveEmbeddedRun(target.sessionId, handle, target.sessionKey, undefined, target.agentId),
-  );
+  const activate = (next: typeof handle, agentId?: string) =>
+    withoutGatewayToolCallerIdentity(() =>
+      registerTestEmbeddedRun(target.sessionId, next, target.sessionKey, undefined, agentId),
+    );
+  activate(handle, target.agentId);
   const cancel = async () => {
     if (listeners.size === 0) {
       return;
@@ -273,19 +271,28 @@ export async function withDelayedSessionToolsSteering(
     emit({ type: "agent_settled" });
     await settled.promise;
   };
+  const settleReceiver = () => emit({ type: "agent_settled" });
   let replacement: ReturnType<typeof createEmbeddedRunHandle> | undefined;
   try {
     await run({
       pendingCount: () => queued.length,
       cancel,
-      end: () => clearActiveEmbeddedRun(target.sessionId, handle, target.sessionKey),
-      abort: () => abortEmbeddedAgentRun(target.sessionId),
+      end: () => {
+        settleReceiver();
+        clearTestEmbeddedRun(target.sessionId, handle, target.sessionKey);
+      },
+      abort: () => {
+        const aborted = abortEmbeddedAgentRun(target.sessionId);
+        settleReceiver();
+        if (aborted) {
+          clearTestEmbeddedRun(target.sessionId, handle, target.sessionKey);
+        }
+        return aborted;
+      },
       replace: () => {
         const next = createEmbeddedRunHandle({ runId: "participant-steering-replacement" });
         replacement = next;
-        withoutGatewayToolCallerIdentity(() =>
-          setActiveEmbeddedRun(target.sessionId, next, target.sessionKey),
-        );
+        activate(next);
       },
       commit: async () => {
         const entry = queued[0];
@@ -303,9 +310,9 @@ export async function withDelayedSessionToolsSteering(
     });
   } finally {
     await cancel();
-    clearActiveEmbeddedRun(target.sessionId, handle, target.sessionKey);
+    clearTestEmbeddedRun(target.sessionId, handle, target.sessionKey);
     if (replacement) {
-      clearActiveEmbeddedRun(target.sessionId, replacement, target.sessionKey);
+      clearTestEmbeddedRun(target.sessionId, replacement, target.sessionKey);
     }
   }
 }

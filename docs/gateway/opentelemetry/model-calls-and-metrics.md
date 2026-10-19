@@ -189,18 +189,36 @@ with underscores in place of dots.
 | ------------------------------------------ | ------- | -------------------------------------------------------------- |
 | `openclaw.gateway.ws.events`               | counter | Outbound event frames accepted by the sender, once per socket  |
 | `openclaw.gateway.ws.event_bytes`          | counter | Encoded UTF-8 bytes of those full JSON frames, once per socket |
+| `openclaw.gateway.ws.event_wire_bytes`     | counter | Post-codec payload bytes handed to each socket                 |
+| `openclaw.gateway.ws.event_frame_bytes`    | counter | Cumulative accepted raw frame counts by byte-size upper bound  |
 | `openclaw.gateway.ws.operator_connections` | gauge   | Connected authenticated operator sockets                       |
 
-The counters have only `openclaw.gateway.ws.event`: a known protocol event name,
+The traffic counters have `openclaw.gateway.ws.event`: a known protocol event name,
 or `other` for an unrecognized name. The connection gauge has no attributes; it
 updates on connect/disconnect and refreshes every 30 seconds to recover dropped
 snapshots or initialize late-starting exporters.
 Event observations are batched by event name within one event-loop turn; fan-out
-still counts each socket separately. Bytes exclude WebSocket framing and
-compression, and send acceptance does not prove client receipt. No event payload,
+still counts each socket separately. Raw bytes exclude framing and compression;
+wire bytes use the deflated payload length when compressed and raw length
+otherwise. Wire bytes exclude WebSocket, TLS, and TCP headers. Compression
+completion can follow raw-frame acceptance; direct local delivery contributes
+its raw payload size. Observations without a wire size do not fabricate a
+wire-byte measurement. Send acceptance does not prove client receipt. No event payload,
 session, user, or connection identifiers are exported. These metrics use the
 same bounded diagnostic queue as Gateway RPC observations; check
 `openclaw.diagnostic.async_queue.dropped` when interpreting traffic totals.
+
+`openclaw.gateway.ws.event_frame_bytes` has unit `1` and also carries `le`, with
+byte-size upper bounds `256`, `512`, `1024`, `2048`, `4096`, `8192`, `16384`,
+`65536`, and `+Inf`. Counts are cumulative across upper bounds, with each accepted
+raw frame counted in every matching bucket. These bounded counters support
+p50/p90 frame-size estimates; they are not individual byte observations.
+
+`openclaw.gateway.ws.presence_frames` (counter, unit `1`) and
+`openclaw.gateway.ws.presence_bytes` (counter, unit `By`) split presence traffic
+by `openclaw.gateway.ws.mode`: `delta`, `reset` (full snapshots for capable
+clients), or `legacy` (full frames without delta negotiation). They count the
+same accepted per-socket frames and encoded bytes as the aggregate counters.
 
 `openclaw.gateway.ws.session_event_frames` (counter, unit `1`) and
 `openclaw.gateway.ws.session_event_bytes` (counter, unit `By`) attribute the same

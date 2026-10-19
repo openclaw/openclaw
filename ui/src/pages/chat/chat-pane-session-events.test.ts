@@ -934,8 +934,8 @@ describe("mounted pane session event ownership", () => {
           expect(delivered.mock.calls[0]?.[1]).toEqual({ applied: false });
         }
         laterHistory.reject(new Error("Incarnation history temporarily unavailable"));
-        await refresh;
         if (preservesSuccessor) {
+          await refresh;
           expect(getChatHistoryLoadState(state)).toMatchObject({
             phase: "failed",
             sessionKey: row.key,

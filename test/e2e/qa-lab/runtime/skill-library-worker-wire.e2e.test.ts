@@ -14,8 +14,9 @@ import type {
 } from "../../../../packages/gateway-protocol/src/schema/skill-library.js";
 import { resolvePreferredOpenClawTmpDir } from "../../../../src/infra/tmp-openclaw-dir.js";
 import { prepareSkillBundle, readSkillBundleTree } from "../../../../src/skills/library/bundle.js";
+import { resolveOpenClawStateSqlitePath } from "../../../../src/state/openclaw-state-db.paths.js";
 import { runQaGatewayTestFixture } from "../../../helpers/qa-gateway-test-lifetime.js";
-import { MODEL_REF, PROOF_TIMEOUT_MS } from "./cloud-worker-midturn-loss-fixture.js";
+import { MODEL_REF, PROOF_TIMEOUT_MS, waitFor } from "./cloud-worker-midturn-loss-fixture.js";
 import {
   closeWireServer,
   createPublishedWireWorkspace,
@@ -220,6 +221,51 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
                   });
                   return { entry: read.entry, revisions: read.revisions };
                 }),
+                observe("freshDatabaseRows", async () => {
+                  // Compare the Gateway's pooled read with a fresh native connection to fixture-only state.
+                  const { stdout } = await execFileAsync(process.execPath, [
+                    "--input-type=module",
+                    "-e",
+                    `
+                      import { realpathSync, statSync } from "node:fs";
+                      import { DatabaseSync } from "node:sqlite";
+                      const [file, skillId, revision] = process.argv.slice(-3);
+                      const files = () => ["", "-wal", "-shm"].map(suffix => {
+                        try {
+                          const { dev, ino, size, mtimeMs } = statSync(file + suffix);
+                          return { suffix, dev, ino, size, mtimeMs };
+                        } catch (error) {
+                          return { suffix, error: String(error) };
+                        }
+                      });
+                      const before = files();
+                      const db = new DatabaseSync(file, { readOnly: true });
+                      try {
+                        db.exec("BEGIN");
+                        const result = {
+                          at: new Date().toISOString(),
+                          runtime: { node: process.versions.node, bun: process.versions.bun },
+                          file: realpathSync(file),
+                          before,
+                          sqlite: db.prepare("SELECT sqlite_version() AS version").get(),
+                          entry: db.prepare("SELECT skill_id, owner_profile_id, current_revision, removed FROM skill_library_entries WHERE skill_id = ?").get(skillId) ?? null,
+                          revision: db.prepare("SELECT revision, created_at, length(files_json) AS manifestBytes FROM skill_library_revisions WHERE skill_id = ? AND revision = ?").get(skillId, revision) ?? null,
+                          tableRevision: db.prepare("SELECT revision, created_at, length(files_json) AS manifestBytes FROM skill_library_revisions NOT INDEXED WHERE skill_id = ? AND revision = ?").get(skillId, revision) ?? null,
+                          events: db.prepare("SELECT revision, action, created_at FROM skill_library_events WHERE skill_id = ? ORDER BY created_at DESC LIMIT 6").all(skillId),
+                          after: files(),
+                        };
+                        console.log(JSON.stringify(result));
+                      } finally {
+                        if (db.isTransaction) db.exec("ROLLBACK");
+                        db.close();
+                      }
+                    `,
+                    resolveOpenClawStateSqlitePath(instance.env),
+                    saved.entry.skillId,
+                    saved.entry.revision,
+                  ]);
+                  return JSON.parse(stdout) as unknown;
+                }),
                 observe("gatewayRevisionDirectories", () =>
                   fs.readdir(
                     path.join(instance.stateDir, "skill-library", saved.entry.skillId, "revisions"),
@@ -298,11 +344,17 @@ describe("skill library mock-provider E2E through real Gateway and node worker",
             marker: string,
             runId: string,
           ) => {
-            const waitResult = await client.request<{ status: string }>(
-              "agent.wait",
-              { runId, timeoutMs: PROOF_TIMEOUT_MS },
-              PROOF_TIMEOUT_MS + 5_000,
-            );
+            const deadline = Date.now() + PROOF_TIMEOUT_MS;
+            const waitResult = await waitFor(`skill library turn ${marker}`, async () => {
+              const remainingMs = Math.max(0, deadline - Date.now());
+              const observation = await client.request<{ status: string }>(
+                "agent.wait",
+                { runId, timeoutMs: remainingMs },
+                remainingMs + 5_000,
+              );
+              // Queue admission is observable before the turn has a terminal result.
+              return observation.status === "pending" ? undefined : observation;
+            });
             expect(waitResult, await waitMessage(waitResult, key, marker)).toMatchObject({
               status: "ok",
             });

@@ -6,6 +6,7 @@ export const SessionStatusToolSchema = Type.Object({
   sessionKey: Type.Optional(Type.String()),
   model: Type.Optional(Type.String()),
   changesSince: Type.Optional(Type.Integer({ minimum: 0 })),
+  capabilities: Type.Optional(Type.Boolean()),
 });
 
 const SessionStatusOriginSchema = Type.Object(
@@ -60,6 +61,27 @@ export const SessionStatusOutputSchema = Type.Object(
     changedModel: Type.Boolean(),
     stateVersion: Type.Integer(),
     statusText: Type.String(),
+    capabilities: Type.Optional(
+      Type.Object(
+        {
+          checked: Type.Union([
+            Type.Literal("live-session"),
+            Type.Literal("local-config"),
+            Type.Literal("unavailable"),
+          ]),
+          available: Type.Array(Type.String()),
+          unavailable: Type.Array(
+            Type.Object(
+              { reason: Type.String(), tools: Type.Array(Type.String()) },
+              { additionalProperties: false },
+            ),
+          ),
+          notices: Type.Optional(Type.Array(Type.String())),
+          error: Type.Optional(Type.String()),
+        },
+        { additionalProperties: false },
+      ),
+    ),
     stateChanges: Type.Optional(
       Type.Object(
         {

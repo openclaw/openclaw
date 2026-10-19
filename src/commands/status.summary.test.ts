@@ -4,6 +4,7 @@ import { resolveSessionStorePathCore } from "../config/sessions/paths.js";
 import { SESSION_TOTAL_TOKENS_VERSION } from "../config/sessions/types.js";
 import type { DatabaseStoreDiagnostic } from "../infra/database-engine/diagnostics.js";
 import { setActiveDegradedPlugins } from "../plugins/runtime-degraded-state.js";
+import { parseAgentSessionKey } from "../routing/session-key.js";
 import {
   clearActiveCredentialDegradedOwner,
   setActiveCredentialDegradedOwner,
@@ -146,7 +147,14 @@ vi.mock("../config/sessions/session-entry-read-runtime.js", async () => {
       return {
         ...summarize(entries),
         byAgent: new Map(
-          options.agentIds.map((agentId) => [
+          [
+            ...new Set([
+              ...options.agentIds,
+              ...entries.flatMap(
+                ({ sessionKey }) => parseAgentSessionKey(sessionKey)?.agentId ?? [],
+              ),
+            ]),
+          ].map((agentId) => [
             agentId,
             summarize(
               entries.filter(({ sessionKey }) => sessionKey.startsWith(`agent:${agentId}:`)),
@@ -765,7 +773,8 @@ describe("getStatusSummary", () => {
     expect(
       vi
         .mocked(statusSummaryRuntime.readSessionRuntimeMetadata)
-        .mock.calls[0]?.[1].map(({ sessionKey }) => sessionKey),
-    ).toEqual(["agent:ops:main", "agent:research:main", "agent:main:main"]);
+        .mock.calls[0]?.[1].map(({ sessionKey }) => sessionKey)
+        .toSorted(),
+    ).toEqual(["agent:main:main", "agent:ops:main", "agent:research:main"]);
   });
 });

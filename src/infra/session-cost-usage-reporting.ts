@@ -389,7 +389,6 @@ export async function loadSessionLogs(
           content = truncateUtf16Safe(content, maxLen) + "…";
         }
       } catch {
-        // Ignore malformed records.
         continue;
       }
 

@@ -10,6 +10,7 @@ import { captureRuntimeWorkerSource } from "../infra/runtime-worker-generation.j
 import { acquireSqliteDatabaseAdmissionTurn } from "../infra/sqlite-database-admission-turn.js";
 import { resolveSqliteDatabaseFilePath } from "../infra/sqlite-database-admission.js";
 import { throwSqliteLifecycleErrors } from "../infra/sqlite-lifecycle-errors.js";
+import { assertExistingDatabaseIdentity } from "../infra/sqlite-worker-identity.js";
 import {
   captureRetainedNativeWorkerSource,
   type RetainedNativeWorkerSource,
@@ -43,9 +44,7 @@ import {
   retainOpenClawStateWorkerErrorPayload,
 } from "./openclaw-state-worker-error.js";
 
-export function decodeOpenClawStateReadReply(
-  reply: OpenClawStateReadReply,
-): OpenClawStateReadOutcome {
+function decodeOpenClawStateReadReply(reply: OpenClawStateReadReply): OpenClawStateReadOutcome {
   if (reply.ok) {
     return { value: reply };
   }
@@ -356,16 +355,23 @@ function createReadTransport(
       task = startReadTask(
         pool,
         () => {
-          const turn = acquireSqliteDatabaseAdmissionTurn(resolveSqliteDatabaseFilePath(location));
-          if (!turn) {
+          const physicalLocation = resolveSqliteDatabaseFilePath(location);
+          const requestForDispatch = () => {
             authority.assertCurrent();
+            // Queue admission can outlive the captured file at this pathname.
+            if (expectedIdentity !== undefined) {
+              assertExistingDatabaseIdentity(physicalLocation, expectedIdentity);
+            }
             return request;
+          };
+          const turn = acquireSqliteDatabaseAdmissionTurn(physicalLocation);
+          if (!turn) {
+            return requestForDispatch();
           }
           return turn.then((release) => {
             releaseAdmission = release;
             try {
-              authority.assertCurrent();
-              return request;
+              return requestForDispatch();
             } catch (error) {
               releaseAdmission();
               releaseAdmission = undefined;

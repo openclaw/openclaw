@@ -2,6 +2,8 @@ import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, it, onTestFinished, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig, setRuntimeConfigSnapshot } from "../../../config/config.js";
+import { resolveSessionStorePathCore } from "../../../config/sessions/paths.js";
+import { upsertSessionEntryCore } from "../../../config/sessions/session-accessor.js";
 import { createContext } from "../../../gateway/server-plugin-in-process-dispatch.test-support.js";
 import { createGatewayRequestContext } from "../../../gateway/server-request-context.js";
 import { makeContextParams } from "../../../gateway/server-request-context.test-support.js";
@@ -10,6 +12,12 @@ import { resetHeartbeatEventsForTest } from "../../../infra/heartbeat-events.js"
 import { loadPendingSessionDeliveries } from "../../../infra/session-delivery-queue-storage.js";
 import { sqliteWorkerOwnerProbe as probe } from "../../../infra/sqlite-worker-owner-probe.test-support.js";
 import { publishSystemEventStoreResolver } from "../../../infra/system-event-ownership.js";
+import { captureSessionTarget } from "../../../sessions/session-controller.lifecycle.js";
+import {
+  reserveSessionControllerSource,
+  retireSessionControllerInput,
+  type SessionControllerInput,
+} from "../../../sessions/session-controller.mailbox.js";
 import { createDeferredCore } from "../../../shared/deferred.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -32,6 +40,10 @@ import {
   requesterWakeDriver,
   seedSubagentCompletionDelivery,
 } from "../completion/subagent-completion-admission.test-helpers.js";
+import {
+  hasSubagentControllerInput,
+  subagentCompletionSourceId,
+} from "./subagent-controller-inputs.js";
 import { loadPendingFinalDeliveryPayload } from "./subagent-delivery-state.js";
 import { SUBAGENT_ENDED_REASON_ERROR } from "./subagent-lifecycle-events.js";
 import {
@@ -75,6 +87,7 @@ vi.mock("../../../logging/subsystem.js", async (importOriginal) => {
 
 const tempDirs = useAutoCleanupTempDirTracker(afterEach);
 let settleRootWork: ReturnType<typeof observeRootWork>;
+const controllerInputs: SessionControllerInput[] = [];
 vi.mock("../../../config/config.js", { spy: true });
 
 beforeEach(async () => {
@@ -87,6 +100,11 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  for (const input of controllerInputs) {
+    retireSessionControllerInput(input);
+  }
+  await Promise.all(controllerInputs.map((input) => input.settlement.promise));
+  controllerInputs.length = 0;
   await settleRootWork();
   await closeOpenClawStateDatabaseAsync();
   await resetSubagentRegistryForTests({ persist: false });
@@ -256,7 +274,17 @@ it.each([false, true])(
 
 it("keeps an observed late-result store retirement after the original selector returns", async () => {
   const input = records();
-  input.subagent.requesterStorePath = "original-store";
+  const requesterStorePath = resolveSessionStorePathCore(undefined, { agentId: "main" });
+  await upsertSessionEntryCore(
+    {
+      agentId: "main",
+      storePath: requesterStorePath,
+      sessionKey: input.subagent.requesterSessionKey,
+    },
+    { sessionId: "store-retirement-requester", updatedAt: Date.now() },
+  );
+  input.subagent.requesterStorePath = requesterStorePath;
+  publishSystemEventStoreResolver(() => requesterStorePath);
   input.subagent.delivery = { status: "pending" };
   input.subagent.execution.outcome = { status: "error" };
   input.subagent.endedReason = SUBAGENT_ENDED_REASON_ERROR;
@@ -288,12 +316,12 @@ it("keeps an observed late-result store retirement after the original selector r
     expect(driver.controller.startSubagentAnnounceCleanupFlow(entry)).toBe(true);
     const announce = await entered.promise;
     expect(announce.isCompletionDeliveryAllowed?.()).toBe(false);
-    publishSystemEventStoreResolver(() => "original-store");
+    publishSystemEventStoreResolver(() => requesterStorePath);
     expect(announce.isCompletionDeliveryAllowed?.()).toBe(false);
   } finally {
     release.resolve();
     await settleRootWork(true);
-    driver.controller.clearScheduledResumeTimers();
+    driver.controller.clearRuntimeState();
   }
 
   const saved = loadSubagentRegistryFromSqlite().get(entry.runId);
@@ -326,6 +354,18 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
       payload: loadPendingFinalDeliveryPayload(input.subagent),
     };
     const executionBefore = structuredClone(input.subagent.execution);
+    const source = reserveSessionControllerSource(input.subagent.requesterSessionKey, {
+      reservationId: subagentCompletionSourceId(input.subagent),
+      policy: { mode: "followup" },
+      target: captureSessionTarget({
+        storeScope: "original-store",
+        sessionKey: input.subagent.requesterSessionKey,
+        agentId: input.subagent.requesterAgentId,
+        incarnation: "requester-session",
+      }),
+    });
+    controllerInputs.push(source);
+    expect(hasSubagentControllerInput(input.subagent)).toBe(true);
     const database = openOpenClawStateDatabase();
     seedSubagentCompletionDelivery({ subagent: input.subagent });
     const receipt = expectDefined(
@@ -456,6 +496,7 @@ it.each(["same", "restore", "unknown retry", "failed", "pending acknowledgment"]
       });
       expect(persisted?.requesterSettleWake).toBeUndefined();
     }
+    expect(hasSubagentControllerInput(input.subagent)).toBe(change === "same");
     const lease = await leasePendingAgentSteeringItems({
       requesterSessionKey: input.subagent.requesterSessionKey,
       leaseId: "after-store-publication",

@@ -20,6 +20,7 @@ export function getLastDiagnosticActivityAt(): number {
   return lastActivityAt;
 }
 
+/** @internal Test-support reset; see diagnostic.test-support.ts. */
 export function resetDiagnosticActivityForTest(): void {
   lastActivityAt = 0;
 }

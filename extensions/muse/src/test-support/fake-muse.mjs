@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 import { randomUUID } from "node:crypto";
-import { appendFileSync } from "node:fs";
+import { appendFileSync, readFileSync } from "node:fs";
 import { createConnection } from "node:net";
 import { createInterface } from "node:readline";
 import { EXPECTED_SCHEMA_FINGERPRINT } from "@muse-code/sdk";
@@ -119,6 +119,10 @@ createInterface({ input: process.stdin }).on("line", (line) => {
     }
     reply(id, result);
   } else if (method === "model/list") {
+    if (process.env.MUSE_FIXTURE_CATALOG_PATH) {
+      reply(id, JSON.parse(readFileSync(process.env.MUSE_FIXTURE_CATALOG_PATH, "utf8")));
+      return;
+    }
     reply(id, {
       providerId: "meta",
       profileId: "fixture",

@@ -138,6 +138,7 @@ export function isUiTestTarget(relative) {
 }
 
 export const uiE2eRealGatewayTestFiles = [
+  "ui/src/e2e/deepseek-search.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-session-diff-folding.real-gateway.e2e.test.ts",
   "ui/src/pages/workboard/workboard-distribution.e2e.test.ts",
   "ui/src/e2e/chat-wait-clock.real-gateway.e2e.test.ts",
@@ -159,6 +160,7 @@ export const uiE2eRealGatewayTestFiles = [
   "ui/src/e2e/chat-project-media.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-reconnect-continuity.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-finished-run.real-gateway.e2e.test.ts",
+  "ui/src/e2e/chat-steer-deferred-custody.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-stop-owned-exec.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-collaborator-scroll.real-gateway.e2e.test.ts",
   "ui/src/e2e/chat-thinking-metadata.real-gateway.e2e.test.ts",

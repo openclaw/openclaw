@@ -243,7 +243,7 @@ describe("paired node desktop observe integration", () => {
       );
       const completedInvocations: boolean[] = [];
 
-      const desktopRegistry = createDesktopSessionRegistry({ lingerMs: 10 });
+      const desktopRegistry = createDesktopSessionRegistry();
       const streamBroker = createNodeDesktopStreamBroker();
       cleanups.push(async () => desktopRegistry.stopAll());
       let gatewayUrl = "";
@@ -375,7 +375,7 @@ describe("worker environment node desktop observe integration", () => {
         throw new Error("expected durable worker node id");
       }
 
-      const desktopRegistry = createDesktopSessionRegistry({ lingerMs: 10 });
+      const desktopRegistry = createDesktopSessionRegistry();
       const streamBroker = createNodeDesktopStreamBroker();
       cleanups.push(async () => desktopRegistry.stopAll());
       const proof = workerNodeProof(record.nodeDeviceId);

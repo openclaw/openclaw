@@ -1,6 +1,6 @@
 import { collectConfiguredModelRefValues } from "@openclaw/model-catalog-core/configured-model-refs";
 import type { OpenClawConfig } from "openclaw/plugin-sdk/config-contracts";
-import { createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
+import { createLazyRuntimeMethod, createLazyRuntimeModule } from "openclaw/plugin-sdk/lazy-runtime";
 import type { MemoryEmbeddingProviderAdapter } from "openclaw/plugin-sdk/memory-core-host-engine-embeddings";
 import { splitTrailingAuthProfile } from "openclaw/plugin-sdk/model-ref-parse";
 import { resolvePluginConfigObject } from "openclaw/plugin-sdk/plugin-config-runtime";
@@ -16,7 +16,7 @@ import {
   type ProviderPlugin,
   type ProviderRuntimeModel,
 } from "openclaw/plugin-sdk/plugin-entry";
-import { coerceSecretRef, isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth";
+import { isNonSecretApiKeyMarker } from "openclaw/plugin-sdk/provider-auth-markers";
 import { runLiveProviderCatalog } from "openclaw/plugin-sdk/provider-catalog-live-runtime";
 import { findNormalizedProviderKey } from "openclaw/plugin-sdk/provider-model-metadata";
 import type {
@@ -25,7 +25,7 @@ import type {
 } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildOpenAICompatibleReplayPolicy } from "openclaw/plugin-sdk/provider-model-shared";
 import { buildProviderToolCompatFamilyHooks } from "openclaw/plugin-sdk/provider-tools";
-import { resolveConfiguredSecretInputString } from "openclaw/plugin-sdk/secret-input-runtime";
+import { coerceSecretRef } from "openclaw/plugin-sdk/secret-input";
 import {
   normalizeResolvedModel,
   resolveThinkingProfile as resolveOllamaThinkingProfile,
@@ -88,6 +88,11 @@ import { createOllamaUsageHooks } from "./src/usage-registration.js";
 import { createLazyOllamaWebSearchProvider } from "./src/web-search-provider-registration.js";
 
 const loadOllamaSetup = createLazyRuntimeModule(() => import("./src/setup.runtime.js"));
+// Registration needs SecretRef syntax, not the asynchronous credential resolution runtime.
+const resolveConfiguredSecretInputString = createLazyRuntimeMethod(
+  createLazyRuntimeModule(() => import("openclaw/plugin-sdk/secret-input-runtime")),
+  (runtime) => runtime.resolveConfiguredSecretInputString,
+);
 const loadOllamaMemoryEmbeddingProviderAdapter = createLazyRuntimeModule(
   async () =>
     (await import("./src/memory-embedding-adapter.js")).ollamaMemoryEmbeddingProviderAdapter,

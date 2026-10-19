@@ -443,23 +443,13 @@ it.each([false, true])(
       hostCommitHeld.resolve();
       await releaseHostCommit.promise;
     });
-    const onHostCompactionTranscriptSettled = vi.fn<
-      NonNullable<QueuedCompactionHostOptions["onHostCompactionTranscriptSettled"]>
-    >(async (commit) => {
-      expect(commit).toMatchObject(hostCommit);
-      expect(maintain).toHaveBeenCalledOnce();
-      expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
-      expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
-    });
     const pending = compact(compactParams(controller.signal), {
       onCommitted,
       onHostCompactionCommitted,
-      onHostCompactionTranscriptSettled,
     });
     try {
       await waitForCheckpoint(hostCommitHeld.promise, pending);
       expect(onHostCompactionCommitted).toHaveBeenCalledOnce();
-      expect(onHostCompactionTranscriptSettled).not.toHaveBeenCalled();
       expectPostCompactionCalls();
       releaseHostCommit.resolve();
 
@@ -470,7 +460,6 @@ it.each([false, true])(
       });
       expect(onCommitted).toHaveBeenCalledOnce();
       expect(onHostCompactionCommitted).toHaveBeenCalledOnce();
-      expect(onHostCompactionTranscriptSettled).toHaveBeenCalledTimes(abortAfterCommit ? 0 : 1);
       expect(loadSessionEntry(target())).toMatchObject(successor);
       expectPostCompactionCalls(abortAfterCommit ? 0 : 1);
       if (!abortAfterCommit) {
@@ -841,10 +830,9 @@ it.each([
   },
 );
 
-it("refreshes host state when cancellation follows a committed maintenance rewrite", async () => {
+it("preserves a committed maintenance rewrite after cancellation", async () => {
   const { request, transcriptBefore } = await transcriptFixture();
   const controller = new AbortController();
-  const onHostCompactionTranscriptSettled = vi.fn();
   contextEngineCompactMock.mockResolvedValueOnce(completed(sessionId));
   maintain.mockImplementationOnce(async ({ runtimeContext }) => {
     const rewrite = expectDefined(runtimeContext?.rewriteTranscriptEntries, "active rewrite");
@@ -853,12 +841,12 @@ it("refreshes host state when cancellation follows a committed maintenance rewri
     return result;
   });
 
-  await expect(
-    compact(compactParams(controller.signal), { onHostCompactionTranscriptSettled }),
-  ).resolves.toMatchObject({ ...success, result: { tokensAfter: 40 } });
+  await expect(compact(compactParams(controller.signal))).resolves.toMatchObject({
+    ...success,
+    result: { tokensAfter: 40 },
+  });
 
   expect(loadTranscriptEventsSync(target())).not.toEqual(transcriptBefore);
-  expect(onHostCompactionTranscriptSettled).toHaveBeenCalledOnce();
   expect(hookRunner.runAfterCompaction).not.toHaveBeenCalled();
   expect(maybeCompactAgentHarnessSessionMock).not.toHaveBeenCalled();
 });

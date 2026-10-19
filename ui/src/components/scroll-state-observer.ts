@@ -1,6 +1,6 @@
 import { cancelLayout, scheduleLayout } from "../lib/layout-frame.ts";
 
-type ScrollState = { scrollable: boolean; atStart: boolean; atEnd: boolean };
+export type ScrollState = { scrollable: boolean; atStart: boolean; atEnd: boolean };
 type Observation = {
   horizontal: boolean;
   trackScroll: boolean;

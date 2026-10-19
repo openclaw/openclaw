@@ -3243,6 +3243,34 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     },
   );
 
+  it("uses 16-class capacity for the qualified compact selection without changing its scope", () => {
+    const targets = [
+      "src/agents/embedded-agent-runner/effective-tool-policy.test.ts",
+      "src/gateway/client-callsites.guard.test.ts",
+      "src/gateway/mcp-app-extension-runtime.test.ts",
+      "src/agents/cli-runner.helpers.test.ts",
+    ];
+    const plan = expectDefined(
+      createSelectedNodeTestShardBundles(targets, { runnerBackend: "hybrid" }),
+      "qualified compact selection",
+    );
+    expect(
+      plan.flatMap((job) => job.groups.flatMap((group) => group.includePatterns ?? [])).toSorted(),
+    ).toEqual(targets.toSorted());
+    for (const job of plan) {
+      expect(job).toMatchObject({
+        runner: "blacksmith-16vcpu-ubuntu-2404",
+        planConcurrency: 1,
+        requiresDist: false,
+      });
+      for (const group of job.groups) {
+        expect(group.env?.OPENCLAW_VITEST_MAX_WORKERS ?? String(group.fallbackMaxWorkers)).toBe(
+          "2",
+        );
+      }
+    }
+  });
+
   it.each([
     ["blacksmith", "src/gateway/board-store.test.ts", "blacksmith-16vcpu-ubuntu-2404"],
     ["hybrid", "src/gateway/board-store.test.ts", "blacksmith-16vcpu-ubuntu-2404"],
@@ -4067,6 +4095,7 @@ describe("scripts/lib/ci-node-test-plan.mts", () => {
     expect(infra.test?.setupFiles).toEqual(support.test?.setupFiles);
     const admitted = new Set(listMatchedTestFiles(infra));
     for (const file of [
+      "src/agents/embedded-agent-runner/run.session-permissions.test.ts",
       "src/agents/embedded-agent-runner/run/attempt-bootstrap-prepare.test.ts",
       "src/agents/sandbox.context.github-identity.test.ts",
       "src/auto-reply/reply/session-reset-prompt.test.ts",

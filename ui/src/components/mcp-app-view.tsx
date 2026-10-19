@@ -1,4 +1,6 @@
 import { createEffect, createMemo, onCleanup, Show } from "solid-js";
+import { gatewayPresentationScope } from "../app/gateway-presentation-scope.ts";
+import { hasOperatorReadAccess } from "../app/operator-access.ts";
 import { formatUiError } from "../lib/format-error.ts";
 import { projectGateway } from "../lib/reactive/application.ts";
 import { useApplication } from "../lib/reactive/context.ts";
@@ -6,6 +8,7 @@ import { t } from "../lib/reactive/i18n.ts";
 import { projectOwner } from "../lib/reactive/projection.ts";
 import { defineSolidBridge } from "../lib/solid-bridge.ts";
 import { McpAppConfirmation } from "./mcp-app-confirm-solid.tsx";
+import { registerMcpAppUnmountTarget } from "./mcp-app-unmount.ts";
 import {
   createMcpAppView,
   type McpAppViewOwner,
@@ -21,20 +24,31 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
   "mcp-app-view",
   (props, host) => {
     const context = useApplication();
-    const gateway = context ? projectGateway(context.gateway) : undefined;
+    const gateway = projectGateway(context.gateway);
     const owner = createMcpAppView(host, context);
     const read = projectOwner(owner, (current) => current.read()).read;
     owners.set(host, owner);
+    const unregister = registerMcpAppUnmountTarget(host);
+    let { client, phase, hello } = context.gateway.snapshot;
+    const stopConnection = context.gateway.subscribe((snapshot) => {
+      if (snapshot.client !== client || snapshot.phase !== phase || snapshot.hello !== hello) {
+        owner.connectionChanged();
+      }
+      ({ client, phase, hello } = snapshot);
+    });
     const binding = createMemo(
       () => {
-        gateway?.read();
+        gateway.read();
         return [
-          context?.gateway.snapshot.client,
+          context.gateway.snapshot.client,
           props.sessionKey,
           props.viewId,
           props.agentId,
-          context?.gateway.connectionRevision,
-          context?.gateway.snapshot.hello,
+          context.gateway.connectionRevision,
+          gatewayPresentationScope(context.gateway).key,
+          context.gateway.snapshot.phase === "connected" &&
+            context.gateway.snapshot.hello !== null &&
+            !hasOperatorReadAccess(context.gateway.snapshot.hello.auth ?? null),
         ] as const;
       },
       { equals: (a, b) => a.every((value, index) => value === b[index]) },
@@ -58,6 +72,8 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
       () => owner.updateReservedHeight(),
     );
     onCleanup(() => {
+      stopConnection();
+      unregister();
       owners.delete(host);
       void owner.teardown();
     });
@@ -99,6 +115,13 @@ export const McpAppView = defineSolidBridge<McpAppViewProps, ViewMethods>(
               {t("mcpApp.unavailable", {
                 error: formatUiError(error(), t("mcpApp.errors.requestFailed")),
               })}
+              <button
+                type="button"
+                disabled={gateway.read().snapshot.phase !== "connected"}
+                onClick={() => void owner.setup(owner.currentBinding())}
+              >
+                {t("mcpApp.retry")}
+              </button>
             </div>
           )}
         </Show>

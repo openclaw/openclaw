@@ -1,4 +1,3 @@
-/** Doctor checks and repairs for state dir durability, sessions, transcripts, and credentials. */
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";

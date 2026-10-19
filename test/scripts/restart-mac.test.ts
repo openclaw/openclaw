@@ -351,6 +351,21 @@ describe("scripts/restart-mac.sh", () => {
     expect(script).toContain("stop those jobs before a target-only restart");
   });
 
+  it.each([false, true])("preserves plugin assets when reusing a source build: %s", (reuse) => {
+    const root = makeTempRoot();
+    const result = runHarness(
+      root,
+      [
+        "set -euo pipefail",
+        'ROOT_DIR="$PWD"',
+        'run_step() { printf "%s\\n" "$1"; }',
+        block("# Bundle Gateway-hosted plugin assets.", 'if [ "$AUTO_DETECT_SIGNING"'),
+      ],
+      { OPENCLAW_MAC_REUSE_BUILD: reuse ? "1" : "0" },
+    );
+    expectSuccess(result, reuse ? "" : "bundle plugin assets");
+  });
+
   it("keeps the managed app alive until the signed replacement is ready", () => {
     expect(script).toContain('OPENCLAW_PACKAGE_APP_ROOT="${STAGED_APP_BUNDLE}"');
     expectBefore('run_step "package app"', 'run_step "verify packaged app"');

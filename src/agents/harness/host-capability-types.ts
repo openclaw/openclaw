@@ -1,8 +1,13 @@
+import type { AgentMessage } from "../../../packages/agent-core/src/types.js";
 import type {
   ApprovalDecision,
   ApprovalTerminalReason,
 } from "../../../packages/gateway-protocol/src/schema/approvals.js";
+import type { ImageContent } from "../../../packages/llm-core/src/types.js";
 import type { AnyAgentTool } from "../tools/common.js";
+
+export type AgentHarnessContextMedia = { text?: string; images: ImageContent[] };
+export type AgentHarnessContextMediaRequest = { message: AgentMessage; maxChars: number };
 
 type AgentHarnessHostApprovalResult = Readonly<{
   decision: ApprovalDecision | null | undefined;
@@ -42,6 +47,15 @@ export type AgentHarnessHostCapabilities = Readonly<{
   version: 1;
   /** Fails closed unless this exact admitted run capability remains active. */
   assertActive: () => void;
+  /** Prepare history only when a native thread must be freshly seeded, under this run's authority. */
+  prepareBoundedSeed?: (
+    request: Readonly<{
+      assertCurrent: () => void;
+      signal?: AbortSignal;
+      /** Final delivery allowance; valid smaller values only narrow the captured host budget. */
+      tokenBudget?: number;
+    }>,
+  ) => Promise<readonly AgentMessage[]>;
   /**
    * Freeze the host continuation count before tools or inference, using the native
    * owner's admitted Gateway-local cwd. Never pass a remote/container path.
@@ -99,10 +113,9 @@ export type AgentHarnessHostCapabilities = Readonly<{
     signal?: AbortSignal;
   }) => Promise<string | undefined>;
   /** Rebuilds retained attachments under this host's captured media policy and run authority. */
-  prepareContextMedia?: (request: {
-    message: import("../runtime/index.js").AgentMessage;
-    maxChars: number;
-  }) => Promise<{ text?: string; images: import("../../llm/types.js").ImageContent[] }>;
+  prepareContextMedia?: (
+    request: AgentHarnessContextMediaRequest,
+  ) => Promise<AgentHarnessContextMedia>;
   /** Stages reply attachments under captured policy and live run authority. */
   prepareReplyMedia?: (
     request: {

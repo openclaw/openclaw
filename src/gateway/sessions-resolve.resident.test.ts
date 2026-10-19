@@ -163,6 +163,7 @@ it.each(["exact", "broad"] as const)(
   async (publication) => {
     await withOpenClawTestState({ scenario: "minimal" }, async () => {
       seed();
+      addUnrelatedSessions();
       using owner = await residentProjection();
       const { projection } = owner;
       const resolve = (sessionId: string) =>
@@ -180,14 +181,20 @@ it.each(["exact", "broad"] as const)(
               return emit({ all: true, scope: { agentId, storePath } }, database);
             })
           : undefined;
-      runOpenClawAgentWriteTransaction(
-        (database) => writeSessionEntry(database, key, { ...entry, sessionId: "replacement-id" }),
-        { agentId: "main" },
-      );
-      publicationSpy?.mockRestore();
-      expect(await resolve("replacement-id")).toEqual(resolved(key));
-      expect(await resolve(entry.sessionId)).toEqual(missing);
-      expect(await resolve(key)).toEqual(resolved(key));
+      await projection.withSelectionPreparation(async () => {
+        runOpenClawAgentWriteTransaction(
+          (database) => writeSessionEntry(database, key, { ...entry, sessionId: "replacement-id" }),
+          { agentId: "main" },
+        );
+        publicationSpy?.mockRestore();
+        expect(projection.dirtyRowCount).toBeGreaterThan(0);
+        expect(await resolve("replacement-id")).toEqual(resolved(key));
+        expect(await resolve(entry.sessionId)).toEqual(missing);
+        expect(await resolve(key)).toEqual(resolved(key));
+        if (publication === "broad") {
+          expect(projection.dirtyRowCount).toBeGreaterThanOrEqual(96);
+        }
+      });
     });
   },
 );
@@ -276,7 +283,7 @@ it("bounds exact resident selection without SQLite and sees committed label chan
       ]) {
         selections.mockClear();
         expect(await resolve(p)).toMatchObject(p.allowMissing ? missing : resolved(key));
-        if ("sessionId" in p || "reference" in p) {
+        if ("sessionId" in p || "reference" in p || "shortId" in p) {
           expect(selectedCount(selections)).toBeLessThanOrEqual(2);
         }
       }
@@ -286,6 +293,15 @@ it("bounds exact resident selection without SQLite and sees committed label chan
     seed({ ...entry, label: "Updated label" });
     expect(await resolve({ label: "Updated label" })).toEqual(resolved(key));
     expect(await resolve({ label: entry.label, allowMissing: true })).toEqual(missing);
+    expect(
+      await resolve({ reference: { key: "agent:main:updated-label", slug: "updated-label" } }),
+    ).toMatchObject(resolved(key));
+    expect(
+      await resolve({
+        reference: { key: "agent:main:original-label", slug: "original-label" },
+        allowMissing: true,
+      }),
+    ).toEqual(missing);
   });
 });
 
@@ -309,6 +325,39 @@ it("searches stored and selected model identities from retained row facts withou
       ).toEqual([key]);
     }
     reads.expectIdle();
+  });
+});
+
+it("keeps repeated-title archives cold when a literal reference resolves", async () => {
+  await withOpenClawTestState({ scenario: "minimal" }, async () => {
+    const literalKey = "agent:main:release";
+    seed({ ...entry, label: "Release" }, literalKey);
+    const archives = Array.from(
+      { length: 8 },
+      (_, index) =>
+        `agent:main:dashboard:abcd1234-${index.toString(16).padStart(4, "0")}-4000-8000-000000000001`,
+    );
+    for (const [index, archivedKey] of archives.entries()) {
+      seed(
+        { ...entry, sessionId: `archive-${index}`, label: "Release", archivedAt: 1 },
+        archivedKey,
+      );
+    }
+    using owner = await residentProjection();
+    const { projection } = owner;
+    await projection.ensureMaterialized();
+    const materialized = projection.materializedCount;
+    expect(
+      await preparedResolve(projection, {
+        reference: { key: literalKey, slug: "release" },
+      }),
+    ).toMatchObject(resolved(literalKey));
+    expect(projection.materializedCount - materialized).toBeLessThanOrEqual(1);
+    for (const archivedKey of archives) {
+      expect(
+        projection.capture({ agentId: "main", key: archivedKey })?.materialized,
+      ).toBeUndefined();
+    }
   });
 });
 

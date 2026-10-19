@@ -48,6 +48,8 @@ export async function runGatewayServicesHealth(ctx: DoctorHealthFlowContext): Pr
     note(NON_DEFAULT_INSTALL_SERVICE_SKIP_REASON, "Gateway");
     return;
   }
+  const { maybeRepairNodeServiceConfig } = await import("../commands/doctor-node-services.js");
+  await maybeRepairNodeServiceConfig(ctx.runtime, ctx.prompter, ctx.env ?? process.env);
   if (!(await shouldManageGatewayService(ctx.env ?? process.env))) {
     return;
   }

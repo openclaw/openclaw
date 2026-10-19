@@ -23,6 +23,7 @@ import {
   assertProviderAuthAuthority,
   getProviderAuthAuthority,
 } from "../plugins/provider-auth-authority.js";
+import * as modelRoutes from "../plugins/provider-model-routes.js";
 import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { getPluginRuntimeGenerationRegistry } from "../plugins/runtime/generation-state.js";
 import {
@@ -37,6 +38,7 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { executePreparedDecision } from "./decision-inference.js";
+import * as modelAuth from "./model-auth-provider.js";
 import { resetPreparedModelRuntimeSnapshotsForTest } from "./prepared-model-runtime.test-support.js";
 
 const roots = useAutoCleanupTempDirTracker(afterEach);
@@ -68,6 +70,7 @@ type Trace = {
 };
 afterEach(async () => {
   await resetPreparedModelRuntimeSnapshotsForTest();
+  vi.restoreAllMocks();
   clearRuntimeConfigSnapshot();
   clearPluginMetadataLifecycleCaches();
   resetPluginLoaderTestStateForTest();
@@ -79,6 +82,10 @@ afterEach(async () => {
 
 it.each([
   "plugin",
+  "plugin-route-fresh",
+  "plugin-route-missing",
+  "plugin-route-multiple",
+  "plugin-route-cleared",
   "agent",
   "profile",
   "missing",
@@ -367,6 +374,46 @@ it.each([
         }
         return;
       }
+      const credentialPreparation = vi.spyOn(modelAuth, "resolveApiKeyForProviderCore");
+      if (authScope.startsWith("plugin-route-")) {
+        const candidate = {
+          api: "openai-responses" as const,
+          baseUrl: "https://selected.fixture.invalid/v1",
+          authRequirement: "api-key" as const,
+          requestTransportOverrides: "none" as const,
+        };
+        const original = modelRoutes.resolveProviderModelRoutes;
+        vi.spyOn(modelRoutes, "resolveProviderModelRoutes").mockImplementation((params) => {
+          if (params.provider !== id || params.capability !== "decision") {
+            return original(params);
+          }
+          return {
+            kind: "routes",
+            routes:
+              authScope === "plugin-route-multiple"
+                ? [candidate, { ...candidate, baseUrl: "https://other.fixture.invalid/v1" }]
+                : [
+                    {
+                      ...candidate,
+                      ...(authScope === "plugin-route-fresh"
+                        ? {
+                            inference: {
+                              chat: false,
+                              decision: {
+                                protocol: "fixture",
+                                input: ["text"],
+                                questions: { boolean: { probabilities: "none", abstention: true } },
+                              },
+                            },
+                          }
+                        : authScope === "plugin-route-cleared"
+                          ? { inference: { chat: false } }
+                          : {}),
+                    },
+                  ],
+          };
+        });
+      }
       const http = vi.fn<typeof fetch>(async () => new Response("{}"));
       let admitted = true;
       if (authScope.startsWith("plugin-revoked")) {
@@ -426,6 +473,20 @@ it.each([
           },
         );
       const outcome = await evaluateFixture();
+      if (authScope.startsWith("plugin-route-") && authScope !== "plugin-route-fresh") {
+        expect(outcome).toEqual({ status: "unavailable", reason: "unsupported-input" });
+        expect(trace.calls).toBe(0);
+        expect(
+          credentialPreparation.mock.calls.filter(([params]) => params.capability === "decision"),
+        ).toEqual([]);
+        expect(usageEvents).toEqual([]);
+        return;
+      }
+      if (authScope === "plugin-route-fresh") {
+        expect(trace.modelBaseUrl).toBe("https://selected.fixture.invalid/v1");
+        expect(trace.modelApi).toBe("openai-responses");
+        expect(trace.modelBilling).toBeUndefined();
+      }
       if (authScope.startsWith("plugin-revoked")) {
         expect(outcome).toEqual({
           status: "unavailable",

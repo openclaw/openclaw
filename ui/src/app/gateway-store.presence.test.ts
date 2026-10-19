@@ -58,6 +58,41 @@ describe("Gateway presence delivery", () => {
     expect(store.current().request).not.toHaveBeenCalled();
   });
 
+  it("applies field patches without losing metadata or retaining cleared fields", () => {
+    const events = vi.fn();
+    store.gateway.subscribeEvents(events);
+    const original = { ...first, watchedSessions: ["agent:main:old"], roles: ["operator"] };
+    const send = (payload: unknown) =>
+      store.current().opts.onEvent?.(createGatewayEvent("presence", payload));
+    send(reset(2, [original]));
+    send({
+      base: 2,
+      version: 3,
+      upsert: [
+        { key: "first-key", set: { ts: 20, roles: ["node"] }, unset: ["watchedSessions"] },
+        { key: "second-key", presence: second },
+      ],
+      remove: [],
+      order: ["second-key", "first-key"],
+    });
+    expect(events.mock.lastCall?.[0].payload).toEqual({
+      presence: [second, { ...first, ts: 20, roles: ["node"] }],
+    });
+    expect(original.watchedSessions).toEqual(["agent:main:old"]);
+    expect(original.ts).toBe(1);
+    expect(store.current().request).not.toHaveBeenCalled();
+
+    send({
+      base: 3,
+      version: 4,
+      upsert: [{ key: "missing-key", set: { ts: 30 }, unset: [] }],
+      remove: [],
+      order: ["second-key", "first-key", "missing-key"],
+    });
+    expect(events).toHaveBeenCalledTimes(2);
+    expect(store.current().request).toHaveBeenCalledWith("system-presence", { snapshot: true });
+  });
+
   it("deduplicates mismatched deltas and publishes the recovered full snapshot", async () => {
     const recovery = createDeferred<ReturnType<typeof reset>>();
     store.current().request.mockReturnValue(recovery.promise);

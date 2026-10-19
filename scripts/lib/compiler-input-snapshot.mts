@@ -437,6 +437,20 @@ export class CompilerInputSnapshot {
     return this.toolPaths;
   }
 
+  /** For caches that already capture and verify their source and config file bytes. */
+  environmentSignature(args: string[]) {
+    return digest(
+      JSON.stringify([
+        "recorded-compiler-inputs-v1",
+        ARTIFACT_CACHE_VERSION,
+        this.namespace(),
+        this.toolchainPaths(),
+        this.toolchain(),
+        args,
+      ]),
+    );
+  }
+
   signature(
     config: string,
     args: string[],

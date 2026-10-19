@@ -83,12 +83,11 @@ export async function linkUpdateCandidatePluginTrees(
     destination: string,
   ) => {
     const root = await (destinationRoot ??= openRoot(privateRoot));
-    await copyUpdateCandidatePluginFileBytes({ entry, privateRoot, destination }, root, {
-      assertBeforeMutation: params.assertCurrent,
-      assertAfterCopy: async () => {
-        await assertEntry(entry);
-      },
-    });
+    await copyUpdateCandidatePluginFileBytes(
+      { entry, privateRoot, destination },
+      root,
+      params.assertCurrent,
+    );
     const relocate = resolveRuntimeFileRelocator(destination);
     if (relocate) {
       await relocate(destination, entry.path, destination, relocations, params.assertCurrent);

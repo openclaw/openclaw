@@ -163,6 +163,13 @@ cap across counters, gauges, and histograms; a fully observed method uses up to
 five samples. Watch `openclaw_prometheus_series_dropped_total` for incomplete
 coverage. See [Prometheus metrics](/gateway/prometheus) for timing semantics.
 
+Requester completion warnings include the underlying error name and message.
+`requester settle wake failed`, `failed to persist requester settle wake rejection`,
+and `failed to publish requester settle dispatch` report failures at the lifecycle
+owner on each failed attempt. These replace the former sustained requester-wake
+commit warning; retained settlement receipts retry through the existing sweep
+without redelivering a completed result.
+
 The existing diagnostic heartbeat debug log includes `nextWakeAtMs`, the earliest
 pending wake time in the Gateway scheduler as a Unix timestamp in milliseconds
 (or `none` when no wake is pending). Overdue diagnostic heartbeats run once after sleep;
@@ -832,6 +839,15 @@ The [Prometheus exporter](/gateway/prometheus) records
 by the WebSocket sender. Each receiving socket contributes one frame and its full
 encoded JSON size, so fan-out is visible. Bytes are UTF-8 payload bytes before
 WebSocket framing or compression; acceptance does not prove delivery to the client.
+`openclaw_gateway_ws_event_wire_bytes_total{event}` records payload bytes handed
+to the socket after the codec: deflated bytes when compressed, raw bytes otherwise.
+It excludes WebSocket, TLS, and TCP headers. Compression completion can report
+these bytes after the corresponding raw-frame observation. Direct local delivery
+contributes its raw payload size.
+`openclaw_gateway_ws_event_frame_bytes{event,le}` counts accepted raw frames in
+cumulative byte-size buckets: `256`, `512`, `1024`, `2048`, `4096`, `8192`,
+`16384`, `65536`, and `+Inf`. Each frame contributes to every matching upper
+bound, so the buckets support p50/p90 estimates with `histogram_quantile`.
 The event label contains only known protocol names, with `other` for unknown
 names. Payload content and session, user, and connection identifiers are excluded.
 The sender batches observations by event name within one event-loop turn,
@@ -841,8 +857,17 @@ as a separate diagnostic event.
 operator socket count without labels, updating on connect/disconnect and every
 30 seconds to refresh late-starting exporters or recover dropped snapshots.
 OpenTelemetry exports the corresponding
-`openclaw.gateway.ws.events`, `openclaw.gateway.ws.event_bytes`, and
+`openclaw.gateway.ws.events`, `openclaw.gateway.ws.event_bytes`,
+`openclaw.gateway.ws.event_wire_bytes`, `openclaw.gateway.ws.event_frame_bytes`, and
 `openclaw.gateway.ws.operator_connections` metrics.
+
+`openclaw_gateway_ws_presence_frames_total{mode}` and
+`openclaw_gateway_ws_presence_bytes_total{mode}` split presence traffic into
+`delta`, `reset` (full snapshots for capable clients), and `legacy` (full frames
+without delta negotiation). OpenTelemetry exports
+`openclaw.gateway.ws.presence_frames` and `openclaw.gateway.ws.presence_bytes`
+with the `openclaw.gateway.ws.mode` attribute. Counts and bytes use the same
+per-socket send acceptance and batching as the aggregate counters.
 
 `openclaw_gateway_ws_session_event_frames_total{event,reason,delivery}` and
 `openclaw_gateway_ws_session_event_bytes_total{event,reason,delivery}` add session
@@ -927,6 +952,15 @@ gauges have no labels and return to zero when the last retained connection state
 is cleared. OpenTelemetry names are `openclaw.session_event_rows_retained_entries`
 and `openclaw.session_event_rows_retained_bytes`. Charges cover vectors and their
 identities; they do not retain or charge copies of the presented session rows.
+
+`openclaw_session_event_rows_reset_total{cause}` counts retained wire baselines
+retired, including each baseline in a connection-wide reset. Its bounded causes
+are `close`, `delivery-lost`, `generation`, `evicted`, and `projection`. Empty
+resets do not increment it. Ordinary session-fact changes and list reads invalidate
+ancestor certification without retiring wire baselines, so they do not increment
+this counter. The OpenTelemetry name is `openclaw.session_event_rows_reset`, with
+the same `cause` label. Like the retention gauges, it uses the existing bounded
+asynchronous diagnostics path and records no session or connection identifiers.
 
 `openclaw_chat_history_requests_total` and
 `openclaw_chat_history_response_bytes_total` attribute successful `chat.history`

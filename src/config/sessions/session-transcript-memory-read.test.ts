@@ -64,6 +64,24 @@ function message(id: string, parentId: string | null, role: string, content: str
     message: { role, content },
   };
 }
+function control(type: string, id: string, parentId: string, fields: Record<string, unknown>) {
+  return { type, id, parentId, timestamp: "2026-10-11T00:00:00.000Z", ...fields };
+}
+
+const accounting = {
+  inputTokens: 10,
+  outputTokens: 20,
+  cacheRead: 30,
+  cacheWrite: 40,
+  estimatedCostUsd: 0.5,
+  totalTokens: 100,
+  totalTokensFresh: true,
+  totalTokensVersion: 1,
+  contextBudgetStatus: contextBudgetStatusFixture({ route: "compact_only", shouldCompact: true }),
+  cliSessionIds: { synthetic: "old" },
+  cliSessionBindings: { synthetic: { sessionId: "old" } },
+  claudeCliSessionId: "old",
+} satisfies Partial<InternalSessionEntry>;
 const ids = (events: readonly unknown[]) =>
   events.flatMap((event) => (isRecord(event) ? [event.id] : []));
 
@@ -108,31 +126,34 @@ async function fixture(sessionId = "one", agentId = "main", messages?: Transcrip
 }
 
 describe("memory transcript read adapters", () => {
-  it("reads sparse recent user context through the captured owner during a reply append", async () => {
-    const { binding, scope, append } = await fixture(
-      "snapshot",
-      "main",
-      Array.from({ length: 300 }, (_, index) =>
+  it("reads sparse post-reset user context without custom messages during a reply append", async () => {
+    const { binding, scope, append } = await fixture("snapshot", "main", [
+      message("before", null, "user", "Before reset"),
+      control("reset", "boundary", "before", { reason: "reset" }),
+      control("custom_message", "notice", "boundary", {
+        customType: "notice",
+        content: "Visible control",
+        display: true,
+      }),
+      ...Array.from({ length: 300 }, (_, index) =>
         message(
           `snapshot-${index}`,
-          index === 0 ? null : `snapshot-${index - 1}`,
+          index === 0 ? "notice" : `snapshot-${index - 1}`,
           index === 0 || index === 50 ? "user" : "assistant",
           `Context ${index}`,
         ),
       ),
-    );
+    ]);
     await runWithSessionActorStorage(binding, async () => {
       const [recent] = await Promise.all([
-        recentText({ ...scope, role: "user", limit: 2 }),
+        recentText({ ...scope, role: "user", limit: 3 }),
         append(message("appended", "snapshot-299", "assistant", "Concurrent reply")),
       ]);
       expect(recent).toEqual([
         { id: "snapshot-0", role: "user", text: "Context 0" },
         { id: "snapshot-50", role: "user", text: "Context 50" },
       ]);
-      expect(await latestAssistant(scope)).toMatchObject({
-        text: "Concurrent reply",
-      });
+      expect(await latestAssistant(scope)).toMatchObject({ text: "Concurrent reply" });
     });
   });
 
@@ -154,9 +175,7 @@ describe("memory transcript read adapters", () => {
     expect(ids(context.events)).toContain("answer");
 
     await expect(readEvents({ ...scope, maxEventBytes: 1 })).rejects.toThrow("too large");
-    expect(await latestAssistant(scope)).toMatchObject({
-      text: "Answer one",
-    });
+    expect(await latestAssistant(scope)).toMatchObject({ text: "Answer one" });
 
     let readAfterClose: (() => Promise<unknown>) | undefined;
     await withSessionTranscriptDeltaReader(scope, async (reader) => {
@@ -177,9 +196,7 @@ describe("memory transcript read adapters", () => {
       readAfterClose = () => reader.raw({});
     });
     await expect(readAfterClose!()).rejects.toThrow("no longer active");
-    expect(await latestAssistant(scope)).toMatchObject({
-      text: "New answer",
-    });
+    expect(await latestAssistant(scope)).toMatchObject({ text: "New answer" });
 
     const hydration = prepareHydration(scope, { maxBytes: 16384, maxEvents: 1 });
     const bounded = await hydration.read();
@@ -190,32 +207,6 @@ describe("memory transcript read adapters", () => {
     const stopped = prepareHydration(scope, undefined, cancelled.signal);
     cancelled.abort(new Error("caller cancelled"));
     await expect(stopped.read()).rejects.toThrow("caller cancelled");
-  });
-
-  it("reads recent text after a reset without leaking older or custom-message context", async () => {
-    const { scope } = await fixture("reset", "main", [
-      message("before", null, "user", "Before reset"),
-      {
-        type: "reset",
-        id: "boundary",
-        parentId: "before",
-        reason: "reset",
-        timestamp: "2026-10-11T00:00:00.000Z",
-      },
-      {
-        type: "custom_message",
-        id: "notice",
-        parentId: "boundary",
-        customType: "notice",
-        content: "Visible control",
-        display: true,
-        timestamp: "2026-10-11T00:00:00.000Z",
-      },
-      message("after", "notice", "user", "After marker"),
-    ]);
-    expect(await recentText({ ...scope, role: "user", limit: 2 })).toEqual([
-      { id: "after", role: "user", text: "After marker" },
-    ]);
   });
 
   it("selects sibling and retained historical windows without creating missing sessions", async () => {
@@ -253,10 +244,7 @@ describe("memory transcript read adapters", () => {
       kind: "missing",
     });
     expect(
-      await prepareHydration({
-        ...missing,
-        sessionKey: root.scope.sessionKey,
-      }).read(),
+      await prepareHydration({ ...missing, sessionKey: root.scope.sessionKey }).read(),
     ).toMatchObject({ kind: "full", snapshot: { events: [] } });
     expect(
       await prepareHydration(
@@ -281,24 +269,7 @@ describe("memory transcript read adapters", () => {
 
   it("manually compacts current rows and accounting while preserving a newer entry update", async () => {
     const { scope, owner, patch } = await fixture();
-    await patch({
-      inputTokens: 10,
-      outputTokens: 20,
-      cacheRead: 30,
-      cacheWrite: 40,
-      estimatedCostUsd: 0.5,
-      totalTokens: 100,
-      totalTokensFresh: true,
-      totalTokensVersion: 1,
-      compactionCount: 3,
-      contextBudgetStatus: contextBudgetStatusFixture({
-        route: "compact_only",
-        shouldCompact: true,
-      }),
-      cliSessionIds: { synthetic: "old" },
-      cliSessionBindings: { synthetic: { sessionId: "old" } },
-      claudeCliSessionId: "old",
-    });
+    await patch({ ...accounting, compactionCount: 3 });
     const source: SessionSourceAssertion = Object.assign(() => {}, {
       async prepareSessionSource() {
         await patch({ label: "Updated during preparation", model: "synthetic-model" });
@@ -328,21 +299,8 @@ describe("memory transcript read adapters", () => {
       updatedAt: 500,
       compactionCount: 3,
     });
-    for (const field of [
-      "inputTokens",
-      "outputTokens",
-      "cacheRead",
-      "cacheWrite",
-      "estimatedCostUsd",
-      "totalTokens",
-      "totalTokensFresh",
-      "totalTokensVersion",
-      "contextBudgetStatus",
-      "cliSessionIds",
-      "cliSessionBindings",
-      "claudeCliSessionId",
-    ] as const) {
-      expect(entry?.[field], field).toBeUndefined();
+    for (const field of Object.keys(accounting)) {
+      expect(Reflect.get(entry ?? {}, field), field).toBeUndefined();
     }
   });
 
@@ -380,9 +338,7 @@ describe("memory transcript read adapters", () => {
     await runWithSessionActorStorage(binding, () =>
       runWithSessionTranscriptReadFence(receipt, async () => {
         expect(ids(await readEvents(scope))).toEqual(["one", "user", "answer"]);
-        expect(await latestAssistant(scope)).toMatchObject({
-          text: "Answer one",
-        });
+        expect(await latestAssistant(scope)).toMatchObject({ text: "Answer one" });
         const hydrated = await prepareHydration(scope).read();
         expect(ids(hydrated.snapshot.events)).toEqual(["one", "user", "answer"]);
         await withSessionTranscriptDeltaReader(scope, async (reader) => {

@@ -11,7 +11,6 @@ import { OPENCLAW_STATE_SCHEMA_VERSION } from "./openclaw-state-db-contract.js";
 import {
   closeOpenClawStateDatabaseAsync,
   openOpenClawStateDatabase,
-  repairOpenClawStateDatabaseIndexesForDoctor,
   repairOpenClawStateDatabaseSchema,
   runOpenClawStateWriteTransaction,
 } from "./openclaw-state-db.js";
@@ -72,10 +71,18 @@ function legacyDatabase(refusePublication = false) {
   return { options: { env, path: pathname }, pathname, before: heads(db) };
 }
 
-it.each(["quick", "full"] as const)(
-  "reserves untouched index recovery for %s verification during upgrade preparation",
-  (integrityCheck) => {
+it.each([
+  { schema: "pending", integrityCheck: undefined },
+  { schema: "pending", integrityCheck: "full" },
+  { schema: "current", integrityCheck: undefined },
+  { schema: "current", integrityCheck: "full" },
+] as const)(
+  "reserves untouched index recovery for $integrityCheck verification with $schema schema",
+  ({ schema, integrityCheck }) => {
     const { options, pathname } = legacyDatabase();
+    if (schema === "current") {
+      expect(repairOpenClawStateDatabaseSchema(options).warnings).toEqual([]);
+    }
     const source = new DatabaseSync(pathname);
     source.exec(`
       CREATE TABLE untouched_payloads (value TEXT);
@@ -84,7 +91,7 @@ it.each(["quick", "full"] as const)(
     `);
     source.close();
     corruptSqliteIndexKey(pathname, "idx_untouched_payload", "retained", "mismatch");
-    const result = repairOpenClawStateDatabaseIndexesForDoctor({ ...options, integrityCheck });
+    const result = repairOpenClawStateDatabaseSchema({ ...options, integrityCheck });
     expect(result.warnings).toEqual([]);
     expect(result.changes.some((change) => change.includes("idx_untouched_payload"))).toBe(
       integrityCheck === "full",
@@ -109,6 +116,9 @@ it.each(["runtime", "doctor"] as const)(
       [
         "schema_meta",
         "config_machine_state",
+        "github_publication_requests",
+        "github_personal_publication_requests",
+        "github_repository_publication_requests",
         "session_state_heads",
         "acp_replay_events",
         "skill_usage",

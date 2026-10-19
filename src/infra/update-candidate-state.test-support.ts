@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { expect, vi } from "vitest";
 import { runCommandBuffered } from "../process/exec.js";
+import * as absoluteDeadline from "../utils/absolute-deadline.js";
 import { runtimeProcessEntrypoints } from "./runtime-process-entrypoints.js";
 import { resolveRuntimeWorkerArgv, resolveRuntimeWorkerUrl } from "./runtime-worker-url.js";
 import {
@@ -23,19 +24,19 @@ type Admission = Pick<
 
 /** Wake the inspection deadline without replacing native process-cleanup timers. */
 export function captureUpdateCandidateDeadline(): () => void {
-  const timers = vi.spyOn(globalThis, "setTimeout");
+  const deadlines = vi.spyOn(absoluteDeadline, "scheduleAbsoluteDeadline");
   return () => {
-    const index = timers.mock.calls.findLastIndex(
-      ([, delay]) => delay !== undefined && delay >= 300_000,
-    );
-    const call = timers.mock.calls[index];
-    const timer = timers.mock.results[index];
-    if (!call || timer?.type !== "return") {
+    const call = deadlines.mock.calls.at(-1);
+    const scheduled = deadlines.mock.results.at(-1);
+    if (!call || scheduled?.type !== "return") {
       throw new Error("Inspection allowance was not scheduled");
     }
-    clearTimeout(timer.value);
-    const [callback, , ...args] = call;
-    callback(...args);
+    const [deadlineAtMs, expire, now = Date.now] = call;
+    if (now() < deadlineAtMs) {
+      throw new Error("Inspection allowance has not expired");
+    }
+    scheduled.value();
+    expire();
   };
 }
 

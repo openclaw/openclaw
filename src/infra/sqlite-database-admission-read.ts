@@ -3,6 +3,7 @@ import { threadId } from "node:worker_threads";
 import {
   isPostgresSqlConnection,
   sqlPublicationAnchor,
+  type EngineConnection,
   type PostgresSqlConnection,
 } from "./sql-connection.js";
 import {
@@ -31,6 +32,8 @@ export function createSqliteDatabaseAdmissionReader(owner: {
     schemaDirty: WeakSet<DatabaseSync>;
     rolledBack: WeakSet<DatabaseSync>;
     misses: WeakMap<Admission, Map<string, number>>;
+    openedIdentities: WeakMap<DatabaseSync, string>;
+    localSchemaRevisions: Map<string, number>;
   };
   admission: (database: DatabaseSync, create?: boolean) => Admission | undefined;
   pathAdmission: (location: string) => Admission | undefined;
@@ -149,6 +152,19 @@ export function createSqliteDatabaseAdmissionReader(owner: {
       : read(pathAdmission(location));
   }
 
+  function getSqliteDatabaseSchemaRevision(
+    connection: EngineConnection,
+    options: { existingOnly?: boolean } = {},
+  ): number | undefined {
+    const database = sqlPublicationAnchor(connection);
+    const record = admission(database, options.existingOnly !== true);
+    if (record) {
+      return readSqliteDatabaseGeneration(record, "schemaRevision");
+    }
+    const fileIdentity = state.openedIdentities.get(database);
+    return fileIdentity ? (state.localSchemaRevisions.get(fileIdentity) ?? 0) : undefined;
+  }
+
   function hasSqliteDatabaseSchemaAdmissionForPath(location: string): boolean {
     return hasSqliteDatabaseSchemaAdmission(pathAdmission(location));
   }
@@ -169,6 +185,7 @@ export function createSqliteDatabaseAdmissionReader(owner: {
 
   return {
     getSqliteDatabaseAdmission,
+    getSqliteDatabaseSchemaRevision,
     getOrLoadSqliteDatabaseAdmissionForPath,
     hasSqliteDatabaseSchemaAdmissionForPath,
     getSqliteDatabaseAdmissionIdentityForPath,

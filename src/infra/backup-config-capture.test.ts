@@ -18,11 +18,13 @@ import {
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
 import { createBackupArchive } from "./backup-create.js";
-import { listArchiveEntries } from "./backup-create.test-support.js";
+import { listArchiveEntries, useIsolatedBackupTempRoot } from "./backup-create.test-support.js";
 import * as sqliteCapture from "./backup-sqlite-snapshot.js";
 import { requireNodeSqlite, resolveSqliteFilesystemPath } from "./node-sqlite.js";
 
 const runtime: RuntimeEnv = { log: () => {}, error: () => {}, exit: () => {} };
+useIsolatedBackupTempRoot();
+
 afterEach(() => {
   vi.restoreAllMocks();
   vi.unstubAllEnvs();

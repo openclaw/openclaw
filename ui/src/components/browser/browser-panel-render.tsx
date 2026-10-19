@@ -1,6 +1,6 @@
-import { createMemo, untrack } from "@solidjs/signals";
+import { createMemo } from "@solidjs/signals";
 import type { JSX } from "@solidjs/web";
-import { Match, onCleanup, onSettled, Switch } from "solid-js";
+import { Match, onSettled, Switch } from "solid-js";
 import { registerBrowserEnglish } from "../../i18n/locales/en-browser.ts";
 import { t, registerEnglishCatalog } from "../../lib/reactive/i18n.ts";
 import { listen } from "../../lib/reactive/listener.ts";
@@ -98,10 +98,11 @@ function HeaderActions(
 }
 
 function Toolbar(props: ControllerProps & { embedded: boolean }) {
-  // The address node belongs to this toolbar's retained synchronous panel owner.
-  const controller = untrack(() => props.controller);
-  onCleanup(() => {
-    controller.addressInput = undefined;
+  onSettled(() => {
+    const controller = props.controller;
+    return () => {
+      controller.addressInput = undefined;
+    };
   });
   const nativeTab = createMemo(() => props.controller.native.activeTab);
   const hasView = createMemo(() => Boolean(nativeTab() || props.controller.view));
@@ -153,7 +154,7 @@ function Toolbar(props: ControllerProps & { embedded: boolean }) {
       />
       <input
         class="bp-url"
-        ref={(element) => (controller.addressInput = element)}
+        ref={(element) => (props.controller.addressInput = element)}
         type="text"
         spellcheck="false"
         autocomplete="off"
@@ -329,10 +330,12 @@ function NativeViewport(props: ControllerProps) {
 }
 
 function ViewportContent(props: ControllerProps) {
-  // Input queues belong to this viewport’s synchronous browser owner.
-  const input = untrack(() => props.controller.input);
-  const remoteInput = () => (props.controller.native.activeTab ? undefined : input);
-  onCleanup(() => (input.elements = {}));
+  const remoteInput = () =>
+    props.controller.native.activeTab ? undefined : props.controller.input;
+  onSettled(() => {
+    const input = props.controller.input;
+    return () => (input.elements = {});
+  });
   return (
     <Switch>
       <Match
@@ -380,14 +383,14 @@ function ViewportContent(props: ControllerProps) {
         />
       </Match>
       <Match when={Boolean(props.controller.view)}>
-        <div class="bp-stage" ref={(element) => (input.elements.stage = element)}>
+        <div class="bp-stage" ref={(element) => (props.controller.input.elements.stage = element)}>
           <img
             class="bp-shot"
             src={props.controller.view!.dataUrl}
             alt={props.controller.view?.metrics?.title || ""}
           />
           <canvas
-            ref={(element) => (input.elements.overlay = element)}
+            ref={(element) => (props.controller.input.elements.overlay = element)}
             class={[
               "bp-overlay",
               {
@@ -404,7 +407,7 @@ function ViewportContent(props: ControllerProps) {
           />
           {props.controller.mode === "interact" ? (
             <textarea
-              ref={(element) => (input.elements.input = element)}
+              ref={(element) => (props.controller.input.elements.input = element)}
               class="bp-overlay bp-input"
               aria-label={t("browser.inputLabel")}
               autocomplete="off"
@@ -443,10 +446,10 @@ export function BrowserPanelChrome(
     tabsInHeader: boolean;
   },
 ) {
-  // Resource callbacks retain this viewport's synchronous browser owner.
-  const controller = untrack(() => props.controller);
-  const remoteInput = () => (controller.native.activeTab ? undefined : controller.input);
+  const remoteInput = () =>
+    props.controller.native.activeTab ? undefined : props.controller.input;
   onSettled(() => {
+    const controller = props.controller;
     const viewport = controller.input.elements.viewport!;
     const observer =
       typeof ResizeObserver === "function"
@@ -517,7 +520,7 @@ export function BrowserPanelChrome(
         </div>
       ) : null}
       <div
-        ref={(element) => (controller.input.elements.viewport = element)}
+        ref={(element) => (props.controller.input.elements.viewport = element)}
         id={panelId}
         class="bp-viewport"
         role="tabpanel"

@@ -77,6 +77,12 @@ async function retainedDirectory(name: string, contents: string, marked = true) 
   return directory;
 }
 
+async function addSparsePadding(directory: string, bytes: number) {
+  const padding = path.join(directory, "padding.bin");
+  await fs.writeFile(padding, "");
+  await fs.truncate(padding, bytes);
+}
+
 describe("browser proxy upload transport", () => {
   it("transfers Gateway inbound media bytes instead of resolving the URI on the node", async () => {
     await fs.mkdir(inboundMediaDir, { recursive: true });
@@ -174,8 +180,11 @@ describe("browser proxy upload transport", () => {
 
   it("keeps staging admission serialized after a queued request is cancelled", async () => {
     const stagingRoot = path.join(uploadDir, ".proxy-uploads");
+    const retainedDirectories: string[] = [];
+    for (let index = 0; index < 63; index += 1) {
+      retainedDirectories.push(await retainedDirectory(`retained-${index}`, ""));
+    }
     const request: Partial<StageRequest> = {
-      maxRetainedDirectories: 1,
       upload: uploadFiles("data"),
     };
     const firstAdmitted = Promise.withResolvers<void>();
@@ -248,23 +257,35 @@ describe("browser proxy upload transport", () => {
           await discardStagedBrowserProxyUpload(result.value);
         }
       }
+      for (const directory of retainedDirectories) {
+        await discardStagedBrowserProxyUpload({ body: {}, directory });
+      }
     }
   });
 
   it("counts the ownership marker against retained-byte admission", async () => {
-    await expect(
-      stage({ upload: uploadFiles("data"), maxRetainedBytes: 4, maxRetainedDirectories: 10 }),
-    ).rejects.toThrow("browser proxy upload staging limit reached");
+    const directory = await retainedDirectory("almost-full", "");
+    await addSparsePadding(
+      directory,
+      256 * 1024 * 1024 - 4 - Buffer.byteLength("openclaw-browser-proxy-upload-v1\n"),
+    );
+    try {
+      await expect(stage({ upload: uploadFiles("data") })).rejects.toThrow(
+        "browser proxy upload staging limit reached",
+      );
+    } finally {
+      await discardStagedBrowserProxyUpload({ body: {}, directory });
+    }
   });
 
   it.each([true, false])(
     "recovers expired directories only with an ownership marker (%s)",
     async (marked) => {
       const directory = await retainedDirectory("stale", "keep", marked);
-      const staleTime = new Date(Date.now() - 10_000);
+      const staleTime = new Date(Date.now() - 25 * 60 * 60 * 1000);
       await fs.utimes(directory, staleTime, staleTime);
 
-      await ensureBrowserProxyUploadCleanup({ uploadDir, retentionMs: 1, nowMs: Date.now() });
+      await ensureBrowserProxyUploadCleanup({ uploadDir });
 
       if (marked) {
         await expect(fs.stat(directory)).rejects.toHaveProperty("code", "ENOENT");
@@ -277,16 +298,15 @@ describe("browser proxy upload transport", () => {
   it("evicts the oldest retained directory during restart recovery when over quota", async () => {
     const oldestDirectory = await retainedDirectory("oldest", "old");
     const newestDirectory = await retainedDirectory("newest", "new");
+    // Recovery counts logical bytes without reading these sparse payloads.
+    for (const directory of [oldestDirectory, newestDirectory]) {
+      await addSparsePadding(directory, 128 * 1024 * 1024);
+    }
     const now = Date.now();
     await fs.utimes(oldestDirectory, new Date(now - 2_000), new Date(now - 2_000));
     await fs.utimes(newestDirectory, new Date(now - 1_000), new Date(now - 1_000));
 
-    await ensureBrowserProxyUploadCleanup({
-      uploadDir,
-      nowMs: now,
-      maxRetainedBytes: 50,
-      maxRetainedDirectories: 10,
-    });
+    await ensureBrowserProxyUploadCleanup({ uploadDir });
 
     await expect(fs.stat(oldestDirectory)).rejects.toHaveProperty("code", "ENOENT");
     await expect(fs.readFile(path.join(newestDirectory, "report.txt"), "utf8")).resolves.toBe(

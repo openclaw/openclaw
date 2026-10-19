@@ -1,15 +1,18 @@
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { createFixtureLifetime } from "../../test/helpers/fixture-lifetime.js";
 import { observeHostDataSql } from "../../test/helpers/sqlite-statement-execution-counter.js";
-import { replaceSessionEntrySync } from "../config/sessions/session-accessor.js";
-import * as history from "../config/sessions/session-transcript-worker-runtime.js";
 import { MAX_SESSION_ROW_FACTS_KEYS } from "../config/sessions/session-transcript-worker.types.js";
 import { DEFAULT_WORKER_PENDING_TASKS } from "../infra/worker-task-capacity.js";
 import { sessionChanges } from "../sessions/session-row-changes.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
-import { retainSessionListForegroundWork } from "./session-projection-work.js";
 import { SessionRowFactsPending, withReadySessionRows } from "./session-row-prepared-read.js";
+import { writeRow } from "./session-row-projection-read-fixtures.test-support.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
+import {
+  createTestProjection,
+  holdForeground,
+  watchRowFacts as observeRowFacts,
+} from "./session-row-projection.read-fixture.test-support.js";
 import { listProjectedSessions } from "./session-utils-list.js";
 import { createWorkerSessionPlacementStore } from "./worker-environments/placement-store.js";
 
@@ -31,19 +34,20 @@ function withCategoryState(run: () => Promise<void>) {
   return fixtureLifetime.run(() => withOpenClawTestState({ scenario: "minimal" }, run));
 }
 
-function observeRowFacts(
-  wrap: (
-    owner: history.SessionHistoryWorkerDatabase,
-  ) => history.SessionHistoryWorkerDatabase["readRowFacts"],
+async function warmArchives(
+  projection: Awaited<ReturnType<typeof createSessionRowProjection>>,
+  queries: { agentId: string; key: string }[],
 ) {
-  const readDatabases = history.withSessionHistoryWorkerDatabases;
-  vi.spyOn(history, "withSessionHistoryWorkerDatabases").mockImplementation(
-    (databases, consume, lane) =>
-      readDatabases(
-        databases,
-        (owners) => consume(owners.map((owner) => ({ ...owner, readRowFacts: wrap(owner) }))),
-        lane,
-      ),
+  projection.setArchivePageSize(101);
+  await withReadySessionRows(
+    projection,
+    () => queries,
+    (read) => {
+      // Establish access order after the concurrent worker batches have finished.
+      for (const query of queries) {
+        expect(read.describe(query)?.entry.category).toBe("Work");
+      }
+    },
   );
 }
 
@@ -57,37 +61,17 @@ it.for(["search", "full"] as const)(
       }));
       const oldest = queries[0]!;
       for (const query of queries) {
-        replaceSessionEntrySync(
-          { agentId: query.agentId, sessionKey: query.key },
-          {
-            sessionId: query.key,
-            updatedAt: 1,
-            archivedAt: 1,
-            category: "Work",
-            ...(query === oldest ? { label: "Cold category target" } : {}),
-          },
-        );
+        writeRow(query.key, {
+          archivedAt: 1,
+          category: "Work",
+          ...(query === oldest ? { label: "Cold category target" } : {}),
+        });
       }
-      const release = retainSessionListForegroundWork();
-      const projection = await createSessionRowProjection({ cfg, modelCatalog: [] }).catch(
-        (error: unknown) => {
-          release();
-          throw error;
-        },
-      );
+      using _ = holdForeground();
+      using projection = await createTestProjection({ cfg, modelCatalog: [] });
       let sql: ReturnType<typeof observeHostDataSql> | undefined;
       try {
-        projection.setArchivePageSize(101);
-        await withReadySessionRows(
-          projection,
-          () => queries,
-          (read) => {
-            // Establish access order after the concurrent worker batches have finished.
-            for (const query of queries) {
-              expect(read.describe(query)?.entry.category).toBe("Work");
-            }
-          },
-        );
+        await warmArchives(projection, queries);
         const materialized = projection.materializedCount;
         expect(materialized).toBe(101);
         const reads: string[][] = [];
@@ -127,8 +111,6 @@ it.for(["search", "full"] as const)(
       } finally {
         await projection.ensureMaterialized().catch(() => undefined);
         sql?.restore();
-        projection.dispose();
-        release();
       }
     });
   },
@@ -142,31 +124,14 @@ it("reconciles more category rows than exact admission permits and survives arch
       key: `agent:main:category-archive-${index}`,
     }));
     for (const query of queries) {
-      replaceSessionEntrySync(
-        { agentId: query.agentId, sessionKey: query.key },
-        { sessionId: query.key, updatedAt: 1, archivedAt: 1, category: "Work" },
-      );
+      writeRow(query.key, { archivedAt: 1, category: "Work" });
     }
-    const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({ cfg, modelCatalog: [] }).catch(
-      (error: unknown) => {
-        release();
-        throw error;
-      },
-    );
+    using _ = holdForeground();
+    using projection = await createTestProjection({ cfg, modelCatalog: [] });
     let sql: ReturnType<typeof observeHostDataSql> | undefined;
     try {
       // The oldest of 101 retained archives must survive eviction as reconciliation work.
-      projection.setArchivePageSize(101);
-      await withReadySessionRows(
-        projection,
-        () => queries.slice(0, 101),
-        (read) => {
-          for (const query of queries.slice(0, 101)) {
-            expect(read.describe(query)?.entry.category).toBe("Work");
-          }
-        },
-      );
+      await warmArchives(projection, queries.slice(0, 101));
       const oldest = queries[0]!;
       expect(projection.capture(oldest)?.materialized).toBeDefined();
       const admitted: string[][] = [];
@@ -202,8 +167,12 @@ it("reconciles more category rows than exact admission permits and survives arch
       expect(projection.capture(oldest)?.materialized).toBeUndefined();
       expect(projection.sharingTargetState(oldest)).toEqual({ status: "pending" });
       expect(() => projection.selectEntries({ key: oldest.key })).toThrow(SessionRowFactsPending);
+      expect(() => projection.selectEntries({ key: oldest.key }, true)).toThrow(
+        SessionRowFactsPending,
+      );
       await projection.prepareMembership();
       expect(projection.needsMembershipPreparation()).toBe(false);
+      expect(projection.selectEntries({ key: oldest.key }, true)).toHaveLength(1);
       expect(admitted.length).toBeGreaterThan(0);
       expect(admitted.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);
       expect(reads.every((keys) => keys.length <= MAX_SESSION_ROW_FACTS_KEYS)).toBe(true);
@@ -219,8 +188,6 @@ it("reconciles more category rows than exact admission permits and survives arch
     } finally {
       await projection.ensureMaterialized().catch(() => undefined);
       sql?.restore();
-      projection.dispose();
-      release();
     }
   });
 });
@@ -230,17 +197,14 @@ it("keeps failed category facts pending and reenters selection through exact pre
     const query = { agentId: "main", key: "agent:main:category-selection" };
     const sibling = { agentId: "main", key: "agent:main:category-selection-sibling" };
     for (const target of [query, sibling]) {
-      replaceSessionEntrySync(
-        { agentId: target.agentId, sessionKey: target.key },
-        { sessionId: target.key, updatedAt: 1, category: "Work" },
-      );
+      writeRow(target.key, { category: "Work" });
     }
     const placements = createWorkerSessionPlacementStore();
     let publishCategory = false;
     let selectionStarted = false;
     let publishedAcrossAwait = false;
-    const release = retainSessionListForegroundWork();
-    const projection = await createSessionRowProjection({
+    using _ = holdForeground();
+    using projection = await createTestProjection({
       cfg,
       modelCatalog: [],
       placementFactsReader: {
@@ -260,9 +224,6 @@ it("keeps failed category facts pending and reenters selection through exact pre
           return reply;
         },
       },
-    }).catch((error: unknown) => {
-      release();
-      throw error;
     });
     let sql: ReturnType<typeof observeHostDataSql> | undefined;
     try {
@@ -320,8 +281,6 @@ it("keeps failed category facts pending and reenters selection through exact pre
     } finally {
       await projection.ensureMaterialized().catch(() => undefined);
       sql?.restore();
-      projection.dispose();
-      release();
     }
   });
 });

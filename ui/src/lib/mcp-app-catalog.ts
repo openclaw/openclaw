@@ -33,6 +33,7 @@ export function createMcpAppCatalog(
   }>({ servers: [], onboarding: [], loading: false, error: null }, { shallow: true });
   let generation = 0;
   let identity = "";
+  let identityClient: GatewayBrowserClient | null = null;
   let preparedSessionIdentity = "";
   let connected = true;
   const available = () => {
@@ -48,17 +49,35 @@ export function createMcpAppCatalog(
     const value = target();
     return JSON.stringify([
       gatewayPresentationScope(context.gateway).key,
-      context.gateway.snapshot.phase === "connected",
-      available(),
       value.agentId,
       value.sessionKey,
     ]);
   });
-  // Synchronize the discovery RPC and its presentation cache with the current target.
-  createEffect(discoveryIdentity, (value) => {
+  const discoveryBinding = createMemo(
+    () =>
+      [
+        discoveryIdentity(),
+        gateway.read().snapshot.phase,
+        gateway.read().snapshot.hello,
+        gateway.read().snapshot.client,
+        available(),
+      ] as const,
+    { equals: (a, b) => a.every((value, index) => value === b[index]) },
+  );
+  createEffect(discoveryBinding, ([value, phase, , client, canDiscover]) => {
+    const changed = identity !== value || identityClient !== client;
     identity = value;
+    identityClient = client;
+    preparedSessionIdentity = "";
     generation++;
-    setState(() => ({ servers: [], onboarding: [], error: null, loading: false }));
+    setState((draft) => {
+      if (changed || (phase === "connected" && !canDiscover)) {
+        draft.servers = [];
+        draft.onboarding = [];
+      }
+      draft.error = null;
+      draft.loading = false;
+    });
     void refresh();
   });
   const unsubscribe = context.gateway.subscribeEvents((event) => {
@@ -84,6 +103,8 @@ export function createMcpAppCatalog(
       return;
     }
     const requestGeneration = ++generation;
+    const connectionGeneration = client.connectionGeneration;
+    const hello = context.gateway.snapshot.hello;
     const scope = gatewayPresentationScope(context.gateway).key;
     let pending = discoveryRequests.get(client);
     if (!pending) {
@@ -91,7 +112,12 @@ export function createMcpAppCatalog(
       discoveryRequests.set(client, pending);
     }
     // A config change during discovery may show the older catalog until the next refresh.
-    const requestKey = JSON.stringify([scope, destination.agentId, destination.sessionKey]);
+    const requestKey = JSON.stringify([
+      scope,
+      connectionGeneration,
+      destination.agentId,
+      destination.sessionKey,
+    ]);
     setState((draft) => {
       draft.loading = true;
       draft.error = null;
@@ -100,6 +126,9 @@ export function createMcpAppCatalog(
       connected &&
       requestGeneration === generation &&
       client === context.gateway.snapshot.client &&
+      client.connectionGeneration === connectionGeneration &&
+      context.gateway.snapshot.phase === "connected" &&
+      hello === context.gateway.snapshot.hello &&
       scope === gatewayPresentationScope(context.gateway).key &&
       JSON.stringify(destination) === JSON.stringify(target());
     try {
@@ -159,10 +188,14 @@ export function createMcpAppCatalog(
   return () => ({
     ...state,
     // Consumers can retain a launch during render, before the refresh effect clears old results.
-    ...(discoveryIdentity() === identity
+    ...(discoveryIdentity() === identity && gateway.read().snapshot.client === identityClient
       ? {}
       : { servers: [], onboarding: [], loading: false, error: null }),
     available: available(),
+    visible:
+      available() ||
+      (gateway.read().snapshot.phase !== "connected" &&
+        (state.servers.length > 0 || state.onboarding.length > 0)),
     refresh,
   });
 }

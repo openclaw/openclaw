@@ -1,5 +1,5 @@
 import type { AssistantMessage } from "openclaw/plugin-sdk/llm";
-import { describe, expect, it, onTestFinished, vi } from "vitest";
+import { assert, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import type { EmbeddedContextAccountingEvent } from "./embedded-agent-runner/run/internal-params.js";
 import {
@@ -10,7 +10,7 @@ import { subscribeEmbeddedAgentSession } from "./embedded-agent-subscribe.js";
 import type { SubscribeEmbeddedAgentSessionParams } from "./embedded-agent-subscribe.types.js";
 import type { AgentSessionEvent } from "./sessions/index.js";
 import { makeAgentAssistantMessage } from "./test-helpers/agent-message-fixtures.js";
-import { createHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
+import { resolveHeartbeatResponseTool } from "./tools/heartbeat-response-tool.js";
 import { makeZeroUsageSnapshot } from "./usage.js";
 
 function harness(params: Omit<Parameters<typeof createSubscribedSessionHarness>[0], "runId"> = {}) {
@@ -168,7 +168,8 @@ describe("compaction accounting", () => {
       sessionPersistence: "detached",
       onHeartbeatToolResponse,
     });
-    const tool = createHeartbeatResponseTool();
+    const tool = resolveHeartbeatResponseTool({ enableHeartbeatTool: true });
+    assert(tool);
     const response = {
       outcome: "done" as const,
       notify: true,

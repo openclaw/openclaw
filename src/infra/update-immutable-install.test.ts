@@ -150,11 +150,11 @@ it.each([
 });
 
 it("resolves a dry-run target without filesystem or receipt changes", async () => {
-  const before = await fs.readdir(root);
+  const before = new Set(await fs.readdir(root));
   const result = await prepareImmutableUpdate({ root, dryRun: true });
   expect(result).toMatchObject({ status: "dry-run", targetSha: nextSha });
   expect(result.coverage?.target).toEqual({ sha: nextSha, preparation: "unknown" });
-  expect(await fs.readdir(root)).toEqual(before);
+  expect(new Set(await fs.readdir(root))).toEqual(before);
   await expectUnchanged(mocks.build, mocks.record);
   expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(1);
 });
@@ -192,7 +192,7 @@ describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
       targetSha: currentSha,
     });
     expectUncalled(mocks.command, mocks.build, mocks.record);
-    expect(await fs.readdir(root)).toEqual(["current", "releases"]);
+    expect(new Set(await fs.readdir(root))).toEqual(new Set(["current", "releases"]));
   });
 
   it("freezes the exact candidate, seals and records it without selecting it", async () => {
@@ -209,7 +209,7 @@ describe.skipIf(process.platform !== "linux")("immutable preparation", () => {
     expect(mocks.command.mock.calls.filter(([argv]) => argv.includes("ls-remote"))).toHaveLength(1);
     expect(mocks.seal).toHaveBeenCalledOnce();
     expect(mocks.record).toHaveBeenCalledOnce();
-    expect(await fs.readdir(root)).toEqual(["current", "releases"]);
+    expect(new Set(await fs.readdir(root))).toEqual(new Set(["current", "releases"]));
   });
 
   it("retains build custody without sealing or publishing when descendants did not settle", async () => {

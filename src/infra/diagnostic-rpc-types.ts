@@ -10,10 +10,24 @@ type DiagnosticSessionsListRetentionFields = {
 };
 
 /** Process totals for per-connection session-event field-hash vectors. */
-export type DiagnosticSessionEventRetentionFields = {
+type DiagnosticSessionEventRetentionFields = {
   type: "sessions.event.retention";
   entries: number;
   estimatedBytes: number;
+};
+
+export type SessionEventRowsResetCause =
+  | "close"
+  | "delivery-lost"
+  | "generation"
+  | "evicted"
+  | "projection";
+
+/** Number of retained wire baselines retired by one bounded lifecycle cause. */
+type DiagnosticSessionEventRowsResetFields = {
+  type: "sessions.event.rows.reset";
+  cause: SessionEventRowsResetCause;
+  count: number;
 };
 
 export type SessionsListBaseMissReason = "unknown-base" | "all-rows-changed";
@@ -98,6 +112,8 @@ type DiagnosticGatewayRpcFields = {
     }
 );
 
+export type GatewayWsPresenceMode = "delta" | "reset" | "legacy";
+
 export type GatewayWsSessionEventAttribution = {
   reason: string;
   delivery: "subscribed" | "roster";
@@ -110,7 +126,12 @@ type DiagnosticGatewayWsFields =
       event: string;
       count: number;
       bytes: number;
+      /** Post-codec payload bytes; excludes WebSocket and lower-level headers. */
+      wireBytes?: number;
+      /** Cumulative raw frame counts by fixed upper byte bound, including +Inf. */
+      frameBytes?: Record<string, number>;
       sessionEvent?: GatewayWsSessionEventAttribution;
+      presenceMode?: GatewayWsPresenceMode;
     }
   | { type: "gateway.ws.connections"; operators: number };
 
@@ -119,4 +140,5 @@ export type DiagnosticGatewayFields =
   | DiagnosticGatewayWsFields
   | DiagnosticSessionsListBaselineRetiredFields
   | DiagnosticSessionsListRetentionFields
-  | DiagnosticSessionEventRetentionFields;
+  | DiagnosticSessionEventRetentionFields
+  | DiagnosticSessionEventRowsResetFields;

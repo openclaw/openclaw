@@ -1,6 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it, onTestFinished, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import * as failoverClassifier from "../agents/failover/classify-core.js";
+import {
+  createTuiProgramStatusReporter,
+  type SetTuiActivityStatus,
+} from "./tui-activity-status.js";
+import { createTuiCommandHandlersHarness } from "./tui-command-handlers-test-support.js";
 import { createEventHandlers } from "./tui-event-handlers.js";
 import {
   createMockBtwPresenter,
@@ -76,6 +81,10 @@ const createHarness = (
 ) => {
   const { localMode, refreshSessionInfo, streamingWatchdogMs, ...overrides } = params ?? {};
   const state = makeTuiState({ activeChatRunId: "run-1", ...overrides });
+  const programStates: string[] = [];
+  const programStatus = createTuiProgramStatusReporter({
+    setProgramStatus: ({ state: programState }) => programStates.push(programState),
+  });
   const localRunIds = new Set<string>();
   const localBtwRunIds = new Set<string>();
   const context = {
@@ -83,7 +92,9 @@ const createHarness = (
     chatLog: createMockChatLog(),
     btw: createMockBtwPresenter(),
     tui: { requestRender: vi.fn() },
-    setActivityStatus: vi.fn(),
+    setActivityStatus: vi.fn<SetTuiActivityStatus>((activityStatus, runOutcome) => {
+      programStatus.update({ activityStatus, isConnected: state.isConnected, runOutcome });
+    }),
     updateFooter: vi.fn(),
     loadHistory,
     noteLocalRunId: (runId: string) => {
@@ -123,6 +134,7 @@ const createHarness = (
     ...handlers,
     log,
     status,
+    programStates,
     render: tui.requestRender,
     runId: overrides.activeChatRunId ?? "run-1",
     text: (runId: string, text: string, phase: ChatEvent["state"] = "delta") =>
@@ -153,13 +165,33 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     h.reconcileHistoryAfterGap();
     await settleHistory();
     expect(h.state.activeChatRunId).toBeNull();
-    expect(h.status).toHaveBeenCalledWith("idle");
+    expect(h.status).toHaveBeenCalledWith("idle", "completed");
+    expect(h.programStates).toEqual(["done"]);
     h.dispose();
     h.reconcileHistoryAfterGap();
     await settleHistory();
     expect(h.loadHistory).toHaveBeenCalledTimes(3);
     expect(h.state.activeChatRunId).toBeNull();
   });
+
+  it.each(["interrupted", "failed"] as const)(
+    "does not report completion when gap recovery finds a %s run",
+    async (outcome) => {
+      const h = createHarness();
+      h.text(h.runId, "partial reply");
+      h.loadHistory.mockResolvedValueOnce({
+        loaded: true,
+        runOutcome:
+          outcome === "failed"
+            ? { state: outcome, errorMessage: "provider failed" }
+            : { state: outcome },
+      });
+      h.reconcileHistoryAfterGap();
+      await settleHistory();
+      expect(h.state.activeChatRunId).toBeNull();
+      expect(h.programStates).toEqual(["working", outcome === "failed" ? "error" : "idle"]);
+    },
+  );
 
   it.each(["interrupted", "failed", "completed"] as const)("reconnect: %s", (outcome) => {
     const h = createHarness({ activeChatRunId: "run-current", activityStatus: "streaming" });
@@ -183,7 +215,16 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(h.log.addSystem).not.toHaveBeenCalledWith("run aborted");
     }
     expect(h.state.activeChatRunId).toBeNull();
-    expect(h.status).toHaveBeenLastCalledWith(outcome === "failed" ? "error" : "idle");
+    if (outcome === "failed") {
+      expect(h.status).toHaveBeenLastCalledWith("error");
+      expect(h.programStates).toEqual(["error"]);
+    } else {
+      expect(h.status).toHaveBeenCalledWith(
+        "idle",
+        outcome === "completed" ? "completed" : "aborted",
+      );
+      expect(h.programStates).toEqual(outcome === "completed" ? ["working", "done"] : ["idle"]);
+    }
   });
 
   it("honors the authoritative stop reason over the nested message stop reason", () => {
@@ -197,6 +238,9 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(h.state.activeChatRunId).toBeNull();
     expect(h.status).toHaveBeenCalledWith("error");
     expect(h.status).not.toHaveBeenCalledWith("idle");
+    h.agent(h.runId, { phase: "finishing" });
+    h.agent(h.runId, { phase: "end" });
+    expect(h.programStates).toEqual(["error", "working", "error"]);
   });
 
   it.each(["buffered", "literal", "thinking-only"] as const)(
@@ -359,8 +403,60 @@ describe("tui-event-handlers: handleAgentEvent", () => {
       expect(h.status).not.toHaveBeenCalledWith("idle");
       h.text("run-final", "done", "final");
     }
-    expect(h.status).toHaveBeenCalledWith("idle");
+    expect(h.status).toHaveBeenCalledWith("idle", "completed");
+    expect(h.programStates).toEqual(pending ? ["working", "done"] : ["done", "working", "done"]);
   });
+
+  it.each(["sending", "accepted"] as const)(
+    "does not report completion while another submission is %s",
+    (phase) => {
+      const h = createHarness();
+      h.text(h.runId, "first reply");
+      h.state.pendingSubmit =
+        phase === "sending" ? sendingSubmit("run-next") : acceptedSubmit("run-next");
+      h.state.activityStatus = phase === "sending" ? "sending" : "waiting";
+      h.status(h.state.activityStatus);
+      h.text(h.runId, "first reply", "final");
+      h.agent(h.runId, { phase: "finishing" });
+      h.agent(h.runId, { phase: "end" });
+      expect(h.state.pendingSubmit?.runId).toBe("run-next");
+      expect(h.programStates).toEqual(["working"]);
+      h.state.pendingSubmit = acceptedSubmit("run-next");
+      h.agent("run-next", { phase: "start" });
+      h.text("run-next", "second reply", "final");
+      expect(h.programStates).toEqual(["working", "done"]);
+    },
+  );
+
+  it.each(["final", "error", "aborted"] as const)(
+    "preserves a %s outcome when the accepted run finishes before its differently keyed ACK",
+    async (outcome) => {
+      const ack = createDeferred<{ runId: string }>();
+      const h = createHarness({ activeChatRunId: null });
+      const commands = createTuiCommandHandlersHarness({
+        state: h.state,
+        sendChat: vi.fn(() => ack.promise),
+        setActivityStatus: h.status,
+        consumeCompletedRunForPendingSend: vi.fn(h.consumeCompletedRunForPendingSend),
+        isRunObserved: h.isRunObserved,
+        flushPendingHistoryRefreshIfIdle: vi.fn(h.flushPendingHistoryRefreshIfIdle),
+      });
+      const sending = commands.handleCommand("steered request");
+      expect(h.state.pendingSubmit?.runId).not.toBe("accepted-run");
+      h.agent("accepted-run", { phase: "start" }, { sessionKey: h.state.currentSessionKey });
+      h.chat("accepted-run", { state: outcome, message: { content: "reply" } });
+      expect(h.state.pendingSubmit).not.toBeNull();
+      ack.resolve({ runId: "accepted-run" });
+      await sending;
+      expect(h.state.pendingSubmit).toBeNull();
+      expect(h.programStates.at(-1)).toBe(
+        outcome === "final" ? "done" : outcome === "error" ? "error" : "idle",
+      );
+      if (outcome !== "final") {
+        expect(h.programStates).not.toContain("done");
+      }
+    },
+  );
 
   it("does not let delayed finalized-run lifecycle clobber a newer active run", () => {
     const h = createHarness({ activeChatRunId: null });
@@ -391,7 +487,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(h.log.finalizeAssistant).toHaveBeenCalledWith("first live response", "run-first", []);
     expect(h.log.finalizeAssistant).toHaveBeenCalledWith("second live response", "run-second", []);
     expect(h.state.activeChatRunId).toBeNull();
-    expect(h.status).toHaveBeenCalledWith("idle");
+    expect(h.status).toHaveBeenCalledWith("idle", "completed");
     for (const runId of ["run-first", "run-second"]) {
       h.handleSessionsChangedEvent({ runId, phase: "end" });
     }
@@ -426,7 +522,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     }
     expectCall(h.log.finalizeAssistant, ["older peer response", "run-without-lifecycle", []]);
     expect(h.state.activeChatRunId).toBeNull();
-    expect(h.status).toHaveBeenCalledWith("idle");
+    expect(h.status).toHaveBeenCalledWith("idle", "completed");
   });
 
   it.each([
@@ -547,7 +643,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expectUnused(h.log.startTool, h.render);
   });
 
-  it("reloads the current session and clears stale run state after sessions.changed reset", () => {
+  it("reloads the current session and clears stale run state after sessions.changed reset", async () => {
     const refreshSessionInfo = vi.fn<() => Promise<void>>(async () => undefined);
     const h = createHarness({
       activeChatRunId: null,
@@ -559,7 +655,7 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     });
     h.text("run-old", "done", "final");
     h.noteLocalRunId("run-local");
-    h.state.activeChatRunId = "run-stale";
+    h.text("run-stale", "still streaming");
     h.state.pendingSubmit = acceptedSubmit("run-pending");
     h.state.activityStatus = "streaming";
     h.loadHistory.mockClear();
@@ -588,6 +684,8 @@ describe("tui-event-handlers: handleAgentEvent", () => {
     expect(h.render).toHaveBeenCalledTimes(1);
     h.agent("run-old", { phase: "start", toolCallId: "tc-old", name: "exec" }, { stream: "tool" });
     expect(h.log.startTool).not.toHaveBeenCalled();
+    await settleHistory();
+    expect(h.programStates).toEqual(["done", "working", "idle"]);
   });
 
   it("reports only the latest reset after all queued history reloads settle", async () => {

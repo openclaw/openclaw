@@ -111,6 +111,10 @@ openclaw --version
 openclaw status --json
 ```
 
+The preinstall check ignores Bun's temporary lifecycle shims and accepts its
+package-manager PATH ordering. If a persistent `node` is on PATH, it must be a
+supported Node runtime; an alias to Bun does not satisfy that check.
+
 On macOS and Linux without Node, the trusted package lifecycle installs a launcher
 that uses that exact Bun executable. Updates preserve it. To repair an older or
 missing launcher, run `/absolute/path/to/bun <package-root>/openclaw.mjs doctor --fix`.

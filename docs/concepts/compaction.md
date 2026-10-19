@@ -227,11 +227,9 @@ Compaction summarization requests exact opaque identifier retention by default (
 
 ### Active transcript byte guard
 
-When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, OpenClaw
-triggers normal local compaction before a run if transcript history reaches
-that size. This is useful for long-running sessions where provider-side context
-management may keep model context healthy while persisted transcript history
-keeps growing. Set a positive byte count or size string such as `"20mb"` to opt
+When `agents.defaults.compaction.maxActiveTranscriptBytes` is set, the built-in
+runtime triggers local compaction before a run if transcript history reaches
+that size. Set a positive byte count or size string such as `"20mb"` to opt
 in; `0` or an unset value disables the guard. It does not split raw bytes; it
 asks the normal compaction pipeline to create a semantic summary. If compaction
 is declined or leaves history over the limit, the turn continues with a bounded
@@ -248,15 +246,12 @@ when the configured positive threshold is reached and automatic compaction is
 enabled. This lets an owning engine apply the same byte-pressure policy during
 manual recovery as during preflight.
 
-Suppressed byte-compaction retries still use a bounded view on subsequent turns.
-Native compaction that leaves the host transcript unchanged preserves retry
-suppression. Host compaction clears or refreshes it; changing the session or
-limit, falling below the limit, or growing by another full threshold also rearms
-the guard.
-Retained history remains available on disk and may continue growing; this is not
-a storage-retention limit. For Codex
-app-server sessions, the same threshold caps native rollout transcripts and
-oversized native threads restart fresh.
+The built-in runtime suppresses repeated unsuccessful byte compaction until
+the session or limit changes, history shrinks below the limit, or it grows by
+another full threshold. Retained history remains available; this is not a
+storage-retention limit.
+
+For Codex app-server, see [fresh-thread seed compaction](/plugins/codex-harness-runtime/compaction#compaction-and-transcript-mirror); native compaction remains separate.
 
 <Warning>
 The byte guard applies to the active SQLite transcript history. Legacy JSONL

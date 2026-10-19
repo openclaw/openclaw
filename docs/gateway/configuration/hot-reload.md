@@ -79,12 +79,14 @@ Reload failures remain visible in the Gateway log.
 If an automatic plugin reload cannot drain active work, the Gateway records the
 failure and keeps the last-good runtime. When the drain timed out on that
 plugin's admitted work, the Gateway retries the replacement automatically once
-the work finishes; no additional config edit is needed. Other drain failures
-wait for `openclaw plugins reload <id> --wait` or a revert of the pending plugin
-settings. Until then, later edits do not repeat the drain, and edits that still
-include the unapplied plugin settings stay pending; they cannot publish those
-settings through an unrelated hot update, and they apply together with the
-retry or recovery. While edits are pending, `config.get` reports an
+the work finishes; no additional config edit is needed. A later config edit also
+retries the full unapplied plugin change through the normal reload transaction.
+If that attempt fails, the previous runtime keeps serving and the failure is
+logged again. A new attempt replaces any earlier idle retry; if it fails for
+another reason, make a new edit or use the manual reload command below after
+fixing the error. Unapplied plugin settings cannot publish through an unrelated
+hot update; all pending changes apply together only after the transaction succeeds.
+While edits are pending, `config.get` reports an
 `appliedConfigHash` that differs from the saved revision, which the Control UI
 shows as unapplied config. `openclaw plugins reload <id> --wait` also lets you
 watch a timed-out replacement finish. A Gateway restart applies the saved config

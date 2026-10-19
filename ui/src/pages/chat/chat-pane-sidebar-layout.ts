@@ -265,7 +265,7 @@ export function createSidebarFullMessageLoader(
     }
     const client = state.client;
     const generation = state.connectionEpoch;
-    const scope = { ...readScope() };
+    const scope = readScope();
     const sameScope = (other: FullMessageScope) =>
       scope.owner === other.owner &&
       scope.sessionKey === other.sessionKey &&

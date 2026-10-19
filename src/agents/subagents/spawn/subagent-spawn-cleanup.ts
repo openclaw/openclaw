@@ -1,8 +1,13 @@
 import { asNullableRecord } from "@openclaw/normalization-core/record-coerce";
-import type { ChatAbortControllerEntry } from "../../../gateway/chat-abort.js";
 import type { GatewayContextResolver } from "../../../gateway/server-methods/types.js";
 import { bindGatewayLifecycleRequest } from "../../../gateway/server-recovery-runtime-context.js";
 import { formatErrorMessage } from "../../../infra/errors.js";
+import {
+  getRpcSourceForGateway,
+  getRpcSourceIdentity,
+  type RpcSourceRef,
+} from "../../../sessions/session-controller.rpc-sources.js";
+import type { SessionTarget } from "../../../sessions/session-controller.target.js";
 import { deleteSubagentSessionForCleanup } from "../registry/subagent-session-cleanup.js";
 import { cleanupMaterializedSubagentAttachments } from "./subagent-attachments.js";
 import { callSubagentGateway, type SubagentGatewayRequest } from "./subagent-spawn-gateway.js";
@@ -22,6 +27,7 @@ type AcceptedRunTerminationResult = { status: "settled" } | { status: "failed"; 
 /** Binds rollback to the session this spawn created, independently of its operator's lifetime. */
 export function bindSubagentSpawnCleanup(params: {
   childSessionKey: string;
+  target: SessionTarget;
   resolveGatewayContext: GatewayContextResolver;
   isCurrent: () => boolean;
   canAbortAcceptedRun: () => boolean;
@@ -35,8 +41,8 @@ export function bindSubagentSpawnCleanup(params: {
   let acceptedRun:
     | {
         runId: string;
-        entry: ChatAbortControllerEntry | undefined;
-        operationalRunInstance: ChatAbortControllerEntry["operationalRunInstance"];
+        entry: RpcSourceRef | undefined;
+        operationalRunInstance: RpcSourceRef["adapter"]["operationalRunInstance"];
       }
     | undefined;
   const isCurrent = (method: "sessions.delete" | "chat.abort" = "sessions.delete") => {
@@ -51,13 +57,15 @@ export function bindSubagentSpawnCleanup(params: {
     if (!identity.expectedSessionId || !identity.expectedLifecycleRevision) {
       return false;
     }
-    const currentRun = acceptedRun && context.chatAbortControllers.get(acceptedRun.runId);
+    const currentRun =
+      acceptedRun &&
+      getRpcSourceForGateway(acceptedRun.runId, params.resolveGatewayContext, params.target);
     return (
       !currentRun ||
       (currentRun === acceptedRun?.entry &&
-        currentRun.operationalRunInstance === acceptedRun?.operationalRunInstance &&
-        currentRun.sessionKey === params.childSessionKey &&
-        currentRun.sessionId === identity.expectedSessionId)
+        currentRun.adapter.operationalRunInstance === acceptedRun?.operationalRunInstance &&
+        getRpcSourceIdentity(currentRun).sessionKey === params.childSessionKey &&
+        getRpcSourceIdentity(currentRun).sessionId === identity.expectedSessionId)
     );
   };
   const callGateway: GatewayCall = async (request) => {
@@ -97,7 +105,8 @@ export function bindSubagentSpawnCleanup(params: {
     if (
       method === "chat.abort" &&
       (!acceptedRun?.entry ||
-        context?.chatAbortControllers.get(acceptedRun.runId) !== acceptedRun.entry)
+        getRpcSourceForGateway(acceptedRun.runId, params.resolveGatewayContext, params.target) !==
+          acceptedRun.entry)
     ) {
       return { aborted: false, runIds: [] };
     }
@@ -147,8 +156,8 @@ export function bindSubagentSpawnCleanup(params: {
       if (acceptedRun) {
         throw new Error("Subagent cleanup already owns an accepted run");
       }
-      const entry = context?.chatAbortControllers.get(runId);
-      acceptedRun = { runId, entry, operationalRunInstance: entry?.operationalRunInstance };
+      const entry = getRpcSourceForGateway(runId, params.resolveGatewayContext, params.target);
+      acceptedRun = { runId, entry, operationalRunInstance: entry?.adapter.operationalRunInstance };
     },
   };
 }

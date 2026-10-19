@@ -1,5 +1,6 @@
 import type { SqliteIntegrityCheckOptions } from "../infra/sqlite-integrity.js";
 import { SCHEMA_MIGRATION_BACKUP_TABLES } from "./schema-migration-backup-tables.js";
+import { resolveSchemaMigrationIntegrityTables } from "./schema-migration-integrity-tables.js";
 
 type SchemaMigration = {
   kind: "agent" | "state";
@@ -31,14 +32,13 @@ export function resolveSchemaMigrationBackupTables(
   return [...tables].toSorted();
 }
 
-/** Undeclared migrations and same-version repairs retain full verification. */
+/** Backup format does not select integrity coverage, including same-version repair. */
 export function resolveSchemaMigrationIntegrityCheck(
   migration: SchemaMigration,
   check: "quick" | "full" = "quick",
 ): SqliteIntegrityCheckOptions {
   if (check === "full") {
-    return { check };
+    return { check: "full" };
   }
-  const tables = resolveSchemaMigrationBackupTables(migration);
-  return tables ? { check, tables } : { check: "full" };
+  return { check, tables: resolveSchemaMigrationIntegrityTables(migration) };
 }

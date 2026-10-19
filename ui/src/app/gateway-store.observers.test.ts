@@ -214,14 +214,22 @@ describe("createApplicationGateway connection ownership", () => {
     const legacyHello = {
       ...HELLO,
       server: { version: "2026.7.20", connId: "legacy-conn" },
+      features: { methods: ["plugins.reload"] },
     };
 
     current().opts.onHello?.(legacyHello);
     expect(gateway.snapshot.phase).toBe("connected");
+    const capabilities = gateway.snapshot.pluginCapabilities;
+    expect(capabilities).not.toBeNull();
 
     current().opts.onClose?.({ code: 1006, reason: "restarting", willRetry: true });
-    current().opts.onHello?.(legacyHello);
+    expect(gateway.snapshot.hello).toBe(legacyHello);
+    expect(gateway.snapshot.pluginCapabilities).toBe(capabilities);
+    const staleHello = { ...legacyHello };
+    current().opts.onHello?.(staleHello);
     expect(gateway.snapshot.phase).toBe("reconnecting");
+    expect(gateway.snapshot.hello).toBe(staleHello);
+    expect(gateway.snapshot.pluginCapabilities).toBeNull();
   });
 
   it("does not invent an assistant agent id before the gateway advertises one", () => {

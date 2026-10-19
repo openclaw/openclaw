@@ -570,7 +570,6 @@ it("ignores replaced observers and aborts detached artifact resolution before bl
 
 describe("message attachment availability", () => {
   const panes: { container: HTMLElement; draw: () => void; unmount: () => void }[] = [];
-  beforeEach(() => vi.stubGlobal("IntersectionObserver", undefined));
   afterEach(() => {
     for (const pane of panes.splice(0)) {
       pane.unmount();
@@ -589,6 +588,8 @@ describe("message attachment availability", () => {
     );
     const pane = { container: target, draw: redraw, unmount: root.unmount };
     panes.push(pane);
+    intersections.at(-1)!();
+    flush();
     return pane;
   }
   const availabilityTicket = (mediaTicket: string) => ticketResponse(mediaTicket, 60_000);

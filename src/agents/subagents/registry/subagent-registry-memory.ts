@@ -352,9 +352,9 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const entry = this.currentValue(observed);
     this.assertCompletionEntryCurrent(entry);
     const custody = this.completionAuthorities.get(getSubagentRunRuntimeKey(entry));
-    // Cancellation notices belong to the admitted cancellation caller, not its revoked target.
-    // Keep that caller's existing dispatch restrictions; never turn a successful result into a notice.
-    if (this.isCancellationNotice(entry)) {
+    // Keep the requester's retained authority after child cancellation. Only a notice
+    // without that custody uses its independently admitted cancellation caller.
+    if (!custody && this.isCancellationNotice(entry)) {
       return run();
     }
     if (this.operatorCompletionEntries.has(getSubagentRunRuntimeKey(entry)) && !custody) {
@@ -375,9 +375,27 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     const batch = observed.map((entry) => this.currentValue(entry));
     batch.forEach((entry) => this.assertCompletionEntryCurrent(entry));
     const resultEntry = batch.find((entry) => !this.isCancellationNotice(entry));
-    // Only a cancellation-only batch can use the independently admitted cancellation caller.
     if (!resultEntry) {
-      return run();
+      const sources = batch.map(
+        (entry) => this.completionAuthorities.get(getSubagentRunRuntimeKey(entry))?.authority,
+      );
+      const first = sources[0];
+      const original = first?.operatorAuthority;
+      // A cancellation-only cohort can share its retained requester. Otherwise its
+      // independently admitted cancellation caller still owns the notices.
+      if (
+        !first ||
+        !original ||
+        sources.some(
+          (source) =>
+            source?.operatorAuthority?.source !== original.source ||
+            !isDeepStrictEqual(source?.operatorAuthority?.scopes, original.scopes),
+        )
+      ) {
+        return run();
+      }
+      sources.forEach((source) => source?.assertCurrent());
+      return first.run(run);
     }
     const first = this.completionAuthorities.get(getSubagentRunRuntimeKey(resultEntry))?.authority
       .operatorAuthority;

@@ -86,7 +86,10 @@ export const EMPTY_SESSION_MENU_DATA: SessionMenuData = {
   categoryClearReturnsToGroups: false,
 };
 
-type SessionMenuActionsHost = HTMLElement & { readonly updateComplete: Promise<boolean> };
+type SessionMenuActionsHost = {
+  readonly updateComplete: Promise<boolean>;
+  focusCurrentView(): void;
+};
 
 export type SessionMenuActionsState = {
   involvingMeContext?: boolean;
@@ -296,12 +299,7 @@ export class SessionMenuActions {
   }
 
   focusCurrentView(): void {
-    void this.host.updateComplete.then(() => {
-      const first =
-        this.host.querySelector<HTMLElement>(".session-menu__appearance button:not(:disabled)") ??
-        this.host.querySelector<HTMLElement>('[role^="menuitem"]:not([disabled])');
-      first?.focus();
-    });
+    void this.host.updateComplete.then(() => this.host.focusCurrentView());
   }
 
   handleKeydown(event: KeyboardEvent, appearancePicker: { showIconGrid: () => void }): boolean {

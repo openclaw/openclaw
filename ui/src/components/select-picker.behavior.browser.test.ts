@@ -142,12 +142,12 @@ describe("Picker", () => {
         searchable: "always",
       });
       p.container.style.cssText = "position:fixed;right:12px;top:calc(100vh - 50px);width:240px";
+      await page.elementLocator(p.trigger).click();
       expect(
         p.picker
           .querySelector<HTMLElement>(".picker-select__menu")!
           .style.getPropertyValue("position-anchor"),
       ).toBe(p.trigger.style.getPropertyValue("anchor-name"));
-      await page.elementLocator(p.trigger).click();
       const row = p.picker.querySelector<HTMLElement>('[role="option"][data-value=""]')!;
       const menu = p.picker.querySelector<HTMLElement>(".picker-select__menu")!;
       const bounds = menu.getBoundingClientRect();

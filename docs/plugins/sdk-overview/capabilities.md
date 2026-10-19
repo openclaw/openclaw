@@ -229,12 +229,14 @@ The host retains the request until physical provider cleanup settles, even when
 cancellation or plugin reload has already revoked dispatch authority. It validates
 and snapshots accepted output before returning it. Auth facts, headers and
 transport overrides do not enter public results. Cost recording is a separate
-consumer of accepted outcomes. V2 SDK calls record validated usage only after
-provider and caller lifetime checks pass; rejected, retired or cancelled results
-produce no usage event. Accounting uses the selected provider/model, excluding
-auth profile suffixes, and the host-owned calling plugin identity. Reported USD
-costs, including zero, win over prepared token rates. Unknown route pricing stays
+consumer of accepted outcomes. V1 and V2 SDK calls, core calls, the explicit tool,
+and the tool prefilter record validated usage once after their final caller
+checks pass. Rejected, retired or cancelled results produce no usage event.
+Accounting uses the selected provider/model without auth profile suffixes and
+the explicit operation agent. Only plugin calls carry a calling-plugin identity.
+Reported USD costs, including zero, win over prepared token rates. Unknown route pricing stays
 unknown. Estimates enter accounting only; returned usage keeps provider facts.
+Missing usage and native-unit-only usage do not emit token/cost events.
 
 The core `decision_evaluate` tool also uses V2 execution. Omit `contractVersion`
 for the existing Boolean/Choice/Score input shape, or set `contractVersion: 2` for

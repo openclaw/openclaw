@@ -1,29 +1,15 @@
-// Crabbox untrusted bootstrap tests cover the pre-execution identity boundary.
 import { execFileSync, spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import {
-  chmodSync,
-  existsSync,
-  mkdirSync,
-  mkdtempSync,
-  readFileSync,
-  rmSync,
-  writeFileSync,
-} from "node:fs";
-import { tmpdir } from "node:os";
+import { chmodSync, existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { buildCrabboxGateTransport } from "../../scripts/pr-lib/crabbox-gate-transport.mts";
+import { useAutoCleanupTempDirTracker } from "../helpers/temp-dir.js";
 
 const source = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
 const historicalPnpmSpec =
   "pnpm@12.1.0+sha512.d9b8276d97f6ec86e49815877f91ee9f63cee61f2063b304e43b6dab8fa07ce8a9afd46d2facd39f921e6a9d06b3c75a81349c7b888c2d22886bae0229901037";
-const roots: string[] = [];
-afterEach(() => {
-  for (const root of roots.splice(0)) {
-    rmSync(root, { recursive: true, force: true });
-  }
-});
+const roots = useAutoCleanupTempDirTracker(afterEach);
 
 function executable(path: string, body: string) {
   writeFileSync(path, body);
@@ -31,8 +17,7 @@ function executable(path: string, body: string) {
 }
 
 function fixture() {
-  const root = mkdtempSync(join(tmpdir(), "bootstrap-image-"));
-  roots.push(root);
+  const root = roots.make("bootstrap-image-");
   const bin = join(root, "bin");
   const image = join(root, "image");
   const origin = join(root, "origin");
@@ -78,12 +63,9 @@ case "$1" in
 esac
 `,
   );
-  const wrapper = join(stage, "wrapper");
-  const native = join(stage, "native");
-  mkdirSync(wrapper);
-  mkdirSync(native);
-  writeFileSync(join(wrapper, "package.json"), '{"version":"12.11.1"}');
-  executable(join(native, "pnpm"), "#!/bin/sh\necho 12.11.1\n");
+  for (const name of ["wrapper", "native"]) {
+    mkdirSync(join(stage, name));
+  }
   function archive(directory: string, name: string, algorithm: string) {
     const output = join(origin, name);
     execFileSync("tar", [name.endsWith(".xz") ? "-cJf" : "-czf", output, "-C", stage, directory]);
@@ -109,15 +91,13 @@ case "$*" in
 esac
 echo node-download >> ${JSON.stringify(join(root, "downloads"))}
 while [[ $# -gt 0 ]]; do
-  if [[ "$1" == "-o" ]]; then output="$2"; shift; fi
-  url="$1"
+  if [[ "$1" == "-o" ]]; then
+    cp ${JSON.stringify(join(origin, "node-v24.21.0-linux-x64.tar.xz"))} "$2"
+    exit
+  fi
   shift
 done
-if [[ "$url" == */SHASUMS256.txt ]]; then
-  printf '%s  %s\\n' ${JSON.stringify(hashes.node)} node-v24.21.0-linux-x64.tar.xz > "$output"
-else
-  cp ${JSON.stringify(join(origin, "node-v24.21.0-linux-x64.tar.xz"))} "$output"
-fi
+exit 1
 `,
   );
   executable(join(bin, "git"), "#!/bin/sh\necho aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n");
@@ -151,7 +131,11 @@ fi
     );
   const scriptPath = join(root, "bootstrap.sh");
   writeFileSync(scriptPath, script);
+  const read = (name: string) => readFileSync(join(root, name), "utf8");
+  const exists = (name: string) => existsSync(join(root, name));
   return {
+    read,
+    exists,
     root,
     image,
     origin,
@@ -179,11 +163,7 @@ fi
         env: process.env,
       });
     },
-    downloads() {
-      return existsSync(join(root, "downloads"))
-        ? readFileSync(join(root, "downloads"), "utf8")
-        : "";
-    },
+    downloads: () => (exists("downloads") ? read("downloads") : ""),
   };
 }
 
@@ -194,8 +174,8 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
       const f = fixture();
       const result = f.runGate(`set -euo pipefail; /bin/bash -c 'exit ${exitCode}'`);
       expect(result.status, result.stderr).toBe(exitCode);
-      expect(readFileSync(join(f.root, "install-log"), "utf8")).toBe("frozen\n");
-      expect(existsSync(readFileSync(join(f.root, "install-home"), "utf8"))).toBe(false);
+      expect(f.read("install-log")).toBe("frozen\n");
+      expect(existsSync(f.read("install-home"))).toBe(false);
     },
   );
 
@@ -210,8 +190,7 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
   });
 
   it("bounds both IMDSv2 identity requests", () => {
-    const script = readFileSync("scripts/crabbox-untrusted-bootstrap.sh", "utf8");
-    const imdsRequests = script.match(
+    const imdsRequests = source.match(
       /\/usr\/bin\/curl[\s\S]*?http:\/\/169\.254\.169\.254[^\n]*/gu,
     );
 
@@ -233,8 +212,8 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
       expect(result.status, result.stderr).toBe(0);
     }
     expect(f.downloads()).toBe("");
-    expect(readFileSync(join(f.root, "install-log"), "utf8")).toBe("frozen\nfrozen\n");
-    expect(readFileSync(join(f.root, "ran"), "utf8")).toBe("ran\nran\n");
+    expect(f.read("install-log")).toBe("frozen\nfrozen\n");
+    expect(f.read("ran")).toBe("ran\nran\n");
   });
 
   it("prepares the approved historical pin outside the checkout before frozen installation", () => {
@@ -243,10 +222,10 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     writeFileSync(join(f.root, "package.json"), JSON.stringify({ packageManager: spec }));
     const result = f.run();
     expect(result.status, result.stderr).toBe(0);
-    expect(readFileSync(join(f.root, "prepared-pin"), "utf8")).toBe(`${spec}\n${f.install}\n`);
+    expect(f.read("prepared-pin")).toBe(`${spec}\n${f.install}\n`);
     expect(f.downloads()).toBe("pnpm-download\n");
-    expect(readFileSync(join(f.root, "install-log"), "utf8")).toBe("frozen\n");
-    expect(readFileSync(join(f.root, "ran"), "utf8")).toBe("ran\n");
+    expect(f.read("install-log")).toBe("frozen\n");
+    expect(f.read("ran")).toBe("ran\n");
   });
 
   it.each(["node", "wrapper", "native"])(
@@ -272,37 +251,29 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     },
   );
 
-  it.each(["current-wrong-hash", "malformed-json", "head", "iam"])(
-    "rejects %s before Corepack setup, installation, or workload execution",
-    (kind) => {
-      const f = fixture();
-      const manifests: Record<string, string> = {
-        "current-wrong-hash": JSON.stringify({ packageManager: `${f.spec}0` }),
-        "malformed-json": "{",
-      };
-      const manifest = manifests[kind];
-      if (manifest !== undefined) {
-        writeFileSync(join(f.root, "package.json"), manifest);
-      }
-      const result = f.run(
-        kind === "iam" ? { FIXTURE_IAM_STATUS: "200" } : {},
-        kind === "head" ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" : undefined,
-      );
-      expect(result.status).toBe(1);
-      expect(result.stderr).toContain(
-        kind === "head"
-          ? "expected HEAD"
-          : kind === "iam"
-            ? "IAM credentials endpoint returned 200"
-            : kind === "malformed-json"
-              ? "invalid package.json"
-              : "packageManager pin differs from trusted main",
-      );
-      expect(existsSync(join(f.root, "corepack-log"))).toBe(false);
-      expect(existsSync(join(f.root, "ran"))).toBe(false);
-      expect(existsSync(join(f.root, "install-log"))).toBe(false);
-    },
-  );
+  it.each([
+    ["current-wrong-hash", "packageManager pin differs from trusted main"],
+    ["malformed-json", "invalid package.json"],
+    ["head", "expected HEAD"],
+    ["iam", "IAM credentials endpoint returned 200"],
+  ])("rejects %s before Corepack setup, installation, or workload execution", (kind, error) => {
+    const f = fixture();
+    const manifests: Record<string, string> = {
+      "current-wrong-hash": JSON.stringify({ packageManager: `${f.spec}0` }),
+      "malformed-json": "{",
+    };
+    const manifest = manifests[kind];
+    if (manifest !== undefined) {
+      writeFileSync(join(f.root, "package.json"), manifest);
+    }
+    const result = f.run(
+      kind === "iam" ? { FIXTURE_IAM_STATUS: "200" } : {},
+      kind === "head" ? "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" : undefined,
+    );
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(error);
+    expect(["corepack-log", "ran", "install-log"].map(f.exists)).toEqual([false, false, false]);
+  });
 
   it("refuses an invalid download after rejecting the image archive", () => {
     const f = fixture();
@@ -313,7 +284,7 @@ describe("scripts/crabbox-untrusted-bootstrap.sh", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain("differs from the trusted digest");
     expect(existsSync(f.install)).toBe(false);
-    expect(existsSync(join(f.root, "ran"))).toBe(false);
+    expect(f.exists("ran")).toBe(false);
   });
 
   it("clears Node injection before reading the candidate package manager", () => {

@@ -36,7 +36,6 @@ class ChatRunPresentation<T extends object> {
   private depth = 0;
   private changed = false;
   private cadence: ChatRunPublication | false = false;
-  private viewUpdate: (() => void) | undefined;
 
   constructor(host: T) {
     const pendingFrame: unknown = Reflect.get(host, "chatStreamRenderFrame");
@@ -126,14 +125,8 @@ class ChatRunPresentation<T extends object> {
     this.notify();
   }
 
-  requestViewUpdate(update: () => void, mode: ChatRunPublication): void {
-    this.viewUpdate = update;
-    this.publish(mode);
-  }
-
   cancelFrame(): void {
     this.clearFrame();
-    this.viewUpdate = undefined;
   }
 
   private clearFrame(): void {
@@ -144,12 +137,9 @@ class ChatRunPresentation<T extends object> {
   }
 
   private notify(): void {
-    const update = this.viewUpdate;
-    this.viewUpdate = undefined;
     for (const listener of this.listeners) {
       listener();
     }
-    update?.();
   }
 }
 

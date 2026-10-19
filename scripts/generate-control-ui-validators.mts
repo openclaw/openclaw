@@ -10,6 +10,7 @@ import {
   SessionApprovalEventSchema,
   SessionApprovalReplaySchema,
 } from "../packages/gateway-protocol/src/schema/approvals.js";
+import { CommandsListResultSchema } from "../packages/gateway-protocol/src/schema/commands.js";
 import {
   AgentActivityItemSchema,
   ChatHistoryParamsSchema,
@@ -158,6 +159,7 @@ const validators: Array<[name: string, schema: TSchema, type: string, group: Gro
         stateRevision: Type.Required(ChatHistoryParamsSchema).properties.knownState,
         pendingInputs: Type.Optional(ChatPendingInputsPageSchema),
         sessionInfo: Type.Optional(SessionRowSchema),
+        commands: Type.Optional(CommandsListResultSchema.properties.commands),
       },
       { additionalProperties: false },
     ),

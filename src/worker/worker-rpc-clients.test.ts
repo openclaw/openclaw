@@ -13,7 +13,7 @@ import type {
 import { createDeferred } from "../../test/helpers/promise.js";
 import { WorkerConnectionStoppedError, WorkerFencedError } from "./worker-connection-contract.js";
 import type { WorkerConnectionFrameDispatcher } from "./worker-connection-frames.js";
-import type { WorkerConnection, WorkerConnectionState } from "./worker-connection.js";
+import { WorkerConnection, type WorkerConnectionState } from "./worker-connection.js";
 import { WorkerInferenceProxyClient } from "./worker-rpc-inference-client.js";
 import { WorkerLiveEventClient } from "./worker-rpc-live-event-client.js";
 import { WorkerTranscriptCommitClient } from "./worker-rpc-transcript-client.js";
@@ -73,6 +73,7 @@ function connectionHarness() {
     get state() {
       return state;
     },
+    isTerminal: () => WorkerConnection.prototype.isTerminal(state),
     waitForReady,
     rpc: {
       request: (

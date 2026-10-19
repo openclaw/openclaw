@@ -30,7 +30,8 @@ export function createMountedPanes(
       | "models.list"
       | "sessions.describe"
       | "sessions.list"
-      | "sessions.patch",
+      | "sessions.patch"
+      | "environments.status",
       GatewayRequestHandler
     >
   >,
@@ -43,7 +44,8 @@ export function createMountedPanes(
       method === "models.list" ||
       method === "sessions.describe" ||
       method === "sessions.list" ||
-      method === "sessions.patch"
+      method === "sessions.patch" ||
+      method === "environments.status"
     ) {
       const response = responses?.[method];
       if (response) {
@@ -106,7 +108,8 @@ export function createMountedPanes(
             "openclaw-chat-runtime-test",
             ChatPaneRuntime,
           ) as unknown as TestChatPane);
-    Object.defineProperty(pane, "isConnected", { configurable: true, value: true });
+    // Configure the detached owner before the view starts its connection lifecycle.
+    Object.defineProperty(pane, "isConnected", { configurable: true, value: false });
     pane.context = context;
     pane.sessionKey = sessionKey;
     // Composer and transcript state belongs to each mounted presentation.

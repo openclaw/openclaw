@@ -31,13 +31,13 @@ import {
   type PreparedAgentRunTerminalReply,
 } from "../../agent-run-terminal-reply.js";
 import { classifyOAuthRefreshFailure } from "../../auth-profiles/oauth-refresh-failure.js";
+import { classifyAssistantFailoverReason } from "../../embedded-agent-helpers/assistant-message-failures.js";
 import {
-  classifyAssistantFailoverReason,
   formatAssistantErrorText,
   formatUserFacingAssistantErrorText,
-  normalizeTextForComparison,
-} from "../../embedded-agent-helpers.js";
-import { SYNTHESIZED_TIMEOUT_ERROR_TEXT } from "../../embedded-agent-helpers/error-text.js";
+  SYNTHESIZED_TIMEOUT_ERROR_TEXT,
+} from "../../embedded-agent-helpers/error-text.js";
+import { normalizeTextForComparison } from "../../embedded-agent-helpers/messaging-dedupe.js";
 import { sanitizeUserFacingText } from "../../embedded-agent-helpers/sanitize-user-facing-text.js";
 import type {
   MessagingToolSend,

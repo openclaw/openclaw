@@ -91,6 +91,7 @@ export type DoctorSessionSqliteOptions = {
   cfg?: OpenClawConfig;
   env?: NodeJS.ProcessEnv;
   mode: DoctorSessionSqliteMode;
+  integrityCheck?: "quick" | "full";
   store?: string;
 };
 

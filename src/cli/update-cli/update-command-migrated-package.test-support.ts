@@ -7,7 +7,7 @@ import * as nodeSqlite from "../../infra/node-sqlite.js";
 import { createRetainedPackageSwap } from "../../infra/package-update-swap.test-support.js";
 import { resolveSqliteDatabaseFilePath } from "../../infra/sqlite-database-admission.js";
 import { createUpdateRun, finishUpdateRun } from "../../infra/update-run-ledger.js";
-import * as childCommands from "../../process/exec.js";
+import * as childCommands from "../../process/exec-runner.js";
 import { defaultRuntime } from "../../runtime.js";
 import { OPENCLAW_STATE_SCHEMA_VERSION } from "../../state/openclaw-state-db-contract.js";
 import { closeStateDatabaseForTest } from "../../test-utils/database-cleanup.js";
@@ -30,6 +30,7 @@ export type MigratedPackageFinalizationCase = {
   handback?: boolean;
   completion?: "success" | "failure";
   recovered?: boolean;
+  diagnostics?: "truncated" | "interrupted" | "incomplete";
 };
 
 export async function expectMigratedPackageFinalization(
@@ -43,6 +44,7 @@ export async function expectMigratedPackageFinalization(
     handback = false,
     completion,
     recovered = false,
+    diagnostics,
   }: MigratedPackageFinalizationCase,
 ) {
   const exitCode = status === "error" ? 1 : 0;
@@ -66,6 +68,23 @@ export async function expectMigratedPackageFinalization(
   const rollback = vi.spyOn(transaction, "rollback");
   vi.spyOn(defaultRuntime, "error").mockImplementation(() => {});
   const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
+  const stderrChunks: Buffer[] = [];
+  if (diagnostics) {
+    vi.spyOn(process.stderr, "write").mockImplementation((chunk) => {
+      stderrChunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+      return false;
+    });
+  }
+  const progress = Buffer.from("finalizing 🦊\n");
+  const cancellation = Buffer.from("finalizer interrupted\n");
+  const padding = diagnostics === "truncated" ? "x".repeat(1024 * 1024) : "";
+  const incomplete = Buffer.from([0xf0, 0x9f]);
+  const expectedProgress = Buffer.concat([
+    progress,
+    Buffer.from(padding),
+    ...(diagnostics === "incomplete" ? [incomplete] : []),
+  ]);
+  let observedProgress = Buffer.alloc(0);
   const onResult = vi.fn();
   if (recovered) {
     windowsRecovery.complete.mockImplementationOnce(async () => {
@@ -92,13 +111,40 @@ export async function expectMigratedPackageFinalization(
     });
   }
   // Keep the real parent and package owner; model only the completed candidate's JSON reply.
-  vi.spyOn(childCommands, "runUtf8CommandWithTimeout").mockImplementation(
+  vi.spyOn(childCommands, "runUtf8CommandBuffersWithTimeout").mockImplementation(
     async (_argv, options) => {
       if (typeof options === "number" || typeof options.input !== "string") {
         throw new Error("Expected serialized finalization input");
       }
       const input: MigratedUpdateFinalizationInput = JSON.parse(options.input);
       expect(input.params).not.toHaveProperty("databaseBackup");
+      if (diagnostics) {
+        // Fixed process I/O: a split UTF-8 progress line, followed by bytes the
+        // runner drains after observation stops during cancellation.
+        expect(options.onOutputChunk?.(progress.subarray(0, 12), "stderr")).toBeUndefined();
+        expect(options.onOutputChunk?.(progress.subarray(12), "stderr")).toBeUndefined();
+        if (padding) {
+          options.onOutputChunk?.(Buffer.from(padding), "stderr");
+        }
+        if (diagnostics === "incomplete") {
+          options.onOutputChunk?.(incomplete, "stderr");
+        }
+        observedProgress = Buffer.concat(stderrChunks);
+        const captured = Buffer.concat([expectedProgress, cancellation]);
+        const tail = captured.subarray(-1024 * 1024);
+        // A cancelled candidate publishes neither a terminal row nor a result artifact.
+        return {
+          stdout: Buffer.alloc(0),
+          stderr: tail,
+          windowsEncoding: null,
+          stderrTruncatedBytes: captured.byteLength - tail.byteLength,
+          code: 124,
+          signal: null,
+          killed: true,
+          termination: "timeout",
+          cleanup: "cooperative",
+        };
+      }
       const result = {
         ...input.params.result,
         status,
@@ -169,8 +215,9 @@ export async function expectMigratedPackageFinalization(
         JSON.stringify({ result, exitCode, terminalRunId: run.runId, candidateStartAttempted }),
       );
       return {
-        stdout: "candidate finalization result\n",
-        stderr: "",
+        stdout: Buffer.from("candidate finalization result\n"),
+        stderr: Buffer.alloc(0),
+        windowsEncoding: null,
         code: 0,
         signal: null,
         killed: false,
@@ -224,18 +271,31 @@ export async function expectMigratedPackageFinalization(
       [],
     );
   let continuedResult: Awaited<ReturnType<typeof continueUpdate>> | undefined;
-  const operation = withUpdateCommandTerminalResult(
-    async (registerRun) => {
-      registerRun(run);
-      continuedResult = await continueUpdate();
-      if (continuedResult.preparedFailure) {
-        throw continuedResult.preparedFailure;
-      }
-      return continuedResult;
-    },
-    { json: true, onResult },
-  );
+  const operation = diagnostics
+    ? continueUpdate()
+    : withUpdateCommandTerminalResult(
+        async (registerRun) => {
+          registerRun(run);
+          continuedResult = await continueUpdate();
+          if (continuedResult.preparedFailure) {
+            throw continuedResult.preparedFailure;
+          }
+          return continuedResult;
+        },
+        { json: true, onResult },
+      );
   const settled = await operation.catch((error: unknown) => error);
+  if (diagnostics) {
+    expect(observedProgress).toEqual(expectedProgress);
+    expect(Buffer.concat(stderrChunks)).toEqual(Buffer.concat([expectedProgress, cancellation]));
+    expect(settled).toBeInstanceOf(Error);
+    expect(stdout).not.toHaveBeenCalled();
+    expect(onResult).not.toHaveBeenCalled();
+    expect(complete).not.toHaveBeenCalled();
+    expect(rollback).not.toHaveBeenCalled();
+    await expect(fs.access(transaction.backupRoot)).resolves.toBeUndefined();
+    return;
+  }
   if (completion) {
     expect.soft(stdoutAtCompletion).toBe(0);
     expect.soft(observedAtCompletion).toBe(0);
