@@ -280,10 +280,10 @@ export function ContextNotice(props: ContextNoticeProps) {
         })
       : t("chat.usageRemaining");
   });
-  const colors = createMemo(() => {
+  const colors = () => {
     const context = model();
     return context ? { "--ctx-color": context.color, "--ctx-bg": context.bg } : undefined;
-  });
+  };
   const dashOffset = () => RING_CIRCUMFERENCE * (1 - (model()?.pct ?? 0) / 100);
   const providerCosts = createMemo(() =>
     model() ? latestProviderCostStats(props.messages) : null,
