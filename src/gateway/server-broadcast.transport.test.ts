@@ -23,15 +23,6 @@ vi.mock("../logging/subsystem.js", async (importOriginal) => {
   };
 });
 
-function clientFor(connId: string, socket: WebSocket): GatewayWsClient {
-  return {
-    connId,
-    socket,
-    connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
-    usesSharedGatewayAuth: false,
-  };
-}
-
 function controlledPeer(connId: string) {
   const callbacks: Array<(error?: Error) => void> = [];
   const frames: Array<{ seq: number; payload: unknown }> = [];
@@ -51,7 +42,23 @@ function controlledPeer(connId: string) {
       },
     ),
   });
-  return { client: clientFor(connId, socket as unknown as WebSocket), socket, callbacks, frames };
+  const client: GatewayWsClient = {
+    connId,
+    socket: socket as unknown as WebSocket,
+    connect: { role: "operator", scopes: ["operator.read"] } as GatewayWsClient["connect"],
+    usesSharedGatewayAuth: false,
+  };
+  return { client, socket, callbacks, frames };
+}
+
+function broadcaster(
+  peers: ReturnType<typeof controlledPeer>[],
+  options: Omit<Parameters<typeof createGatewayBroadcaster>[0], "clients"> = {},
+) {
+  return createGatewayBroadcaster({
+    clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+    ...options,
+  });
 }
 
 const liveText = (group: AbortSignal) => ({
@@ -70,8 +77,7 @@ describe("broadcast transport retirement", () => {
     for (const { client } of peers) {
       client.connect.caps = [GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS];
     }
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+    const { broadcast } = broadcaster(peers, {
       preparePresenceProjection: (presence) => () => presence,
     });
     const publish = (version: number) =>
@@ -103,8 +109,7 @@ describe("broadcast transport retirement", () => {
     const peer = controlledPeer("lost");
     peer.client.connect.caps = [GATEWAY_CLIENT_CAPS.PRESENCE_DELTAS];
     const onSessionDeliveryLost = vi.fn();
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([peer.client]),
+    const { broadcast } = broadcaster([peer], {
       preparePresenceProjection: (presence) => () => presence,
       onSessionDeliveryLost,
     });
@@ -133,14 +138,7 @@ describe("broadcast transport retirement", () => {
     sessionRead.client.connect.scopes = ["operator.sessions.read"];
     admin.client.connect.scopes = ["operator.admin"];
     node.client.connect.role = "node";
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([
-        read.client,
-        sessionRead.client,
-        admin.client,
-        node.client,
-      ]),
-    });
+    const { broadcast } = broadcaster([read, sessionRead, admin, node]);
 
     broadcast("agent.identity.changed", { agentId: "main" });
 
@@ -169,8 +167,7 @@ describe("broadcast transport retirement", () => {
     subscribers.subscribe("revoked", "agent:work:global");
     subscribers.subscribe("node", "agent:work:global");
     subscribers.subscribe("other", "agent:main:global");
-    const { broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry(peers.map((peer) => peer.client)),
+    const { broadcastToConnIds } = broadcaster(peers, {
       sessionMessageSubscribers: subscribers,
       canReceiveSessionEvent: (client) => client.connId !== "revoked",
     });
@@ -268,9 +265,7 @@ describe("broadcast transport retirement", () => {
     const admin = controlledPeer("admin");
     write.client.connect.scopes = ["operator.write"];
     admin.client.connect.scopes = ["operator.admin"];
-    const { broadcastPluginEvent } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([read.client, write.client, admin.client]),
-    });
+    const { broadcastPluginEvent } = broadcaster([read, write, admin]);
     const payload = { text: "synthetic 🦞 update" };
 
     broadcastPluginEvent("plugin.fixture.changed", payload, "operator.write");
@@ -311,8 +306,7 @@ describe("broadcast transport retirement", () => {
     const project = vi.fn((client: GatewayWsClient) =>
       client.connId === "revoked" && revoked ? hidden : visible,
     );
-    const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+    const { broadcast, broadcastToConnIds } = broadcaster(peers, {
       preparePresenceProjection: () => project,
     });
     broadcastToConnIds("tick", {}, new Set(["ahead"]));
@@ -356,8 +350,7 @@ describe("broadcast transport retirement", () => {
       ];
       const variantFor = (connId: string) =>
         variants[connId === "restricted" ? 1 : connId === "roster" ? 2 : 0]!;
-      const { broadcast, broadcastToConnIds } = createGatewayBroadcaster({
-        clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+      const { broadcast, broadcastToConnIds } = broadcaster(peers, {
         prepareSessionEventProjection: (event) =>
           event === "session.message"
             ? (client) => {
@@ -405,9 +398,7 @@ describe("broadcast transport retirement", () => {
     const retired = controlledPeer("replacement");
     const replacement = controlledPeer("replacement");
     retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([retired.client]),
-    });
+    const { broadcast } = broadcaster([retired]);
 
     broadcast("tick", {});
     expect(retired.socket.close).toHaveBeenCalledExactlyOnceWith(1008, "slow consumer");
@@ -425,9 +416,7 @@ describe("broadcast transport retirement", () => {
     vi.useFakeTimers();
     const retired = controlledPeer("closed");
     retired.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([retired.client]),
-    });
+    const { broadcast } = broadcaster([retired]);
 
     broadcast("tick", {});
     retired.socket.emit("close", 1008, Buffer.from("slow consumer"));
@@ -443,9 +432,7 @@ describe("broadcast transport retirement", () => {
     retired.socket.close.mockImplementationOnce(() => {
       throw new Error("close unavailable");
     });
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([retired.client]),
-    });
+    const { broadcast } = broadcaster([retired]);
 
     broadcast("tick", {});
 
@@ -456,9 +443,7 @@ describe("broadcast transport retirement", () => {
   it("keeps failed delivery terminal through late callbacks and permits a replacement socket", () => {
     const retired = controlledPeer("replacement");
     const replacement = controlledPeer("replacement");
-    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([retired.client]),
-    });
+    const { broadcast, getBufferedAmount } = broadcaster([retired]);
     const owner = new AbortController();
     sendError.mockClear();
     broadcast("tick", {});
@@ -527,9 +512,7 @@ describe("broadcast transport retirement", () => {
 
   it("stops a terminal barrier when its pending flush fails synchronously", () => {
     const peer = controlledPeer("barrier");
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([peer.client]),
-    });
+    const { broadcast } = broadcaster([peer]);
     const owner = new AbortController();
     broadcast("tick", {});
     broadcast("chat", { text: "pending" }, { liveText: liveText(owner.signal) });

@@ -2,6 +2,7 @@ import { EventEmitter } from "node:events";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { GATEWAY_CLIENT_CAPS } from "../../packages/gateway-protocol/src/client-info.js";
 import { INTERNAL_RUNTIME_CONTEXT_BEGIN } from "../agents/internal-runtime-context.js";
+import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { chatWireProjection } from "./server-chat-live-text.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
@@ -71,6 +72,10 @@ function harness() {
   });
   return {
     ...broadcaster,
+    chat: (text: string, state = "delta", runId = "run", opts?: GatewayBroadcastOpts) =>
+      broadcaster.broadcast("chat", chat(text, state, runId), opts),
+    agent: (stream: string, data: Record<string, unknown>, runId = "run") =>
+      broadcaster.broadcast("agent", { sessionKey: key, runId, stream, data }),
     narration,
     foreground,
     subscribers,
@@ -81,6 +86,9 @@ function harness() {
   };
 }
 
+const events = (frames: Frame[]) => frames.map(({ event }) => event);
+const texts = (frames: Frame[]) => frames.map(({ payload }) => payload.text);
+
 afterEach(() => vi.useRealTimers());
 
 describe("narration delivery through the Gateway broadcaster", () => {
@@ -89,7 +97,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
     const deadlines = vi.spyOn(globalThis, "setTimeout");
     const run = new AbortController();
     const publish = (text: string, state = "delta") =>
-      h.broadcast("chat", chat(text, state), {
+      h.chat(text, state, "run", {
         liveText: {
           group: run.signal,
           projection:
@@ -98,24 +106,14 @@ describe("narration delivery through the Gateway broadcaster", () => {
               : undefined,
         },
       });
-    h.broadcast("agent", {
-      sessionKey: key,
-      runId: "run",
-      stream: "lifecycle",
-      data: { phase: "start" },
-    });
+    h.agent("lifecycle", { phase: "start" });
     publish("First sentence.");
     for (let index = 1; index <= 19; index += 1) {
       vi.advanceTimersByTime(100);
-      h.broadcast("agent", {
-        sessionKey: key,
-        runId: "run",
-        stream: "assistant",
-        data: { text: `Raw ${index}` },
-      });
+      h.agent("assistant", { text: `Raw ${index}` });
       publish(`Latest sentence ${index}.`);
     }
-    expect(h.narration.frames.map(({ event }) => event)).toEqual(["agent", "session.narration"]);
+    expect(events(h.narration.frames)).toEqual(["agent", "session.narration"]);
     expect(deadlines).toHaveBeenCalledTimes(1);
     vi.advanceTimersByTime(100);
     expect(h.narration.frames.at(-1)?.payload.text).toBe("Latest sentence 19.");
@@ -141,46 +139,37 @@ describe("narration delivery through the Gateway broadcaster", () => {
 
   it("bounds visible tails after stripping hidden blocks and immediately delivers final retractions", () => {
     const h = harness();
-    h.broadcast(
-      "chat",
-      chat(`Visible.\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${"private ".repeat(4_000)}`),
-    );
+    h.chat(`Visible.\n${INTERNAL_RUNTIME_CONTEXT_BEGIN}\n${"private ".repeat(4_000)}`);
     expect(h.narration.frames.at(-1)?.payload.text).toBe("Visible.");
     vi.advanceTimersByTime(2_000);
-    h.broadcast("chat", chat(`Visible. <think>${"private ".repeat(4_000)}`));
+    h.chat(`Visible. <think>${"private ".repeat(4_000)}`);
     expect(h.narration.frames.at(-1)?.payload.text?.trim()).toBe("Visible.");
     vi.advanceTimersByTime(2_000);
-    h.broadcast("chat", chat(`${"x".repeat(20_000)}\n\nLatest line.`));
+    h.chat(`${"x".repeat(20_000)}\n\nLatest line.`);
     expect(h.narration.frames.at(-1)?.payload.text).toHaveLength(16_384);
     expect(h.narration.frames.at(-1)?.payload.text).toMatch(/Latest line\.$/);
-    h.broadcast("chat", chat("", "final"));
+    h.chat("", "final");
     expect(h.narration.frames.at(-2)?.payload.text).toBe("");
   });
 
   it("retires text superseded by tool activity without restarting its pacing window", () => {
     const h = harness();
-    const tool = () =>
-      h.broadcast("agent", {
-        sessionKey: key,
-        runId: "run",
-        stream: "tool",
-        data: { phase: "start", name: "read" },
-      });
-    h.broadcast("chat", chat("First."));
+    const tool = () => h.agent("tool", { phase: "start", name: "read" });
+    h.chat("First.");
     vi.advanceTimersByTime(100);
-    h.broadcast("chat", chat("Before the tool."));
+    h.chat("Before the tool.");
     vi.advanceTimersByTime(100);
     tool();
     vi.advanceTimersByTime(1_800);
-    expect(h.narration.frames.map(({ event }) => event)).toEqual(["session.narration", "agent"]);
+    expect(events(h.narration.frames)).toEqual(["session.narration", "agent"]);
 
-    h.broadcast("chat", chat("Assistant resumed."));
+    h.chat("Assistant resumed.");
     vi.advanceTimersByTime(100);
-    h.broadcast("chat", chat("Before another tool."));
+    h.chat("Before another tool.");
     tool();
-    h.broadcast("chat", chat("Latest assistant activity."));
+    h.chat("Latest assistant activity.");
     vi.advanceTimersByTime(1_899);
-    expect(h.narration.frames.map(({ event }) => event)).toEqual([
+    expect(events(h.narration.frames)).toEqual([
       "session.narration",
       "agent",
       "session.narration",
@@ -193,22 +182,17 @@ describe("narration delivery through the Gateway broadcaster", () => {
 
   it("does not let an older digest follow a new-run lifecycle event", () => {
     const h = harness();
-    h.broadcast("chat", chat("First."));
+    h.chat("First.");
     vi.advanceTimersByTime(100);
-    h.broadcast("chat", chat("Queued from the previous run."));
+    h.chat("Queued from the previous run.");
     vi.advanceTimersByTime(100);
-    h.broadcast("agent", {
-      stream: "lifecycle",
-      data: { phase: "start" },
-      sessionKey: key,
-      runId: "next-run",
-    });
+    h.agent("lifecycle", { phase: "start" }, "next-run");
     vi.advanceTimersByTime(1_800);
     expect(h.narration.frames.map((frame) => [frame.event, frame.payload.runId])).toEqual([
       ["session.narration", "run"],
       ["agent", "next-run"],
     ]);
-    h.broadcast("chat", chat("New run progress.", "delta", "next-run"));
+    h.chat("New run progress.", "delta", "next-run");
     expect(h.narration.frames.at(-1)?.payload).toMatchObject({
       runId: "next-run",
       text: "New run progress.",
@@ -217,7 +201,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
 
   it("omits token previews while retaining item completion, status, and tool events", () => {
     const h = harness();
-    for (const payload of [
+    const hidden = [
       { stream: "thinking", data: { delta: "Private reasoning" } },
       { stream: "item", data: { phase: "update", kind: "preamble", progressText: "Working" } },
       {
@@ -229,25 +213,18 @@ describe("narration delivery through the Gateway broadcaster", () => {
           progressText: "Draft",
         },
       },
+    ];
+    const visible = [
       { stream: "item", data: { phase: "end", kind: "preamble" } },
       { stream: "item", data: { phase: "update", kind: "answer_candidate", status: "selected" } },
       { stream: "run_status", data: { phase: "starting_model" } },
       { stream: "tool", data: { phase: "start", name: "read" } },
-    ]) {
-      h.broadcast("agent", { ...payload, sessionKey: key, runId: "run" });
+    ];
+    for (const { stream, data } of [...hidden, ...visible]) {
+      h.agent(stream, data);
     }
     expect(h.foreground.frames).toHaveLength(7);
-    expect(h.narration.frames).toMatchObject([
-      { payload: { stream: "item", data: { phase: "end", kind: "preamble" } } },
-      {
-        payload: {
-          stream: "item",
-          data: { phase: "update", kind: "answer_candidate", status: "selected" },
-        },
-      },
-      { payload: { stream: "run_status", data: { phase: "starting_model" } } },
-      { payload: { stream: "tool", data: { phase: "start", name: "read" } } },
-    ]);
+    expect(h.narration.frames).toMatchObject(visible.map((payload) => ({ payload })));
   });
 
   it.each(["revocation", "close", "retirement"] as const)(
@@ -256,8 +233,8 @@ describe("narration delivery through the Gateway broadcaster", () => {
       const h = harness();
       const run = new AbortController();
       const opts = { liveText: { group: run.signal } };
-      h.broadcast("chat", chat("First."), opts);
-      h.broadcast("chat", chat("Pending."), opts);
+      h.chat("First.", "delta", "run", opts);
+      h.chat("Pending.", "delta", "run", opts);
       if (reason === "revocation") {
         h.revoke();
       }
@@ -278,26 +255,20 @@ describe("narration delivery through the Gateway broadcaster", () => {
     const h = harness();
     const sibling = "agent:main:sibling";
     h.subscribers.subscribe("narration", sibling);
-    h.broadcast("chat", chat("Full alias."), { sessionKeys: [key, sibling] });
+    h.chat("Full alias.", "delta", "run", { sessionKeys: [key, sibling] });
     expect(h.narration.frames.at(-1)?.event).toBe("chat");
     h.subscribers.subscribe("narration", sibling, { mode: "narration" });
-    h.broadcast("chat", chat("First session."));
+    h.chat("First session.");
     h.broadcast("chat", { ...chat("Second session."), sessionKey: sibling });
-    expect(h.narration.frames.slice(-2).map(({ payload }) => payload.text)).toEqual([
-      "First session.",
-      "Second session.",
-    ]);
-    h.broadcast("chat", chat("Last partial."));
+    expect(texts(h.narration.frames.slice(-2))).toEqual(["First session.", "Second session."]);
+    h.chat("Last partial.");
     h.broadcast("chat", {
       sessionKey: key,
       runId: "run",
       state: "error",
       errorMessage: "Stopped.",
     });
-    expect(h.narration.frames.slice(-2).map(({ event }) => event)).toEqual([
-      "session.narration",
-      "chat",
-    ]);
+    expect(events(h.narration.frames.slice(-2))).toEqual(["session.narration", "chat"]);
     expect(h.narration.frames.at(-2)?.payload.text).toBe("Last partial.");
   });
 
@@ -306,10 +277,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
     const mainKey = "agent:main:global";
     const opsKey = "agent:ops:global";
     h.subscribers.subscribe("narration", mainKey, { subscriptionId: "raw", mode: "narration" });
-    h.subscribers.subscribe("narration", mainKey, {
-      subscriptionId: "literal",
-      mode: "narration",
-    });
+    h.subscribers.subscribe("narration", mainKey, { subscriptionId: "literal", mode: "narration" });
     h.subscribers.subscribe("narration", opsKey, { subscriptionId: "ops", mode: "narration" });
     const initial = { ...chat("Initial."), sessionKey: "global" };
     h.broadcast("chat", initial, { sessionKeys: [mainKey], agentId: "main" });
@@ -339,10 +307,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
       { sessionKeys: [mainKey], agentId: "main" },
     );
     vi.advanceTimersByTime(1_900);
-    expect(h.narration.frames.slice(-2).map(({ payload }) => payload.text)).toEqual([
-      "Literal pending.",
-      "Ops pending.",
-    ]);
+    expect(texts(h.narration.frames.slice(-2))).toEqual(["Literal pending.", "Ops pending."]);
     expect(h.narration.frames).toHaveLength(6);
 
     publish("global", "main", "Raw resumed.");
@@ -352,7 +317,7 @@ describe("narration delivery through the Gateway broadcaster", () => {
     publish("global", "ops", "Ops retained.");
     h.subscribers.unsubscribe("narration", mainKey, "raw");
     vi.advanceTimersByTime(1_900);
-    expect(h.narration.frames.slice(-3).map(({ payload }) => payload.text)).toEqual([
+    expect(texts(h.narration.frames.slice(-3))).toEqual([
       "Raw retired.",
       "Literal retired.",
       "Ops retained.",

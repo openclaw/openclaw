@@ -10,6 +10,7 @@ import {
   wsInstances,
 } from "../../ui/src/api/gateway-socket.test-support.js";
 import { GatewayBrowserClient } from "../../ui/src/api/gateway.js";
+import type { GatewayBroadcastOpts } from "./server-broadcast-types.js";
 import { createGatewayBroadcaster } from "./server-broadcast.js";
 import { createSessionMessageSubscriberRegistry } from "./server-chat-state.js";
 import { MAX_BUFFERED_BYTES, WEBSOCKET_CLOSE_GRACE_MS } from "./server-constants.js";
@@ -95,6 +96,22 @@ const textProjection = {
     deltaPayloadBytes + Buffer.byteLength(',"text":""') + (payload as TextPayload).text.length * 6,
 };
 
+function broadcaster(
+  peers: ReturnType<typeof createPeer>[],
+  options: Omit<Parameters<typeof createGatewayBroadcaster>[0], "clients"> = {},
+) {
+  return createGatewayBroadcaster({
+    clients: new GatewayClientRegistry(peers.map(({ client }) => client)),
+    ...options,
+  });
+}
+
+const textOptions = (group: AbortSignal) =>
+  ({
+    liveText: { group, coalesce: { key: "text", merge: mergeText }, projection: textProjection },
+  }) satisfies GatewayBroadcastOpts;
+const deltaPayload = (value: string) => ({ sessionKey: "agent:main:stream", delta: value });
+
 describe("connection live-text delivery", () => {
   it("keeps a shared chat stream when one full observer unsubscribes", async () => {
     useNodeFakeTimers();
@@ -113,8 +130,7 @@ describe("connection live-text delivery", () => {
       ws.emitMessage(String(frame));
     };
     const subscribers = createSessionMessageSubscriberRegistry();
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([peer.client]),
+    const { broadcast } = broadcaster([peer], {
       sessionMessageSubscribers: subscribers,
     });
     const sessionKey = "agent:main:chat";
@@ -192,13 +208,7 @@ describe("connection live-text delivery", () => {
     const onBroadcast = vi.fn();
     const { broadcast } = createGatewayBroadcaster({ clients, onBroadcast });
     const owner = new AbortController();
-    const opts = {
-      liveText: {
-        group: owner.signal,
-        coalesce: { key: "text", merge: mergeText },
-        projection: textProjection,
-      },
-    };
+    const opts = textOptions(owner.signal);
     broadcast("chat", text("A", "A"), opts);
     broadcast("chat", text("AB", "B"), opts);
     clients.add(late.client);
@@ -207,17 +217,17 @@ describe("connection live-text delivery", () => {
     slow.complete();
     expect(slow.frames.map(({ payload }) => payload)).toEqual([
       text("A", "A"),
-      { sessionKey: "agent:main:stream", delta: "BCD" },
+      deltaPayload("BCD"),
     ]);
     expect(fast.frames.map(({ payload }) => payload)).toEqual([
       text("A", "A"),
-      { sessionKey: "agent:main:stream", delta: "B" },
-      { sessionKey: "agent:main:stream", delta: "C" },
-      { sessionKey: "agent:main:stream", delta: "D" },
+      deltaPayload("B"),
+      deltaPayload("C"),
+      deltaPayload("D"),
     ]);
     expect(late.frames.map(({ payload }) => payload)).toEqual([
       text("ABC", "C"),
-      { sessionKey: "agent:main:stream", delta: "D" },
+      deltaPayload("D"),
     ]);
     expect(slow.frames.map(({ seq }) => seq)).toEqual([1, 2]);
     expect(onBroadcast.mock.calls.map(([, payload]) => payload)).toEqual([
@@ -232,18 +242,9 @@ describe("connection live-text delivery", () => {
 
   it("repairs the baseline after dropped output without hiding the sequence gap", () => {
     const peer = createPeer("subscriber", true);
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([peer.client]),
-    });
+    const { broadcast } = broadcaster([peer]);
     const owner = new AbortController();
-    const opts = {
-      dropIfSlow: true,
-      liveText: {
-        group: owner.signal,
-        coalesce: { key: "text", merge: mergeText },
-        projection: textProjection,
-      },
-    };
+    const opts = { ...textOptions(owner.signal), dropIfSlow: true };
     broadcast("chat", text("A", "A"), opts);
     peer.socket.bufferedAmount = MAX_BUFFERED_BYTES + 1;
     broadcast("chat", text("AB", "B"), opts);
@@ -256,15 +257,9 @@ describe("connection live-text delivery", () => {
 
   it("flushes appends before rewrite and tool barriers, snapshots canvas changes, and retires abort progress", () => {
     const peer = createPeer("barriers");
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([peer.client]),
-    });
+    const { broadcast } = broadcaster([peer]);
     const owner = new AbortController();
-    const liveText = {
-      group: owner.signal,
-      coalesce: { key: "text", merge: mergeText },
-      projection: textProjection,
-    };
+    const { liveText } = textOptions(owner.signal);
     broadcast("chat", text("A", "A"), { liveText });
     broadcast("chat", text("AB", "B"), { liveText });
     broadcast("agent", text("tool"), { liveText: { group: owner.signal } });
@@ -279,7 +274,7 @@ describe("connection live-text delivery", () => {
     broadcast("chat", text("final"), { liveText: { group: owner.signal } });
     expect(peer.frames.map(({ payload }) => payload)).toEqual([
       text("A", "A"),
-      { sessionKey: "agent:main:stream", delta: "B" },
+      deltaPayload("B"),
       text("tool"),
       text("replacement", "replacement"),
       text("replacement!!", "!!"),
@@ -300,8 +295,7 @@ describe("connection live-text delivery", () => {
     const peer = createPeer("blocked");
     const subscribers = createSessionMessageSubscriberRegistry();
     subscribers.subscribe(peer.client.connId, "agent:main:stream");
-    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([peer.client]),
+    const { broadcast, getBufferedAmount } = broadcaster([peer], {
       sessionMessageSubscribers: subscribers,
     });
     const owner = new AbortController();
@@ -406,9 +400,7 @@ describe("connection live-text delivery", () => {
         createBufferedPeer(`retirement-${index + 1}`, MAX_BUFFERED_BYTES - 16384),
       ),
     ];
-    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry(peers.map((peer) => peer.client)),
-    });
+    const { broadcast, getBufferedAmount } = broadcaster(peers);
     const retired = new AbortController();
     const sibling = new AbortController();
     const coalesce = { key: "text", merge: replaceText };
@@ -454,9 +446,7 @@ describe("connection live-text delivery", () => {
 
   it("does not merge a revoked owner's pending delta into its replacement", () => {
     const peer = createPeer("replacement");
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([peer.client]),
-    });
+    const { broadcast } = broadcaster([peer]);
     const group = new AbortController().signal;
     const coalesce = { key: "agent", merge: mergeText };
     let current = true;
@@ -481,8 +471,7 @@ describe("connection live-text delivery", () => {
     const peer = createPeer("ordinary-subscriber");
     const subscribers = createSessionMessageSubscriberRegistry();
     subscribers.subscribe(peer.client.connId, "agent:main:stream");
-    const { broadcastToConnIds } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([peer.client]),
+    const { broadcastToConnIds } = broadcaster([peer], {
       sessionMessageSubscribers: subscribers,
     });
     const recipients = new Set([peer.client.connId]);
@@ -509,8 +498,7 @@ describe("connection live-text delivery", () => {
     };
     let sharingRole = "owner";
     const delivered = vi.fn();
-    const { broadcast, getBufferedAmount } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([peer.client]),
+    const { broadcast, getBufferedAmount } = broadcaster([peer], {
       prepareSessionEventProjection: (event, value) => {
         if (event !== "session.message") {
           return undefined;
@@ -562,8 +550,7 @@ describe("connection live-text delivery", () => {
       vi.useFakeTimers();
       const peer = createBufferedPeer("sibling-pressure", MAX_BUFFERED_BYTES - 8192);
       const delivered = vi.fn();
-      const { broadcast } = createGatewayBroadcaster({
-        clients: new GatewayClientRegistry([peer.client]),
+      const { broadcast } = broadcaster([peer], {
         prepareSessionEventProjection: (event, payload) =>
           event === "session.message" ? () => ({ payload, delivered }) : undefined,
       });
@@ -602,9 +589,7 @@ describe("connection live-text delivery", () => {
   it("preserves slow-consumer closure after flushing coalesced output", () => {
     vi.useFakeTimers();
     const peer = createBufferedPeer("backlogged", MAX_BUFFERED_BYTES - 4096);
-    const { broadcast } = createGatewayBroadcaster({
-      clients: new GatewayClientRegistry([peer.client]),
-    });
+    const { broadcast } = broadcaster([peer]);
     const group = new AbortController().signal;
     const payload = text("x".repeat(3072));
     broadcast("tick", {});
