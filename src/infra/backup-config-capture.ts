@@ -217,11 +217,6 @@ export async function stageBackupConfigCapture(
     await fs.writeFile(stagedPath, bytes, { flag: "wx", mode: 0o600 });
     remaps.set(stagedPath, file.canonicalPath);
   }
-  await capture?.revalidate();
-  // Seal only after every dependency has been copied. Matching all authored
-  // bytes also pins the include edges; no second resolver or mixed retry.
-  for (const file of capture?.files ?? []) {
-    await readBackupConfigCaptureFile(file);
-  }
+  await capture?.assertRootAlias?.();
   return remaps;
 }
