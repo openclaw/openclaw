@@ -63,33 +63,43 @@ describe("Codex app-server attempt timeouts", () => {
     );
   });
 
-  it("waits for startup timeout cleanup before rejecting", async () => {
-    vi.useFakeTimers();
-    const events: string[] = [];
-    const run = withCodexStartupTimeout({
-      timeoutMs: 10,
-      signal: new AbortController().signal,
-      onTimeout: async () => {
-        events.push("cleanup-start");
-        await new Promise<void>((resolve) => {
-          setTimeout(() => {
-            events.push("cleanup-done");
-            resolve();
-          }, 5);
-        });
-      },
-      operation: async () => new Promise<never>(() => {}),
-    });
-    const errorResult = run.catch((error: unknown) => error);
+  it.each([false, true])(
+    "waits for startup timeout cleanup before rejecting (cleanup aborts: %s)",
+    async (abortDuringCleanup) => {
+      vi.useFakeTimers();
+      const events: string[] = [];
+      const controller = new AbortController();
+      const run = withCodexStartupTimeout({
+        timeoutMs: 10,
+        signal: controller.signal,
+        onTimeout: async () => {
+          events.push("cleanup-start");
+          if (abortDuringCleanup) {
+            controller.abort();
+          }
+          await new Promise<void>((resolve) => {
+            setTimeout(() => {
+              events.push("cleanup-done");
+              resolve();
+            }, 5);
+          });
+        },
+        operation: async () => new Promise<never>(() => {}),
+      });
+      const errorResult = run.catch((error: unknown) => {
+        events.push("rejected");
+        return error;
+      });
 
-    await vi.advanceTimersByTimeAsync(10);
-    expect(events).toEqual(["cleanup-start"]);
-    await vi.advanceTimersByTimeAsync(5);
-    const error = await errorResult;
-    expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
-    expect((error as Error).message).toBe("codex app-server startup timed out");
-    expect(events).toEqual(["cleanup-start", "cleanup-done"]);
-  });
+      await vi.advanceTimersByTimeAsync(10);
+      expect(events).toEqual(["cleanup-start"]);
+      await vi.advanceTimersByTimeAsync(5);
+      const error = await errorResult;
+      expect(isCodexAppServerStartupError(error, "timed_out")).toBe(true);
+      expect((error as Error).message).toBe("codex app-server startup timed out");
+      expect(events).toEqual(["cleanup-start", "cleanup-done", "rejected"]);
+    },
+  );
 
   it("rejects startup timeout when aborted before completion", async () => {
     vi.useFakeTimers();

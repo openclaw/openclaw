@@ -81,9 +81,7 @@ export async function withCodexStartupTimeout<T>(params: {
           () => undefined,
           () => undefined,
         );
-        return timeoutCleanup.then(() => {
-          throw timeoutError;
-        });
+        throw timeoutError;
       },
       {
         signal: params.signal,

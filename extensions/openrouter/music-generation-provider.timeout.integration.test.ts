@@ -8,7 +8,8 @@ import { describe, expect, it, vi } from "vitest";
 import { buildOpenRouterMusicGenerationProvider } from "./music-generation-provider.js";
 
 const resolveContext = vi.hoisted(() => vi.fn());
-vi.mock("./generation-request-context.js", () => ({
+vi.mock("./generation-request-context.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("./generation-request-context.js")>()),
   resolveOpenRouterGenerationRequestContext: resolveContext,
 }));
 
@@ -35,7 +36,7 @@ describe("OpenRouter music HTTP deadline", () => {
     const chunks = channel("undici:request:bodyChunkReceived");
     const onChunk = (message: unknown) => {
       const event = message as { request: { origin: string } };
-      if (String(event.request.origin) === origin) {
+      if (event.request.origin === origin) {
         received.resolve();
       }
     };
