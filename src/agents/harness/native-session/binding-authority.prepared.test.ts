@@ -27,7 +27,26 @@ import {
   prepareReplyToolAuthorityCallerRead,
   recordPreparedToolAuthorityRead,
 } from "../host-private-capabilities.js";
-import { createNativeSessionBindingAuthority } from "./binding-authority.js";
+import {
+  createNativeSessionBindingAuthority,
+  type NativeSessionBindingRead,
+} from "./binding-authority.js";
+
+function bindingRead(env: NodeJS.ProcessEnv, sessionKey: string): NativeSessionBindingRead {
+  return {
+    agentId: "main",
+    sessionKey,
+    storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env }),
+    env,
+  };
+}
+
+function bindingAuthority(read: NativeSessionBindingRead, sessionId: string, message: string) {
+  return createNativeSessionBindingAuthority(
+    [{ read, sessionId, createSupersededError: () => new Error(message) }],
+    () => {},
+  );
+}
 
 afterEach(() => {
   testing.resetSessionControllerForTest();
@@ -49,6 +68,9 @@ it.each([
     await captureRuntimeConfigAsyncReader()();
     const nativeKey = "agent:main:native-lineage";
     const policyKey = "agent:policy:steering-policy";
+    const nativeRead = bindingRead(state.env, nativeKey);
+    const compatibility = ["partial", "compat-refusal", "legacy-allowed"].includes(change);
+    const refusal = change === "refusal" || change === "compat-refusal";
     await upsertSessionEntryCore(
       { agentId: "main", sessionKey: nativeKey },
       { sessionId: "native", updatedAt: 1 },
@@ -80,28 +102,12 @@ it.each([
     });
     await operation.bindToolAuthoritySnapshotAsync(prepareReplyToolAuthority(run));
     const admitted = await operation.bindToolAuthorityRouteAsync(run.run);
-    const authority = createNativeSessionBindingAuthority(
-      [
-        {
-          read: {
-            agentId: "main",
-            sessionKey: nativeKey,
-            storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
-            env: state.env,
-          },
-          sessionId: "native",
-          createSupersededError: () => new Error("native lineage superseded"),
-        },
-      ],
-      () => {},
-    );
+    const authority = bindingAuthority(nativeRead, "native", "native lineage superseded");
     const compatAssertCurrent = vi.fn(() => {
       if (change === "legacy-allowed") {
         expect(
           loadSessionEntryReadOnly({
-            agentId: "main",
-            sessionKey: nativeKey,
-            storePath: resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env }),
+            ...nativeRead,
             readConsistency: "latest",
           })?.sessionId,
         ).toBe("native");
@@ -122,7 +128,7 @@ it.each([
         if (projected !== admitted) {
           throw new Error("policy no longer matches");
         }
-        if (change === "partial" || change === "compat-refusal" || change === "legacy-allowed") {
+        if (compatibility) {
           await prepareReplyToolAuthorityCallerRead({}, undefined, admitted, run.run, () => {});
           finalAdmissionEntered = true;
           entered.resolve();
@@ -157,7 +163,7 @@ it.each([
     const calls = observeMainThreadSql();
     const outcome = authority.withPreparedCurrent!(consumed, [
       preparation,
-      ...(change === "refusal" || change === "compat-refusal"
+      ...(refusal
         ? [
             bindWorkerToolPreparation({
               assertCurrent: assertOtherCurrent,
@@ -232,12 +238,8 @@ it.each([
         }
         expect(consumed).not.toHaveBeenCalled();
       }
-      expect(compatAssertCurrent).toHaveBeenCalledTimes(
-        change === "partial" || change === "compat-refusal" || change === "legacy-allowed" ? 1 : 0,
-      );
-      expect(onRefused).toHaveBeenCalledTimes(
-        change === "refusal" || change === "compat-refusal" ? 1 : 0,
-      );
+      expect(compatAssertCurrent).toHaveBeenCalledTimes(compatibility ? 1 : 0);
+      expect(onRefused).toHaveBeenCalledTimes(refusal ? 1 : 0);
     } finally {
       resume.resolve();
       await outcome;
@@ -255,18 +257,10 @@ it("pins the native lineage database before tool preparation yields", async () =
       { agentId: "main", sessionKey },
       { sessionId: "same", updatedAt: 1 },
     );
-    const storePath = resolveOpenClawAgentSqlitePath({ agentId: "main", env: state.env });
+    const read = bindingRead(state.env, sessionKey);
+    const { storePath } = read;
     await closeOpenClawAgentDatabaseByPathAsync(storePath, "main");
-    const authority = createNativeSessionBindingAuthority(
-      [
-        {
-          read: { agentId: "main", sessionKey, storePath, env: state.env },
-          sessionId: "same",
-          createSupersededError: () => new Error("superseded"),
-        },
-      ],
-      () => {},
-    );
+    const authority = bindingAuthority(read, "same", "superseded");
     const entered = createDeferred();
     const resume = createDeferred();
     const consumed = vi.fn();

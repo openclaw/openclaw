@@ -12,7 +12,29 @@ import {
 
 function createLeaseFixture() {
   const { state, values } = createBindingTestState();
-  return { state, values, owner: createNativeSessionBindingLeases(state, bindingTestOptions) };
+  const owner = createNativeSessionBindingLeases(state, bindingTestOptions);
+  return { state, values, owner };
+}
+
+function withLease<T>(
+  owner: ReturnType<typeof createLeaseFixture>["owner"],
+  key: string,
+  run: () => Promise<T>,
+) {
+  return owner.withLease(key, run, { prepareLease: prepareBindingTestLease });
+}
+
+type BindingStore = ReturnType<ReturnType<typeof createBindingTestState>["state"]["withCurrent"]>;
+
+function interceptStore(
+  state: ReturnType<typeof createBindingTestState>["state"],
+  wrap: (store: BindingStore) => Partial<BindingStore>,
+) {
+  const withCurrent = state.withCurrent.bind(state);
+  state.withCurrent = (authority) => {
+    const store = withCurrent(authority);
+    return { ...store, ...wrap(store) };
+  };
 }
 
 afterEach(() => {
@@ -24,77 +46,54 @@ describe("native session binding leases", () => {
   it("refuses callback entry when acquisition settles after lease expiry", async () => {
     vi.useFakeTimers();
     const { state, values, owner } = createLeaseFixture();
-    const withCurrent = state.withCurrent.bind(state);
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async compareAndApply(...args) {
-          const result = await store.compareAndApply(...args);
-          if (args[2].action === "set" && args[2].value.lease) {
-            vi.setSystemTime(args[2].value.lease.expiresAt);
-          }
-          return result;
-        },
-      };
-    };
+    interceptStore(state, (store) => ({
+      async compareAndApply(...args) {
+        const result = await store.compareAndApply(...args);
+        if (args[2].action === "set" && args[2].value.lease) {
+          vi.setSystemTime(args[2].value.lease.expiresAt);
+        }
+        return result;
+      },
+    }));
     const run = vi.fn(async () => "native effect");
-    await expect(
-      owner.withLease("expired", run, { prepareLease: prepareBindingTestLease }),
-    ).rejects.toThrow("Lost binding lease");
+    await expect(withLease(owner, "expired", run)).rejects.toThrow("Lost binding lease");
     expect(run).not.toHaveBeenCalled();
     expect(values.get("expired")).not.toHaveProperty("lease");
   });
 
-  it.each(["renewed"])("serializes peer writes behind a %s binding lease", async (mode) => {
+  it("serializes peer writes behind a renewed binding lease", async () => {
     vi.useFakeTimers();
     const { state, values, owner } = createLeaseFixture();
     const peer = createNativeSessionBindingLeases(state, bindingTestOptions);
     const key = "binding";
-    if (mode === "renewed") {
-      values.set(key, { value: "owner" });
-    }
+    values.set(key, { value: "owner" });
     let peerFinished = false;
     let peerWrite!: Promise<boolean>;
     await expect(
-      owner.withLease(
-        key,
-        async () => {
-          peerWrite = peer
-            .transact(key, (current) =>
-              mode === "renewed" || current?.value === undefined
-                ? { next: { value: "peer" }, result: true }
-                : { result: false },
-            )
-            .then((result) => {
-              peerFinished = true;
-              return result;
-            });
-          await Promise.resolve();
-          expect(peerFinished).toBe(false);
-          if (mode === "renewed") {
-            await vi.advanceTimersByTimeAsync(66_000);
-            expect(peerFinished).toBe(false);
-          }
-          const updated = await owner.transact(key, (current) =>
-            mode === "renewed" || current?.value === undefined
-              ? {
-                  next: { ...current, value: mode === "renewed" ? "updated" : "owner" },
-                  result: true,
-                }
-              : { result: false },
-          );
-          expect(updated).toBe(true);
-          await Promise.resolve();
-          expect(peerFinished).toBe(false);
-          return updated;
-        },
-        { prepareLease: prepareBindingTestLease },
-      ),
+      withLease(owner, key, async () => {
+        peerWrite = peer
+          .transact(key, () => ({ next: { value: "peer" }, result: true }))
+          .then((result) => {
+            peerFinished = true;
+            return result;
+          });
+        await Promise.resolve();
+        expect(peerFinished).toBe(false);
+        await vi.advanceTimersByTimeAsync(66_000);
+        expect(peerFinished).toBe(false);
+        const updated = await owner.transact(key, (current) => ({
+          next: { ...current, value: "updated" },
+          result: true,
+        }));
+        expect(updated).toBe(true);
+        await Promise.resolve();
+        expect(peerFinished).toBe(false);
+        return updated;
+      }),
     ).resolves.toBe(true);
     await vi.advanceTimersByTimeAsync(1_000);
-    await expect(peerWrite).resolves.toBe(mode === "renewed");
-    expect(values.get(key)).toEqual({ value: mode === "renewed" ? "peer" : "owner" });
+    await expect(peerWrite).resolves.toBe(true);
+    expect(values.get(key)).toEqual({ value: "peer" });
   });
 
   it.each([-70_000, 70_000])(
@@ -103,36 +102,26 @@ describe("native session binding leases", () => {
       vi.useFakeTimers();
       const { values, owner } = createLeaseFixture();
       const key = "binding";
-      // A peer holds a live lease long enough that the owner must wait inside
-      // the acquisition loop while its 70s wait budget runs.
       values.set(key, {
         value: "peer",
         lease: { token: "peer-owner", expiresAt: Date.now() + 120_000 },
       });
       const pending = owner.transact(key, (current) => ({ next: current, result: true }));
-      // Attach an early catch so a mid-advance rejection never surfaces as an
-      // unhandled rejection before the assertion below observes it.
+      // Observe rejection before advancing timers.
       const settled = pending.then(
         (v) => ({ ok: true as const, v }),
         (e: unknown) => ({ ok: false as const, e }),
       );
-      // Let the first busy iteration (update + monotonic sleep) settle.
       await vi.advanceTimersByTimeAsync(1_000);
-      // Adjust the wall clock (Date.now) only; the monotonic budget is untouched.
       vi.setSystemTime(Date.now() + jumpMs);
       if (jumpMs > 0) {
-        // A forward jump past the 70s deadline must not prematurely time out an
-        // acquisition that has waited nothing, so release the peer lease only
-        // after the deadline check has run.
+        // Release only after checking the deadline against the forward wall-clock jump.
         await vi.advanceTimersByTimeAsync(1_000);
         values.set(key, { value: "peer" });
         await vi.advanceTimersByTimeAsync(1_000);
         await expect(settled).resolves.toEqual({ ok: true, v: true });
       } else {
-        // A backward jump must not stretch the wait past its budget: with the
-        // peer never releasing, the acquisition times out at the waitMs budget
-        // (70s) instead of hanging beyond it. Advance just past 70s monotonic
-        // so the deadline fires; a wall-clock-based deadline would need ~140s.
+        // A wall-clock deadline would take ~140s; the monotonic budget stays at 70s.
         await vi.advanceTimersByTimeAsync(71_000);
         await expect(settled).resolves.toMatchObject({ ok: false });
         await expect(pending).rejects.toThrow("Binding lease timed out: binding");
@@ -150,34 +139,30 @@ describe("native session binding leases", () => {
       const key = "binding";
       values.set(key, { value: "owner" });
       await expect(
-        owner.withLease(
-          key,
-          async () => {
-            if (check === "transaction") {
-              vi.setSystemTime(Date.now() + 66_000);
-              await peer.withLease(
-                key,
-                async () => {
-                  await expect(
-                    peer.transact(key, (current) => ({
-                      next: { ...current, value: "peer" },
-                      result: true,
-                    })),
-                  ).resolves.toBe(true);
-                },
-                { prepareLease: prepareBindingTestLease },
-              );
-              await owner.transact(key, () => ({ next: { value: "stale" }, result: true }));
-            } else {
-              values.set(key, {
-                ...values.get(key),
-                lease: { token: "peer-owner", expiresAt: Date.now() + 120_000 },
-              });
-              await vi.advanceTimersByTimeAsync(30_000);
-            }
-          },
-          { prepareLease: prepareBindingTestLease },
-        ),
+        withLease(owner, key, async () => {
+          if (check === "transaction") {
+            vi.setSystemTime(Date.now() + 66_000);
+            await peer.withLease(
+              key,
+              async () => {
+                await expect(
+                  peer.transact(key, (current) => ({
+                    next: { ...current, value: "peer" },
+                    result: true,
+                  })),
+                ).resolves.toBe(true);
+              },
+              { prepareLease: prepareBindingTestLease },
+            );
+            await owner.transact(key, () => ({ next: { value: "stale" }, result: true }));
+          } else {
+            values.set(key, {
+              ...values.get(key),
+              lease: { token: "peer-owner", expiresAt: Date.now() + 120_000 },
+            });
+            await vi.advanceTimersByTimeAsync(30_000);
+          }
+        }),
       ).rejects.toThrow("Lost binding lease");
       if (check === "transaction") {
         expect(values.get(key)).toEqual({ value: "peer" });
@@ -201,21 +186,16 @@ describe("native session binding leases", () => {
           cause === renewalCause ? renewalFailure : bindingTestOptions.errors.lostLease(key),
       },
     });
-    const withCurrent = state.withCurrent.bind(state);
     let failNextObservation = false;
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async observe(key) {
-          if (failNextObservation) {
-            failNextObservation = false;
-            throw renewalCause;
-          }
-          return await store.observe(key);
-        },
-      };
-    };
+    interceptStore(state, (store) => ({
+      async observe(key) {
+        if (failNextObservation) {
+          failNextObservation = false;
+          throw renewalCause;
+        }
+        return await store.observe(key);
+      },
+    }));
     const { promise: ownerStarted, resolve: started } = createDeferred();
     const { promise: finishRun, resolve: finish } = createDeferred();
     let assertRetainedLease!: () => void;
@@ -251,25 +231,20 @@ describe("native session binding leases", () => {
     async (outcome) => {
       const { state, values, owner } = createLeaseFixture();
       values.set("binding", { value: "original" });
-      const withCurrent = state.withCurrent.bind(state);
       let replaced = false;
-      state.withCurrent = (authority) => {
-        const store = withCurrent(authority);
-        return {
-          ...store,
-          async compareAndApply(...args) {
-            if (outcome === "comparison refusal" && !replaced) {
-              replaced = true;
-              values.set("binding", { value: "successor" });
-            }
-            const result = await store.compareAndApply(...args);
-            if (outcome === "uncertain outcome") {
-              throw new Error("storage outcome unknown");
-            }
-            return result;
-          },
-        };
-      };
+      interceptStore(state, (store) => ({
+        async compareAndApply(...args) {
+          if (outcome === "comparison refusal" && !replaced) {
+            replaced = true;
+            values.set("binding", { value: "successor" });
+          }
+          const result = await store.compareAndApply(...args);
+          if (outcome === "uncertain outcome") {
+            throw new Error("storage outcome unknown");
+          }
+          return result;
+        },
+      }));
       const pending = owner.transact("binding", (current) =>
         outcome === "uncertain outcome"
           ? { next: { value: `${current?.value}:once` }, result: true }
@@ -291,22 +266,17 @@ describe("native session binding leases", () => {
     vi.useFakeTimers();
     const { state, values, owner } = createLeaseFixture();
     values.set("binding", { value: "original" });
-    const withCurrent = state.withCurrent.bind(state);
     let holdRenewal = false;
     const { promise: observationReleased, resolve: releaseObservation } = createDeferred();
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async observe(key) {
-          if (holdRenewal) {
-            holdRenewal = false;
-            await observationReleased;
-          }
-          return await store.observe(key);
-        },
-      };
-    };
+    interceptStore(state, (store) => ({
+      async observe(key) {
+        if (holdRenewal) {
+          holdRenewal = false;
+          await observationReleased;
+        }
+        return await store.observe(key);
+      },
+    }));
     const { promise: ownerStarted, resolve: started } = createDeferred();
     const { promise: finishRun, resolve: finish } = createDeferred();
     let settled = false;
@@ -353,50 +323,41 @@ describe("native binding lease settlement", () => {
     values.set("settling", { value: "original" });
     const entered = createDeferred();
     const released = createDeferred();
-    const withCurrent = state.withCurrent.bind(state);
     let pauseRenewal = false;
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async compareAndApply(...args) {
-          if (pauseRenewal) {
-            pauseRenewal = false;
-            entered.resolve();
-            await released.promise;
-          }
-          return store.compareAndApply(...args);
-        },
-      };
-    };
-    await owner.withLease(
-      "settling",
-      async () => {
-        const held = owner.owner("settling")!;
-        const originalExpiry = values.get("settling")!.lease!.expiresAt;
-        pauseRenewal = true;
-        await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs);
-        await entered.promise;
-        try {
-          expect(held.renewalPending()).toBe(true);
-          expect(() => held.quiesce()).toThrow("Lost binding lease");
-          expect(values.get("settling")!.lease!.expiresAt).toBe(originalExpiry);
-        } finally {
-          released.resolve();
+    interceptStore(state, (store) => ({
+      async compareAndApply(...args) {
+        if (pauseRenewal) {
+          pauseRenewal = false;
+          entered.resolve();
+          await released.promise;
         }
-        await held.joinRenewal();
-        expect(held.renewalPending()).toBe(false);
-        expect(values.get("settling")!.lease!.expiresAt).toBeGreaterThan(originalExpiry);
-        held.quiesce();
-        const quiesced = structuredClone(values.get("settling"));
-        await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs * 2);
-        expect(values.get("settling")).toEqual(quiesced);
-        await expect(
-          owner.transact("settling", () => ({ next: { value: "late" }, result: true })),
-        ).rejects.toThrow("Lost binding lease");
+        return store.compareAndApply(...args);
       },
-      { prepareLease: prepareBindingTestLease },
-    );
+    }));
+    await withLease(owner, "settling", async () => {
+      const held = owner.owner("settling")!;
+      const originalExpiry = values.get("settling")!.lease!.expiresAt;
+      pauseRenewal = true;
+      await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs);
+      await entered.promise;
+      try {
+        expect(held.renewalPending()).toBe(true);
+        expect(() => held.quiesce()).toThrow("Lost binding lease");
+        expect(values.get("settling")!.lease!.expiresAt).toBe(originalExpiry);
+      } finally {
+        released.resolve();
+      }
+      await held.joinRenewal();
+      expect(held.renewalPending()).toBe(false);
+      expect(values.get("settling")!.lease!.expiresAt).toBeGreaterThan(originalExpiry);
+      held.quiesce();
+      const quiesced = structuredClone(values.get("settling"));
+      await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.renewIntervalMs * 2);
+      expect(values.get("settling")).toEqual(quiesced);
+      await expect(
+        owner.transact("settling", () => ({ next: { value: "late" }, result: true })),
+      ).rejects.toThrow("Lost binding lease");
+    });
     expect(values.get("settling")).toEqual({ value: "original" });
   });
 
@@ -407,24 +368,18 @@ describe("native binding lease settlement", () => {
     const failure = new SqliteWorkerError("native settlement lost", "outcome-unknown");
     let token: string | undefined;
     await expect(
-      owner.withLease(
-        "uncertain",
-        async () => {
-          const held = owner.owner("uncertain")!;
-          token = held.token;
-          held.quiesce();
-          held.block(failure, { key: "uncertain", token });
-          throw failure;
-        },
-        { prepareLease: prepareBindingTestLease },
-      ),
+      withLease(owner, "uncertain", async () => {
+        const held = owner.owner("uncertain")!;
+        token = held.token;
+        held.quiesce();
+        held.block(failure, { key: "uncertain", token });
+        throw failure;
+      }),
     ).rejects.toBe(failure);
     expect(values.get("uncertain")?.lease?.token).toBe(token);
     await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.staleMs * 2);
     const replay = vi.fn(async () => "replayed");
-    await expect(
-      owner.withLease("uncertain", replay, { prepareLease: prepareBindingTestLease }),
-    ).rejects.toBe(failure);
+    await expect(withLease(owner, "uncertain", replay)).rejects.toBe(failure);
     await expect(
       owner.transact("uncertain", () => ({ next: { value: "replaced" }, result: true })),
     ).rejects.toBe(failure);
@@ -437,71 +392,55 @@ describe("native binding lease settlement", () => {
     ).resolves.toBe("available");
   });
 
-  it.each(["removed row"] as const)(
-    "refuses an already-waiting mutation when settlement becomes unknown (%s)",
-    async (available) => {
-      vi.useFakeTimers();
-      const { state, values, owner } = createLeaseFixture();
-      const key = "queued-before-unknown";
-      values.set(key, { value: "original" });
-      const entered = createDeferred();
-      const finished = createDeferred();
-      const waiting = createDeferred();
-      let held: ReturnType<typeof owner.owner>;
-      const lease = owner.withLease(
-        key,
-        async () => {
-          held = owner.owner(key);
-          entered.resolve();
-          await finished.promise;
-        },
-        { prepareLease: prepareBindingTestLease },
-      );
-      const leaseOutcome = lease.catch((error: unknown) => error);
-      await entered.promise;
-      const withCurrent = state.withCurrent.bind(state);
-      state.withCurrent = (authority) => {
-        const store = withCurrent(authority);
-        return {
-          ...store,
-          async compareAndApply(...args) {
-            const result = await store.compareAndApply(...args);
-            if (args[2].action === "keep") {
-              waiting.resolve();
-            }
-            return result;
-          },
-        };
-      };
-      const apply = vi.fn(() => ({ next: { value: "late write" }, result: true }));
-      // This caller is outside the lease's async context and has already passed its first fence.
-      const mutation = owner.transact(key, apply);
-      const mutationOutcome = mutation.catch((error: unknown) => error);
-      const failure = new SqliteWorkerError("original deletion outcome unknown", "outcome-unknown");
-      try {
-        await waiting.promise;
-        await vi.advanceTimersByTimeAsync(0);
-        held!.block(failure, { key });
-        if (available === "removed row") {
-          values.delete(key);
-        } else {
-          vi.setSystemTime(Date.now() + bindingTestOptions.lease.staleMs + 1);
+  it("refuses an already-waiting mutation when settlement removes its row", async () => {
+    vi.useFakeTimers();
+    const { state, values, owner } = createLeaseFixture();
+    const key = "queued-before-unknown";
+    values.set(key, { value: "original" });
+    const entered = createDeferred();
+    const finished = createDeferred();
+    const waiting = createDeferred();
+    let held: ReturnType<typeof owner.owner>;
+    const lease = withLease(owner, key, async () => {
+      held = owner.owner(key);
+      entered.resolve();
+      await finished.promise;
+    });
+    const leaseOutcome = lease.catch((error: unknown) => error);
+    await entered.promise;
+    interceptStore(state, (store) => ({
+      async compareAndApply(...args) {
+        const result = await store.compareAndApply(...args);
+        if (args[2].action === "keep") {
+          waiting.resolve();
         }
-        const blockedValue = structuredClone(values.get(key));
-        finished.resolve();
-        expect(await leaseOutcome).toBe(failure);
-        await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.retryIntervalMs);
-        expect(await mutationOutcome).toBe(failure);
-        expect(apply).not.toHaveBeenCalled();
-        expect(values.get(key)).toEqual(blockedValue);
-      } finally {
-        finished.resolve();
-        await leaseOutcome;
-        await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.retryIntervalMs);
-        await mutationOutcome;
-      }
-    },
-  );
+        return result;
+      },
+    }));
+    const apply = vi.fn(() => ({ next: { value: "late write" }, result: true }));
+    // This caller is outside the lease's async context and has already passed its first fence.
+    const mutation = owner.transact(key, apply);
+    const mutationOutcome = mutation.catch((error: unknown) => error);
+    const failure = new SqliteWorkerError("original deletion outcome unknown", "outcome-unknown");
+    try {
+      await waiting.promise;
+      await vi.advanceTimersByTimeAsync(0);
+      held!.block(failure, { key });
+      values.delete(key);
+      const blockedValue = structuredClone(values.get(key));
+      finished.resolve();
+      expect(await leaseOutcome).toBe(failure);
+      await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.retryIntervalMs);
+      expect(await mutationOutcome).toBe(failure);
+      expect(apply).not.toHaveBeenCalled();
+      expect(values.get(key)).toEqual(blockedValue);
+    } finally {
+      finished.resolve();
+      await leaseOutcome;
+      await vi.advanceTimersByTimeAsync(bindingTestOptions.lease.retryIntervalMs);
+      await mutationOutcome;
+    }
+  });
 
   it("rechecks unresolved custody after observation and immediately before an accepted write", async () => {
     const { state, values, owner } = createLeaseFixture();
@@ -509,18 +448,13 @@ describe("native binding lease settlement", () => {
     values.set(key, { value: "original" });
     const entered = createDeferred();
     const released = createDeferred();
-    const withCurrent = state.withCurrent.bind(state);
-    state.withCurrent = (authority) => {
-      const store = withCurrent(authority);
-      return {
-        ...store,
-        async compareAndApply(...args) {
-          entered.resolve();
-          await released.promise;
-          return store.compareAndApply(...args);
-        },
-      };
-    };
+    interceptStore(state, (store) => ({
+      async compareAndApply(...args) {
+        entered.resolve();
+        await released.promise;
+        return store.compareAndApply(...args);
+      },
+    }));
     const apply = vi.fn(() => ({ next: { value: "stale prepared write" }, result: true }));
     const mutation = owner.transact(key, apply);
     const outcome = mutation.catch((error: unknown) => error);
@@ -552,25 +486,20 @@ describe("native binding lease settlement", () => {
         active = false;
         return "native-outcome";
       });
-      const bind = state.withCurrent.bind(state);
-      state.withCurrent = (authority) => {
-        const store = bind(authority);
-        return {
-          ...store,
-          async compareAndApply(...args) {
-            const result = await store.compareAndApply(...args);
-            if (args[2].action === "set" && args[2].value.lease) {
-              if (failureAt === "storage-cleanup") {
-                throw failure;
-              }
-              if (failureAt === "canceled-after-admission") {
-                active = false;
-              }
+      interceptStore(state, (store) => ({
+        async compareAndApply(...args) {
+          const result = await store.compareAndApply(...args);
+          if (args[2].action === "set" && args[2].value.lease) {
+            if (failureAt === "storage-cleanup") {
+              throw failure;
             }
-            return result;
-          },
-        };
-      };
+            if (failureAt === "canceled-after-admission") {
+              active = false;
+            }
+          }
+          return result;
+        },
+      }));
       await expect(
         owner.withLease(key, run, {
           prepareLease: prepareBindingTestLease,
@@ -626,14 +555,10 @@ describe("native binding lease settlement", () => {
     };
     const failure = new Error("caller revoked");
     await expect(
-      owner.withLease(
-        key,
-        async () => {
-          values.set(key, successor);
-          throw failure;
-        },
-        { prepareLease: prepareBindingTestLease },
-      ),
+      withLease(owner, key, async () => {
+        values.set(key, successor);
+        throw failure;
+      }),
     ).rejects.toBe(failure);
     expect(values.get(key)).toEqual(successor);
   });

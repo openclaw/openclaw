@@ -24,6 +24,8 @@ import {
   type TestBindingRecord,
 } from "./binding.test-support.js";
 
+const leaseOptions = { prepareLease: prepareBindingTestLease };
+
 function bindingStores(env: NodeJS.ProcessEnv) {
   const options = {
     namespace: "bindings",
@@ -31,9 +33,6 @@ function bindingStores(env: NodeJS.ProcessEnv) {
     overflowPolicy: "reject-new" as const,
     env,
   };
-  const asyncState = createPluginStateKeyedStoreV2<TestBindingRecord>("binding-proof", options, {
-    assertCurrent() {},
-  });
   const state = {
     withCurrent(authority: PluginStateActionAuthority) {
       return createPluginStateKeyedStoreV2<TestBindingRecord>("binding-proof", options, authority);
@@ -41,7 +40,7 @@ function bindingStores(env: NodeJS.ProcessEnv) {
   };
   return {
     state,
-    asyncState,
+    asyncState: state.withCurrent({ assertCurrent() {} }),
     owner: createNativeSessionBindingLeasesV2(state, bindingTestOptions),
   };
 }
@@ -118,7 +117,7 @@ describe("native binding worker admission", () => {
             expect(await pending).toMatchObject({ message: `${changed} lineage superseded` });
             expect(await asyncState.lookup("binding")).toMatchObject({ value: "before" });
           },
-          { prepareLease: prepareBindingTestLease, authority: lease.authority },
+          { ...leaseOptions, authority: lease.authority },
         );
       });
     },
@@ -165,7 +164,7 @@ describe("native binding worker admission", () => {
               }
               expect(assertCurrent).toThrow();
             },
-            { prepareLease: prepareBindingTestLease },
+            leaseOptions,
           );
           expect(retainedAssertion).toThrow("Lost binding lease");
         }
@@ -205,9 +204,8 @@ describe("native binding worker admission", () => {
         await mutation;
         await holder.joined;
       }
-      const result = await mutation;
       expect(progressedBeforeSettlement).toBe(true);
-      expect(result).toEqual({ value: "stored" });
+      expect(await mutation).toEqual({ value: "stored" });
       expect(await asyncState.lookup("binding")).toEqual({ value: "after" });
     });
   });
@@ -247,16 +245,12 @@ describe("native binding worker admission", () => {
               assertCurrent,
             );
           },
-          {
-            prepareLease: prepareBindingTestLease,
-            assertCurrent,
-          },
+          { ...leaseOptions, assertCurrent },
         ),
       ).rejects.toThrow();
       expect(refusedCommit).toBe(true);
       expect(entered).toBe(true);
-      const stored = await asyncState.lookup("binding");
-      expect(stored).toMatchObject({ value: "before" });
+      expect(await asyncState.lookup("binding")).toMatchObject({ value: "before" });
     });
   });
 });

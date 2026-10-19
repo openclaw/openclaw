@@ -50,6 +50,22 @@ describe("native session binding generation authority", () => {
   };
   const binding = { value: "native-owner" };
   const scope = () => ({ agentId: target.agentId, sessionKey: target.sessionKey, storePath });
+  const params = () => ({ target, storePath, createSupersededError });
+  const seed = () => upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
+  const retain = (
+    overrides: Partial<Parameters<typeof retainNativeSessionGenerationAuthority>[0]> = {},
+  ) => retainNativeSessionGenerationAuthority({ ...params(), ...overrides });
+  const resolve = (
+    overrides: Partial<
+      Parameters<typeof resolvePreparedNativeSessionBinding<typeof binding>>[0]
+    > = {},
+  ) =>
+    resolvePreparedNativeSessionBinding({
+      ...params(),
+      readBinding: async () => binding,
+      ...overrides,
+    });
+  const superseded = "Session generation is no longer current";
 
   beforeEach(async ({ onTestFinished }) => {
     const fixture = await createOpenClawTestState({
@@ -69,11 +85,8 @@ describe("native session binding generation authority", () => {
         state === "ephemeral" ? { ...scope(), sessionKey: "agent:main:other" } : scope(),
         { sessionId: state === "ephemeral" ? "session-other" : target.sessionId, updatedAt: 1 },
       );
-      const pending = resolvePreparedNativeSessionBinding({
+      const pending = resolve({
         target: state === "stale" ? { ...target, sessionId: "session-stale" } : target,
-        storePath,
-        readBinding: async () => binding,
-        createSupersededError,
         assertCurrent: () => {
           if (!active) {
             throw new Error("caller authority closed");
@@ -81,7 +94,7 @@ describe("native session binding generation authority", () => {
         },
       });
       if (state === "stale") {
-        await expect(pending).rejects.toThrow("Session generation is no longer current");
+        await expect(pending).rejects.toThrow(superseded);
         return;
       }
       const resolved = await pending;
@@ -93,27 +106,17 @@ describe("native session binding generation authority", () => {
       } else {
         await patchSessionEntryCore(scope(), () => ({ sessionId: "session-successor" }));
       }
-      expect(() => resolved.authority.assertCurrent()).toThrow(
-        state === "ephemeral"
-          ? "caller authority closed"
-          : "Session generation is no longer current",
-      );
-      await expect(resolved.authority.withCurrent(() => undefined)).rejects.toThrow(
-        state === "ephemeral"
-          ? "caller authority closed"
-          : "Session generation is no longer current",
-      );
+      const error = state === "ephemeral" ? "caller authority closed" : superseded;
+      expect(() => resolved.authority.assertCurrent()).toThrow(error);
+      await expect(resolved.authority.withCurrent(() => undefined)).rejects.toThrow(error);
     },
   );
 
   it("rechecks host generation after an awaited binding read", async () => {
-    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
+    await seed();
     const reading = createDeferred();
     const release = createDeferred();
-    const pending = resolvePreparedNativeSessionBinding({
-      target,
-      storePath,
-      createSupersededError,
+    const pending = resolve({
       readBinding: async () => {
         reading.resolve();
         await release.promise;
@@ -132,12 +135,9 @@ describe("native session binding generation authority", () => {
   });
 
   it("retains published lineage through foreground abort and terminal cleanup without main-thread SQL", async () => {
-    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
+    await seed();
     const controller = new AbortController();
-    const retained = await retainNativeSessionGenerationAuthority({
-      target,
-      storePath,
-      createSupersededError,
+    const retained = await retain({
       assertCurrent: () => controller.signal.throwIfAborted(),
     });
     using _ = { [Symbol.dispose]: () => retained.release() };
@@ -174,53 +174,31 @@ describe("native session binding generation authority", () => {
   });
 
   it("releases a composed child capture without releasing its borrowed parent", async () => {
-    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
-    const parent = await retainNativeSessionGenerationAuthority({
-      target,
-      storePath,
-      createSupersededError,
-    });
+    await seed();
+    const parent = await retain();
     using _ = { [Symbol.dispose]: () => parent.release() };
-    const child = await resolvePreparedNativeSessionBinding({
-      target,
-      storePath,
-      createSupersededError,
-      authority: parent.authority,
-      readBinding: async () => binding,
-    });
+    const child = await resolve({ authority: parent.authority });
     const cleanup = child.authority.withLiveness(() => {});
     child.release();
-    expect(() => cleanup.assertLegacyCurrent()).toThrow("Session generation is no longer current");
+    expect(() => cleanup.assertLegacyCurrent()).toThrow(superseded);
     expect(() => parent.authority.assertLegacyCurrent()).not.toThrow();
     parent.release();
-    expect(() => parent.authority.assertLegacyCurrent()).toThrow(
-      "Session generation is no longer current",
-    );
+    expect(() => parent.authority.assertLegacyCurrent()).toThrow(superseded);
   });
 
   it("consumes transferred lineage even when resolver admission is already revoked", async () => {
-    await upsertSessionEntryCore(scope(), { sessionId: target.sessionId, updatedAt: 1 });
-    const retained = await retainNativeSessionGenerationAuthority({
-      target,
-      storePath,
-      createSupersededError,
-    });
+    await seed();
+    const retained = await retain();
     using _ = { [Symbol.dispose]: () => retained.release() };
     const controller = new AbortController();
     controller.abort(new Error("resolver revoked"));
     await expect(
-      resolvePreparedNativeSessionBinding({
-        target,
-        storePath,
-        createSupersededError,
+      resolve({
         generationAuthority: retained,
         signal: controller.signal,
-        readBinding: async () => binding,
       }),
     ).rejects.toThrow("resolver revoked");
-    expect(() => retained.authority.assertLegacyCurrent()).toThrow(
-      "Session generation is no longer current",
-    );
+    expect(() => retained.authority.assertLegacyCurrent()).toThrow(superseded);
   });
 
   it("does not bridge two generations when the host rotates during a predecessor wait", async () => {
@@ -243,21 +221,21 @@ describe("native session binding generation authority", () => {
         return authority.withCurrent(adopt);
       },
       reclaim: async (_expectedPreviousSessionId, authority) => {
-        const reclaim = () => {
+        return authority.withCurrent(() => {
           throw new Error("Stale reclaim is disabled");
-        };
-        return authority.withCurrent(reclaim);
+        });
       },
     };
     await upsertSessionEntryCore(scope(), { sessionId: previous.sessionId, updatedAt: 1 });
     await patchSessionEntryCore(scope(), () => ({ sessionId: target.sessionId }));
-    const outcome = reclaimNativeSessionGenerationWithAuthority({
-      target,
-      storePath,
-      generation,
-      reclaimStale: false,
-      createSupersededError,
-    }).catch((error: unknown) => error);
+    const reclaim = (currentTarget = target) =>
+      reclaimNativeSessionGenerationWithAuthority({
+        ...params(),
+        target: currentTarget,
+        generation,
+        reclaimStale: false,
+      });
+    const outcome = reclaim().catch((error: unknown) => error);
     await preparationStarted;
     await patchSessionEntryCore(scope(), () => ({ sessionId: next.sessionId }));
     finishPreparation();
@@ -270,14 +248,6 @@ describe("native session binding generation authority", () => {
       sessionId: next.sessionId,
       previousSessionId: target.sessionId,
     });
-    await expect(
-      reclaimNativeSessionGenerationWithAuthority({
-        target: next,
-        storePath,
-        generation,
-        reclaimStale: false,
-        createSupersededError,
-      }),
-    ).resolves.toBe(false);
+    await expect(reclaim(next)).resolves.toBe(false);
   });
 });
