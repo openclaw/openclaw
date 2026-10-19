@@ -1,4 +1,4 @@
-import { projectSource } from "../../lib/reactive/projection.ts";
+import { projectMutableSource } from "../../lib/reactive/projection.ts";
 
 /** RPC admission and drafts mutate synchronously; rendering observes their publication. */
 export function observeSkillState<T extends object>(initial: T) {
@@ -13,16 +13,8 @@ export function observeSkillState<T extends object>(initial: T) {
       return updated;
     },
   });
-  const projection = projectSource(state, {
-    read: (source) => source,
-    subscribe: (_source, listener) => {
-      notify = listener;
-      return () => {
-        notify = () => {};
-      };
-    },
-    equality: "revision",
-  });
+  const projection = projectMutableSource(state, (source) => source);
+  notify = projection.publish;
   return {
     state,
     read: projection.read,
