@@ -75,13 +75,16 @@ function classifyProcessArtifactCustody(
   cwd: string | undefined,
   parentCommand: ProcessCommand | undefined,
 ): ArtifactCustody {
-  const argv = command && "argv" in command ? command.argv : [];
+  if (!command) {
+    return { kind: "unknown", reason: "process command is unavailable" };
+  }
+  const argv = "argv" in command ? command.argv : [];
   const references = [
     ...argv.map((value) => value.replace(/^--[^=]+=/u, "").replace(/^-r(?=.)/u, "")),
     cwd ?? "",
-    command && "executable" in command ? (command.executable ?? "") : "",
+    "executable" in command ? (command.executable ?? "") : "",
   ].filter(referencesRetainedArtifact);
-  if (!command || "argvUnavailable" in command || argv.length === 0) {
+  if ("argvUnavailable" in command || argv.length === 0) {
     return references.length ? { kind: "holder" } : { kind: "not-holder" };
   }
   const { position, operands } = resolveRuntimeScriptPosition(argv);
@@ -281,9 +284,9 @@ export function inspectOtherOpenClawProcesses(references?: HandoffReferences | s
     if (
       !current ||
       (!handoff &&
-        processes.some(
-          (entry) => !entry.command || (process.platform === "linux" && !("argv" in entry.command)),
-        ))
+        (!current.command ||
+          (process.platform === "linux" &&
+            processes.some((entry) => entry.command && !("argv" in entry.command)))))
     ) {
       throw new Error("OpenClaw process census is incomplete.");
     }
