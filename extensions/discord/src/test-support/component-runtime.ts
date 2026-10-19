@@ -163,7 +163,6 @@ export function resetDiscordComponentRuntimeMocks() {
       pluginId: "openclaw-codex-app-server",
       pluginName: "OpenClaw App Server",
       pluginRoot: "/plugins/codex",
-      requestedAt: Date.now(),
       conversation: {
         channel: "discord",
         accountId: "default",
