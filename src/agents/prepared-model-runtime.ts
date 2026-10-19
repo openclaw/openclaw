@@ -522,7 +522,7 @@ export function refreshPreparedModelRuntimeSnapshots(
   const isPublicationCurrent = () =>
     requestEpoch === refreshRequestEpoch && options.isPublicationCurrent?.() !== false;
   const startup =
-    options.startup === true && options.catalogMode === "static" && replacement
+    options.startup && options.catalogMode === "static" && replacement
       ? new PreparedModelRuntimeStartup({
           replacement,
           owners: () => owners.values(),
@@ -635,7 +635,12 @@ export function refreshPreparedModelRuntimeSnapshots(
       }
       throw refreshError;
     });
-  return publicationQueue.complete(publication, isPublicationCurrent, options, startup);
+  return publicationQueue.complete(
+    publication,
+    isPublicationCurrent,
+    options,
+    options.startup === "background" ? undefined : startup,
+  );
 }
 
 async function drainPendingAuthMutations(

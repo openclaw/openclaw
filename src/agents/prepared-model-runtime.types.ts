@@ -194,8 +194,10 @@ export type PreparedModelRuntimePublicationOptions = {
 
 export type PreparedModelRuntimeRefreshOptions = {
   gatewayLifecycle?: boolean;
-  /** Startup may serve settled agents while the remaining publication continues. */
-  startup?: boolean;
+  /**
+   * Startup owns acquisition. `true` bounds the foreground wait; `background` joins publication.
+   */
+  startup?: boolean | "background";
   defaultWorkspaceDir?: string;
   catalogMode?: PreparedModelRuntimeCatalogMode;
   onBuildStats?: (stats: PreparedModelRuntimeBuildStats) => void;
