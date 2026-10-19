@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { aggregateDay, aggregateDays } from "./aggregate.js";
+import { aggregateDay, aggregateDays, type AggregateDayOptions } from "./aggregate.js";
 import { describePeriod } from "./periods.js";
 import { buildRoster } from "./roster.js";
 import type { DiscordMessage, GithubItem, Person, ReportDocument } from "./types.js";
@@ -37,10 +37,20 @@ function message(overrides: Partial<DiscordMessage> = {}): DiscordMessage {
   };
 }
 
+function comment(suffix: string, overrides: Partial<GithubItem> = {}) {
+  return item({
+    kind: "issue_comment",
+    body: "Ready for review",
+    url: `https://github.com/sample/project/${suffix}`,
+    ...overrides,
+  });
+}
+
 function day(
   items: GithubItem[] = [],
   messages: DiscordMessage[] = [],
   key = period.key,
+  overrides: Partial<AggregateDayOptions> = {},
 ): ReportDocument {
   return aggregateDay({
     period: describePeriod("day", key),
@@ -59,6 +69,7 @@ function day(
       ],
       excerptMaxChars: 20,
     },
+    ...overrides,
   });
 }
 
@@ -117,40 +128,16 @@ describe("team report attribution", () => {
 
   it("collapses exact comment bodies by actor and kind, ignores patterns, and removes bodies from stored evidence", () => {
     const comments = [
-      item({
-        kind: "issue_comment",
-        body: "Ready for review",
-        url: "https://github.com/sample/project/issues/1#issuecomment-1",
-      }),
-      item({
-        kind: "issue_comment",
-        body: "Ready for review",
-        url: "https://github.com/sample/project/issues/2#issuecomment-2",
+      comment("issues/1#issuecomment-1"),
+      comment("issues/2#issuecomment-2", {
         atMs: period.sinceMs + 2000,
       }),
-      item({
+      comment("pull/3#discussion_r3", {
         kind: "review_comment",
-        body: "Ready for review",
-        url: "https://github.com/sample/project/pull/3#discussion_r3",
       }),
-      item({
-        kind: "issue_comment",
-        body: "Ready for review",
-        actor: "beta",
-        url: "https://github.com/sample/project/issues/1#issuecomment-4",
-      }),
-      item({
-        kind: "issue_comment",
-        body: "automation: label backfill",
-        url: "https://github.com/sample/project/issues/1#issuecomment-5",
-      }),
-      ...["\ud800", "\ud801"].map((body, index) =>
-        item({
-          kind: "issue_comment",
-          body,
-          url: `https://github.com/sample/project/issues/1#unicode-${index}`,
-        }),
-      ),
+      comment("issues/1#issuecomment-4", { actor: "beta" }),
+      comment("issues/1#issuecomment-5", { body: "automation: label backfill" }),
+      ...["\ud800", "\ud801"].map((body, index) => comment(`issues/1#unicode-${index}`, { body })),
     ];
     const report = day(comments);
     expect(report.totals.github).toMatchObject({ total: 5, issueComments: 4, reviewComments: 1 });
@@ -210,14 +197,9 @@ describe("team report attribution", () => {
 
   it("marks an open UTC day partial and excludes future activity", () => {
     const nowMs = period.sinceMs + 2000;
-    const report = aggregateDay({
-      period,
+    const report = day([item(), item({ atMs: nowMs + 1, url: "future" })], [], period.key, {
       nowMs,
-      orgs: ["sample"],
-      roster: buildRoster(people),
-      items: [item(), item({ atMs: nowMs + 1, url: "future" })],
-      messages: [],
-      githubStatus: { ok: true, warnings: [], stats: {} },
+      discordStatus: undefined,
     });
     expect(report.status).toBe("partial");
     expect(report.totals.github.total).toBe(1);
@@ -279,7 +261,8 @@ describe("stored day aggregation", () => {
 });
 
 describe("report evidence bounds", () => {
-  it.each(["e\u0301"])("bounds excerpts without splitting %s graphemes", (grapheme) => {
+  it("bounds excerpts without splitting combining graphemes", () => {
+    const grapheme = "e\u0301";
     for (const [content, excerpt] of [
       [grapheme.repeat(20), grapheme.repeat(20)],
       [grapheme.repeat(21), `${grapheme.repeat(19)}…`],
@@ -302,14 +285,13 @@ describe("report evidence bounds", () => {
       Array.from({ length: 12 }, (_, index) => message({ atMs: period.sinceMs + index + 1 })),
     );
     expect(report.truncated).toBe(true);
-    expect(member(report, "alpha").github.total).toBe(205);
-    expect(member(report, "alpha").github.items).toHaveLength(200);
-    expect(member(report, "alpha").github.items.at(-1)?.url).toBe(
-      "https://github.com/sample/project/commit/5",
-    );
-    expect(member(report, "alpha").discord.total).toBe(12);
-    expect(member(report, "alpha").discord.excerpts).toHaveLength(8);
-    expect(member(report, "alpha").discord.excerpts.at(-1)?.atMs).toBe(period.sinceMs + 5);
+    const { github, discord } = member(report, "alpha");
+    expect(github.total).toBe(205);
+    expect(github.items).toHaveLength(200);
+    expect(github.items.at(-1)?.url).toBe("https://github.com/sample/project/commit/5");
+    expect(discord.total).toBe(12);
+    expect(discord.excerpts).toHaveLength(8);
+    expect(discord.excerpts.at(-1)?.atMs).toBe(period.sinceMs + 5);
   });
 
   it("bounds UTF-8 serialized data by dropping oldest evidence, preserving exact counts", () => {

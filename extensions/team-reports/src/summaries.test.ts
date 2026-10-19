@@ -1,26 +1,23 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { describePeriod } from "./periods.js";
 import { completion, githubCounts as counts, type Complete } from "./reports.fixtures.js";
 import { generateSummaries } from "./summaries.js";
 import type { PersonReport, ReportDocument } from "./types.js";
 
-function member(login: string): PersonReport {
+function member(login: string, items: PersonReport["github"]["items"] = []): PersonReport {
   return {
     login,
     display: login,
     access: [],
     areas: [],
     aliases: [],
-    github: { ...counts(), items: [] },
+    github: { ...counts(items.length), items },
     discord: { total: 0, channels: {}, excerpts: [] },
   };
 }
 
 function report(): ReportDocument {
-  const alex = member("alex");
-  alex.github.total = 1;
-  alex.github.commits = 1;
-  alex.github.repos = { "sample/widgets": 1 };
-  alex.github.items = [
+  const alex = member("alex", [
     {
       kind: "commit",
       repo: "sample/widgets",
@@ -29,16 +26,11 @@ function report(): ReportDocument {
       actor: "alex",
       atMs: Date.parse("2026-08-20T12:00:00Z"),
     },
-  ];
+  ]);
+  alex.github.repos = { "sample/widgets": 1 };
   return {
     version: 1,
-    period: {
-      period: "day",
-      key: "2026-08-20",
-      sinceMs: Date.parse("2026-08-20T00:00:00Z"),
-      untilMs: Date.parse("2026-08-21T00:00:00Z"),
-      title: "August 20, 2026",
-    },
+    period: describePeriod("day", "2026-08-20"),
     generatedAtMs: 1,
     status: "closed",
     orgs: ["sample"],
@@ -60,10 +52,10 @@ function response() {
     globalSummary:
       "One member corrected widget resizing. The other member has no recorded activity.\n\n- **Widgets:** Corrected resize calculations.\n- **Reviews:** None recorded.\n- **Discord:** No messages recorded.\n- **Coverage:** GitHub collection succeeded.",
     highlights: [
-      "Widget resize calculation corrected.",
-      "No review comments were recorded.",
-      "No Discord messages were recorded.",
-      "One member has no recorded activity.",
+      "Resize corrected.",
+      "No reviews.",
+      "No Discord messages.",
+      "One inactive member.",
     ],
     members: [
       {
@@ -88,6 +80,8 @@ function summarize(
   });
 }
 
+const modelCompletion = () => completion(JSON.stringify(response()));
+
 afterEach(() => vi.restoreAllMocks());
 
 describe("team report summaries", () => {
@@ -101,7 +95,7 @@ describe("team report summaries", () => {
     const complete = vi
       .fn<Complete>()
       .mockResolvedValueOnce(completion(JSON.stringify(incomplete)))
-      .mockResolvedValueOnce(completion(JSON.stringify(response())));
+      .mockResolvedValueOnce(modelCompletion());
     const result = await summarize(complete);
     expect(result.summary.source).toBe("model");
     expect(result.report.members.every((entry) => entry.summary?.source === "model")).toBe(true);
@@ -184,7 +178,7 @@ describe("team report summaries", () => {
   });
 
   it("reuses an unchanged fingerprint and restores stored member prose onto fresh evidence", async () => {
-    const complete = vi.fn<Complete>().mockResolvedValue(completion(JSON.stringify(response())));
+    const complete = vi.fn<Complete>().mockResolvedValue(modelCompletion());
     const first = await summarize(complete);
     const fresh = report();
     fresh.generatedAtMs = 12345;
@@ -193,7 +187,6 @@ describe("team report summaries", () => {
     const next = await summarize(complete, { report: fresh, previous: first });
     expect(complete).toHaveBeenCalledOnce();
     expect(next.summary).toEqual(first.summary);
-    expect(next.summary.fingerprint).toBe(first.summary.fingerprint);
     expect(next.report.generatedAtMs).toBe(12345);
     expect(next.report.members.find((entry) => entry.login === "alex")?.summary?.text).toBe(
       response().members[0]?.summary,
@@ -215,7 +208,7 @@ describe("team report summaries", () => {
       actor: "alex",
       atMs: index,
     }));
-    const complete = vi.fn<Complete>().mockResolvedValue(completion(JSON.stringify(response())));
+    const complete = vi.fn<Complete>().mockResolvedValue(modelCompletion());
     await summarize(complete, { report: input });
     const digest = complete.mock.calls[0]?.[0].messages[1]?.content;
     expect(digest).not.toContain("RAW BODY");
@@ -228,16 +221,11 @@ describe("team report summaries", () => {
     const complete = vi.fn<Complete>().mockImplementation(async ({ signal }) => {
       expect(signal).toBe(controller.signal);
       controller.abort(new Error("Run deadline reached"));
-      return completion(JSON.stringify(response()));
+      return modelCompletion();
     });
-    await expect(
-      generateSummaries({
-        report: report(),
-        options: { enabled: true },
-        llm: { complete },
-        signal: controller.signal,
-      }),
-    ).rejects.toThrow("Run deadline reached");
+    await expect(summarize(complete, { signal: controller.signal })).rejects.toThrow(
+      "Run deadline reached",
+    );
     expect(complete).toHaveBeenCalledOnce();
   });
 });

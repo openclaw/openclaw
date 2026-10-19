@@ -13,7 +13,7 @@ import { renderMarkdown } from "./render/markdown.js";
 import { githubCounts } from "./reports.fixtures.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
-import type { Period, Person, ReportDocument, SummaryDocument } from "./types.js";
+import type { Period, Person, PersonReport, ReportDocument, SummaryDocument } from "./types.js";
 import type { WorkSessions } from "./work-sessions.js";
 
 vi.mock("openclaw/plugin-sdk/gateway-method-runtime", () => ({ dispatchGatewayMethod: vi.fn() }));
@@ -51,6 +51,18 @@ const avatarPeople: Person[] = [
   { github: ["a".repeat(40), "long-login-alias"], display: "Long Login" },
 ];
 
+function member(login: string, display = login, aliases: string[] = []): PersonReport {
+  return {
+    login,
+    display,
+    aliases,
+    access: [],
+    areas: [],
+    github: { ...counts, items: [] },
+    discord: { total: 0, channels: {}, excerpts: [] },
+  };
+}
+
 function report(period: Period, key: string, partial = false): ReportDocument {
   const descriptor = describePeriod(period, key);
   return {
@@ -64,11 +76,7 @@ function report(period: Period, key: string, partial = false): ReportDocument {
     totals: { github: counts, discord: { messages: 0, channels: {} } },
     members: [
       {
-        login: "alice",
-        display: "Alice",
-        aliases: [],
-        access: [],
-        areas: [],
+        ...member("alice", "Alice"),
         github: {
           ...counts,
           items: [
@@ -82,7 +90,6 @@ function report(period: Period, key: string, partial = false): ReportDocument {
             },
           ],
         },
-        discord: { total: 0, channels: {}, excerpts: [] },
       },
     ],
     otherActors: [{ login: "bob", github: counts }],
@@ -160,15 +167,9 @@ beforeAll(async () => {
     workerModuleUrl: resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint),
   });
   const avatarReport = report("day", "2026-08-19");
-  avatarReport.members = avatarPeople.map((person) => ({
-    login: person.github[0] ?? "",
-    display: person.display ?? "",
-    aliases: person.github.slice(1),
-    access: [],
-    areas: [],
-    github: { ...counts, items: [] },
-    discord: { total: 0, channels: {}, excerpts: [] },
-  }));
+  avatarReport.members = avatarPeople.map((person) =>
+    member(person.github[0] ?? "", person.display ?? "", person.github.slice(1)),
+  );
   avatarReport.memberCount = avatarPeople.length;
   avatarReport.activeMembers = avatarPeople.length;
   avatarReport.totals.github = githubCounts(avatarPeople.length);
@@ -182,15 +183,7 @@ beforeAll(async () => {
   ]) {
     if (document.period.key === "2026-08-21") {
       document.members[0]!.github.items[0]!.body = "unrendered activity ".repeat(4096);
-      document.members.push({
-        login: "report-only",
-        display: "Report Only Person",
-        aliases: ["report-only-alias"],
-        access: [],
-        areas: [],
-        github: { ...counts, items: [] },
-        discord: { total: 0, channels: {}, excerpts: [] },
-      });
+      document.members.push(member("report-only", "Report Only Person", ["report-only-alias"]));
       document.memberCount = 2;
       document.activeMembers = 2;
       document.totals.github = githubCounts(2);
@@ -321,11 +314,11 @@ describe("Team Reports HTTP responses", () => {
     expect(csp).toBe(
       `default-src 'none'; style-src 'nonce-${nonce}'; script-src 'nonce-${nonce}'; img-src 'self' https://avatars.githubusercontent.com data:; base-uri 'none'; form-action 'none'`,
     );
-    expect(response.body).toContain(`<style nonce="${nonce}">`);
-    expect(response.body).toContain("&lt;script&gt;alert(&quot;report&quot;)&lt;/script&gt;");
     expect(response.body.match(/<script\b/g)).toHaveLength(1);
-    expect(response.body).toContain(`<script nonce="${nonce}">`);
     expect(response.body).not.toContain('href="javascript:');
+    expect(response.body).toContain(`<style nonce="${nonce}">`);
+    expect(response.body).toContain(`<script nonce="${nonce}">`);
+    expect(response.body).toContain("&lt;script&gt;alert(&quot;report&quot;)&lt;/script&gt;");
     expect(response.body).toContain(
       `href="https://127.0.0.1:${port}/reports/day/2026-08-20/" target="_blank" rel="noopener" data-report-open-window aria-label="Open in a new window"`,
     );
@@ -417,22 +410,21 @@ describe("Team Reports HTTP responses", () => {
     expect(response.headers.location).toBe("/reports/day/2026-08-20/");
   });
 
-  it.each([["week", "2026-W34"]] as const)(
-    "serves %s Markdown and canonical JSON",
-    async (period, key) => {
-      const markdown = await fetchPath(`/reports/${period}/${key}/report.md`);
-      expect(markdown.status).toBe(200);
-      expect(markdown.headers["content-type"]).toBe("text/markdown; charset=utf-8");
-      expect(markdown.body).toContain(key);
-      expect(markdown.body).not.toContain(maliciousTitle);
-      expect(markdown.body).toContain("> Model summary unavailable: completion failed\n");
-      expect(markdown.body).toBe(renderMarkdown(report(period, key), summary) + markdownSuffix);
-      const json = await fetchPath(`/reports/${period}/${key}/data.json`);
-      expect(json.status).toBe(200);
-      expect(json.headers["content-type"]).toBe("application/json; charset=utf-8");
-      expect(JSON.parse(json.body)).toMatchObject({ version: 1, period: { period, key } });
-    },
-  );
+  it("serves week Markdown and canonical JSON", async () => {
+    const period = "week";
+    const key = "2026-W34";
+    const markdown = await fetchPath(`/reports/${period}/${key}/report.md`);
+    expect(markdown.status).toBe(200);
+    expect(markdown.headers["content-type"]).toBe("text/markdown; charset=utf-8");
+    expect(markdown.body).toContain(key);
+    expect(markdown.body).not.toContain(maliciousTitle);
+    expect(markdown.body).toContain("> Model summary unavailable: completion failed\n");
+    expect(markdown.body).toBe(renderMarkdown(report(period, key), summary) + markdownSuffix);
+    const json = await fetchPath(`/reports/${period}/${key}/data.json`);
+    expect(json.status).toBe(200);
+    expect(json.headers["content-type"]).toBe("application/json; charset=utf-8");
+    expect(JSON.parse(json.body)).toMatchObject({ version: 1, period: { period, key } });
+  });
 
   it.each(["/reports/", "/reports/day/2026-08-20/", "/reports/day/2026-08-20/data.json"])(
     "serves %s without transferring unused Markdown from storage",
@@ -543,8 +535,8 @@ describe("Team Reports HTTP responses", () => {
     expect(workSessions).not.toHaveBeenCalled();
   });
 
-  it.each(["9007199254740992"])("rejects invalid session offset %s", async (offset) => {
-    expect((await fetchPath(`/reports/sessions/?offset=${offset}`)).status).toBe(400);
+  it("rejects an unsafe integer session offset", async () => {
+    expect((await fetchPath("/reports/sessions/?offset=9007199254740992")).status).toBe(400);
     expect(workSessions).not.toHaveBeenCalled();
   });
 
@@ -573,13 +565,13 @@ describe("Team Reports HTTP responses", () => {
 });
 
 describe("per-member session links through HTTP", () => {
-  it.each(["/month/2026-08/"])("links current owned sessions inside %s", async (route) => {
+  it("links current owned sessions inside a monthly report", async () => {
     workSessions.mockResolvedValue({
       available: true,
       sessions: [{ key: "agent:writer:dashboard:alice-work", label: "Current Alice work" }],
       nextOffset: 3,
     });
-    const response = await fetchPath("/reports" + route);
+    const response = await fetchPath("/reports/month/2026-08/");
     expect(response.status).toBe(200);
     expect(response.body).toContain("Current work / owned sessions");
     expect(response.body).toContain('href="/control/chat/writer/dashboard/alice-work"');

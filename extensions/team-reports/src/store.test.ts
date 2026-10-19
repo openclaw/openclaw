@@ -9,7 +9,7 @@ import { githubCounts as counts } from "./reports.fixtures.js";
 import { buildRoster } from "./roster.js";
 import { teamReportsSqliteBackendEntrypoint } from "./sqlite-backend-entrypoint.test-support.js";
 import { createTeamReportsStore, type TeamReportsStore } from "./store.js";
-import type { PeriodDescriptor, ReportDocument, SummaryDocument } from "./types.js";
+import type { ReportDocument, SummaryDocument } from "./types.js";
 
 const DAY_MS = 86_400_000;
 const workerModuleUrl = resolveRuntimeWorkerUrl(teamReportsSqliteBackendEntrypoint);
@@ -20,6 +20,27 @@ async function openStore() {
   const store = await createTeamReportsStore({ stateDir: directory, workerModuleUrl });
   resources.push({ directory, store });
   return { store, dbPath: path.join(directory, "plugins", "team-reports", "team-reports.sqlite") };
+}
+
+async function withReopened(dbPath: string, check: (store: TeamReportsStore) => Promise<void>) {
+  const reopened = await createTeamReportsStore({ dbPath, workerModuleUrl });
+  try {
+    await check(reopened);
+  } finally {
+    await reopened.close();
+  }
+}
+
+async function expectStored(
+  store: TeamReportsStore,
+  document: ReportDocument,
+  markdown: string,
+  storedSummary: SummaryDocument | null = summary,
+) {
+  const { period, key } = document.period;
+  const expected = { report: document, summary: storedSummary };
+  expect(await store.getPeriod(period, key)).toEqual({ ...expected, markdown });
+  expect(await store.getPeriodDocument(period, key)).toEqual(expected);
 }
 
 function report(key = "2026-08-20", logins = ["alice", "bob"]): ReportDocument {
@@ -90,24 +111,13 @@ describe("Team Reports storage", () => {
       database.close();
     }
     await store.close();
-    const reopened = await createTeamReportsStore({ dbPath, workerModuleUrl });
-    try {
-      expect(await reopened.getPeriod("day", "2026-08-20")).toEqual({
-        report: report(),
-        summary,
-        markdown: "# Daily report",
-      });
-      expect(await reopened.getPeriodDocument("day", "2026-08-20")).toEqual({
-        report: report(),
-        summary,
-      });
+    await withReopened(dbPath, async (reopened) => {
+      await expectStored(reopened, report(), "# Daily report");
       expect((await reopened.latestPeople())?.members.map((member) => member.login)).toEqual([
         "alice",
         "bob",
       ]);
-    } finally {
-      await reopened.close();
-    }
+    });
     await expect(store.listPeriods()).rejects.toThrow("store is closed");
     await expect(store.getPeriodDocument("day", "2026-08-20")).rejects.toThrow("store is closed");
   });
@@ -136,14 +146,11 @@ describe("Team Reports storage", () => {
       blocker.close();
       await retained.close();
     }
-    const reopened = await createTeamReportsStore({ dbPath, workerModuleUrl });
-    try {
+    await withReopened(dbPath, async (reopened) => {
       expect((await reopened.getPeriod("day", "2026-08-20"))?.markdown).toBe(
         "drained before close",
       );
-    } finally {
-      await reopened.close();
-    }
+    });
   });
 
   it("replaces the document, summary, markdown, and person-day counts as one unit", async () => {
@@ -164,15 +171,7 @@ describe("Team Reports storage", () => {
           markdown: "failed refresh",
         }),
       ).rejects.toThrow();
-      expect(await store.getPeriod("day", "2026-08-20")).toEqual({
-        report: report(),
-        summary,
-        markdown: "original",
-      });
-      expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
-        report: report(),
-        summary,
-      });
+      await expectStored(store, report(), "original");
       expect((await store.listPersonDaysSince("2026-08-20")).map((day) => day.login)).toEqual([
         "alice",
         "bob",
@@ -183,15 +182,7 @@ describe("Team Reports storage", () => {
     refreshed.members[0]!.github.total = 3;
     refreshed.generatedAtMs += 1000;
     await store.upsertPeriod({ report: refreshed, markdown: "refreshed" });
-    expect(await store.getPeriod("day", "2026-08-20")).toEqual({
-      report: refreshed,
-      summary: null,
-      markdown: "refreshed",
-    });
-    expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
-      report: refreshed,
-      summary: null,
-    });
+    await expectStored(store, refreshed, "refreshed", null);
     expect((await store.listPersonDays("alice"))[0]).toMatchObject({ githubTotal: 3, commits: 3 });
     expect(await store.listPersonDays("bob")).toEqual([]);
   });
@@ -250,13 +241,7 @@ describe("Team Reports storage", () => {
       await store.upsertPeriod({ report: report(key), markdown: key });
     }
     const week = report();
-    week.period = {
-      period: "week",
-      key: "2026-W34",
-      title: "Week 34",
-      sinceMs: Date.parse("2026-08-17T00:00:00Z"),
-      untilMs: Date.parse("2026-08-24T00:00:00Z"),
-    };
+    week.period = { ...describePeriod("week", "2026-W34"), title: "Week 34" };
     await store.upsertPeriod({ report: week, markdown: "week" });
     expect(
       (
@@ -279,82 +264,68 @@ describe("Team Reports storage", () => {
   });
 
   it.each([
-    "report member schema",
-    "report JSON syntax",
-    "summary schema",
-    "summary JSON syntax",
-    "unsafe until timestamp",
-    "unsafe extracted total",
-  ])("preserves latest warning and people failures for %s", async (failure) => {
-    const { store, dbPath } = await openStore();
-    await store.upsertPeriod({ report: report(), summary, markdown: "kept" });
-    const database = openNodeSqliteDatabase(dbPath);
-    try {
-      const data = report();
-      switch (failure) {
-        case "report member schema":
-          database
-            .prepare("UPDATE team_reports_periods SET data_json = ?")
-            .run(JSON.stringify({ ...data, members: "invalid" }));
-          break;
-        case "report JSON syntax":
-          database.prepare("UPDATE team_reports_periods SET data_json = ?").run("{");
-          break;
-        case "summary schema":
-          database
-            .prepare("UPDATE team_reports_periods SET summary_json = ?")
-            .run(JSON.stringify({ ...summary, globalSummary: 123 }));
-          break;
-        case "summary JSON syntax":
-          database.prepare("UPDATE team_reports_periods SET summary_json = ?").run("{");
-          break;
-        case "unsafe until timestamp":
-          database.exec("UPDATE team_reports_periods SET until_ms = 9007199254740992");
-          break;
-        case "unsafe extracted total":
-          database
-            .prepare("UPDATE team_reports_periods SET data_json = ?")
-            .run(JSON.stringify({ ...data, activeMembers: 9_007_199_254_740_992 }));
-          break;
-      }
-      const originalRead = async () => {
-        const latest = (await store.listPeriods({ period: "day", limit: 1 }))[0];
-        return latest ? store.getPeriod("day", latest.key) : undefined;
-      };
-      const originalError = await originalRead().catch((error: unknown) => error);
-      if (!(originalError instanceof Error)) {
-        throw new Error("The existing period read must reject this fixture");
-      }
-      await expect(store.latestSourceWarnings()).rejects.toMatchObject({
-        name: originalError.name,
-        message: originalError.message,
-      });
-      await expect(store.latestPeople()).rejects.toMatchObject({
-        name: originalError.name,
-        message: originalError.message,
-      });
-      if (failure === "unsafe extracted total") {
-        // Direct document reads validate JSON numbers without SQLite's integer extraction.
-        expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
-          report: { ...data, activeMembers: 9_007_199_254_740_992 },
-          summary,
-        });
-      } else {
-        const directError = await store
-          .getPeriod("day", "2026-08-20")
-          .catch((error: unknown) => error);
-        if (!(directError instanceof Error)) {
-          throw new Error("The complete period read must reject this fixture");
+    ["report member schema", "data_json", JSON.stringify({ ...report(), members: "invalid" })],
+    ["report JSON syntax", "data_json", "{"],
+    ["summary schema", "summary_json", JSON.stringify({ ...summary, globalSummary: 123 })],
+    ["summary JSON syntax", "summary_json", "{"],
+    ["unsafe until timestamp", "until_ms", 9_007_199_254_740_992],
+    [
+      "unsafe extracted total",
+      "data_json",
+      JSON.stringify({ ...report(), activeMembers: 9_007_199_254_740_992 }),
+    ],
+  ] as const)(
+    "preserves latest warning and people failures for %s",
+    async (failure, column, value) => {
+      const { store, dbPath } = await openStore();
+      await store.upsertPeriod({ report: report(), summary, markdown: "kept" });
+      const database = openNodeSqliteDatabase(dbPath);
+      try {
+        const data = report();
+        if (typeof value === "number") {
+          database.exec(`UPDATE team_reports_periods SET ${column} = ${value}`);
+        } else {
+          database.prepare(`UPDATE team_reports_periods SET ${column} = ?`).run(value);
         }
-        await expect(store.getPeriodDocument("day", "2026-08-20")).rejects.toMatchObject({
-          name: directError.name,
-          message: directError.message,
+        const originalRead = async () => {
+          const latest = (await store.listPeriods({ period: "day", limit: 1 }))[0];
+          return latest ? store.getPeriod("day", latest.key) : undefined;
+        };
+        const originalError = await originalRead().catch((error: unknown) => error);
+        if (!(originalError instanceof Error)) {
+          throw new Error("The existing period read must reject this fixture");
+        }
+        await expect(store.latestSourceWarnings()).rejects.toMatchObject({
+          name: originalError.name,
+          message: originalError.message,
         });
+        await expect(store.latestPeople()).rejects.toMatchObject({
+          name: originalError.name,
+          message: originalError.message,
+        });
+        if (failure === "unsafe extracted total") {
+          // Direct document reads validate JSON numbers without SQLite's integer extraction.
+          expect(await store.getPeriodDocument("day", "2026-08-20")).toEqual({
+            report: { ...data, activeMembers: 9_007_199_254_740_992 },
+            summary,
+          });
+        } else {
+          const directError = await store
+            .getPeriod("day", "2026-08-20")
+            .catch((error: unknown) => error);
+          if (!(directError instanceof Error)) {
+            throw new Error("The complete period read must reject this fixture");
+          }
+          await expect(store.getPeriodDocument("day", "2026-08-20")).rejects.toMatchObject({
+            name: directError.name,
+            message: directError.message,
+          });
+        }
+      } finally {
+        database.close();
       }
-    } finally {
-      database.close();
-    }
-  });
+    },
+  );
 
   it("records run outcomes once, including bounded failures and collector statistics", async () => {
     const { store } = await openStore();
@@ -397,21 +368,9 @@ describe("Team Reports storage", () => {
     for (const key of ["2026-08-15", "2026-08-16", "2026-08-17"]) {
       await store.upsertPeriod({ report: report(key, ["alice"]), markdown: key });
     }
-    const periods: PeriodDescriptor[] = [
-      {
-        period: "week",
-        key: "2026-W33",
-        title: "Older week",
-        sinceMs: Date.parse("2026-08-10T00:00:00Z"),
-        untilMs: Date.parse("2026-08-17T00:00:00Z"),
-      },
-      {
-        period: "month",
-        key: "2026-08",
-        title: "Overlapping month",
-        sinceMs: Date.parse("2026-08-01T00:00:00Z"),
-        untilMs: Date.parse("2026-09-01T00:00:00Z"),
-      },
+    const periods = [
+      { ...describePeriod("week", "2026-W33"), title: "Older week" },
+      { ...describePeriod("month", "2026-08"), title: "Overlapping month" },
     ];
     for (const period of periods) {
       await store.upsertPeriod({ report: { ...report(), period }, markdown: period.title });
