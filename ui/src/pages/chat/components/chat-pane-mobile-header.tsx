@@ -46,7 +46,11 @@ export type ChatPaneMobileHeaderProps = {
 
 function MobileHeaderNotice(props: { notice: ChatPaneMobileHeaderNotice }) {
   return (
-    <div class="mobile-header__notices" role="status" aria-live="polite">
+    <div
+      class="mobile-header__notices"
+      role={props.notice.kind === "device-offline" ? "status" : undefined}
+      aria-live={props.notice.kind === "device-offline" ? "polite" : undefined}
+    >
       <Show when={props.notice.kind === "device-offline" ? props.notice : undefined}>
         {(notice) => (
           <button
