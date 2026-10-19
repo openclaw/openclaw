@@ -10,18 +10,13 @@ import {
   createChatFlowE2eSuite,
   installMockGateway,
   newChatPage,
-  requireRecord,
   waitForChatScrollIdle,
   waitForRequests,
 } from "./chat-flow.test-support.ts";
 
 const suite = createChatFlowE2eSuite();
 const sessionId = "durable-geometry-session";
-const sessionInfo = {
-  key: "agent:main:main",
-  kind: "direct",
-  sessionId,
-} satisfies GatewaySessionRow;
+const sessionInfo: GatewaySessionRow = { key: "agent:main:main", kind: "direct", sessionId };
 
 function historyMessage(seq: number, text: string) {
   return {
@@ -160,7 +155,7 @@ suite.define(() => {
       "chat.history",
       historyRequestsBeforeReload + 1,
     );
-    expect(requireRecord(requests.at(-1)?.params)).toMatchObject({
+    expect(requests.at(-1)?.params).toMatchObject({
       offset: compactRecentMessages.length,
       sessionKey: "agent:main:main",
     });

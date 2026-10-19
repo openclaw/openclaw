@@ -63,17 +63,13 @@ export async function installHistoryPaginationProbe(
       const stamp = (key: keyof typeof marks) => () => {
         marks[key] = performance.now();
       };
-      let finish: () => void;
-      const done = new Promise<void>((resolve) => {
-        finish = resolve;
-      });
+      const { promise: done, resolve: finish } = Promise.withResolvers<void>();
       let lastActivity = performance.now();
-      let confirmed = false;
       let stableFrames = 0;
       const changed = () => {
         lastActivity = performance.now();
         stableFrames = 0;
-        if (confirmed) {
+        if (marks.quietConfirmed !== undefined) {
           sample.lateChanges += 1;
         }
       };
@@ -118,17 +114,16 @@ export async function installHistoryPaginationProbe(
       const originalRequest = client.request.bind(client);
       client.request = function <T>(...args: Parameters<typeof originalRequest>) {
         const params = args[1] as { sessionKey?: string; offset?: number } | undefined;
-        const selected =
-          args[0] === "chat.history" &&
-          params?.sessionKey === sessionKey &&
-          (params.offset ?? 0) > 0;
-        if (selected) {
-          marks.request ??= performance.now();
+        if (
+          args[0] !== "chat.history" ||
+          params?.sessionKey !== sessionKey ||
+          !((params.offset ?? 0) > 0)
+        ) {
+          return originalRequest<T>(...args);
         }
+        marks.request ??= performance.now();
         const promise = originalRequest<T>(...args);
-        if (selected) {
-          void promise.then(stamp("response"), stamp("requestFailed"));
-        }
+        void promise.then(stamp("response"), stamp("requestFailed"));
         return promise;
       };
       const originalRender = pane.render;
@@ -141,9 +136,7 @@ export async function installHistoryPaginationProbe(
         }
         return result;
       };
-      const wheel = () => {
-        marks.wheel ??= performance.now();
-      };
+      const wheel = stamp("wheel");
       thread.addEventListener("wheel", wheel, { capture: true, once: true });
       let frame = 0;
       let prior = "";
@@ -180,14 +173,17 @@ export async function installHistoryPaginationProbe(
           prior = position;
           changed();
         }
-        if (marks.committed !== undefined && !pane.loadingOlder && !confirmed) {
+        if (
+          marks.committed !== undefined &&
+          !pane.loadingOlder &&
+          marks.quietConfirmed === undefined
+        ) {
           stableFrames += 1;
           if (stableFrames >= 2 && now - lastActivity >= 50) {
             marks.settled = Math.max(marks.committed, lastActivity);
             marks.quietConfirmed = now;
             sample.rows = rows.length;
             sample.markers = thread.querySelectorAll(".chat-position-rail__marker").length;
-            confirmed = true;
             finish();
           }
         }
@@ -195,9 +191,7 @@ export async function installHistoryPaginationProbe(
       };
       frame = requestAnimationFrame(tick);
       window.historyPaginationProbe = {
-        begin: () => {
-          marks.position ??= performance.now();
-        },
+        begin: () => (marks.position ??= performance.now()),
         done,
         result: () => {
           cancelAnimationFrame(frame);

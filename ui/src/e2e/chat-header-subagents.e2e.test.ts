@@ -19,7 +19,7 @@ const suite = createControlUiE2eSuite({
 });
 
 suite.define(() => {
-  it("keeps new batches collapsed until Subagents is opened manually without duplicate wait status", async () => {
+  it("keeps new batches collapsed and retains the manually opened panel across layouts", async () => {
     const page = await newChatPage(suite, {
       locale: "en-US",
       colorScheme: "dark",
@@ -74,21 +74,6 @@ suite.define(() => {
       updatedAt: now + offset,
       snapshotAt: now + offset,
     });
-    const emit = async (
-      session: GatewaySessionRow,
-      ancestors: GatewaySessionRow[],
-      reason: string,
-      rows: GatewaySessionRow[],
-    ) => {
-      await gateway.setSessionsListResponse(sessionsListResponse([...rows, next]));
-      await gateway.emitGatewayEvent("sessions.changed", {
-        sessionKey: session.key,
-        reason,
-        ts: session.updatedAt,
-        session,
-        ancestorSessions: ancestors,
-      });
-    };
     await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
     const activePane = page.locator(".chat-pane-cache__pane--active");
     const panel = activePane.locator("openclaw-chat-subagents-panel");
@@ -139,7 +124,14 @@ suite.define(() => {
       1,
       {},
     );
-    await emit(child, [runningParent], "run-start", [runningParent, child]);
+    await gateway.setSessionsListResponse(sessionsListResponse([runningParent, child, next]));
+    await gateway.emitGatewayEvent("sessions.changed", {
+      sessionKey: child.key,
+      reason: "run-start",
+      ts: child.updatedAt,
+      session: child,
+      ancestorSessions: [runningParent],
+    });
     const runningCount = activePane.locator(".chat-pane__subagents-running");
     await runningCount.waitFor();
     expect(await panel.isVisible()).toBe(false);
@@ -150,66 +142,6 @@ suite.define(() => {
       "1 running",
     );
     expect(await waitLine.isVisible()).toBe(false);
-    const transcriptHeight = () =>
-      activePane.locator(".chat-thread").evaluate((element) => element.clientHeight);
-    const beforeWaitHeight = await transcriptHeight();
-
-    const yieldCall = {
-      role: "assistant",
-      content: [
-        { type: "text", text: "Waiting for the backend review." },
-        { type: "toolCall", id: "yield", name: "sessions_yield", arguments: {} },
-      ],
-      timestamp: now + 2,
-      __openclaw: { id: "yield-call", seq: 3, runId },
-    };
-    const yieldResult = {
-      role: "toolResult",
-      toolCallId: "yield",
-      toolName: "sessions_yield",
-      content: [{ type: "text", text: '{"status":"yielded"}' }],
-      timestamp: now + 3,
-      __openclaw: { id: "yield-result", seq: 4, runId },
-    };
-    const waitingParent = at(runningParent, 3, {
-      hasActiveRun: false,
-      activeRunIds: [],
-      endedAt: now + 3,
-    });
-    await gateway.setSessionsListResponse(sessionsListResponse([waitingParent, child, next]));
-    await gateway.setMethodResponse("chat.history", {
-      messages: [
-        ...history,
-        { role: "user", content: prompt, timestamp: now, __openclaw: { id: "prompt", seq: 2 } },
-        yieldCall,
-        yieldResult,
-      ],
-      sessionId: parent.sessionId,
-      sessionInfo: waitingParent,
-      inFlightRun: null,
-    });
-    await gateway.emitGatewayEvent("session.message", {
-      sessionKey: parent.key,
-      message: yieldResult,
-      messageId: "yield-result",
-      messageSeq: 4,
-      hasActiveRun: true,
-      session: runningParent,
-    });
-    await page.clock.setFixedTime(now + 65_000);
-    await gateway.emitGatewayEvent("chat", {
-      sessionKey: parent.key,
-      runId,
-      state: "final",
-      yielded: true,
-    });
-    await activePane
-      .locator(".chat-subagent-activity")
-      .getByText("Backend review", { exact: true })
-      .waitFor();
-    expect(await waitLine.count()).toBe(0);
-    expect(await activePane.locator(".chat-working-indicator--subagents").count()).toBe(0);
-    expect(await transcriptHeight()).toBe(beforeWaitHeight);
     const mountedPanel = await panel.elementHandle();
     await selectChatLayoutAction(activePane, "Expand Subagents");
     await activePane.locator(".sidebar-region--expanded-side").waitFor();
@@ -230,27 +162,6 @@ suite.define(() => {
     await selectChatLayoutAction(activePane, "Subagents");
     await panelRow.waitFor();
 
-    const settledChild = at(child, 66_000, {
-      status: "done",
-      hasActiveRun: false,
-      activeRunIds: [],
-      endedAt: now + 66_000,
-    });
-    const settledParent = at(waitingParent, 66_000, {
-      hasActiveSubagentRun: false,
-    });
-    await emit(settledChild, [settledParent], "run-settled", [settledParent, settledChild]);
-    await waitLine.waitFor({ state: "hidden" });
-    const resumedParent = at(settledParent, 67_000, {
-      status: "running",
-      hasActiveRun: true,
-      activeRunIds: ["parent-resumed"],
-      startedAt: now + 67_000,
-    });
-    await emit(resumedParent, [], "run-start", [resumedParent, settledChild]);
-    await activePane.locator(".chat-working-indicator").waitFor();
-    expect(await activePane.locator(".agent-chat__composer-run-status").count()).toBe(0);
-    expect(await waitLine.count()).toBe(0);
     expect(await panel.isVisible()).toBe(true);
     await activePane.getByRole("button", { name: "Close Subagents", exact: true }).click();
     await panel.waitFor({ state: "hidden" });

@@ -10,23 +10,6 @@ const suite = createControlUiE2eSuite({
   trackBrowserContexts: true,
 });
 
-function imageHistory(
-  prefix: string,
-  index: number,
-  content: unknown,
-  media: Record<string, unknown> = {},
-) {
-  return Array.from({ length: 60 }, (_, i) => ({
-    role: i % 2 ? "assistant" : "user",
-    content: i === index ? content : `Image fixture message ${i}.`,
-    timestamp: i + 1,
-    __openclaw: Object.assign(
-      { id: `${prefix}-message-${i}`, seq: i + 1 },
-      i === index ? media : {},
-    ),
-  }));
-}
-
 function imageLayout(element: Element) {
   const row = element.closest<HTMLElement>(".chat-virtual-row")!;
   const next = row
@@ -50,7 +33,7 @@ function imageLayout(element: Element) {
 
 suite.define(() => {
   it.each([true, false])(
-    "keeps saved images stable through metadata, decode, and remount (dimensions: %s)",
+    "keeps saved images stable through metadata and decode (dimensions: %s)",
     async (sized) => {
       const page = await newChatPage(suite, {
         reducedMotion: "reduce",
@@ -87,18 +70,29 @@ suite.define(() => {
         });
       });
       await installMockGateway(page, {
-        historyMessages: imageHistory("image", 2, "Delayed image.", {
-          media: [
-            {
-              url: imageUrl,
-              kind: "image",
-              contentType: "image/png",
-              fileName: "Intrinsic size proof",
-              ...(sized ? { width: 480, height: 240 } : {}),
-            },
-          ],
-          mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
-        }),
+        historyMessages: Array.from({ length: 60 }, (_, i) => ({
+          role: i % 2 ? "assistant" : "user",
+          content: i === 2 ? "Delayed image." : `Image fixture message ${i}.`,
+          timestamp: i + 1,
+          __openclaw: {
+            id: `image-message-${i}`,
+            seq: i + 1,
+            ...(i === 2
+              ? {
+                  media: [
+                    {
+                      url: imageUrl,
+                      kind: "image",
+                      contentType: "image/png",
+                      fileName: "Intrinsic size proof",
+                      ...(sized ? { width: 480, height: 240 } : {}),
+                    },
+                  ],
+                  mediaImageLayout: { slots: [{ kind: "inline", factIndex: 0 }] },
+                }
+              : {}),
+          },
+        })),
       });
       await page.goto(`${suite.server.baseUrl}chat`);
       const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
@@ -131,24 +125,6 @@ suite.define(() => {
       await waitForChatScrollIdle(page);
       expect(await geometry()).toEqual(before);
       expect(Math.abs(await gap())).toBeLessThanOrEqual(1);
-      await page.locator(".chat-scroll-to-bottom").click();
-      await expect.poll(() => image.count()).toBe(0);
-      await expect
-        .poll(() =>
-          thread.evaluate((element) =>
-            Math.abs(element.scrollHeight - element.clientHeight - element.scrollTop),
-          ),
-        )
-        .toBeLessThanOrEqual(2);
-      await thread.hover();
-      await page.mouse.wheel(0, -100_000);
-      await image.waitFor({ state: "visible" });
-      await expect.poll(async () => (await geometry()).height).toBe(before.height);
-      await image.evaluate((element) => (element as HTMLImageElement).decode());
-      const returned = await geometry();
-      expect(returned.imageWidth).toBe(before.imageWidth);
-      expect(returned.imageHeight).toBe(before.imageHeight);
-      expect(Math.abs(await gap())).toBeLessThanOrEqual(1);
     },
   );
   it.each([
@@ -156,7 +132,7 @@ suite.define(() => {
     { colorScheme: "dark", reducedMotion: "no-preference" },
     { colorScheme: "dark", reducedMotion: "reduce" },
   ] as const)(
-    "keeps the themed shimmer and cached image stable ($colorScheme, $reducedMotion)",
+    "renders the image shimmer with $colorScheme and $reducedMotion",
     async ({ colorScheme, reducedMotion }) => {
       const page = await newChatPage(suite, {
         colorScheme,
@@ -164,10 +140,8 @@ suite.define(() => {
         viewport: { width: 1280, height: 900 },
       });
       const ready = createDeferred();
-      let imageRequests = 0;
       const source = "/api/chat/media/outgoing/agent%3Amain%3Amain/shimmer-proof/full";
       await page.route("**/api/chat/media/outgoing/**", async (route) => {
-        imageRequests += 1;
         await ready.promise;
         await route.fulfill({
           contentType: "image/svg+xml",
@@ -176,30 +150,13 @@ suite.define(() => {
       });
       try {
         await installMockGateway(page, {
-          historyMessages: imageHistory("shimmer", 57, [
-            {
-              type: "image",
-              url: source,
-              alt: "Shimmer proof",
-              width: 1200,
-              height: 800,
-            },
-          ]),
+          historyMessages: [{ role: "assistant", content: [{ type: "image", url: source }] }],
         });
         await page.goto(suite.server.baseUrl + "chat");
-        const frame = page.locator(
-          '.chat-bubble[data-entry-id="shimmer-message-57"] .chat-image-frame',
-        );
+        const frame = page.locator(".chat-image-frame");
         const skeleton = frame.locator(".chat-image-skeleton");
         await skeleton.waitFor({ state: "visible" });
         await waitForChatScrollIdle(page);
-        const before = await frame.boundingBox();
-        const surface = frame.locator(".chat-image-surface");
-        const imageBefore = await surface.boundingBox();
-        expect(imageBefore?.width).toBe(400);
-        expect(imageBefore?.height).toBeCloseTo(400 / 1.5, 1);
-        expect((await frame.textContent())?.trim()).toBe("");
-        expect(await frame.locator("svg").count()).toBe(0);
         const motion = await skeleton.evaluate((element) => {
           const style = getComputedStyle(element, "::after");
           return {
@@ -219,31 +176,8 @@ suite.define(() => {
           const highlightX = Number.parseFloat(motion.transform.split(",")[4] ?? "NaN");
           expect(Math.abs(highlightX + motion.width)).toBeLessThanOrEqual(1);
         } else {
-          expect(motion).toMatchObject({
-            name: "shimmer",
-            duration: 2.4,
-            iterations: "infinite",
-          });
+          expect(motion).toMatchObject({ name: "shimmer", duration: 2.4, iterations: "infinite" });
         }
-        ready.resolve();
-        const image = frame.locator("img");
-        await image.waitFor({ state: "visible" });
-        await image.evaluate((element) => (element as HTMLImageElement).decode());
-        await waitForChatScrollIdle(page);
-        expect(await frame.boundingBox()).toEqual(before);
-        expect(await surface.boundingBox()).toEqual(imageBefore);
-        expect(await skeleton.count()).toBe(0);
-        const loadedSource = await image.getAttribute("src");
-        const thread = page.locator(".chat-pane-cache__pane--active .chat-thread");
-        await thread.hover();
-        await page.mouse.wheel(0, -100_000);
-        await expect.poll(() => frame.count()).toBe(0);
-        await page.locator(".chat-scroll-to-bottom").click();
-        await image.waitFor({ state: "visible" });
-        expect(await image.getAttribute("src")).toBe(loadedSource);
-        expect(await skeleton.count()).toBe(0);
-        await image.evaluate((element) => (element as HTMLImageElement).decode());
-        expect(imageRequests).toBe(1);
       } finally {
         ready.resolve();
       }

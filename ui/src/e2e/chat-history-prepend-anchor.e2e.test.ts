@@ -12,25 +12,52 @@ const suite = createChatFlowE2eSuite();
 type AnchorFrames = { frame: number; positions: Array<number | null>; readerDelta: number };
 type AnchorWindow = typeof window & { prependFrames: AnchorFrames };
 
+function touchGesture(element: Element, [start, momentum]: [boolean, boolean]) {
+  const thread = element as HTMLElement;
+  const move = (delta: number) => {
+    (window as AnchorWindow).prependFrames.readerDelta += delta;
+    thread.scrollTop += delta;
+    thread.dispatchEvent(new Event("scroll"));
+  };
+  if (start && momentum) {
+    // Model browsers that release momentum through idle, not scrollend.
+    thread.addEventListener("scrollend", (event) => event.stopImmediatePropagation(), {
+      capture: true,
+    });
+  }
+  if (!start && momentum) {
+    move(10);
+  }
+  const contact = [new Touch({ identifier: 1, target: thread })];
+  thread.dispatchEvent(
+    new TouchEvent(start ? "touchstart" : "touchend", {
+      changedTouches: contact,
+      bubbles: true,
+      ...(start ? { touches: contact, targetTouches: contact } : {}),
+    }),
+  );
+  // End-contact movement, release and momentum stay in one browser task.
+  if (momentum) {
+    move(start ? 20 : 10);
+  }
+}
+
 suite.define(() => {
-  it.each([
-    { sharedGroup: false, manual: false, onlyGroup: false, more: false },
-    { sharedGroup: true, manual: false, onlyGroup: false, more: false },
-    { sharedGroup: false, manual: true, onlyGroup: false, more: false },
-    { sharedGroup: true, manual: true, onlyGroup: false, more: false },
-    { sharedGroup: true, manual: false, onlyGroup: true, more: false },
-    { sharedGroup: true, manual: false, onlyGroup: true, more: true },
-    { sharedGroup: true, manual: false, onlyGroup: true, more: false, persisted: false },
-    { sharedGroup: true, manual: false, onlyGroup: false, more: true, activeTouch: true },
-    {
-      sharedGroup: true,
-      manual: false,
-      onlyGroup: false,
-      more: true,
-      activeTouch: true,
-      momentum: true,
-    },
-  ])(
+  it.each(
+    [
+      {},
+      { sharedGroup: true },
+      { manual: true },
+      { sharedGroup: true, manual: true },
+      { sharedGroup: true, onlyGroup: true },
+      { sharedGroup: true, onlyGroup: true, more: true },
+      { sharedGroup: true, onlyGroup: true, persisted: false },
+      { sharedGroup: true, more: true, activeTouch: true },
+      { sharedGroup: true, more: true, activeTouch: true, momentum: true },
+    ].map((row) =>
+      Object.assign({ sharedGroup: false, manual: false, onlyGroup: false, more: false }, row),
+    ),
+  )(
     "anchors history prepend (shared=$sharedGroup, manual=$manual, onlyGroup=$onlyGroup, more=$more, persisted=$persisted, touch=$activeTouch, momentum=$momentum)",
     async ({
       sharedGroup,
@@ -45,24 +72,17 @@ suite.define(() => {
         locale: "en-US",
         serviceWorkers: "block",
         hasTouch: activeTouch,
-        ...(activeTouch
-          ? {
-              userAgent:
-                "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1",
-            }
-          : {}),
+        userAgent: activeTouch
+          ? "Mozilla/5.0 (iPhone; CPU iPhone OS 18_0 like Mac OS X) AppleWebKit/605.1.15 Version/18.0 Mobile/15E148 Safari/604.1"
+          : undefined,
         viewport: { height: 900, width: 1280 },
       });
+      const detail = "History detail for the reader. ".repeat(8);
       const message = (seq: number) => ({
         __openclaw: { ...(persisted ? { id: `prepend-${seq}` } : {}), seq },
         role:
           sharedGroup && seq >= 995 && seq <= 1005 ? "assistant" : seq % 2 ? "user" : "assistant",
-        content: [
-          {
-            type: "text",
-            text: `Transcript entry ${seq}. ${"History detail for the reader. ".repeat(8)}`,
-          },
-        ],
+        content: [{ type: "text", text: `Transcript entry ${seq}. ${detail}` }],
         timestamp: 1_800_000_000_000 + seq,
       });
       const recent = Array.from({ length: 800 }, (_, index) => message(index + 1001));
@@ -130,32 +150,7 @@ suite.define(() => {
       const scrollTop = () => thread.evaluate((element) => element.scrollTop);
       const heldOffset = await scrollTop();
       if (activeTouch) {
-        if (momentum) {
-          // Model browsers that release momentum through idle, not scrollend.
-          await thread.evaluate((element) =>
-            element.addEventListener("scrollend", (event) => event.stopImmediatePropagation(), {
-              capture: true,
-            }),
-          );
-        }
-        await thread.evaluate((element) => {
-          const contact = new Touch({ identifier: 1, target: element });
-          element.dispatchEvent(
-            new TouchEvent("touchstart", {
-              touches: [contact],
-              targetTouches: [contact],
-              changedTouches: [contact],
-              bubbles: true,
-            }),
-          );
-        });
-        if (momentum) {
-          await thread.evaluate((element) => {
-            (window as AnchorWindow).prependFrames.readerDelta += 20;
-            element.scrollTop += 20;
-            element.dispatchEvent(new Event("scroll"));
-          });
-        }
+        await thread.evaluate(touchGesture, [true, momentum]);
       }
       await gateway.resolveDeferred("chat.history");
       await expect
@@ -173,27 +168,7 @@ suite.define(() => {
           await scrollTop(),
           "a history prepend must not write the scroll offset during an active touch",
         ).toBe(heldOffset + (momentum ? 20 : 0));
-        await thread.evaluate((element, withMomentum) => {
-          const move = () => {
-            (window as AnchorWindow).prependFrames.readerDelta += 10;
-            element.scrollTop += 10;
-            element.dispatchEvent(new Event("scroll"));
-          };
-          // One task prevents RPC latency from turning this fling into an idle touch.
-          if (withMomentum) {
-            move();
-          }
-          element.dispatchEvent(
-            new TouchEvent("touchend", {
-              changedTouches: [new Touch({ identifier: 1, target: element })],
-              bubbles: true,
-            }),
-          );
-          if (withMomentum) {
-            move();
-          }
-          // Deliberately omit scrollend: the offset observer must release history.
-        }, momentum);
+        await thread.evaluate(touchGesture, [false, momentum]);
       }
       await waitForChatScrollIdle(page);
       // Require the fetched page to reach the viewport, not just pane state.
