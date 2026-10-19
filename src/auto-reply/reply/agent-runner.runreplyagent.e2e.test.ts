@@ -75,6 +75,7 @@ import { registerFollowupDrainCases } from "./agent-runner.runreplyagent.followu
 import { createReplyQueueFixture } from "./agent-runner.runreplyagent.queue.test-support.js";
 import { registerRequiredReplyCompletionCases } from "./agent-runner.runreplyagent.required-reply.cases.js";
 import { registerSteeringReceiptCases } from "./agent-runner.runreplyagent.steering-receipts.cases.js";
+import { registerTranscriptClaimCases } from "./agent-runner.runreplyagent.transcript-claim.cases.js";
 import { registerWaitingStatusCases } from "./agent-runner.runreplyagent.waiting-status.cases.js";
 import { resolveActiveExplicitSteerSessionKey } from "./explicit-steer-routing.js";
 import type { InternalGetReplyOptions } from "./get-reply.types.js";
@@ -2784,80 +2785,12 @@ describe("runReplyAgent pending final delivery capture", () => {
     });
   });
 
-  it.each([
-    {
-      label: "legacy fingerprint",
-      fingerprint: "request-fingerprint",
-      fullId: undefined,
-      sourceTurnId: "channel-user:v1:different-from-gateway-run",
-      final: "visible final",
-    },
-    {
-      label: "short id differing from the full id",
-      fingerprint: undefined,
-      fullId: "provider-full-msg",
-      sourceTurnId: "channel-user:v1:control-ui-run",
-      final: "final",
-    },
-  ])(
-    "adopts a transcript-only claim by $label and preserves its pending final",
-    async (testCase) => {
-      const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({
-        abortedLastRun: false,
-        restartRecoveryDeliveryRequestFingerprint: testCase.fingerprint,
-        restartRecoveryDeliveryRunId: "msg",
-        restartRecoveryDeliverySourceRunId: "control-ui-run",
-      });
-      state.runEmbeddedAgentMock.mockImplementationOnce(async () => {
-        const storedDuringRun = await readStoredMainSession(storePath);
-        expect(storedDuringRun.restartRecoveryBeforeAgentReplyState).toBeUndefined();
-        expect(storedDuringRun.restartRecoveryDeliveryContext).toBeUndefined();
-        expect(storedDuringRun.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
-        expect(typeof storedDuringRun.restartRecoveryDeliveryRunId).toBe("string");
-        expect(storedDuringRun.restartRecoveryDeliverySourceRunId).toBe("control-ui-run");
-        expect(storedDuringRun.restartRecoverySourceIngress).toBe("control-ui");
-        return {
-          payloads: [{ text: testCase.final }],
-          meta: {},
-        };
-      });
-
-      const { run } = createMinimalRun({
-        sessionCtx: {
-          MessageSid: "msg",
-          MessageSidFull: testCase.fullId,
-          Provider: "webchat",
-          OriginatingChannel: "webchat",
-        },
-        sourceTurnId: testCase.sourceTurnId,
-        runOverrides: { messageProvider: "webchat" },
-        sessionEntry,
-        sessionStore,
-        sessionKey: "main",
-        storePath,
-      });
-
-      await expect(run()).resolves.toEqual(expect.objectContaining({ text: testCase.final }));
-
-      expect(state.runEmbeddedAgentMock).toHaveBeenCalledTimes(1);
-      expect(sessionStore.main.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
-      const stored = await readStoredMainSession(storePath);
-      expect(stored.restartRecoveryDeliveryContext).toBeUndefined();
-      expect(stored.restartRecoveryBeforeAgentReplyState).toBeUndefined();
-      expect(stored.restartRecoveryDeliveryRequestFingerprint).toBeUndefined();
-      expect(stored.restartRecoveryDeliveryRunId).toBeUndefined();
-      expect(stored.restartRecoveryDeliverySourceRunId).toBeUndefined();
-      expect(stored.pendingFinalDelivery).toMatchObject({
-        kind: "replayable",
-        text: testCase.final,
-        context: { channel: "webchat" },
-        intentId: expect.any(String),
-        createdAt: expect.any(Number),
-      });
-      expect(stored.restartRecoverySourceIngress).toBe("control-ui");
-      expect(stored.restartRecoveryTerminalRunIds).toEqual(["control-ui-run"]);
-    },
-  );
+  registerTranscriptClaimCases({
+    createMinimalRun,
+    makeSessionFixture,
+    readStoredMainSession,
+    runEmbeddedAgentMock: state.runEmbeddedAgentMock,
+  });
 
   it("advances a transcript-only admission to pending before running a discovered hook", async () => {
     const { sessionEntry, sessionStore, storePath } = await makeSessionFixture({

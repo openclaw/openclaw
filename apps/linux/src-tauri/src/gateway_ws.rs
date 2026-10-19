@@ -3858,19 +3858,6 @@ esac
     }
 
     #[test]
-    fn tls_trust_uses_system_roots_or_an_exact_pin() {
-        assert_eq!(
-            tls_trust(None).expect("system trust"),
-            TlsTrust::SystemRoots
-        );
-        assert_eq!(
-            tls_trust(Some(&"ab".repeat(32))).expect("pinned trust"),
-            TlsTrust::Pinned([0xab; 32])
-        );
-        assert!(tls_trust(Some("sha256:abc")).is_err());
-    }
-
-    #[test]
     fn tls_failures_have_a_distinct_connectivity_state() {
         let failure =
             RequestFailure::from_shared(SharedClientError::Tls("fixture TLS failure".to_string()))

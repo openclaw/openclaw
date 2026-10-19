@@ -9,6 +9,7 @@ import type { inspectLocalAudioSelection } from "../media-understanding/local-au
 import { registerEmbeddingCapabilityCliTests } from "./capability-cli.embedding.test-support.js";
 import { registerCapabilityCli } from "./capability-cli.js";
 import {
+  invalidModelRunOptionCases,
   runCap,
   runCapability,
   runCapabilityWithParentAgent,
@@ -1007,21 +1008,17 @@ describe("capability cli", () => {
     expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
   });
 
-  it.each([
-    { args: ["--prompt", "\n\t"], error: "--prompt cannot be empty or whitespace-only." },
-    {
-      args: ["--model", "not-a-provider/"],
-      error: "Model overrides must use the form <provider/model>.",
+  it.each(invalidModelRunOptionCases)(
+    "rejects invalid model run options $args before dispatch",
+    async ({ args, error }) => {
+      await expect(runModelProbe(...args)).rejects.toThrow("exit 1");
+      expectRuntimeErrorContains(error);
+      expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
+      expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
+      expect(mocks.callGateway).not.toHaveBeenCalled();
+      expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
     },
-    { args: ["--thinking", "turbo-mode"], error: "Invalid thinking level." },
-  ])("rejects invalid model run options $args before dispatch", async ({ args, error }) => {
-    await expect(runModelProbe(...args)).rejects.toThrow("exit 1");
-    expectRuntimeErrorContains(error);
-    expect(mocks.acquireSimpleCompletionModelForAgent).not.toHaveBeenCalled();
-    expect(mocks.completeWithPreparedSimpleCompletionModel).not.toHaveBeenCalled();
-    expect(mocks.callGateway).not.toHaveBeenCalled();
-    expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-  });
+  );
 
   it("runs gateway model probes in fresh raw sessions without chat-agent prompt policy or tools", async () => {
     mocks.callGateway.mockResolvedValueOnce({

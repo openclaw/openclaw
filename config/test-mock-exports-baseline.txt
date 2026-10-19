@@ -5598,7 +5598,6 @@
 ["src/cron/isolated-agent/run.test-harness.ts","../../browser-lifecycle-cleanup.js","faf0432f619abaf43afa3c0b1a2fcabc37c3615ed0bd5d06ed8eaaeacb52175f",1]
 ["src/cron/isolated-agent/run.test-harness.ts","../../channels/plugins/index.js","cde56c959d718af3654e0fcdc801aba945477b3f1bd1b6cea686d11bd217b5b8",1]
 ["src/cron/isolated-agent/run.test-harness.ts","../../gateway/call.js","a88d9c5d6e99c0e15f706182bc9eec5f15df7fa39d9d8b621d05e2ee3c507e1f",1]
-["src/cron/isolated-agent/run.test-harness.ts","../../gateway/session-transcript-readers.js","3633fad4ecb9d08fd8f77945c17db18b85798148859b2bece56d5994e29a6cda",1]
 ["src/cron/isolated-agent/run.test-harness.ts","../../web-search/runtime.js","14700d964d5efd74e547c8293ef66ea1eaa1a26c0c342ab234037add393251a6",1]
 ["src/cron/isolated-agent/run.test-harness.ts","../run-continuation-cleanup.js","b87958c52913b1e163264595b4e6331a85ad8e43606cbab26717f82576afed39",1]
 ["src/cron/isolated-agent/run.test-harness.ts","./model-preflight.runtime.js","6a9b6d52ad58922be645c25ad6858c0129064b5978f9e8c594aef7f565f890c8",1]
