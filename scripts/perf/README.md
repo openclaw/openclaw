@@ -985,6 +985,7 @@ For a second scenario with independent revision checks, add
 then poll both existing synthetic worktrees concurrently, using a separate
 session per checkout and `--tabs` peers per session. This option is repeatable,
 requires RPC mode, and rejects `--mutate`: shared checkout contents stay read-only
+with optional Git index refresh disabled through `GIT_OPTIONAL_LOCKS=0`,
 while Gateway state and temporary diff indexes remain owned by each side's
 `--state-dir`. The report includes the extra fixture inventories, checkout count,
 and each sample's checkout index. This adds multiple-root contention without

@@ -82,9 +82,9 @@ describe("typed Git read ownership", () => {
     await Promise.all([runGitReadOperation(operation), runGitReadOperation(operation)]);
     await runGitReadOperation(operation);
     await waitForDiagnosticEventsDrained();
-    const phases = events.filter(
-      (event) => event.type === "diagnostic.phase.completed" && event.name === "checkout.diff",
-    );
+    const phases = events
+      .filter((event) => event.type === "diagnostic.phase.completed")
+      .filter((event) => event.name === "checkout.diff");
     expect(phases).toHaveLength(3);
     expect(phases.map((event) => event.details?.outcome)).toEqual([
       "cache-miss",

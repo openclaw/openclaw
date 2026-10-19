@@ -92,6 +92,7 @@ const gitEnv = {
   GIT_CONFIG_NOSYSTEM: "1",
   GIT_CONFIG_GLOBAL: "/dev/null",
   GIT_TERMINAL_PROMPT: "0",
+  ...(values["poll-state-dir"]?.length ? { GIT_OPTIONAL_LOCKS: "0" } : {}),
   GIT_AUTHOR_NAME: "Synthetic Fixture",
   GIT_AUTHOR_EMAIL: "fixture@example.invalid",
   GIT_COMMITTER_NAME: "Synthetic Fixture",
