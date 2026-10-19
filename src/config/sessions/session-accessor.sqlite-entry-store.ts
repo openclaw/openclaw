@@ -1,4 +1,3 @@
-import { isDeepStrictEqual } from "node:util";
 import { uniqueStrings } from "@openclaw/normalization-core/string-normalization";
 import {
   executeSqliteQuerySync,
@@ -7,12 +6,11 @@ import {
 import {
   retireSqliteDatabaseWriteScopes,
   sqliteSessionIdWriteScope,
+  withoutSqliteDatabaseWriteScope,
   withSqliteDatabaseWriteScope,
 } from "../../infra/sqlite-database-admission.js";
-import { getChildLogger } from "../../logging/logger.js";
 import { resolveAgentIdFromSessionKey } from "../../routing/session-key.js";
 import { communicationEntryBinding } from "../../sessions/communication-admission.js";
-import { isIncognitoSessionKey } from "../../shared/incognito-session-key.js";
 import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { readSessionActivitySummary } from "./activity-summary.js";
 import type { ConversationRouteContext } from "./conversation-route-context.js";
@@ -43,6 +41,7 @@ import { getSessionEntryWriteQueries } from "./session-accessor.sqlite-entry-wri
 import { advanceSessionEntryMaintenanceAgeFact } from "./session-accessor.sqlite-maintenance-age.js";
 import {
   clearSessionCollaborationForKey,
+  copySessionNodeArtifactsForRepair,
   deleteSessionDeliveryArtifacts,
   deleteSessionNodeArtifacts,
 } from "./session-accessor.sqlite-node-artifacts.js";
@@ -67,18 +66,17 @@ import {
 } from "./session-canonical-key.js";
 import { validateCanonicalSessionRow } from "./session-canonical-row.js";
 import { normalizeSessionEntryTimestamp } from "./session-entry-json.js";
-import { preserveCreationStamp } from "./session-entry-provenance.js";
 import {
   splitSessionEntrySnapshots,
   writeSessionEntrySnapshots,
 } from "./session-entry-snapshots.js";
 import type { SessionEntryWindowFacts } from "./session-entry-window.types.js";
+import { applySessionEntryWritePolicy } from "./session-entry-write-policy.js";
 import {
   createSessionEntryWriteRow,
   type SessionEntryWritePostimage,
   type SessionEntryWritePostimages,
 } from "./session-entry-write-postimage.js";
-import { resolveSessionPublicShare } from "./session-public-share.js";
 import {
   readStagedSessionTranscriptUpdatedAt,
   readStagedSessionTranscriptAuthority,
@@ -263,6 +261,87 @@ export function deleteLifecycleTargetRows(
   return transcriptInventoryUnchanged;
 }
 
+export function deleteLegacySessionEntryRows(
+  database: OpenClawAgentDatabase,
+  legacyKeys: string[],
+  sessionKey: string,
+  options: {
+    rehomeMembers?: boolean;
+    validatedEntries?: ReadonlyMap<string, SessionEntry>;
+    postimages?: SessionEntryWritePostimages;
+  } = {},
+): void {
+  if (legacyKeys.length === 0) {
+    return;
+  }
+  const db = getSessionKysely(database.db);
+  for (const legacyKey of legacyKeys) {
+    if (legacyKey === sessionKey) {
+      continue;
+    }
+    const previousEntry =
+      options.validatedEntries?.get(legacyKey) ??
+      readExactSessionEntryRow(database, legacyKey)?.entry;
+    if (previousEntry) {
+      commitSqliteSessionDeletion(legacyKey, previousEntry);
+    }
+    rehomeSessionWindows(database, sessionKey, [legacyKey], options.postimages);
+    copySessionNodeArtifactsForRepair(database, database, [legacyKey], sessionKey, {
+      includeMembers: options.rehomeMembers,
+      postimages: options.postimages,
+    });
+    withSqliteDatabaseWriteScope(database.db, [legacyKey], () =>
+      executeSqliteQuerySync(
+        database.db,
+        db.deleteFrom("session_nodes").where("session_key", "=", legacyKey),
+      ),
+    );
+    retireSqliteDatabaseWriteScopes(database.db, [legacyKey]);
+    conversationPublication.stageRows(database, { removedNodes: [legacyKey] });
+    options.postimages?.delete(legacyKey);
+    const canonicalPostimage = options.postimages?.get(sessionKey);
+    if (canonicalPostimage) {
+      canonicalPostimage.changed = true;
+    }
+    publishSessionEntryCacheInvalidation(database, { sessionKey: legacyKey });
+  }
+  publishSessionEntryCacheInvalidation(database, { sessionKey });
+}
+
+/** Move retained generations to the canonical node before removing key aliases. */
+export function rehomeSessionWindows(
+  database: OpenClawAgentDatabase,
+  canonicalKey: string,
+  previousKeys: Iterable<string>,
+  postimages?: SessionEntryWritePostimages,
+): void {
+  const legacyKeys = uniqueStrings([...previousKeys].map((key) => key.trim())).filter(
+    (key) => key && key !== canonicalKey,
+  );
+  if (legacyKeys.length === 0) {
+    return;
+  }
+  const db = getSessionKysely(database.db);
+  // Offline repair can move shared windows whose other logical readers are not in this key set.
+  withoutSqliteDatabaseWriteScope(database.db, () =>
+    executeSqliteQuerySync(
+      database.db,
+      db
+        .updateTable("session_windows")
+        .set({ session_key: canonicalKey })
+        .where("session_key", "in", legacyKeys),
+    ),
+  );
+  conversationPublication.stageRows(database, {
+    rehomes: [{ kind: "rehome", sessionKey: canonicalKey, previousKeys: legacyKeys }],
+  });
+  for (const postimage of postimages?.values() ?? []) {
+    if (legacyKeys.includes(postimage.window.session_key)) {
+      postimage.window = { ...postimage.window, session_key: canonicalKey };
+    }
+  }
+}
+
 export function writeSessionEntry(
   database: OpenClawAgentDatabase,
   sessionKey: string,
@@ -343,108 +422,17 @@ export function writeSessionEntry(
   if (options.postimages && !canonicalPreviousSideTables) {
     throw new Error("Session entry postimage requires prepared side-table facts");
   }
-  if (
-    canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
-    canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision &&
-    canonicalPreviousEntry.compactionQualityDegraded
-  ) {
-    normalizedEntry = { ...normalizedEntry, compactionQualityDegraded: true };
-  }
-  if (!options.providerReviewMutation && !options.allowStoredAliases) {
-    // Bookkeeping can carry a stale snapshot; only the review owner may clear its pause.
-    normalizedEntry = {
-      ...normalizedEntry,
-      providerReview:
-        canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId &&
-        canonicalPreviousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision
-          ? canonicalPreviousEntry.providerReview
-          : undefined,
-    };
-  }
-  if (normalizedEntry.providerReview?.sessionId !== normalizedEntry.sessionId) {
-    delete normalizedEntry.providerReview;
-  }
-  if (canonicalPreviousEntry?.sandbox === "required") {
-    if (
-      normalizedEntry.sandbox !== "required" ||
-      normalizedEntry.createdVia !== canonicalPreviousEntry.createdVia ||
-      normalizedEntry.createdAt !== canonicalPreviousEntry.createdAt ||
-      !isDeepStrictEqual(normalizedEntry.createdActor, canonicalPreviousEntry.createdActor)
-    ) {
-      getChildLogger({ subsystem: "session-sqlite" }).warn(
-        "blocked role-required session creation provenance downgrade",
-        { agentId: database.agentId, sessionKey },
-      );
-    }
-  }
-  // Doctor/import owners validate and select a whole creator stamp across aliases.
-  // Preserve their selection unless this canonical node already owns required isolation;
-  // ordinary writes cannot restamp a logical node's creator.
-  if (!options.allowStoredAliases || canonicalPreviousEntry?.sandbox === "required") {
-    normalizedEntry = preserveCreationStamp(normalizedEntry, canonicalPreviousEntry);
-  }
-  if (isIncognitoSessionKey(sessionKey) && normalizedEntry.createdAt === undefined) {
-    // Pin timestamp-less creation once at the writer, never independently in
-    // each Gateway observer. Existing legacy rows retain their known age.
-    normalizedEntry = {
-      ...normalizedEntry,
-      createdAt: canonicalPreviousEntry?.updatedAt ?? Date.now(),
-    };
-  }
-  // Personal choices follow the logical node through reset and relocation. A
-  // fork has a different key; stale entry writers cannot replace committed choices.
-  const involvement =
-    options.profileInvolvement ??
-    canonicalPreviousEntry?.profileInvolvement ??
-    (entry.profileInvolvement?.key === sessionKey || options.allowStoredAliases
-      ? entry.profileInvolvement
-      : undefined);
-  if (involvement) {
-    normalizedEntry = {
-      ...normalizedEntry,
-      profileInvolvement: { ...involvement, key: sessionKey },
-    };
-  } else if (normalizedEntry.profileInvolvement) {
-    const { profileInvolvement: _sourceInvolvement, ...forkEntry } = normalizedEntry;
-    normalizedEntry = forkEntry;
-  }
-  const previousEntry =
-    options.previousEntry === undefined
-      ? canonicalPreviousEntry
-      : (options.previousEntry ?? undefined);
-  if (
-    options.consumePendingReset !== true &&
-    previousEntry?.updatedAt === 0 &&
-    previousEntry.sessionId === normalizedEntry.sessionId &&
-    previousEntry.lifecycleRevision === normalizedEntry.lifecycleRevision
-  ) {
-    // Same-lifecycle bookkeeping cannot cancel the one-time reset owed by legacy state.
-    normalizedEntry.updatedAt = 0;
-  }
+  const normalized = applySessionEntryWritePolicy(
+    database.agentId,
+    sessionKey,
+    entry,
+    normalizedEntry,
+    canonicalPreviousEntry,
+    options,
+  );
+  normalizedEntry = normalized.entry;
+  const previousEntry = normalized.previousEntry;
   const updatedAt = normalizedEntry.updatedAt;
-  // Public/plugin projections omit this server-owned field. Same-session replacements
-  // retain publication; only an explicit field clear or a new session id revokes it.
-  if (
-    !Object.hasOwn(normalizedEntry, "publicShare") &&
-    canonicalPreviousEntry?.sessionId === normalizedEntry.sessionId
-  ) {
-    normalizedEntry.publicShare = resolveSessionPublicShare(canonicalPreviousEntry);
-  }
-  // A copied or reset entry must never publish its replacement generation.
-  // Checking the embedded binding also covers forks into previously absent nodes.
-  if (
-    normalizedEntry.incognito === true ||
-    normalizedEntry.publicShare?.sessionId !== normalizedEntry.sessionId
-  ) {
-    delete normalizedEntry.publicShare;
-  }
-  // The lifecycle-selected entry owns visibility copy-forward semantics.
-  if (previousEntry && previousEntry.sessionId !== normalizedEntry.sessionId) {
-    delete normalizedEntry.visibility;
-  }
-  if (normalizedEntry.archivedAt || normalizedEntry.incognito) {
-    delete normalizedEntry.pendingExecNotifications;
-  }
   const canonicalEntry = stripRuntimeOnlySessionSkillsFields(
     projectCanonicalSessionEntryShape({ ...normalizedEntry }),
   );

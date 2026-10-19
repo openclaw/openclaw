@@ -1,7 +1,6 @@
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { assert, expect, it, vi } from "vitest";
 import { appendSessionManagerActor } from "../../agents/sessions/session-manager-actor-append.js";
-import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import { readOpenClawAgentDatabaseIdentity } from "../../state/openclaw-agent-db-identity.js";
 import {
   getOpenClawAgentDatabaseIfOpen,
@@ -10,6 +9,7 @@ import {
 import { resolveIncognitoOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.paths.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { conversationPublication } from "./session-accessor.sqlite-conversation-publication.js";
 import { retainPreparedSessionEntryPredicate } from "./session-accessor.sqlite-entry-cache-publication-state.js";
 import { patchSessionEntryCore, replaceSessionEntrySync } from "./session-accessor.sqlite-entry.js";
@@ -187,15 +187,17 @@ it.each([false, true])(
         kind: "channel" as const,
         peerId: "channel:C_ACTOR_SYNTHETIC",
       };
-      const routed = normalizeLegacySessionEntryDelivery({
+      const routed = {
         ...fixture.read()!,
         chatType: "channel" as const,
-        deliveryContext: {
-          channel: address.channel,
-          accountId: address.accountId,
-          to: address.peerId,
-        },
-      });
+        delivery: normalizeSessionDeliveryState({
+          context: {
+            channel: address.channel,
+            accountId: address.accountId,
+            to: address.peerId,
+          },
+        }),
+      };
       replaceSessionEntrySync(fixture.scope, routed);
       const competitor = { ...fixture.scope, sessionKey: "agent:main:actor-competitor", env };
       replaceSessionEntrySync(competitor, {

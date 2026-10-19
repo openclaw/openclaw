@@ -2,7 +2,6 @@ import "./session-accessor.sqlite-replacement-publication.test-support.js";
 import { afterEach, expect, it, vi } from "vitest";
 import { createSessionMembershipProjection } from "../../gateway/session-membership-projection.js";
 import { createSessionRowProjection } from "../../gateway/session-row-projection.js";
-import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import * as logging from "../../logging/logger.js";
 import {
   onSessionIdentityMutation,
@@ -16,6 +15,7 @@ import {
 } from "../../state/openclaw-agent-db.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { readPreparedSessionEntryChange } from "./session-accessor.sqlite-entry-cache-publication.js";
 import {
   projectSessionSharingEntry,
@@ -151,19 +151,18 @@ it.each(["delivered", "lost", "overtaken"] as const)(
         kind: "channel" as const,
         peerId: "channel:C_SYNTHETIC",
       };
-      const routed = (sessionId: string, updatedAt: number) => {
-        const entry = {
-          sessionId,
-          updatedAt,
-          chatType: "channel" as const,
-          deliveryContext: {
+      const routed = (sessionId: string, updatedAt: number): SessionEntry => ({
+        sessionId,
+        updatedAt,
+        chatType: "channel" as const,
+        delivery: normalizeSessionDeliveryState({
+          context: {
             channel: address.channel,
             accountId: address.accountId,
             to: address.peerId,
           },
-        };
-        return normalizeLegacySessionEntryDelivery(entry);
-      };
+        }),
+      });
       replaceSessionEntrySync(selected, routed("selected", 10));
       write(makeEntry("competitor", {}));
       const check = await captureSessionEntryCurrentCheckAsyncInternal({

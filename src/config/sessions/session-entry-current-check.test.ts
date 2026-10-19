@@ -6,7 +6,6 @@ import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
 import { createTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
 import {
   closeOpenClawAgentDatabaseByPathAsync,
   runOpenClawAgentWriteTransaction,
@@ -15,6 +14,7 @@ import { resolveOpenClawAgentSqlitePath } from "../../state/openclaw-agent-db.pa
 import { beginAgentDeletionJournal } from "../../test-utils/agent-deletion-journal.js";
 import { observeMainThreadSql } from "../../test-utils/main-thread-sql-spies.test-support.js";
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
+import { normalizeSessionDeliveryState } from "../../utils/delivery-context.shared.js";
 import { clearRuntimeConfigSnapshot, setRuntimeConfigSnapshot } from "../runtime-snapshot.js";
 import {
   patchSessionEntryCore,
@@ -339,17 +339,18 @@ const conversationAddress = {
 };
 
 function conversationEntry(sessionId: string, updatedAt: number): InternalSessionEntry {
-  const legacy = {
+  return {
     sessionId,
     updatedAt,
     chatType: "channel" as const,
-    deliveryContext: {
-      channel: conversationAddress.channel,
-      accountId: conversationAddress.accountId,
-      to: conversationAddress.peerId,
-    },
+    delivery: normalizeSessionDeliveryState({
+      context: {
+        channel: conversationAddress.channel,
+        accountId: conversationAddress.accountId,
+        to: conversationAddress.peerId,
+      },
+    }),
   };
-  return normalizeLegacySessionEntryDelivery(legacy);
 }
 
 type CurrentCheck = Awaited<ReturnType<typeof captureSessionEntryCurrentCheckAsyncInternal>>;

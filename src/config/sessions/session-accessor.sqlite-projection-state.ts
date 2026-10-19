@@ -3,15 +3,13 @@ import type { OpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import type { MaterializedSessionStateDeletePlan } from "./session-accessor.sqlite-archive-types.js";
 import { readExactSessionEntryRowForCanonicalRepair } from "./session-accessor.sqlite-canonical-repair.js";
 import {
-  deleteLegacySessionEntryRows,
-  rehomeSessionWindows,
-} from "./session-accessor.sqlite-entry-aliases.js";
-import {
   sqliteSessionEntriesEqual,
   type SqliteLifecycleTargetSnapshot,
 } from "./session-accessor.sqlite-entry-equality.js";
 import { captureSessionEntrySnapshot } from "./session-accessor.sqlite-entry-snapshot.js";
 import {
+  deleteLegacySessionEntryRows,
+  rehomeSessionWindows,
   deleteSessionEntryRows,
   readExactSessionEntryRow,
   readSessionEntryCount,

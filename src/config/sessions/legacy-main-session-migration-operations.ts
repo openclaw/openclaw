@@ -36,8 +36,8 @@ import {
   runSqliteSessionDeletionTransaction,
   withSqliteSessionDeletions,
 } from "./session-accessor.sqlite-deletion.js";
-import { deleteLegacySessionEntryRows } from "./session-accessor.sqlite-entry-aliases.js";
 import {
+  deleteLegacySessionEntryRows,
   readExactSessionEntryRow,
   writeSessionEntry,
 } from "./session-accessor.sqlite-entry-store.js";
