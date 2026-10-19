@@ -46,8 +46,8 @@ function fixture(mode: "foreground" | "supervised" = "foreground", published = t
     startedAt: getFileLockProcessStartTime(process.pid),
   };
   expect(owner.startedAt).not.toBeNull();
-  const publish = () =>
-    withOpenClawStateStartupMigrationCheckpointDatabase((db) => {
+  withOpenClawStateStartupMigrationCheckpointDatabase((db) => {
+    if (published) {
       db.prepare(
         `INSERT INTO state_leases
        (scope, lease_key, owner, expires_at, heartbeat_at, payload_json, created_at, updated_at)
@@ -64,12 +64,8 @@ function fixture(mode: "foreground" | "supervised" = "foreground", published = t
         Date.now(),
         Date.now(),
       );
-    });
-  if (published) {
-    publish();
-  } else {
-    withOpenClawStateStartupMigrationCheckpointDatabase(() => {});
-  }
+    }
+  });
   closeOpenClawStateDatabaseForTest();
   const databasePath = path.join(stateDir, "state", "openclaw.sqlite");
   const predecessor = acquireGatewayStateOwner({
@@ -82,7 +78,7 @@ function fixture(mode: "foreground" | "supervised" = "foreground", published = t
       stateDir,
     },
   });
-  return { databasePath, predecessor, publish };
+  return { databasePath, predecessor };
 }
 
 it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
@@ -145,17 +141,14 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
             ).run();
           });
         }
-        predecessor?.release();
-      } else if (outcome === "authority-lost") {
+      } else {
         authorized = false;
-        predecessor?.release();
       }
+      predecessor?.release();
       if (outcome === "rowless-released") {
         monotonicMs = GATEWAY_SHUTDOWN_RESERVE_MS;
-        await vi.advanceTimersToNextTimerAsync();
-      } else {
-        await vi.advanceTimersToNextTimerAsync();
       }
+      await vi.advanceTimersToNextTimerAsync();
       const completed = await result;
       maintenance = "maintenance" in completed ? completed.maintenance : undefined;
       if (released) {
@@ -163,13 +156,7 @@ it.each(["slow-released", "authority-lost", "rowless-released"] as const)(
         await maintenance?.finish({});
       } else {
         expect(completed).toMatchObject({
-          error: expect.objectContaining({
-            message: expect.stringContaining(
-              outcome === "authority-lost"
-                ? "update owner was revoked"
-                : "OpenClaw state database is busy at",
-            ),
-          }),
+          error: { message: expect.stringContaining("update owner was revoked") },
         });
       }
     } finally {
