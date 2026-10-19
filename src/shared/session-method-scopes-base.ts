@@ -13,6 +13,8 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "canvas.document.preview",
   "canvas.document.view",
   "models.list",
+  "mentions.list",
+  "mentions.dismiss",
   "progressCard.get",
   "projects.list",
   "projects.checkoutOptions",
@@ -50,6 +52,7 @@ const SESSION_READ_METHODS: ReadonlySet<string> = new Set([
   "users.prefs.get",
   "users.prefs.set",
   "users.self",
+  "users.mentionable",
 ]);
 
 const SESSION_WRITE_METHODS: ReadonlySet<string> = new Set([

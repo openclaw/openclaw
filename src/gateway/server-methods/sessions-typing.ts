@@ -100,8 +100,7 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async ({
   const prepared = sharing();
   if (
     !target ||
-    (hasOperatorBoundary(client, projection.getPolicyConfig()) &&
-      prepared.entryFilter?.(target.storeKey, target.entry) === false)
+    (hasOperatorBoundary(client, projection.getPolicyConfig()) && !prepared.canReadTarget(target))
   ) {
     respond(
       false,
@@ -118,8 +117,7 @@ export const sessionTypingHandler: GatewayRequestHandlers[string] = async ({
   const canType = (current: NonNullable<ReturnType<typeof readTarget>>, access = sharing()) => {
     if (
       authorizeIncognitoSessionTarget({ client, sessionKey: query.key, target: current }) ||
-      (hasOperatorBoundary(client, projection.getPolicyConfig()) &&
-        access.entryFilter?.(current.storeKey, current.entry) === false)
+      (hasOperatorBoundary(client, projection.getPolicyConfig()) && !access.canReadTarget(current))
     ) {
       return false;
     }

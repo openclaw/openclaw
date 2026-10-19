@@ -8,6 +8,9 @@ import type {
 import type { MentionCommittedInput } from "./mention-inbox-input.js";
 import type { GatewayClient } from "./server-methods/client-types.js";
 
+/** In-process authority from the committed human-input owner; never persisted in the Inbox. */
+export type MentionCommitAuthority = { client: GatewayClient | null; assertCurrent: () => void };
+
 /** Keep the Gateway context independent of its context-consuming Inbox implementation. */
 export type MentionInbox = {
   mentionable: (
@@ -46,7 +49,10 @@ export type MentionInbox = {
   recordCommittedInput: (input: MentionCommittedInput) => void;
   /** @deprecated Await invalidateAsync. The synchronous adapter rejects calls; its signature is removed in a later release after stable deprecation. */
   invalidate: (sessionKey?: string) => void;
-  recordCommittedInputAsync: (input: MentionCommittedInput) => Promise<void>;
+  recordCommittedInputAsync: (
+    input: MentionCommittedInput,
+    authority?: MentionCommitAuthority,
+  ) => Promise<void>;
   invalidateAsync: (sessionKey?: string) => Promise<void>;
   dispose: () => Promise<void>;
 };

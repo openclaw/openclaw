@@ -23,7 +23,7 @@ import {
 
 afterEach(() => vi.restoreAllMocks());
 
-function viewerConfig(others: "view" | "none"): OpenClawConfig {
+function viewerConfig(others: "view" | "invited" | "none"): OpenClawConfig {
   return {
     gateway: {
       roles: {
@@ -43,6 +43,8 @@ function viewerConfig(others: "view" | "none"): OpenClawConfig {
 it.each([
   "membership-unpublished",
   "membership-external",
+  "membership-invited-unpublished",
+  "membership-invited-external",
   "visibility",
   "identity",
   "config",
@@ -54,6 +56,7 @@ it.each([
       const owner = ensureProfileForEmail("page-owner@example.test").id;
       const scope = { agentId: "main", sessionKey: "agent:main:selected-page" };
       const membershipChange = change.startsWith("membership");
+      const invited = change.includes("invited");
       const replacementKey = "agent:main:replacement-page";
       const selected: SessionEntry = {
         sessionId: "selected-page",
@@ -95,7 +98,7 @@ it.each([
       if (membershipChange) {
         addSessionMember(scope, { identityId: viewer, addedBy: owner });
       }
-      let config = viewerConfig("view");
+      let config = viewerConfig(invited ? "invited" : "view");
       const context = requestContext(config);
       context.getRuntimeConfig = () => config;
       const client = identifiedClient(viewer);
@@ -120,7 +123,7 @@ it.each([
               profileId: owner,
             };
           } else {
-            if (change === "membership-external") {
+            if (change.endsWith("external")) {
               const external = new DatabaseSync(openOpenClawAgentDatabase(scope).path);
               try {
                 external
@@ -151,13 +154,16 @@ it.each([
         request,
       });
       expect(readiness).toHaveBeenCalled();
-      if (membershipChange) {
+      if (membershipChange && !invited) {
         expect(result.sessions).toMatchObject([
           { key: scope.sessionKey, sharingRole: "viewer", activitySummary: { canEnsure: false } },
         ]);
       } else {
         expect(result.sessions.map((session) => session.key)).toEqual([replacementKey]);
         expect(result).toMatchObject({ count: 1, nextOffset: 1 });
+        if (invited) {
+          expect(result.totalCount).toBe(2);
+        }
       }
     });
   },

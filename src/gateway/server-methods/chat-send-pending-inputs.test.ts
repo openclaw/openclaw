@@ -9,6 +9,7 @@ import { seedCanonicalAcpSessionMeta } from "../../acp/runtime/session-meta-fixt
 import * as acpReads from "../../acp/runtime/session-meta-readonly.js";
 import type { dispatchInboundMessage } from "../../auto-reply/dispatch.js";
 import { getRuntimeConfig } from "../../config/config.js";
+import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import * as sessionAccessor from "../../config/sessions/session-accessor.js";
 import {
   listSessionPendingInputs,
@@ -21,6 +22,11 @@ import {
   resolveSqliteScope,
   toDatabaseOptions,
 } from "../../config/sessions/session-accessor.sqlite-scope.js";
+import * as involvementStore from "../../config/sessions/session-involvement-store.js";
+import {
+  readSessionMembersInWorker,
+  removeSessionMember,
+} from "../../config/sessions/session-sharing-store.js";
 import { rotateAgentEventLifecycleGeneration } from "../../infra/agent-events.js";
 import { initializeGlobalHookRunner } from "../../plugins/hook-runner-global.js";
 import { captureCurrentReplyMessageInjectionTarget } from "../../sessions/session-controller.message-injection.js";
@@ -38,7 +44,7 @@ import {
 } from "../../sessions/user-turn-transcript.js";
 import { openOpenClawAgentDatabase } from "../../state/openclaw-agent-db.js";
 import { prepareUserProfileCatalog } from "../../state/user-profile-list.js";
-import { setDisplayName } from "../../state/user-profile-writes.worker.js";
+import { setDisplayName, setUserProfileRole } from "../../state/user-profile-writes.worker.js";
 import { ensureProfileForEmail } from "../../state/user-profiles.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
 import { useUserProfileCatalogForTest } from "../../test-utils/user-profile-catalog.js";
@@ -98,9 +104,8 @@ async function admitPending(fixture: FollowupFixture) {
 
 describe("ordinary chat input admission", () => {
   async function createMentionFixture(
-    options: { active?: boolean; preserveContent?: boolean } = {},
+    options: { active?: boolean; preserveContent?: boolean; creator?: "alice" | "carol" } = {},
   ) {
-    const fixture = await createBrowserFollowupFixture({ preserveContent: true, ...options });
     const createProfile = (name: string) => {
       const profile = ensureProfileForEmail(`${name.toLowerCase()}@mentions.example.test`);
       setDisplayName(profile.id, name);
@@ -109,6 +114,20 @@ describe("ordinary chat input admission", () => {
     const alice = createProfile("Alice"),
       bob = createProfile("Bob"),
       carol = createProfile("Carol");
+    const { creator, ...sessionOptions } = options;
+    const fixture = await createBrowserFollowupFixture({
+      preserveContent: true,
+      ...sessionOptions,
+      ...(creator
+        ? {
+            createdActor: {
+              type: "human",
+              source: "profile",
+              id: creator === "alice" ? alice.profileId : carol.profileId,
+            } as const,
+          }
+        : {}),
+    });
     fixture.client.authenticatedUserProfile = alice;
     const bobClient = { ...fixture.client, connId: "bob-one", authenticatedUserProfile: bob };
     const carolClient = { ...fixture.client, connId: "carol", authenticatedUserProfile: carol };
@@ -141,6 +160,187 @@ describe("ordinary chat input admission", () => {
       [Symbol.asyncDispose]: cleanup,
     };
   }
+
+  async function createInvitationFixture(
+    options: { active?: boolean; preserveContent?: boolean; creator?: "alice" | "carol" } = {},
+  ) {
+    const fixture = await createMentionFixture({ creator: "alice", ...options });
+    const aliceId = fixture.client.authenticatedUserProfile!.profileId;
+    const bobId = fixture.bobClient.authenticatedUserProfile.profileId;
+    const cfg = getRuntimeConfig();
+    setRuntimeConfigSnapshot({
+      ...cfg,
+      gateway: {
+        ...cfg.gateway,
+        roles: {
+          default: "staff",
+          definitions: {
+            staff: {
+              agents: "*",
+              scopes: ["operator.read", "operator.write"],
+              sessions: { others: "write" },
+            },
+            guest: {
+              agents: "*",
+              scopes: ["operator.sessions.read", "operator.sessions.write"],
+              sessions: { others: "invited" },
+            },
+          },
+        },
+      },
+    });
+    setUserProfileRole(bobId, "guest");
+    for (const client of [fixture.client, fixture.bobClient, fixture.carolClient]) {
+      client.connect = {
+        ...client.connect,
+        scopes:
+          client === fixture.bobClient
+            ? ["operator.sessions.read", "operator.sessions.write"]
+            : ["operator.read", "operator.write"],
+      };
+      prepareGatewayRecipientProfile(client);
+    }
+    expect(loadSessionEntry(fixture.scope)?.createdActor?.id).toBe(
+      options.creator === "carol"
+        ? fixture.carolClient.authenticatedUserProfile.profileId
+        : aliceId,
+    );
+    return {
+      ...fixture,
+      aliceId,
+      bobId,
+      members: async () => (await readSessionMembersInWorker(fixture.scope)).members,
+    };
+  }
+
+  it("invites a guest at the original human commit and never regrants a removed membership on replay", async () => {
+    await using fixture = await createInvitationFixture();
+    const record = vi.spyOn(fixture.inbox, "recordCommittedInputAsync");
+    expectStarted(await fixture.send());
+    expect(await fixture.members()).toEqual([]);
+    expect(await fixture.read()).toEqual([]);
+    const recorder = await fixture.dispatchedRecorder;
+    const committed = await recorder.persistApproved();
+    expect(committed?.appended).toBe(true);
+    expect(await fixture.read()).toHaveLength(1);
+    expect(await fixture.members()).toEqual([
+      expect.objectContaining({ identityId: fixture.bobId, addedBy: fixture.aliceId }),
+    ]);
+    const call = record.mock.calls[0]!;
+    expect(call[1]).toBeDefined();
+    await removeSessionMember(fixture.scope, fixture.bobId, undefined, fixture.scope.sessionId);
+    await fixture.inbox.recordCommittedInputAsync(...call);
+    expect(await fixture.members()).toEqual([]);
+    expect(await fixture.read()).toEqual([]);
+  });
+
+  it.each(["plain text", "rewritten", "non-manager"] as const)(
+    "does not invite from %s mentions",
+    async (kind) => {
+      await using fixture = await createInvitationFixture({
+        preserveContent: kind !== "rewritten",
+        creator: kind === "non-manager" ? "carol" : "alice",
+      });
+      if (kind === "plain text") {
+        delete fixture.params.mentions;
+      }
+      const ack = await fixture.send();
+      if (kind === "non-manager") {
+        expectNotStarted(ack);
+        expect(ack.mock.calls[0]?.[2]).toMatchObject({
+          message: "One or more mentioned people are unavailable. Select the recipients again.",
+        });
+        await expectUncommitted(fixture);
+      } else {
+        expectStarted(ack);
+        const committed = await (await fixture.dispatchedRecorder).persistApproved();
+        expect(committed?.message["__openclaw"]?.humanMentions).toBeUndefined();
+      }
+      expect(await fixture.read()).toEqual([]);
+      expect(await fixture.members()).toEqual([]);
+    },
+  );
+
+  it.each([false, true])(
+    "reports an invitation commit failure to its sender while preserving the posted message (queued: %s)",
+    async (active) => {
+      await using fixture = await createInvitationFixture({ active });
+      const update = vi
+        .spyOn(involvementStore, "updateSessionProfileInvolvementAsync")
+        .mockRejectedValueOnce(new Error("Invitation worker unavailable"));
+      try {
+        const ack = await fixture.send();
+        if (active) {
+          expectStarted(ack);
+          await (await fixture.dispatchedRecorder).persistApproved();
+        } else {
+          expectNotStarted(ack);
+        }
+        await fixture.read();
+        expect(fixture.readTranscript()).toContainEqual(
+          expect.objectContaining({
+            type: "message",
+            message: expect.objectContaining({
+              role: "user",
+              content: fixture.params.message,
+            }),
+          }),
+        );
+        expect(await fixture.members()).toEqual([]);
+        expect(fixture.mentionBroadcast).toHaveBeenCalledWith(
+          "mentions.failed",
+          expect.objectContaining({
+            sessionKey: fixture.scope.sessionKey,
+            errorMessage: expect.stringContaining("Your message was posted"),
+          }),
+          new Set([fixture.client.connId]),
+        );
+      } finally {
+        update.mockRestore();
+      }
+    },
+  );
+
+  it("reports a recipient revoked after posting instead of silently committing a partial mention", async () => {
+    await using fixture = await createInvitationFixture();
+    const carolId = fixture.carolClient.authenticatedUserProfile.profileId;
+    fixture.params.message = "@Bob @Carol please review this";
+    fixture.params.mentions = [
+      { profileId: fixture.bobId, start: 0, end: 4 },
+      { profileId: carolId, start: 5, end: 11 },
+    ];
+    const record = fixture.inbox.recordCommittedInputAsync.bind(fixture.inbox);
+    vi.spyOn(fixture.inbox, "recordCommittedInputAsync").mockImplementationOnce((...args) => {
+      const cfg = getRuntimeConfig();
+      const roles = cfg.gateway!.roles!;
+      setRuntimeConfigSnapshot({
+        ...cfg,
+        gateway: {
+          ...cfg.gateway,
+          roles: {
+            ...roles,
+            definitions: {
+              ...roles.definitions,
+              guest: { ...roles.definitions.guest!, scopes: [] },
+            },
+          },
+        },
+      });
+      return record(...args);
+    });
+    expectStarted(await fixture.send());
+    expect((await (await fixture.dispatchedRecorder).persistApproved())?.appended).toBe(true);
+    expect(await fixture.read(fixture.carolClient)).toEqual([]);
+    expect(await fixture.members()).toEqual([]);
+    expect(loadSessionEntry(fixture.scope)?.profileInvolvement?.profiles[carolId]).toBeUndefined();
+    expect(fixture.mentionBroadcast).toHaveBeenCalledWith(
+      "mentions.failed",
+      expect.objectContaining({
+        errorMessage: expect.stringContaining("Your message was posted"),
+      }),
+      new Set([fixture.client.connId]),
+    );
+  });
 
   it("creates recipient-only mentions at original message commit, never at the queued ACK", async () => {
     await using fixture = await createMentionFixture();

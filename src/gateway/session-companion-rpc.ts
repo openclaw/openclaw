@@ -60,7 +60,7 @@ function companionTargetIsVisible(
   client: Parameters<GatewayRequestHandlers[string]>[0]["client"],
   context: Parameters<GatewayRequestHandlers[string]>[0]["context"],
   prepared: {
-    target: Pick<SessionSharingTarget, "storeKey" | "entry"> | null;
+    target: SessionSharingTarget | null;
     membership: ReadonlySet<string>;
     profiles?: PreparedSessionSharingProfiles;
   },
@@ -79,7 +79,7 @@ function companionTargetIsVisible(
     profiles: prepared.profiles,
     isMember: (_target, id) => prepared.membership.has(id),
   });
-  return sharing.entryFilter?.(sharingTarget.storeKey, sharingTarget.entry) !== false;
+  return sharing.canReadTarget(sharingTarget);
 }
 
 export const sessionCompanionHandlers: GatewayRequestHandlers = {

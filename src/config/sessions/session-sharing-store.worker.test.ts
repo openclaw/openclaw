@@ -60,6 +60,7 @@ import { captureDurableSessionActor } from "./session-actor-durable.js";
 import { readSessionActorEntryFacts } from "./session-actor-replica.js";
 import { setCanonicalSqliteSessionMainKey } from "./session-canonical-key.js";
 import { updateSessionGroupCategoriesInWorker } from "./session-group-categories.js";
+import { updateSessionProfileInvolvementAsync } from "./session-involvement-store.js";
 import { assignSessionOwnerInWorker } from "./session-metadata-write.async.js";
 import { recordSessionParticipantInWorker as recordSessionParticipant } from "./session-sharing-store.async.js";
 import {
@@ -440,6 +441,10 @@ it.each([
   { mutation: "membership", receipt: "conflicting", closeBeforeFailure: false },
   { mutation: "membership", receipt: "missing", closeBeforeFailure: false },
   { mutation: "membership", receipt: "missing", closeBeforeFailure: true },
+  { mutation: "invitation", receipt: "valid", closeBeforeFailure: false },
+  { mutation: "invitation", receipt: "conflicting", closeBeforeFailure: false },
+  { mutation: "invitation", receipt: "missing", closeBeforeFailure: false },
+  { mutation: "invitation", receipt: "missing", closeBeforeFailure: true },
 ] as const)(
   "settles committed $mutation with $receipt receipt when the ordinary worker reply is lost (host closed: $closeBeforeFailure)",
   async ({ mutation, receipt, closeBeforeFailure }) => {
@@ -454,7 +459,10 @@ it.each([
         updatedAt: 1,
         category: " Work ",
       });
-      await addSessionMember(scope, memberRow("guest", 2));
+      if (mutation !== "invitation") {
+        await addSessionMember(scope, memberRow("guest", 2));
+      }
+      const initialMembers = mutation === "invitation" ? [] : ["guest"];
       const database = openOpenClawAgentDatabase({ agentId: scope.agentId, path: scope.storePath });
       const aliasedScope = {
         agentId: "other",
@@ -515,10 +523,19 @@ it.each([
             }
             const facts: unknown = structuredClone(committed.facts);
             if (receipt === "conflicting") {
-              if (!isRecord(facts) || !isRecord(facts.result) || !isRecord(facts.result.facts)) {
+              if (!isRecord(facts) || !isRecord(facts.result)) {
                 throw new Error("Expected native membership commit receipt");
               }
-              facts.result.facts.present = true;
+              const memberFact =
+                mutation === "invitation" && Array.isArray(facts.result.memberFacts)
+                  ? facts.result.memberFacts.find(
+                      (fact: unknown) => isRecord(fact) && fact.kind === "member",
+                    )
+                  : facts.result.facts;
+              if (!isRecord(memberFact)) {
+                throw new Error("Expected native membership fact");
+              }
+              memberFact.present = mutation !== "invitation";
             }
             observer({ facts });
           }),
@@ -545,7 +562,14 @@ it.each([
               type: keyof Operations,
               run: () => Promise<T>,
             ): Promise<T> => {
-              if (type !== (mutation === "category" ? "category.apply" : "remove")) {
+              if (
+                type !==
+                (mutation === "category"
+                  ? "category.apply"
+                  : mutation === "invitation"
+                    ? "involvement"
+                    : "remove")
+              ) {
                 return run();
               }
               mutations++;
@@ -587,17 +611,28 @@ it.each([
               from: "Work",
               assertTargetCurrent: assertCurrent,
             })
-          : removeSessionMember(scope, "guest", undefined, "lost-member-reply", assertCurrent);
+          : mutation === "invitation"
+            ? updateSessionProfileInvolvementAsync(scope, {
+                expectedSessionId: "lost-member-reply",
+                profileIds: ["guest"],
+                assertCurrent,
+                change: {
+                  kind: "mention",
+                  source: { generation: "invitation-generation", sequence: 1, timestamp: 1 },
+                  invitation: { addedBy: "owner", profileIds: ["guest"] },
+                },
+              })
+            : removeSessionMember(scope, "guest", undefined, "lost-member-reply", assertCurrent);
       try {
         await projection.prepare();
-        expect(projection.membership(database.path, scope.sessionKey)).toEqual(["guest"]);
+        expect(projection.membership(database.path, scope.sessionKey)).toEqual(initialMembers);
         await expect(
           run(() => {
             throw new Error("manager already revoked");
           }),
         ).rejects.toThrow("manager already revoked");
         expect(changes).toEqual([]);
-        expect(projection.membership(database.path, scope.sessionKey)).toEqual(["guest"]);
+        expect(projection.membership(database.path, scope.sessionKey)).toEqual(initialMembers);
         expect(committedCache()?.get(scope.sessionKey)?.category).toBe(" Work ");
         if (receipt !== "valid") {
           const outcome = await run().then(
@@ -611,16 +646,24 @@ it.each([
           if (closeBeforeFailure) {
             await closeOpenClawAgentDatabaseByPathAsync(database.path, database.agentId);
           }
-          expect(await readMembers(scope)).toEqual([]);
+          expect((await readMembers(scope)).map((member) => member.identityId)).toEqual(
+            mutation === "invitation" ? ["guest"] : [],
+          );
           expect(() => sharing.readCurrent(cfg)).toThrow(unavailable);
           await expectUnavailable();
           open.mockRestore();
           corruptReceipt.mockRestore();
-          await addSessionMember(scope, memberRow("guest", 3));
+          if (mutation === "invitation") {
+            await removeSessionMember(scope, "guest", undefined, "lost-member-reply");
+          } else {
+            await addSessionMember(scope, memberRow("guest", 3));
+          }
           await expectUnavailable();
           return;
         }
-        await expect(run()).resolves.toEqual(mutation === "category" ? 2 : memberRow("guest", 2));
+        await expect(run()).resolves.toEqual(
+          mutation === "category" ? 2 : mutation === "invitation" ? true : memberRow("guest", 2),
+        );
         expect(changes).toEqual(
           mutation === "category"
             ? [scope.sessionKey, aliasedScope.sessionKey].map((sessionKey) =>
@@ -630,18 +673,35 @@ it.each([
                   facts: expect.objectContaining({ kind: "category", category: null }),
                 }),
               )
-            : [
-                expect.objectContaining({
-                  sessionKey: scope.sessionKey,
-                  storePath: database.path,
-                  facts: {
-                    kind: "member",
-                    sessionId: "lost-member-reply",
-                    identityId: "guest",
-                    present: false,
-                  },
-                }),
-              ],
+            : mutation === "invitation"
+              ? [
+                  expect.objectContaining({
+                    sessionKey: scope.sessionKey,
+                    storePath: database.path,
+                    facts: {
+                      kind: "member",
+                      sessionId: "lost-member-reply",
+                      identityId: "guest",
+                      present: true,
+                    },
+                  }),
+                  expect.objectContaining({
+                    sessionKey: scope.sessionKey,
+                    facts: { kind: "unchanged" },
+                  }),
+                ]
+              : [
+                  expect.objectContaining({
+                    sessionKey: scope.sessionKey,
+                    storePath: database.path,
+                    facts: {
+                      kind: "member",
+                      sessionId: "lost-member-reply",
+                      identityId: "guest",
+                      present: false,
+                    },
+                  }),
+                ],
         );
         if (mutation === "category") {
           expect(cachesAtPublication).toHaveLength(2);
@@ -651,9 +711,11 @@ it.each([
           }
           expect(loadSessionEntry(aliasedScope)?.category).toBeUndefined();
         }
-        const members = mutation === "category" ? ["guest"] : [];
+        const members = mutation === "membership" ? [] : ["guest"];
         expect([...sharing.readCurrent(cfg).membership]).toEqual(members);
-        expect(publishedMemberships).toEqual([mutation === "category"]);
+        expect(publishedMemberships).toEqual(
+          mutation === "invitation" ? [true, true] : [mutation === "category"],
+        );
         expect(projection.membership(database.path, scope.sessionKey)).toEqual(members);
         expect(projection.needsPreparation).toBe(false);
         expect((await readMembers(scope)).map((member) => member.identityId)).toEqual(members);

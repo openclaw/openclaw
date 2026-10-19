@@ -275,13 +275,16 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
       allowMissing: true,
     });
     try {
-      const target = facts.readCurrent(context.getRuntimeConfig()).target;
+      const { target, membership } = facts.readCurrent(context.getRuntimeConfig());
       if (
         !target ||
         target.entry.sessionId !== params.expectedSessionId ||
         target.entry.incognito ||
         authorizeIncognitoSessionTarget({ client, sessionKey: params.key, target }) ||
-        createSessionListEntryFilter({ client, cfg })?.(target.storeKey, target.entry) === false
+        createSessionListEntryFilter({ client, cfg, membership })?.(
+          target.storeKey,
+          target.entry,
+        ) === false
       ) {
         respond(
           false,
@@ -302,7 +305,8 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
           change: { kind: "visibility", hidden: params.hidden },
           assertCurrent: () => {
             const currentCfg = context.getRuntimeConfig();
-            const current = facts.readCurrent(currentCfg).target;
+            const { target: current, membership: currentMembership } =
+              facts.readCurrent(currentCfg);
             const currentProfile = client.authenticatedUserProfile?.profileId;
             if (
               client.invalidated ||
@@ -311,10 +315,11 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
               !current ||
               current.entry.sessionId !== params.expectedSessionId ||
               current.entry.incognito ||
-              createSessionListEntryFilter({ client, cfg: currentCfg })?.(
-                current.storeKey,
-                current.entry,
-              ) === false
+              createSessionListEntryFilter({
+                client,
+                cfg: currentCfg,
+                membership: currentMembership,
+              })?.(current.storeKey, current.entry) === false
             ) {
               throw new SessionMutationAuthorizationChangedError(
                 errorShape(
@@ -406,10 +411,11 @@ export const sessionMutationHandlers: GatewayRequestHandlers = {
         currentCfg = context.getCommittedRuntimeConfig?.() ?? context.getRuntimeConfig(),
       ) =>
         authorizeIncognitoSessionTarget({ client, sessionKey: key, target: candidate }) ??
-        (createSessionListEntryFilter({ client, cfg: currentCfg })?.(
-          candidate.storeKey,
-          candidate.entry,
-        ) === false
+        (createSessionListEntryFilter({
+          client,
+          cfg: currentCfg,
+          membership: facts.readCurrent(currentCfg).membership,
+        })?.(candidate.storeKey, candidate.entry) === false
           ? errorShape(ErrorCodes.FORBIDDEN, "session is not visible to this connection")
           : null);
       const visibilityError = authorizeView(target);

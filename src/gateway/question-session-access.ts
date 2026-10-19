@@ -282,9 +282,7 @@ export async function withPreparedQuestionSessions<T>(
                       })
                     );
                   }
-                  return (
-                    sharingFor(client).entryFilter?.(target.canonicalKey, target.entry) ?? true
-                  );
+                  return sharingFor(client).canReadTarget(target);
                 } catch {
                   return false;
                 }
@@ -638,7 +636,7 @@ export async function prepareQuestionCommitAuthority(
         hasOperatorBoundary(options.client, currentCfg) &&
         observation.record.sessionKey &&
         (!current?.target ||
-          sharing.entryFilter?.(current.target.storeKey, current.target.entry) === false ||
+          !sharing.canReadTarget(current.target) ||
           sharing.authorizeTarget(current.target))) ||
       accessRevision !== readGatewayAccessRevision()
     ) {

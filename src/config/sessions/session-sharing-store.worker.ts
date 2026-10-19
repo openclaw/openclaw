@@ -131,6 +131,7 @@ export function bindSqliteWorkerBackend(
       let keys = [scope.sessionKey];
       let participantResult: SessionSharingWorkerOperations["participant"]["output"] | undefined;
       let membershipResult: MembershipPublication | undefined;
+      let involvementResult: SessionSharingWorkerOperations["involvement"]["output"] | undefined;
       let ownerResult: SessionSharingWorkerOperations["owner.assign"]["output"] | undefined;
       return withSqlitePostCommitPublications(sqlPublicationAnchor(db), () =>
         runSqliteWorkerTransactionSync(
@@ -153,11 +154,12 @@ export function bindSqliteWorkerBackend(
           () => {
             const captured = captureSessionRowChanges(db, () => {
               if (command.type === "involvement") {
-                return updatePreparedSessionProfileInvolvement(
+                involvementResult = updatePreparedSessionProfileInvolvement(
                   scope,
                   command.input.params,
                   command.input.profiles,
                 );
+                return involvementResult;
               }
               if (command.type === "owner.assign") {
                 ownerResult = { value: assignSessionOwner(scope, command.input.params) };
@@ -255,8 +257,13 @@ export function bindSqliteWorkerBackend(
                 continue;
               }
               const facts = change.facts;
-              if (membershipResult && facts.kind === "member") {
-                membershipResult.facts = facts;
+              if ((membershipResult || involvementResult) && facts.kind === "member") {
+                if (membershipResult) {
+                  membershipResult.facts = facts;
+                }
+                if (involvementResult) {
+                  (involvementResult.memberFacts ??= []).push(facts);
+                }
                 recordFact(change.sessionKey, facts);
               } else if (ownerResult && facts.kind === "owner") {
                 ownerResult.facts = facts;

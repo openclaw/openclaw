@@ -51,6 +51,7 @@ import {
 import { MAX_MENTION_SOURCES } from "./mention-inbox-store.js";
 import { createMentionTargetCache } from "./mention-inbox-targets.js";
 import { readMentionSnapshot, commitMentionChanges } from "./mention-inbox-worker.js";
+import type { MentionCommitAuthority } from "./mention-inbox.contracts.js";
 import type {
   MentionCommittedInput,
   MentionInbox,
@@ -241,6 +242,7 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       agentId: resolved.agentId,
       sessionKey: resolved.canonicalKey,
       entry: resolved.entry,
+      membership: resolved.membership,
     };
     const recipient = policy.recipientProfile(item.recipientProfileId, target, cfg);
     const sender = policy.readProfile(senderProfileId);
@@ -522,7 +524,10 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
 
   void refresh();
 
-  function recordCommittedInputAsync(committedInput: MentionCommittedInput): Promise<void> {
+  function recordCommittedInputAsync(
+    committedInput: MentionCommittedInput,
+    authority?: MentionCommitAuthority,
+  ): Promise<void> {
     const input = {
       ...committedInput,
       recipientProfileIds: [...committedInput.recipientProfileIds],
@@ -544,16 +549,13 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
         agentId,
       });
       try {
-        await policy.recordCommittedInvolvementAsync(input, prepared);
+        await policy.recordCommittedInvolvementAsync(input, prepared, authority);
         const committed = await mutate<StoredMention[]>(
           (draft, guards, bounds) =>
-            applyCommittedInput(
-              input,
-              draft,
-              guards,
-              bounds,
-              () => prepared.readCurrent(params.getRuntimeConfig()).target,
-            ),
+            applyCommittedInput(input, draft, guards, bounds, () => {
+              const { target, membership } = prepared.readCurrent(params.getRuntimeConfig());
+              return target && { ...target, membership };
+            }),
           () => input.recipientProfileIds.map((id) => policy.readProfile(id)?.profileId ?? id),
         );
         context.admission.assertCurrent();
@@ -563,7 +565,40 @@ export function createMentionInbox(params: MentionInboxOptions): MentionInbox {
       } finally {
         prepared.release();
       }
-    }).catch(() => {
+    }).catch((error: unknown) => {
+      if (authority) {
+        const failure = new Error(
+          "Your message was posted, but mention notifications and invitations could not be confirmed. Check session members before retrying.",
+          { cause: error },
+        );
+        const client = authority.client;
+        const sender = policy.readProfile(input.senderProfileId);
+        // Queued inputs can commit after their ACK. Report the failure to that
+        // sender without terminating the agent run or rewriting its posted input.
+        if (
+          client?.connId &&
+          !client.invalidated &&
+          !client.connectionSignal?.aborted &&
+          sender &&
+          client.authenticatedUserProfile?.profileId &&
+          policy.readProfile(client.authenticatedUserProfile.profileId)?.profileId ===
+            sender.profileId &&
+          [...params.getClients()].includes(client)
+        ) {
+          params.broadcastToConnIds(
+            "mentions.failed",
+            {
+              gatewayInstanceId: params.gatewayInstanceId,
+              sessionKey: input.sessionKey,
+              agentId: input.agentId,
+              messageId: input.messageId,
+              errorMessage: failure.message,
+            },
+            new Set([client.connId]),
+          );
+        }
+        throw failure;
+      }
       log.warn("Mention delivery could not be completed; the posted message is unchanged.");
     });
   }

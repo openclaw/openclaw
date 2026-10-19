@@ -11,6 +11,7 @@ import {
 import { sessionMetadataExpectedEntryMatches } from "./session-accessor.sqlite-owner.js";
 import { resolveSqliteScope, toDatabaseOptions } from "./session-accessor.sqlite-scope.js";
 import { isNewerSessionMention, mergeSessionProfileInvolvement } from "./session-involvement.js";
+import { addSessionMember } from "./session-sharing-store.native.js";
 import type {
   SessionInvolvementMutation,
   SessionSharingWorkerOperations,
@@ -55,6 +56,15 @@ export function updatePreparedSessionProfileInvolvement(
         const hidden = change.kind === "visibility" && change.hidden;
         if (change.kind === "visibility" && previous?.hidden === hidden) {
           continue;
+        }
+        // Commit the grant with its replay watermark. Removing membership preserves that
+        // watermark, so retries of an old message cannot restore a revoked invitation.
+        if (change.kind === "mention" && change.invitation?.profileIds.includes(profileId)) {
+          addSessionMember(scope, {
+            identityId: profileId,
+            addedBy: change.invitation.addedBy,
+            expectedSessionId: params.expectedSessionId,
+          });
         }
         for (const alias of aliases) {
           delete involvement[alias];

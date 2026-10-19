@@ -1,4 +1,5 @@
 import type { OpenClawConfig } from "../config/types.openclaw.js";
+import type { MentionSharingTarget } from "./human-mention-policy.js";
 import type { StoredMention } from "./mention-inbox-projection.js";
 import { MAX_MENTION_SOURCES } from "./mention-inbox-store.js";
 import type { SessionSharingTarget } from "./session-sharing-policy.js";
@@ -23,16 +24,21 @@ export function createMentionTargetCache(params: {
   const connectedTargets: SharingTargets = new Map();
   const targetAliases = new Map<string, string>();
 
-  function readTarget(sessionKey: string, agentId?: string): SessionSharingTarget | null {
+  function readTarget(sessionKey: string, agentId?: string): MentionSharingTarget | null {
     const key = JSON.stringify([agentId, sessionKey]);
     const prepared = connectedTargets.get(targetAliases.get(key) ?? key);
     if (!prepared) {
       return null;
     }
     try {
-      const current = prepared.facts.readCurrent(params.getRuntimeConfig()).target;
+      const { target: current, membership } = prepared.facts.readCurrent(params.getRuntimeConfig());
       return current
-        ? { ...prepared.target, ...current, entry: { ...prepared.target.entry, ...current.entry } }
+        ? {
+            ...prepared.target,
+            ...current,
+            membership,
+            entry: { ...prepared.target.entry, ...current.entry },
+          }
         : null;
     } catch {
       return null;

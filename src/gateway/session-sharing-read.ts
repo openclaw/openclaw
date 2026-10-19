@@ -73,7 +73,6 @@ export function canReceiveSessionEvent(params: {
     );
   }
   const sharing = params.prepared.sharing;
-  const hidesForeignSessions = sharing.sessionCap === "none";
   const authorId =
     event === "session.suggestion" && params.payload && typeof params.payload === "object"
       ? (params.payload as { suggestion?: { author?: { id?: unknown } } }).suggestion?.author?.id // SAFETY: publishSuggestion emits SessionSuggestionEvent; this only reads the optional author id.
@@ -88,7 +87,7 @@ export function canReceiveSessionEvent(params: {
     if (
       target.entry.incognito === true ||
       isIncognitoSessionKey(target.canonicalKey) ||
-      (hidesForeignSessions && !isCreator)
+      !sharing.canReadTarget(target)
     ) {
       return false;
     }
@@ -124,10 +123,17 @@ export function prepareSessionSharing(
       target,
       isMember ?? (prepared && Boolean(identity && prepared.isMember(target, identity.id))),
     );
+  const entryFilter = createSessionListEntryFilter(params, isCreator, { sessionCap });
   return {
     isCreator,
-    sessionCap: prepared?.sessionCap,
-    entryFilter: createSessionListEntryFilter(params, isCreator, { sessionCap }),
+    sessionCap,
+    entryFilter,
+    canReadTarget: (target: SessionSharingTarget) =>
+      entryFilter?.(
+        target.storeKey,
+        target.entry,
+        Boolean(identity && prepared?.isMember(target, identity.id)),
+      ) ?? true,
     roleForTarget,
     authorizeTarget: (target: SessionSharingTarget, role = roleForTarget(target)) =>
       authorizeSessionSharingTarget({ ...params, target }, { ...cap, role }),
@@ -385,13 +391,16 @@ export function prepareProjectedSessionSharing(params: {
 }
 
 export function createSessionListEntryFilter(
-  params: Pick<SessionSharingRoleParams, "cfg" | "client">,
+  params: Pick<SessionSharingRoleParams, "cfg" | "client"> & {
+    membership?: ReadonlySet<string>;
+  },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
   prepared?: { sessionCap: ReturnType<typeof operatorSessionCap> },
 ):
   | ((
       sessionKey: string | undefined,
       entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
+      isMember?: boolean,
     ) => boolean)
   | undefined {
   const operatorActor = resolveGatewayOperatorRoleActor(params.client);
@@ -405,11 +414,18 @@ export function createSessionListEntryFilter(
   const sessionCap = prepared
     ? prepared.sessionCap
     : params.cfg && operatorSessionCap(params.client, params.cfg);
-  return createProfileSessionEntryFilter({ profileId: identity.id, sessionCap }, isCreator);
+  return createProfileSessionEntryFilter(
+    { profileId: identity.id, sessionCap, membership: params.membership },
+    isCreator,
+  );
 }
 
 export function createProfileSessionEntryFilter(
-  params: { profileId: string; sessionCap?: ReturnType<typeof operatorSessionCap> },
+  params: {
+    profileId: string;
+    sessionCap?: ReturnType<typeof operatorSessionCap>;
+    membership?: ReadonlySet<string>;
+  },
   isCreator?: ReturnType<typeof prepareSessionCreatorProfile>,
 ) {
   // Unprepared filters (notably preview) may survive yields and must read current aliases.
@@ -417,9 +433,14 @@ export function createProfileSessionEntryFilter(
   return (
     sessionKey: string | undefined,
     entry: Pick<SessionEntry, "createdActor" | "visibility" | "incognito">,
+    isMember = params.membership?.has(params.profileId) ?? false,
   ) =>
     entry.incognito !== true &&
     !isIncognitoSessionKey(sessionKey) &&
     (creatorMatches(entry.createdActor) ||
-      (params.sessionCap !== "none" && resolveSessionVisibility(entry) !== "draft"));
+      (params.sessionCap !== "none" &&
+        // Projection callbacks may pass metadata as the third argument; only true grants membership.
+        // oxlint-disable-next-line typescript/no-unnecessary-boolean-literal-compare
+        (params.sessionCap !== "invited" || isMember === true) &&
+        resolveSessionVisibility(entry) !== "draft"));
 }

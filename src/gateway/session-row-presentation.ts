@@ -18,7 +18,10 @@ import {
 import { retainSessionListBaseMiss } from "./session-list-diagnostics.js";
 import type { SessionEntrySelection, SessionListFilteredEntries } from "./session-list-filters.js";
 import type { SessionListView } from "./session-list-view-cache.js";
-import { tryResolveSessionCompatibilityOwnerAgentId } from "./session-request-agent.js";
+import {
+  resolveRequestedSessionAgentId,
+  tryResolveSessionCompatibilityOwnerAgentId,
+} from "./session-request-agent.js";
 import {
   sessionRowId,
   sessionRowsRevision,
@@ -352,7 +355,18 @@ export function prepareProjectedSessionPresentation(
     if (!excludedChildKeys && client !== undefined) {
       let excluded: Set<string> | undefined;
       for (const { key, entry } of record.materialized.source.childLinks ?? []) {
-        if (sharing.entryFilter?.(key, entry) === false) {
+        const owner = resolveRequestedSessionAgentId(cfg, key);
+        if (
+          sharing.entryFilter?.(
+            key,
+            entry,
+            Boolean(
+              profileId &&
+              owner.ok &&
+              projection.readMembership({ key, agentId: owner.agentId })?.has(profileId),
+            ),
+          ) === false
+        ) {
           (excluded ??= new Set()).add(key);
         }
       }
@@ -368,9 +382,23 @@ export function prepareProjectedSessionPresentation(
         if (
           excludedChildKeys?.has(sessionKey) ||
           (client !== undefined &&
-            projection
-              .selectEntries({ key: sessionKey })
-              .some((child) => sharing.entryFilter?.(child.key, child.entry) === false))
+            projection.selectEntries({ key: sessionKey }).some(
+              (child) =>
+                sharing.entryFilter?.(
+                  child.key,
+                  child.entry,
+                  Boolean(
+                    profileId &&
+                    projection
+                      .readMembership({
+                        key: child.key,
+                        agentId: child.agentId,
+                        storePath: child.storeTarget.storePath,
+                      })
+                      ?.has(profileId),
+                  ),
+                ) === false,
+            ))
         ) {
           (excludedSwarmKeys ??= new Set()).add(sessionKey);
         }

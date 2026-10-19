@@ -178,6 +178,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
           do {
             await projection.prepareSelection({ metadataOnly: true });
           } while (projection.needsSelectionPreparation({ metadataOnly: true }));
+          await projection.prepareMembership();
           if (getSessionRowProjection(context) !== projection || projection.state.cfg !== cfg) {
             throw new Error(
               "Session projection changed while preparing the listing. Retry the request.",
@@ -193,6 +194,7 @@ export function createProjectsHandlers(service: ProjectWorktreeService): Gateway
             client,
             store,
             diagnostics,
+            sessions?.readMembership,
           );
         }
         diagnostics?.mark("recents");

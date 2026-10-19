@@ -102,11 +102,10 @@ export function createGatewayChatUserTurnController(params: {
   const selectedMentions = request.mentions;
   const mentionInbox = params.mentionInbox;
   const sourceId = buildRunUserTurnIdempotencyKey(session.clientRunId);
-  const sourceClients =
+  const humanInput =
     !params.client?.internal?.syntheticClient &&
-    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user")
-      ? normalizeMessageClientSources([request.clientInfo])
-      : [];
+    (!request.systemInputProvenance || request.systemInputProvenance.kind === "external_user");
+  const sourceClients = humanInput ? normalizeMessageClientSources([request.clientInfo]) : [];
   const baseInput: UserTurnInput = {
     ...params.transcript,
     ...(request.goalOperation?.action === "resume" || request.restartResume
@@ -307,21 +306,32 @@ export function createGatewayChatUserTurnController(params: {
               );
               return;
             }
-            mentionCommit = mentionInbox.recordCommittedInputAsync({
-              sourceId,
-              committedSource: {
-                generation: anchor.generation,
-                sequence: anchor.rawSeq,
-                timestamp: message.timestamp,
+            mentionCommit = mentionInbox.recordCommittedInputAsync(
+              {
+                sourceId,
+                committedSource: {
+                  generation: anchor.generation,
+                  sequence: anchor.rawSeq,
+                  timestamp: message.timestamp,
+                },
+                agentId: anchor.agentId,
+                sessionKey: session.sessionKey,
+                sessionId: anchor.sessionId,
+                messageId: anchor.entryId,
+                senderProfileId,
+                recipientProfileIds: retained.map((mention) => mention.profileId),
+                excerpt: text,
               },
-              agentId: anchor.agentId,
-              sessionKey: session.sessionKey,
-              sessionId: anchor.sessionId,
-              messageId: anchor.entryId,
-              senderProfileId,
-              recipientProfileIds: retained.map((mention) => mention.profileId),
-              excerpt: text,
-            });
+              humanInput
+                ? {
+                    client: params.client,
+                    assertCurrent: () => {
+                      params.assertOriginalInputCommit?.();
+                      admission.operatorAuthority?.assertCurrent();
+                    },
+                  }
+                : undefined,
+            );
             void mentionCommit.catch(onPersistenceError);
           },
         }

@@ -268,7 +268,7 @@ Visitor Access requires `gateway.roles.default` to be a restricted guest role:
 default: "guest",
 definitions: {
   guest: {
-    sessions: { others: "view" },
+    sessions: { others: "invited" },
     agents: ["assistant"],
     scopes: ["operator.sessions.write"],
     sandbox: "required",
@@ -283,6 +283,13 @@ switching the default, assign every staff member an explicit role with
 `users.setRole` or `gateway.roles.assignments.byGithubLogin`. An administrator
 then asks the agent to call `visitor_invite` with a GitHub login or email; the
 guest signs in at the normal Team URL.
+
+This role sees its own sessions and sessions where it is a member. The session
+creator or an administrator can invite a guest with a selected human @mention.
+Access starts when the message is committed, not when it enters the send queue.
+Remove the guest from session members to revoke access. Explicit public links
+still expose only the sanitized transcript. The session-only scope permits
+changes to the guest's own sessions, not to sessions they were invited to read.
 
 Guests can create sandboxed sessions on the listed agents and publish open or
 explicitly requested draft pull requests from their own sessions through the

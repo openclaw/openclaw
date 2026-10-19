@@ -160,7 +160,10 @@ export const usageHandlers: GatewayRequestHandlers = {
     }
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
-    if (!isGatewayAdmin(client ?? null) && operatorSessionCap(client ?? null, config) === "none") {
+    if (
+      !isGatewayAdmin(client ?? null) &&
+      ["none", "invited"].includes(operatorSessionCap(client ?? null, config) ?? "")
+    ) {
       respond(
         false,
         undefined,
@@ -214,9 +217,20 @@ export const usageHandlers: GatewayRequestHandlers = {
     const { interpretation: dateInterpretation, range } = dateRange;
     const config = context.getRuntimeConfig();
     const sessionCap = operatorSessionCap(client ?? null, config);
-    const visibilityFilter =
-      sessionCap === "none"
-        ? createSessionListEntryFilter({ client: client ?? null, cfg: config })
+    const visibilityFilter: Parameters<typeof selectUsageSessions>[0]["visibilityFilter"] =
+      sessionCap === "none" || sessionCap === "invited"
+        ? (key, entry, target) =>
+            createSessionListEntryFilter({
+              client: client ?? null,
+              cfg: context.getRuntimeConfig(),
+              membership:
+                target &&
+                getSessionRowProjection(context)?.readMembership({
+                  agentId: target.agentId,
+                  key: target.storeKey ?? key,
+                  storePath: target.storeTarget.storePath,
+                }),
+            })?.(key, entry) !== false
         : undefined;
     const profileId = gatewayClientSessionCreator(client ?? null)?.id;
     const visibilityIdentity = sessionCap && profileId ? `${profileId}:${sessionCap}` : undefined;
@@ -497,11 +511,20 @@ export const usageHandlers: GatewayRequestHandlers = {
           const source = sourceFor(session);
           const committed = source && committedEntry(source);
           let current = committed?.entry;
+          let membership =
+            source?.contextTarget &&
+            getSessionRowProjection(context)?.readMembership({
+              agentId: source.agentId,
+              key: source.contextTarget.storedKey,
+              storePath: source.contextTarget.storeTarget.storePath,
+            });
           if (committed === undefined && source) {
             const prepared = contextReads.get(source);
             if (prepared) {
               try {
-                current = prepared.readCurrent(currentConfig).target?.entry;
+                const facts = prepared.readCurrent(currentConfig);
+                current = facts.target?.entry;
+                membership = facts.membership;
               } catch (error) {
                 if (!(error instanceof SessionMutationFactsUnavailableError)) {
                   throw error;
@@ -514,8 +537,14 @@ export const usageHandlers: GatewayRequestHandlers = {
           // Cached reports are data; current receipt metadata owns publication authority.
           if (
             source?.storeEntry
-              ? !current || (currentFilter && !currentFilter(session.key, current))
-              : currentSessionCap === "none"
+              ? !current ||
+                (currentFilter &&
+                  !currentFilter(
+                    session.key,
+                    current,
+                    Boolean(profileId && membership?.has(profileId)),
+                  ))
+              : currentSessionCap === "none" || currentSessionCap === "invited"
           ) {
             return [];
           }

@@ -86,6 +86,13 @@ export const MentionsListResultSchema = closedObject({
   items: Type.Array(MentionInboxItemSchema, { maxItems: MENTION_INBOX_MAX_ITEMS }),
 });
 export const MentionsChangedEventSchema = closedObject(MentionInboxVersionProperties);
+export const MentionsFailedEventSchema = closedObject({
+  gatewayInstanceId: MentionReferenceSchema,
+  sessionKey: MentionSessionKeySchema,
+  agentId: MentionReferenceSchema,
+  messageId: MentionReferenceSchema,
+  errorMessage: Type.String({ minLength: 1, maxLength: 512 }),
+});
 
 export type HumanMention = Static<typeof HumanMentionSchema>;
 export type UsersMentionableParams = Static<typeof UsersMentionableParamsSchema>;
@@ -96,3 +103,4 @@ export type MentionsListParams = Static<typeof MentionsListParamsSchema>;
 export type MentionsDismissParams = Static<typeof MentionsDismissParamsSchema>;
 export type MentionsListResult = Static<typeof MentionsListResultSchema>;
 export type MentionsChangedEvent = Static<typeof MentionsChangedEventSchema>;
+export type MentionsFailedEvent = Static<typeof MentionsFailedEventSchema>;

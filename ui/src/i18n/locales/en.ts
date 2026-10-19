@@ -2249,8 +2249,10 @@ export const en: TranslationMap & {
       offline: "Offline",
       unavailable: "Could not load people. Try again.",
       limit: "You can mention up to 10 people per message.",
-      selectedLabel: "Will notify",
-      selected: "Will notify: {names}",
+      selectedLabel: "Notify or invite",
+      selected: "Notify or invite: {names}",
+      invitationHelp:
+        "Sending a selected @mention can give guests access to this session. Only its creator or an admin can invite them.",
       remove: "Remove mention",
       restoreFailed:
         "Mention selection could not be restored. Edit this message and select its recipients again.",

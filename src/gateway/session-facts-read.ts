@@ -100,10 +100,18 @@ export function prepareFactsRead(
       ) {
         return undefined;
       }
-      let visible = authority?.visibility.get(record.entry);
+      const visibilityCache = sharing.sessionCap === "invited" ? undefined : authority?.visibility;
+      let visible = visibilityCache?.get(record.entry);
       if (visible === undefined) {
-        visible = sharing.entryFilter?.(record.key, record.entry) !== false;
-        authority?.visibility.set(record.entry, visible);
+        visible = sharing.canReadTarget({
+          agentId: record.agentId,
+          canonicalKey: record.key,
+          storeKey: record.key,
+          storeKeys: [record.key],
+          storePath: record.storeTarget.storePath,
+          entry: record.entry,
+        });
+        visibilityCache?.set(record.entry, visible);
       }
       if (!visible) {
         return undefined;

@@ -10,7 +10,7 @@ import { isGatewayClientProfilePending } from "./server-methods/gateway-client-i
 import type { GatewayClient } from "./server-methods/types.js";
 import { resolveSessionEventAgentScope } from "./session-request-agent.js";
 import type { SessionRowProjection } from "./session-row-projection.js";
-import { isGatewayAdmin, prepareProjectedSessionSharing } from "./session-sharing.js";
+import { createSessionListEntryFilter, isGatewayAdmin } from "./session-sharing.js";
 
 /** Roster objects are immutable for one publication; authority is checked for every recipient. */
 export function createPresenceRecipientProjection(params: {
@@ -87,11 +87,8 @@ export function createPresenceRecipientProjection(params: {
       targets.clear();
     }
     const canReadSessions = isGatewayAdmin(client) || !isGatewayClientProfilePending(client);
-    const { entryFilter } = prepareProjectedSessionSharing({
-      cfg,
-      client,
-      isMember: () => false,
-    });
+    const createProfileVisibility = (membership: ReadonlySet<string> | undefined) =>
+      createSessionListEntryFilter({ cfg, client, membership });
     const visible = new Set<string>();
     const indexes: number[] = [];
     if (canReadSessions) {
@@ -100,6 +97,8 @@ export function createPresenceRecipientProjection(params: {
           continue;
         }
         const target = resolveTarget(sessionKey, key, agentId);
+        const membership = params.projection?.readMembership({ key, agentId });
+        const entryFilter = createProfileVisibility(membership);
         if (target && (entryFilter?.(target.canonicalKey, target.entry) ?? true)) {
           visible.add(sessionKey);
           indexes.push(index);

@@ -95,6 +95,7 @@ export const validateMentionsListParams = compile(S.MentionsListParamsSchema);
 export const validateMentionsDismissParams = compile(S.MentionsDismissParamsSchema);
 export const validateMentionsListResult = compile(S.MentionsListResultSchema);
 export const validateMentionsChangedEvent = compile(S.MentionsChangedEventSchema);
+export const validateMentionsFailedEvent = compile(S.MentionsFailedEventSchema);
 export const validateUsersBackgroundGetParams = compile(S.UsersBackgroundGetParamsSchema);
 export const validateUsersBackgroundUploadParams = compile(S.UsersBackgroundUploadParamsSchema);
 export const validateUsersBackgroundRemoveParams = compile(S.UsersBackgroundRemoveParamsSchema);

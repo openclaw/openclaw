@@ -158,7 +158,12 @@ export function prepareSessionEventProjection(
         const hiddenAncestors: string[] = [];
         const ancestorRows = ancestors?.every((ancestor) => projection.isCurrent(ancestor))
           ? ancestors.flatMap((ancestor) => {
-              if (presentation.sharing.entryFilter?.(ancestor.key, ancestor.entry) === false) {
+              const target = presentation.target({
+                key: ancestor.key,
+                agentId: ancestor.agentId,
+                storePath: ancestor.storeTarget.storePath,
+              });
+              if (!target || !presentation.sharing.canReadTarget(target)) {
                 hiddenAncestors.push(ancestor.key);
                 return [];
               }
