@@ -1,5 +1,4 @@
 import { beforeEach, describe, expect, it } from "vitest";
-import type { OpenClawConfig } from "../config/config.js";
 import { generateImage, type GenerateImageParams } from "./runtime.js";
 import type { ImageGenerationProvider, ImageGenerationRequest } from "./types.js";
 
@@ -14,11 +13,7 @@ const runtimeDeps: ImageGenerationRuntimeDeps = {
   log: { warn() {} },
 };
 
-function imageConfig(
-  primary: string,
-  fallbacks: string[] = [],
-  timeoutMs?: number,
-): OpenClawConfig {
+function imageConfig(primary: string, fallbacks: string[] = [], timeoutMs?: number) {
   return { agents: { defaults: { mediaModels: { image: { primary, fallbacks, timeoutMs } } } } };
 }
 
@@ -33,22 +28,6 @@ const imageResult = {
 let seenRequest: ImageGenerationRequest | undefined;
 
 const referenceImage = { buffer: Buffer.from("reference"), mimeType: "image/png" };
-const outputKeys = ["quality", "outputFormat", "background"] as const;
-
-function expectIgnoredOutput(
-  result: Awaited<ReturnType<typeof runGenerateImage>>,
-  values: string[],
-) {
-  expect(seenRequest).toMatchObject({
-    quality: undefined,
-    outputFormat: undefined,
-    background: undefined,
-  });
-  expect(result.ignoredOverrides).toEqual(
-    outputKeys.map((key, index) => ({ key, value: values[index] })),
-  );
-}
-
 function geometryCapabilities(
   geometry: Geometry | undefined,
   mode: Omit<ImageGenerationProvider["capabilities"]["edit"], "enabled">,
@@ -90,7 +69,7 @@ describe("image-generation runtime", () => {
   });
 
   it.each(["grok-imagine-image-unknown", "xai/"])(
-    "rejects unresolved explicit model %s instead of generating with the configured default",
+    "rejects unknown explicit model %s",
     async (modelOverride) => {
       useProvider("xai", {
         defaultModel: "grok-imagine-image",
@@ -107,21 +86,17 @@ describe("image-generation runtime", () => {
     },
   );
 
-  it("uses configured image-generation timeout when the call omits timeoutMs", async () => {
-    useProvider("image-plugin");
-
-    await runGenerateImage({ cfg: imageConfig("image-plugin/img-v1", [], 180_000) });
-
-    expect(seenRequest).toMatchObject({ timeoutMs: 180_000 });
-  });
-
-  it("uses provider default image-generation timeout when the call and config omit timeoutMs", async () => {
-    useProvider("image-plugin", { defaultTimeoutMs: 600_000 });
-
-    await runGenerateImage({ cfg: imageConfig("image-plugin/img-v1") });
-
-    expect(seenRequest).toMatchObject({ timeoutMs: 600_000 });
-  });
+  it.each([
+    [180_000, undefined, 180_000],
+    [undefined, 600_000, 600_000],
+  ])(
+    "resolves configured %s or provider %s timeout",
+    async (configured, providerDefault, expected) => {
+      useProvider("image-plugin", { defaultTimeoutMs: providerDefault });
+      await runGenerateImage({ cfg: imageConfig("image-plugin/img-v1", [], configured) });
+      expect(seenRequest).toMatchObject({ timeoutMs: expected });
+    },
+  );
 
   it("falls through when an image provider returns an empty buffer", async () => {
     providers = [
@@ -129,9 +104,7 @@ describe("image-generation runtime", () => {
       createBufferedImageProvider("valid", [Buffer.from("png-bytes")]),
     ];
 
-    const result = await runGenerateImage({
-      cfg: imageConfig("empty/img-v1", ["valid/img-v2"]),
-    });
+    const result = await runGenerateImage({ cfg: imageConfig("empty/img-v1", ["valid/img-v2"]) });
 
     expect(result.provider).toBe("valid");
     expect(result.images[0]?.buffer).toEqual(Buffer.from("png-bytes"));
@@ -235,19 +208,6 @@ describe("image-generation runtime", () => {
     ]);
   });
 
-  it("drops unsupported image output hints and reports them", async () => {
-    useProvider("vydra");
-
-    const result = await runGenerateImage({
-      cfg: imageConfig("vydra/grok-imagine"),
-      quality: "low",
-      outputFormat: "jpeg",
-      background: "transparent",
-    });
-
-    expectIgnoredOutput(result, ["low", "jpeg", "transparent"]);
-  });
-
   it("preserves flexible-model dimensions for reference-image edits", async () => {
     useProvider("canvas", {
       capabilities: geometryCapabilities(
@@ -275,28 +235,23 @@ describe("image-generation runtime", () => {
   });
 
   it("uses model-specific geometry lists before provider normalization", async () => {
+    const model = "krea/v2/medium/text-to-image";
     useProvider("fal", {
       capabilities: geometryCapabilities(
         {
           sizes: ["1024x1024", "1536x1024", "1024x1536"],
-          sizesByModel: {
-            "krea/v2/medium/text-to-image": [],
-          },
+          sizesByModel: { [model]: [] },
           aspectRatios: ["1:1", "4:3", "3:2", "16:9"],
-          aspectRatiosByModel: {
-            "krea/v2/medium/text-to-image": ["1:1", "2:1", "20:9"],
-          },
+          aspectRatiosByModel: { [model]: ["1:1", "2:1", "20:9"] },
           resolutions: ["1K", "2K", "4K"],
-          resolutionsByModel: {
-            "krea/v2/medium/text-to-image": ["1K", "2K"],
-          },
+          resolutionsByModel: { [model]: ["1K", "2K"] },
         },
         { supportsSize: true, supportsAspectRatio: true, supportsResolution: true },
       ),
     });
 
     await runGenerateImage({
-      cfg: imageConfig("fal/krea/v2/medium/text-to-image"),
+      cfg: imageConfig(`fal/${model}`),
       size: "1024x768",
       aspectRatio: "20:9",
       resolution: "4K",
@@ -309,28 +264,31 @@ describe("image-generation runtime", () => {
     });
   });
 
-  it("filters output hints against legacy model capabilities", async () => {
-    useProvider("test", {
-      capabilities: {
-        generate: {},
-        edit: { enabled: true },
-        output: {
-          qualities: ["low"],
-          formats: ["png"],
-          backgrounds: ["opaque"],
-          qualitiesByModel: { extended: ["max"] },
-          formatsByModel: { extended: ["webp"] },
-          backgroundsByModel: { extended: ["transparent"] },
-        },
-      },
-    });
-    const result = await runGenerateImage({
-      modelOverride: "test/legacy",
-      prompt: "A sticker",
-      quality: "max",
-      outputFormat: "webp",
-      background: "transparent",
-    });
-    expectIgnoredOutput(result, ["max", "webp", "transparent"]);
-  });
+  const legacyOutput: ImageGenerationProvider["capabilities"]["output"] = {
+    qualities: ["low"],
+    formats: ["png"],
+    backgrounds: ["opaque"],
+    qualitiesByModel: { extended: ["max"] },
+    formatsByModel: { extended: ["webp"] },
+    backgroundsByModel: { extended: ["transparent"] },
+  };
+  it.each([
+    ["missing", undefined, "low", "jpeg", false],
+    ["legacy", legacyOutput, "max", "webp", true],
+  ] as const)(
+    "filters output hints against %s capabilities",
+    async (_kind, output, quality, outputFormat, edit) => {
+      useProvider("test", { capabilities: { generate: {}, edit: { enabled: edit }, output } });
+      const hints = { quality, outputFormat, background: "transparent" } as const;
+      const result = await runGenerateImage({ modelOverride: "test/legacy", ...hints });
+      expect(seenRequest).toMatchObject({
+        quality: undefined,
+        outputFormat: undefined,
+        background: undefined,
+      });
+      expect(result.ignoredOverrides).toEqual(
+        Object.entries(hints).map(([key, value]) => ({ key, value })),
+      );
+    },
+  );
 });
