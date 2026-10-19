@@ -13,7 +13,7 @@ import { withOwnedSessionTranscriptWrites } from "../../config/sessions/transcri
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { withOpenClawTestState } from "../../test-utils/openclaw-test-state.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import * as harness from "./run.test-harness.js";
 
 const runCron = await harness.loadRunCronIsolatedAgentTurn();
@@ -84,10 +84,10 @@ describe("cron terminal error persistence", () => {
       agentId: target.agentId,
       cfg: { session: { store: target.storePath } },
       sessionKey: target.sessionKey,
-      job: {
+      job: makeIsolatedAgentJobFixture({
         sessionTarget: `session:${target.sessionKey}`,
         delivery: { mode: "none" },
-      },
+      }),
     });
     // Reuse both the job and physical transcript, in the incident's execution order.
     const first = await runCron(params);
@@ -192,7 +192,7 @@ describe("cron terminal error persistence", () => {
           agentId: "main",
           cfg: { session: { store: storePath } },
           sessionKey: "cron:synthetic-job",
-          job: { id: "synthetic-job", delivery: { mode: "none" } },
+          job: makeIsolatedAgentJobFixture({ id: "synthetic-job", delivery: { mode: "none" } }),
         }),
       );
       expect(harness.runEmbeddedAgentMock).toHaveBeenCalledOnce();

@@ -301,7 +301,7 @@ describe("status scans", () => {
 
     mocks.readBestEffortConfigSnapshot.mockResolvedValue({
       config: { session: {} },
-      sourceConfig: { session: { raw: true } },
+      sourceConfig: { session: { dmScope: "per-peer" } },
       configDiagnostics: null,
     });
     mocks.resolveCommandSecretRefsViaGateway.mockResolvedValue({
@@ -330,7 +330,7 @@ describe("status scans", () => {
     expectCall(mocks.callGateway, { method: "channels.status", url, token: "tok" });
     expectChannels({
       config: { session: {} },
-      sourceConfig: { session: { raw: true } },
+      sourceConfig: { session: { dmScope: "per-peer" } },
       showSecrets: false,
       includeSetupFallbackPlugins: true,
       liveChannelStatus: { channelAccounts: {} },

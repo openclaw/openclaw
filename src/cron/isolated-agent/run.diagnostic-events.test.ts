@@ -34,19 +34,19 @@ async function runWithEvents(
   publicEvents = false,
   events: diagnostics.DiagnosticEventPayload[] = [],
 ) {
-  const subscribe = publicEvents
-    ? diagnostics.onDiagnosticEvent
-    : diagnostics.onInternalDiagnosticEvent;
-  const unsubscribe = subscribe((event) => events.push(event), {
-    include: [
-      "message.queued",
-      "message.dispatch.started",
-      "message.dispatch.completed",
-      "message.processed",
-      "session.state",
-      "model.usage",
-    ],
-  });
+  const listener = (event: diagnostics.DiagnosticEventPayload) => events.push(event);
+  const unsubscribe = publicEvents
+    ? diagnostics.onDiagnosticEvent(listener)
+    : diagnostics.onInternalDiagnosticEvent(listener, {
+        include: [
+          "message.queued",
+          "message.dispatch.started",
+          "message.dispatch.completed",
+          "message.processed",
+          "session.state",
+          "model.usage",
+        ],
+      });
   try {
     const result = await runCron(params);
     await diagnostics.waitForDiagnosticEventsDrained();

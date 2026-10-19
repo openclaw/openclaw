@@ -31,10 +31,14 @@ import { clickClackSetupWizard } from "./setup-surface.js";
 import type { CoreConfig } from "./types.js";
 
 const { credentials, status, introNote, finalize } = clickClackSetupWizard;
-const credential = credentials[0];
-if (!credential) {
-  throw new Error("expected ClickClack token credential");
+function requireCredential() {
+  const credential = credentials[0];
+  if (!credential) {
+    throw new Error("expected ClickClack token credential");
+  }
+  return credential;
 }
+const credential = requireCredential();
 const account = {
   baseUrl: "https://clickclack.example",
   token: "ccb_test",

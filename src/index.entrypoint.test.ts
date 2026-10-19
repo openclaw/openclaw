@@ -36,13 +36,16 @@ vi.mock("node:fs", async (importOriginal) => ({
   existsSync: vi.fn(() => false),
 }));
 
+// mock-isolation: Exercise entrypoint dispatch without running the CLI.
 vi.mock("./cli/run-main.js", () => ({ runCli: vi.fn(async () => undefined) }));
 const lifecycleImports = vi.hoisted(() => ({ failureOutput: vi.fn() }));
 
+// mock-isolation: Keep one-shot finalization from terminating the test process.
 vi.mock("./cli/one-shot-exit.js", () => ({ runCliWithExitFinalization: vi.fn() }));
 vi.mock("./entry.version-fast-path.js", () => ({
   tryHandleRootVersionFastPath: vi.fn(() => false),
 }));
+// mock-isolation: Import this entrypoint as the main module in the fixture.
 vi.mock("./infra/is-main.js", () => ({ isMainModule: vi.fn(() => true) }));
 vi.mock("./infra/package-lifecycle.js", () => ({
   completePendingPackageLifecycle: vi.fn(async () => true),

@@ -5,6 +5,7 @@ import {
   readRuntimeConfig,
 } from "../config/runtime-snapshot.js";
 import type { OpenClawConfig } from "../config/types.js";
+import type { PluginCompatibilityNotice } from "../plugins/status-compatibility.js";
 import { resolveStatusJsonOutput } from "./status-json-runtime.ts";
 import type { resolveStatusRuntimeSnapshot } from "./status-runtime-shared.ts";
 import { createStatusGatewayProbeBudget } from "./status.gateway-probe-budget.js";
@@ -25,7 +26,7 @@ const compatibilityWarning = {
   compatCode: "hook-only-plugin-shape",
   severity: "info" as const,
   message: "warn",
-};
+} satisfies PluginCompatibilityNotice;
 const runtimeSnapshot = {
   securityAudit: { summary: { critical: 1 } },
   usage: { providers: [] },

@@ -24,6 +24,7 @@ vi.mock("../config/config.js", async (importOriginal) => {
     },
   };
 });
+// mock-isolation: Assert Gateway projection avoids local agent discovery.
 vi.mock("./status.agent-local.js", () => ({ collectStatusLocalSnapshot: mocks.localAgents }));
 // mock-isolation: Gateway projection tests must not read local session databases.
 vi.mock("../status/summary.js", () => ({
@@ -47,6 +48,7 @@ vi.mock("./status.update.js", () => ({
     packageManager: "unknown",
   }),
 }));
+// mock-isolation: Supply reachable/offline Gateway facts without network access.
 vi.mock("../gateway/probe.js", () => ({ probeGateway: mocks.probeGateway }));
 vi.mock("../cli/daemon-cli/diagnostic-readiness.js", () => ({
   waitForGatewayDiagnosticReadiness: mocks.waitForGatewayDiagnosticReadiness,

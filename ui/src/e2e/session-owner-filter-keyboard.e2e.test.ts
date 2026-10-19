@@ -1,6 +1,6 @@
 import type { Locator, Page } from "playwright";
 import { expect as expectBrowser } from "playwright/test";
-import { expect, it } from "vitest";
+import { assert, expect, it } from "vitest";
 import { createControlUiSessionRow as sessionRow } from "../test-helpers/control-ui-session-fixtures.ts";
 import {
   controlUiSessionUrl,
@@ -35,7 +35,9 @@ async function openRoster(
     "presenceUsers" | "historyMessages"
   > = {},
 ) {
-  const key = sessions[0].key;
+  const [first] = sessions;
+  assert(first, "Expected a session to open");
+  const key = first.key;
   const gateway = await installMockGateway(page, {
     ...options,
     sessionKey: key,

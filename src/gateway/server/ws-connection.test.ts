@@ -47,20 +47,25 @@ const {
   upsertPresence: vi.fn(),
 }));
 
+// mock-isolation: Test socket lifecycle without starting message dispatch.
 vi.mock("./ws-connection/message-handler.js", () => ({
   attachGatewayWsMessageHandler: attachMessage,
 }));
+// mock-isolation: Test worker attachment ownership without starting worker dispatch.
 vi.mock("./ws-connection/worker-connection.js", () => ({
   attachWorkerWsMessageHandler: attachWorker,
 }));
+// mock-isolation: Record disconnection without reading or updating paired-device state.
 vi.mock("../../infra/device-pairing-node.js", () => ({
   recordPairedNodeDisconnection: recordDisconnect,
 }));
+// mock-isolation: Observe presence lifecycle without shared process presence state.
 vi.mock("../../infra/system-presence.js", () => ({
   commitPresence: vi.fn(),
   touchPresence,
   upsertPresence,
 }));
+// mock-isolation: Observe connection cleanup without opening talk sessions.
 vi.mock("../talk/session-registry.js", () => ({
   cleanupTalkConnection: cleanupTalk,
 }));

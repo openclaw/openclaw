@@ -77,14 +77,16 @@ beforeEach(() => {
     .mockImplementation(async (argv) => ({
       ...successfulGit,
       stdout:
-        [
-          ["--show-toplevel", gitFixture.root],
-          ["--abbrev-ref", "main"],
-          ["--count", "0\t0"],
-          ["--format=%ct", "1700000000"],
-          ["--porcelain", ""],
-          ["--is-shallow-repository", "false"],
-        ].find(([flag]) => argv.includes(flag))?.[1] ?? "abc123",
+        (
+          [
+            ["--show-toplevel", gitFixture.root],
+            ["--abbrev-ref", "main"],
+            ["--count", "0\t0"],
+            ["--format=%ct", "1700000000"],
+            ["--porcelain", ""],
+            ["--is-shallow-repository", "false"],
+          ] as const
+        ).find(([flag]) => argv.includes(flag))?.[1] ?? "abc123",
     }));
 });
 afterEach(() => {

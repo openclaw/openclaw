@@ -1,16 +1,18 @@
-import { aroundEach, describe, expect, it, vi } from "vitest";
+/**
+ * WebSocket connection startup regression tests.
+ */
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildDeviceAuthPayload } from "../../../packages/gateway-client/src/device-auth.js";
 import {
   GATEWAY_CLIENT_MODES,
   GATEWAY_CLIENT_NAMES,
 } from "../../../packages/gateway-protocol/src/client-info.js";
 import { PROTOCOL_VERSION } from "../../../packages/gateway-protocol/src/index.js";
-import type { ConnectParams, ResponseFrame } from "../../../packages/gateway-protocol/src/index.js";
 import {
-  GATEWAY_STARTUP_CLOSE_CODE as STARTUP_CODE,
-  GATEWAY_STARTUP_CLOSE_REASON as STARTUP_REASON,
-  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE as STARTUP_PENDING,
-  GATEWAY_STARTUP_UNAVAILABLE_REASON as STARTUP_UNAVAILABLE,
+  GATEWAY_STARTUP_CLOSE_CODE,
+  GATEWAY_STARTUP_CLOSE_REASON,
+  GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
+  GATEWAY_STARTUP_UNAVAILABLE_REASON,
 } from "../../../packages/gateway-protocol/src/startup-unavailable.js";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { runQaGatewayFixture } from "../../../test/helpers/qa-gateway-cleanup.js";
@@ -19,16 +21,16 @@ import {
   setRuntimeConfigSnapshot,
 } from "../../config/runtime-snapshot.js";
 import {
-  consumeDeviceBootstrapTokenWithSetupCompletion as consumeBootstrap,
+  consumeDeviceBootstrapTokenWithSetupCompletion,
   ensureDevicePairSetupBootstrapToken,
   issueDevicePairSetupBootstrapToken,
-  readDevicePairSetupCompletion as readSetupCompletion,
-  verifyDeviceBootstrapToken as verifyBootstrap,
+  readDevicePairSetupCompletion,
+  verifyDeviceBootstrapToken,
 } from "../../infra/device-bootstrap.js";
 import type { CloudWorkerSetupMutationAdmission } from "../../infra/device-bootstrap.worker-types.js";
 import {
   loadOrCreateDeviceIdentity,
-  publicKeyRawBase64UrlFromPem as rawPublicKey,
+  publicKeyRawBase64UrlFromPem,
   signDevicePayload,
 } from "../../infra/device-identity.js";
 import { approveDevicePairing } from "../../infra/device-pairing-approval.js";
@@ -43,8 +45,8 @@ import {
 } from "../../process/gateway-work-admission.js";
 import { AsyncWorkScope } from "../../shared/async-work-scope.js";
 import {
-  CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE as cloudProfile,
-  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE as nodeProfile,
+  CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+  NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
 } from "../../shared/device-bootstrap-profile.js";
 import {
   closeOpenClawStateDatabaseAsync,
@@ -68,50 +70,21 @@ import { createWorkerNodeEnrollmentManager } from "../worker-environments/node-e
 import { publishWorkerEnvironmentFixture } from "../worker-environments/placement-test-fixtures.js";
 import { createWorkerEnvironmentStore } from "../worker-environments/store.js";
 import { createWorkerBootstrapArtifactTransferService } from "../worker-environments/worker-bootstrap-artifact-transfer-service.js";
+import { GatewayClientRegistry } from "./client-registry.js";
 import { attachGatewayWsConnectionHandler } from "./ws-connection.js";
 import {
   attachGatewayWsForTest,
-  createGatewayWsTestLogger as makeLogger,
-  createGatewayWsTestRequestContext as makeContext,
-  createGatewayWsTestSocket as makeSocket,
+  createGatewayWsTestLogger,
+  createGatewayWsTestRequestContext,
+  createGatewayWsTestSocket,
 } from "./ws-connection.test-helpers.js";
 
-type StartupConnectResponse = Partial<ResponseFrame>;
-
-const startupUnavailable = {
-  ok: false,
-  error: { code: "UNAVAILABLE", details: { reason: STARTUP_UNAVAILABLE } },
+type StartupConnectResponse = {
+  type?: unknown;
+  id?: unknown;
+  ok?: unknown;
+  error?: { code?: unknown; retryable?: unknown; details?: unknown };
 };
-const retryableUnavailable = {
-  ...startupUnavailable,
-  error: { ...startupUnavailable.error, retryable: true },
-};
-
-function sendConnect(
-  socket: ReturnType<typeof makeSocket>,
-  id: string,
-  params: Partial<ConnectParams>,
-) {
-  const connectParams = {
-    minProtocol: PROTOCOL_VERSION,
-    maxProtocol: PROTOCOL_VERSION,
-    scopes: [],
-    caps: [],
-    ...params,
-  };
-  socket.emit(
-    "message",
-    Buffer.from(JSON.stringify({ type: "req", id, method: "connect", params: connectParams })),
-  );
-}
-
-async function pendingSetupToken(setupId: string, profile = cloudProfile) {
-  const issued = await ensureDevicePairSetupBootstrapToken({ setupId, profile });
-  if (issued.status !== "pending") {
-    throw new Error("expected pending node setup token");
-  }
-  return issued;
-}
 
 const connectionCleanups = new Set<() => Promise<void>>();
 const identityCleanups = new Set<() => Promise<void>>();
@@ -119,10 +92,12 @@ const identityCleanups = new Set<() => Promise<void>>();
 function ownStartupCleanup(owners: Set<() => Promise<void>>, run: () => Promise<unknown>) {
   // A failed drain stays owned; a later teardown cannot turn it into a clean reset.
   let settlement: Promise<void> | undefined;
-  const start = async () => {
-    await run();
-  };
-  owners.add(() => (settlement ??= start()));
+  owners.add(
+    () =>
+      (settlement ??= (async () => {
+        await run();
+      })()),
+  );
 }
 
 async function drainStartupCleanups(owners: Set<() => Promise<void>>) {
@@ -139,9 +114,9 @@ async function drainStartupCleanups(owners: Set<() => Promise<void>>) {
   );
 }
 
-function attachTracked(params: Omit<Parameters<typeof attachGatewayWsForTest>[0], "attach">) {
+function attachTrackedGatewayWs(params: Parameters<typeof attachGatewayWsForTest>[0]) {
   setRuntimeConfigSnapshot({});
-  const socket = params.socket ?? makeSocket();
+  const socket = params.socket ?? createGatewayWsTestSocket();
   const connectionWork = params.options?.connectionWork ?? new GatewayConnectionWork();
   let observedClose = false;
   socket.once("close", () => {
@@ -157,24 +132,18 @@ function attachTracked(params: Omit<Parameters<typeof attachGatewayWsForTest>[0]
   return {
     ...attachGatewayWsForTest({
       ...params,
-      attach: attachGatewayWsConnectionHandler,
       socket,
-      options: {
-        getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
-        ...params.options,
-        connectionWork,
-      },
+      options: { ...params.options, connectionWork },
     }),
     connectionWork,
   };
 }
 
-async function withStartupTestState(run: (state: OpenClawTestState) => Promise<void>) {
-  const state = await createOpenClawTestState({
-    label: "gateway-startup",
-    layout: "state-only",
-    prepareProfileCatalog: true,
-  });
+async function withStartupTestState<T>(
+  options: Parameters<typeof createOpenClawTestState>[0],
+  run: (state: OpenClawTestState) => Promise<T>,
+): Promise<T> {
+  const state = await createOpenClawTestState({ ...options, prepareProfileCatalog: true });
   const work = new AsyncWorkScope();
   return await runQaGatewayFixture(
     () => work.track(() => run(state)),
@@ -187,55 +156,57 @@ async function withStartupTestState(run: (state: OpenClawTestState) => Promise<v
   );
 }
 
-function captureFrames(id = "startup-node-connect") {
-  const sent: Array<StartupConnectResponse & { event?: string; payload?: { nonce?: unknown } }> =
-    [];
-  const response = createDeferred<StartupConnectResponse>();
-  const socket = makeSocket({
-    onSend: (data) => {
-      const frame = JSON.parse(data) as (typeof sent)[number];
-      sent.push(frame);
-      if (frame.type === "res" && frame.id === id) {
-        response.resolve(frame);
-      }
-    },
-  });
-  return { sent, socket, response: response.promise };
-}
+afterEach(async () => {
+  await drainStartupCleanups(connectionCleanups);
+  await drainStartupCleanups(identityCleanups);
+  await closeOpenClawStateDatabaseAsync();
+  resetGatewayWorkAdmission();
+  closeOpenClawStateDatabaseForTest();
+  clearRuntimeConfigSnapshot();
+});
 
-aroundEach((runTest) =>
-  runQaGatewayFixture(runTest, async () => {
-    await drainStartupCleanups(connectionCleanups);
-    await drainStartupCleanups(identityCleanups);
-    await closeOpenClawStateDatabaseAsync();
-    resetGatewayWorkAdmission();
-    closeOpenClawStateDatabaseForTest();
-    clearRuntimeConfigSnapshot();
-  }),
-);
-
-let node: Awaited<ReturnType<typeof provisionNode>>;
-let identityPath: string;
-
-async function connectNode(params: {
+async function attachStartupNodeConnect(params: {
   bootstrapToken?: string;
   sharedToken?: string;
   gatewayToken?: string;
+  identityPath: string;
+  isPendingWorkerNodeSetup: (setupId: string, deviceId: string) => boolean;
   admitsNodeSetupCompletion?: (fact: CloudWorkerSetupMutationAdmission) => boolean;
   rateLimiter?: ReturnType<typeof createGatewayAuthRateLimiter>;
   onNodeRegistered?: () => void;
 }) {
+  const identityPath = params.identityPath;
   ownStartupCleanup(identityCleanups, () => closeOpenClawStateDatabaseByPathAsync(identityPath));
-  const { sent, socket, response } = captureFrames();
+  const sent: unknown[] = [];
+  const connectResponse = createDeferred<StartupConnectResponse>();
   const setupCompletion = createDeferred<unknown>();
-  let registeredNodeId: string | undefined;
+  const clients = new GatewayClientRegistry();
+  const socket = createGatewayWsTestSocket({
+    onSend: (data) => {
+      const frame = JSON.parse(data) as StartupConnectResponse;
+      sent.push(frame);
+      if (frame.id === "startup-node-connect") {
+        connectResponse.resolve(frame);
+      }
+    },
+  });
+  let registeredNode:
+    | {
+        nodeId: string;
+        connId: string;
+        displayName: string;
+        platform: string;
+        commands: string[];
+        connectedAtMs: number;
+        pairingGeneration?: string;
+      }
+    | undefined;
   const nodeRegistry = {
     register: vi.fn(
       (client: { connId: string; connect: { device?: { id?: string } } }, options) => {
         params.onNodeRegistered?.();
-        registeredNodeId = client.connect.device?.id ?? "node-host";
-        return {
-          nodeId: registeredNodeId,
+        registeredNode = {
+          nodeId: client.connect.device?.id ?? "node-host",
           connId: client.connId,
           displayName: "Cloud worker",
           platform: "linux",
@@ -245,16 +216,17 @@ async function connectNode(params: {
             ? { pairingGeneration: String(options.pairingGeneration) }
             : {}),
         };
+        return registeredNode;
       },
     ),
     get: vi.fn(() => undefined),
     getForPairingGeneration: vi.fn(() => undefined),
-    unregister: vi.fn(() => registeredNodeId ?? null),
+    unregister: vi.fn(() => registeredNode?.nodeId ?? null),
     sendEventRawForPairingGeneration: vi.fn(async () => {}),
     sendEventForPairingIdentity: vi.fn(async () => {}),
   };
   const requestContext = {
-    ...makeContext(),
+    ...createGatewayWsTestRequestContext(),
     nodeRegistry,
     broadcast: vi.fn((event: string, payload: unknown) => {
       if (event === "device.pair.setup.completed") {
@@ -262,15 +234,20 @@ async function connectNode(params: {
       }
     }),
   };
-  const pendingSetup = vi.fn(node.isPendingWorkerNodeSetup);
-  const connection = attachTracked({
+  const pendingSetup = vi.fn(params.isPendingWorkerNodeSetup);
+  const connection = attachTrackedGatewayWs({
+    attach: attachGatewayWsConnectionHandler,
+    clients,
     socket,
     options: {
-      getResolvedAuth: () => ({
-        mode: params.sharedToken ? "token" : "none",
-        token: params.gatewayToken ?? params.sharedToken,
-        allowTailscale: false,
-      }),
+      getResolvedAuth: () =>
+        params.sharedToken
+          ? {
+              mode: "token",
+              token: params.gatewayToken ?? params.sharedToken,
+              allowTailscale: false,
+            }
+          : { mode: "none", allowTailscale: false },
       isStartupPending: () => true,
       isPendingWorkerNodeSetup: pendingSetup,
       admitsNodeSetupCompletion: params.admitsNodeSetupCompletion,
@@ -278,11 +255,18 @@ async function connectNode(params: {
       buildRequestContext: () => requestContext as never,
     },
   });
-  const nonce = sent.find((frame) => frame.event === "connect.challenge")?.payload?.nonce;
+  const challenge = sent.find(
+    (frame) =>
+      typeof frame === "object" &&
+      frame !== null &&
+      (frame as { event?: unknown }).event === "connect.challenge",
+  ) as { payload?: { nonce?: unknown } } | undefined;
+  const nonce = challenge?.payload?.nonce;
   if (typeof nonce !== "string") {
     throw new Error("startup node connect challenge was not sent");
   }
   const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+  const publicKey = publicKeyRawBase64UrlFromPem(identity.publicKeyPem);
   const signedAt = Date.now();
   const devicePayload = buildDeviceAuthPayload({
     deviceId: identity.deviceId,
@@ -295,50 +279,69 @@ async function connectNode(params: {
     nonce,
   });
   markGatewayRestartDraining();
-  sendConnect(socket, "startup-node-connect", {
-    client: {
-      id: GATEWAY_CLIENT_NAMES.NODE_HOST,
-      version: "dev",
-      platform: "linux",
-      mode: GATEWAY_CLIENT_MODES.NODE,
-    },
-    role: "node",
-    commands: [],
-    auth: {
-      ...(params.bootstrapToken ? { bootstrapToken: params.bootstrapToken } : {}),
-      ...(params.sharedToken ? { token: params.sharedToken } : {}),
-    },
-    device: {
-      id: identity.deviceId,
-      publicKey: rawPublicKey(identity.publicKeyPem),
-      signature: signDevicePayload(identity.privateKeyPem, devicePayload),
-      signedAt,
-      nonce,
-    },
-  });
+  socket.emit(
+    "message",
+    Buffer.from(
+      JSON.stringify({
+        type: "req",
+        id: "startup-node-connect",
+        method: "connect",
+        params: {
+          minProtocol: PROTOCOL_VERSION,
+          maxProtocol: PROTOCOL_VERSION,
+          client: {
+            id: GATEWAY_CLIENT_NAMES.NODE_HOST,
+            version: "dev",
+            platform: "linux",
+            mode: GATEWAY_CLIENT_MODES.NODE,
+          },
+          role: "node",
+          scopes: [],
+          caps: [],
+          commands: [],
+          auth: {
+            ...(params.bootstrapToken ? { bootstrapToken: params.bootstrapToken } : {}),
+            ...(params.sharedToken ? { token: params.sharedToken } : {}),
+          },
+          device: {
+            id: identity.deviceId,
+            publicKey,
+            signature: signDevicePayload(identity.privateKeyPem, devicePayload),
+            signedAt,
+            nonce,
+          },
+        },
+      }),
+    ),
+  );
   return {
+    clients,
     connectionWork: connection.connectionWork,
     identity,
-    registered: nodeRegistry.register,
+    nodeRegistry,
     pendingSetup,
-    response,
+    response: connectResponse.promise,
     setupCompletion: setupCompletion.promise,
+    sent,
     socket,
   };
 }
 
-async function provisionNode() {
+async function seedProvisioningNodeSetup() {
   const store = await createWorkerEnvironmentStore();
-  const environmentId = "startup-worker-environment";
-  const { state: from } = await store.createIntent({
-    environmentId,
+  const intent = await store.createIntent({
+    environmentId: "startup-worker-environment",
     providerId: "startup-provider",
     profileId: "startup-profile",
     profileSnapshot: { settings: {} },
     provisionOperationId: "provision:startup-worker-environment",
   });
-  const provisioning = await store.transition({ environmentId, from, to: "provisioning" });
-  const setupId = (await store.ensureNodeEnrollment(environmentId)).nodeSetupId;
+  const provisioning = await store.transition({
+    environmentId: intent.environmentId,
+    from: intent.state,
+    to: "provisioning",
+  });
+  const setupId = (await store.ensureNodeEnrollment(intent.environmentId)).nodeSetupId;
   if (!setupId) {
     throw new Error("startup worker setup id was not persisted");
   }
@@ -368,76 +371,190 @@ async function provisionNode() {
     beginEnrollment: () => manager.begin(provisioning),
     closeEnrollment: manager.close,
     admitsNodeSetupCompletion: manager.admitsNodeSetupCompletion,
-    isPendingWorkerNodeSetup: (candidateSetupId: string, deviceId: string) =>
-      store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
   };
 }
 
-it("applies the shared preauth queue limit while the message handler loads", async () => {
-  const socket = makeSocket();
+describe("attachGatewayWsConnectionHandler startup readiness", () => {
+  it("applies the shared preauth queue limit while the message handler loads", async () => {
+    const socket = createGatewayWsTestSocket();
 
-  attachTracked({ socket });
+    attachTrackedGatewayWs({
+      attach: attachGatewayWsConnectionHandler,
+      socket,
+      options: {
+        getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
+        buildRequestContext: () => createGatewayWsTestRequestContext() as never,
+      },
+    });
 
-  for (let index = 0; index <= MAX_QUEUED_GATEWAY_PREAUTH_FRAMES; index += 1) {
-    socket.emit("message", Buffer.from(`queued-${index}`));
-  }
+    for (let index = 0; index <= MAX_QUEUED_GATEWAY_PREAUTH_FRAMES; index += 1) {
+      socket.emit("message", Buffer.from(`queued-${index}`));
+    }
 
-  expect(socket.close).toHaveBeenCalledWith(1008, "gateway message handler loading");
-  socket.emit("close", 1008, Buffer.from("gateway message handler loading"));
-  await vi.dynamicImportSettled();
-});
+    expect(socket.close).toHaveBeenCalledWith(1008, "gateway message handler loading");
+    socket.emit("close", 1008, Buffer.from("gateway message handler loading"));
+    await vi.dynamicImportSettled();
+  });
 
-it("keeps startup-unavailable closes at debug level", async () => {
-  const { socket, response: responseReceived } = captureFrames("connect-1");
-  const logWsControl = makeLogger();
+  it("admits only one of two connect frames that race during lazy handler loading", async () => {
+    await withStartupTestState({}, async () => {
+      const sent: unknown[] = [];
+      const clients = new GatewayClientRegistry();
+      const socket = createGatewayWsTestSocket({
+        onSend: (data) => {
+          sent.push(JSON.parse(data));
+        },
+      });
 
-  attachTracked({
-    socket,
-    options: {
-      isStartupPending: () => true,
-      logWsControl: logWsControl as never,
+      attachTrackedGatewayWs({
+        attach: attachGatewayWsConnectionHandler,
+        clients,
+        socket,
+        options: {
+          getResolvedAuth: () => ({ mode: "token", allowTailscale: false, token: "test-token" }),
+          buildRequestContext: () => createGatewayWsTestRequestContext() as never,
+        },
+      });
+      const connectFrame = (id: string) =>
+        JSON.stringify({
+          type: "req",
+          id,
+          method: "connect",
+          params: {
+            minProtocol: PROTOCOL_VERSION,
+            maxProtocol: PROTOCOL_VERSION,
+            client: {
+              id: "gateway-client",
+              version: "dev",
+              platform: "test",
+              mode: GATEWAY_CLIENT_MODES.BACKEND,
+            },
+            role: "operator",
+            scopes: [],
+            caps: [],
+            auth: { token: "test-token" },
+          },
+        });
+
+      socket.emit("message", Buffer.from(connectFrame("connect-1")));
+      socket.emit("message", Buffer.from(connectFrame("connect-2")));
+      await vi.dynamicImportSettled();
+
+      await vi.waitFor(() => {
+        expect(clients.size).toBe(1);
+        expect(
+          sent.filter(
+            (frame) =>
+              typeof frame === "object" &&
+              frame !== null &&
+              (frame as { type?: unknown; ok?: unknown }).type === "res" &&
+              (frame as { ok?: unknown }).ok === true,
+          ),
+        ).toHaveLength(1);
+      });
+
+      socket.emit("close", 1000, Buffer.from("done"));
+      expect(clients.size).toBe(0);
+    });
+  });
+
+  it.each([GATEWAY_STARTUP_CLOSE_CODE])(
+    "keeps startup-unavailable close code %i at debug level",
+    async (observedCloseCode) => {
+      const responseReceived = createDeferred<{
+        type?: unknown;
+        id?: unknown;
+        ok?: unknown;
+        error?: {
+          code?: unknown;
+          retryable?: unknown;
+          retryAfterMs?: unknown;
+          details?: unknown;
+        };
+      }>();
+      const socket = createGatewayWsTestSocket({
+        onSend: (data) => {
+          const frame = JSON.parse(data) as unknown;
+          if (
+            typeof frame === "object" &&
+            frame !== null &&
+            (frame as { type?: unknown }).type === "res" &&
+            (frame as { id?: unknown }).id === "connect-1"
+          ) {
+            responseReceived.resolve(frame);
+          }
+        },
+      });
+      const logWsControl = createGatewayWsTestLogger();
+
+      attachTrackedGatewayWs({
+        attach: attachGatewayWsConnectionHandler,
+        socket,
+        options: {
+          getResolvedAuth: () => ({ mode: "none", allowTailscale: false }),
+          isStartupPending: () => true,
+          logWsControl: logWsControl as never,
+          buildRequestContext: () => createGatewayWsTestRequestContext() as never,
+        },
+      });
+      socket.emit(
+        "message",
+        Buffer.from(
+          JSON.stringify({
+            type: "req",
+            id: "connect-1",
+            method: "connect",
+            params: {
+              minProtocol: PROTOCOL_VERSION,
+              maxProtocol: PROTOCOL_VERSION,
+              client: {
+                id: GATEWAY_CLIENT_NAMES.CLI,
+                version: "dev",
+                platform: "test",
+                mode: GATEWAY_CLIENT_MODES.CLI,
+              },
+              role: "operator",
+              scopes: ["operator.read"],
+              caps: [],
+            },
+          }),
+        ),
+      );
+
+      // The handler is lazy-loaded; wait for its actual frame instead of a one-second poll.
+      const response = await responseReceived.promise;
+      expect(response?.type).toBe("res");
+      expect(response?.id).toBe("connect-1");
+      expect(response?.ok).toBe(false);
+      expect(response?.error?.code).toBe("UNAVAILABLE");
+      expect(response?.error?.retryable).toBe(true);
+      expect(response?.error?.retryAfterMs).toBe(500);
+      expect(response?.error?.details).toEqual({ reason: GATEWAY_STARTUP_UNAVAILABLE_REASON });
+      await vi.waitFor(() => {
+        expect(socket.close).toHaveBeenCalledWith(
+          GATEWAY_STARTUP_CLOSE_CODE,
+          GATEWAY_STARTUP_CLOSE_REASON,
+        );
+      });
+      socket.emit("close", observedCloseCode, Buffer.alloc(0));
+      expect(logWsControl.debug).toHaveBeenCalledWith(
+        expect.stringContaining("closed before connect"),
+        expect.objectContaining({
+          cause: GATEWAY_STARTUP_PENDING_CLOSE_CAUSE,
+          handshake: "failed",
+        }),
+      );
+      expect(logWsControl.debug).toHaveBeenCalledWith(
+        expect.stringContaining(`code=${observedCloseCode}`),
+        expect.anything(),
+      );
+      expect(logWsControl.warn).not.toHaveBeenCalledWith(
+        expect.stringContaining("closed before connect"),
+        expect.anything(),
+      );
     },
-  });
-  sendConnect(socket, "connect-1", {
-    client: {
-      id: GATEWAY_CLIENT_NAMES.CLI,
-      version: "dev",
-      platform: "test",
-      mode: GATEWAY_CLIENT_MODES.CLI,
-    },
-    role: "operator",
-    scopes: ["operator.read"],
-  });
+  );
 
-  // The handler is lazy-loaded; wait for its actual frame instead of a one-second poll.
-  const response = await responseReceived;
-  expect(response).toMatchObject({
-    type: "res",
-    id: "connect-1",
-    ...retryableUnavailable,
-    error: { ...retryableUnavailable.error, retryAfterMs: 500 },
-  });
-  expect(response.error?.details).toEqual(startupUnavailable.error.details);
-  await vi.waitFor(() => expect(socket.close).toHaveBeenCalledWith(STARTUP_CODE, STARTUP_REASON));
-  socket.emit("close", STARTUP_CODE, Buffer.alloc(0));
-  expect(logWsControl.debug).toHaveBeenCalledWith(
-    expect.stringMatching(new RegExp(`closed before connect.*code=${STARTUP_CODE}`)),
-    expect.objectContaining({ cause: STARTUP_PENDING, handshake: "failed" }),
-  );
-  expect(logWsControl.warn).not.toHaveBeenCalledWith(
-    expect.stringContaining("closed before connect"),
-    expect.anything(),
-  );
-});
-
-describe("startup node admission", () => {
-  aroundEach((runTest) =>
-    withStartupTestState(async (state) => {
-      node = await provisionNode();
-      identityPath = state.path("startup-node.sqlite");
-      await runTest();
-    }),
-  );
   it.each([
     // Node preparation goes directly from provisioning to ready; bootstrapping is SSH-only.
     ["provisioning", false],
@@ -445,219 +562,323 @@ describe("startup node admission", () => {
     ["attached", false],
     ["provisioning", true],
   ] as const)(
-    "retries uncertain setup in %s unless destroyed=%s",
+    "admits same-device uncertain startup setup retry in %s unless destroy was requested (%s)",
     async (environmentState, destroyRequested) => {
-      const { store, setupId, beginEnrollment, closeEnrollment, admitsNodeSetupCompletion } = node;
-      const issued = await pendingSetupToken(setupId);
-      const enrollment = await beginEnrollment();
-      const identity = loadOrCreateDeviceIdentity({ path: identityPath });
-      const verification = {
-        token: issued.token,
-        deviceId: identity.deviceId,
-        publicKey: rawPublicKey(identity.publicKeyPem),
-        role: "node",
-        scopes: [],
-      };
-      await expect(verifyBootstrap(verification)).resolves.toEqual({ ok: true });
-      await expect(
-        consumeBootstrap({
-          token: issued.token,
-          deviceId: identity.deviceId,
-          completedAtMs: Date.now(),
-          admitsCloudWorkerSetup: admitsNodeSetupCompletion,
-        }),
-      ).resolves.toMatchObject({ completion: { deliveryState: "uncertain" } });
-      closeEnrollment(enrollment);
-      if (environmentState !== "provisioning") {
-        runOpenClawStateWriteTransaction((database) => {
-          database.db
-            .prepare(
-              "UPDATE worker_environments SET state = ?, lease_id = ?, attached_session_ids_json = ? WHERE node_setup_id = ?",
-            )
-            .run(
-              environmentState,
-              "startup-worker-lease",
-              JSON.stringify(environmentState === "attached" ? ["startup-worker-session"] : []),
-              setupId,
-            );
-          publishWorkerEnvironmentFixture(database.db, "startup-worker-environment");
-        });
-      }
-      if (destroyRequested) {
-        await store.requestDestroy({
-          environmentId: "startup-worker-environment",
-          state: "provisioning",
-        });
-      }
+      await withStartupTestState(
+        { label: "gateway-startup-cloud-worker-uncertain-retry", layout: "state-only" },
+        async (state) => {
+          const { store, setupId, beginEnrollment, closeEnrollment, admitsNodeSetupCompletion } =
+            await seedProvisioningNodeSetup();
+          const issued = await ensureDevicePairSetupBootstrapToken({
+            setupId,
+            profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          });
+          if (issued.status !== "pending") {
+            throw new Error("expected pending cloud-worker setup token");
+          }
+          const enrollment = await beginEnrollment();
+          const identityPath = state.path("startup-retrying-node.sqlite");
+          const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+          const verification = {
+            token: issued.token,
+            deviceId: identity.deviceId,
+            publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+            role: "node",
+            scopes: [],
+          };
+          await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({ ok: true });
+          await expect(
+            consumeDeviceBootstrapTokenWithSetupCompletion({
+              token: issued.token,
+              deviceId: identity.deviceId,
+              completedAtMs: Date.now(),
+              admitsCloudWorkerSetup: admitsNodeSetupCompletion,
+            }),
+          ).resolves.toMatchObject({ completion: { deliveryState: "uncertain" } });
+          closeEnrollment(enrollment);
+          if (environmentState !== "provisioning") {
+            runOpenClawStateWriteTransaction((database) => {
+              database.db
+                .prepare(
+                  "UPDATE worker_environments SET state = ?, lease_id = ?, attached_session_ids_json = ? WHERE node_setup_id = ?",
+                )
+                .run(
+                  environmentState,
+                  "startup-worker-lease",
+                  JSON.stringify(environmentState === "attached" ? ["startup-worker-session"] : []),
+                  setupId,
+                );
+              publishWorkerEnvironmentFixture(database.db, "startup-worker-environment");
+            });
+          }
+          if (destroyRequested) {
+            await store.requestDestroy({
+              environmentId: "startup-worker-environment",
+              state: "provisioning",
+            });
+          }
 
-      const harness = await connectNode({ bootstrapToken: issued.token });
+          const harness = await attachStartupNodeConnect({
+            bootstrapToken: issued.token,
+            identityPath,
+            isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
+              store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
+          });
 
-      const response = await harness.response;
-      expect(harness.pendingSetup).toHaveBeenCalledWith(setupId, identity.deviceId);
-      if (destroyRequested) {
-        expect(response).toMatchObject(startupUnavailable);
-        expect(harness.registered).not.toHaveBeenCalled();
-        harness.socket.emit("close", STARTUP_CODE, Buffer.alloc(0));
-        return;
-      }
-      expect(response).toMatchObject({
-        ok: true,
-        payload: { type: "hello-ok", auth: { role: "node", scopes: [] } },
-      });
-      await expect(harness.setupCompletion).resolves.toMatchObject({
-        setupId,
-        deviceId: identity.deviceId,
-      });
-      await expect(readSetupCompletion({ setupId })).resolves.toMatchObject({
-        deviceId: identity.deviceId,
-        deliveryState: "confirmed",
-      });
-      await expect(verifyBootstrap(verification)).resolves.toEqual({
-        ok: false,
-        reason: "bootstrap_token_invalid",
-      });
-      harness.socket.emit("close", 1000, Buffer.from("done"));
+          const response = await harness.response;
+          expect(harness.pendingSetup).toHaveBeenCalledWith(setupId, identity.deviceId);
+          if (destroyRequested) {
+            expect(response).toMatchObject({
+              ok: false,
+              error: {
+                code: "UNAVAILABLE",
+                details: { reason: GATEWAY_STARTUP_UNAVAILABLE_REASON },
+              },
+            });
+            expect(harness.nodeRegistry.register).not.toHaveBeenCalled();
+            harness.socket.emit("close", GATEWAY_STARTUP_CLOSE_CODE, Buffer.alloc(0));
+            return;
+          }
+          expect(response).toMatchObject({
+            ok: true,
+            payload: { type: "hello-ok", auth: { role: "node", scopes: [] } },
+          });
+          await expect(harness.setupCompletion).resolves.toMatchObject({
+            setupId,
+            deviceId: identity.deviceId,
+          });
+          await expect(readDevicePairSetupCompletion({ setupId })).resolves.toMatchObject({
+            deviceId: identity.deviceId,
+            deliveryState: "confirmed",
+          });
+          await expect(verifyDeviceBootstrapToken(verification)).resolves.toEqual({
+            ok: false,
+            reason: "bootstrap_token_invalid",
+          });
+          harness.socket.emit("close", 1000, Buffer.from("done"));
+        },
+      );
     },
   );
 
   it.each(["cloud bootstrap", "paired shared-token"] as const)(
-    "tracks %s authentication through registration",
+    "keeps restart-startup %s authentication tracked until its node mutation and handshake settle",
     async (connectionKind) => {
-      const { setupId, beginEnrollment, admitsNodeSetupCompletion } = node;
-      const issued = await pendingSetupToken(setupId);
-      if (connectionKind === "cloud bootstrap") {
-        await beginEnrollment();
-      }
-      if (connectionKind === "paired shared-token") {
-        const { deviceId, publicKeyPem } = loadOrCreateDeviceIdentity({ path: identityPath });
-        const devicePairing = await requestDevicePairing({
-          deviceId,
-          publicKey: rawPublicKey(publicKeyPem),
-          role: "node",
-          roles: ["node"],
-          scopes: [],
-        });
-        await approveDevicePairing(devicePairing.request.requestId, { callerScopes: [] });
-        const nodePairing = await requestNodePairing({
-          nodeId: deviceId,
-          platform: "linux",
-          caps: [],
-        });
-        await approveNodePairing(nodePairing.request.requestId, {
-          callerScopes: ["operator.pairing"],
-        });
-      }
-      const authenticationStarted = createDeferred();
-      const releaseAuthentication = createDeferred();
-      const admissionReleased = createDeferred();
-      const beginAdmission = gatewayWorkAdmission.tryBeginGatewayRestartStartupRootWorkAdmission;
-      const startupAdmission = vi
-        .spyOn(gatewayWorkAdmission, "tryBeginGatewayRestartStartupRootWorkAdmission")
-        .mockImplementation(() => {
-          const admission = beginAdmission();
-          return (
-            admission && {
-              ...admission,
-              release: () => {
-                admission.release();
-                admissionReleased.resolve();
-              },
+      await withStartupTestState(
+        { label: "gateway-startup-cloud-worker-drain-race", layout: "state-only" },
+        async (state) => {
+          const { store, setupId, beginEnrollment, admitsNodeSetupCompletion } =
+            await seedProvisioningNodeSetup();
+          const issued = await ensureDevicePairSetupBootstrapToken({
+            setupId,
+            profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+          });
+          if (issued.status !== "pending") {
+            throw new Error("expected pending cloud-worker setup token");
+          }
+          if (connectionKind === "cloud bootstrap") {
+            await beginEnrollment();
+          }
+          const identityPath = state.path("startup-drain-race-node.sqlite");
+          if (connectionKind === "paired shared-token") {
+            const identity = loadOrCreateDeviceIdentity({ path: identityPath });
+            const devicePairing = await requestDevicePairing({
+              deviceId: identity.deviceId,
+              publicKey: publicKeyRawBase64UrlFromPem(identity.publicKeyPem),
+              role: "node",
+              roles: ["node"],
+              scopes: [],
+            });
+            await approveDevicePairing(devicePairing.request.requestId, { callerScopes: [] });
+            const nodePairing = await requestNodePairing({
+              nodeId: identity.deviceId,
+              platform: "linux",
+              caps: [],
+            });
+            await approveNodePairing(nodePairing.request.requestId, {
+              callerScopes: ["operator.pairing"],
+            });
+          }
+          const authenticationStarted = createDeferred();
+          const releaseAuthentication = createDeferred();
+          const admissionReleased = createDeferred();
+          const beginAdmission =
+            gatewayWorkAdmission.tryBeginGatewayRestartStartupRootWorkAdmission;
+          const startupAdmission = vi
+            .spyOn(gatewayWorkAdmission, "tryBeginGatewayRestartStartupRootWorkAdmission")
+            .mockImplementation(() => {
+              const admission = beginAdmission();
+              return (
+                admission && {
+                  ...admission,
+                  release: () => {
+                    admission.release();
+                    admissionReleased.resolve();
+                  },
+                }
+              );
+            });
+          const registeredRootCounts: number[] = [];
+          const authorize = gatewayAuth.authorizeWsControlUiGatewayConnect;
+          const authentication = vi
+            .spyOn(gatewayAuth, "authorizeWsControlUiGatewayConnect")
+            .mockImplementationOnce(async (params) => {
+              authenticationStarted.resolve();
+              await releaseAuthentication.promise;
+              expect(getActiveGatewayRootWorkCount()).toBe(1);
+              return await authorize(params);
+            });
+          try {
+            const harness = await attachStartupNodeConnect({
+              ...(connectionKind === "cloud bootstrap"
+                ? { bootstrapToken: issued.token }
+                : { sharedToken: "startup-shared-token" }),
+              identityPath,
+              admitsNodeSetupCompletion,
+              isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
+                store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
+              onNodeRegistered: () => registeredRootCounts.push(getActiveGatewayRootWorkCount()),
+            });
+
+            await authenticationStarted.promise;
+            expect(getActiveGatewayRootWorkCount()).toBe(1);
+            expect(createSafeGatewayRestartPreflight()).toMatchObject({
+              safe: false,
+              counts: { rootRequests: 1 },
+            });
+            expect(harness.nodeRegistry.register).not.toHaveBeenCalled();
+
+            releaseAuthentication.resolve();
+            await expect(harness.response).resolves.toMatchObject({ ok: true });
+            expect(registeredRootCounts).toEqual([1]);
+            if (connectionKind === "paired shared-token") {
+              expect(harness.pendingSetup).not.toHaveBeenCalled();
             }
-          );
-        });
-      const registeredRootCounts: number[] = [];
-      const authorize = gatewayAuth.authorizeWsControlUiGatewayConnect;
-      const authentication = vi
-        .spyOn(gatewayAuth, "authorizeWsControlUiGatewayConnect")
-        .mockImplementationOnce(async (params) => {
-          authenticationStarted.resolve();
-          await releaseAuthentication.promise;
-          expect(getActiveGatewayRootWorkCount()).toBe(1);
-          return await authorize(params);
-        });
-      try {
-        const harness = await connectNode({
-          ...(connectionKind === "cloud bootstrap"
-            ? { bootstrapToken: issued.token }
-            : { sharedToken: "startup-shared-token" }),
-          admitsNodeSetupCompletion,
-          onNodeRegistered: () => registeredRootCounts.push(getActiveGatewayRootWorkCount()),
-        });
-
-        await authenticationStarted.promise;
-        expect(getActiveGatewayRootWorkCount()).toBe(1);
-        expect(createSafeGatewayRestartPreflight()).toMatchObject({
-          safe: false,
-          counts: { rootRequests: 1 },
-        });
-        expect(harness.registered).not.toHaveBeenCalled();
-
-        releaseAuthentication.resolve();
-        await expect(harness.response).resolves.toMatchObject({ ok: true });
-        expect(registeredRootCounts).toEqual([1]);
-        if (connectionKind === "paired shared-token") {
-          expect(harness.pendingSetup).not.toHaveBeenCalled();
-        }
-        await admissionReleased.promise;
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-        expect(createSafeGatewayRestartPreflight()).toMatchObject({
-          safe: true,
-          counts: { rootRequests: 0 },
-        });
-        harness.socket.emit("close", 1000, Buffer.from("done"));
-      } finally {
-        releaseAuthentication.resolve();
-        authentication.mockRestore();
-        startupAdmission.mockRestore();
-      }
+            await admissionReleased.promise;
+            expect(getActiveGatewayRootWorkCount()).toBe(0);
+            expect(createSafeGatewayRestartPreflight()).toMatchObject({
+              safe: true,
+              counts: { rootRequests: 0 },
+            });
+            harness.socket.emit("close", 1000, Buffer.from("done"));
+          } finally {
+            releaseAuthentication.resolve();
+            authentication.mockRestore();
+            startupAdmission.mockRestore();
+          }
+        },
+      );
     },
   );
 
-  it.each(["non-cloud", "wrong setup", "invalid bootstrap", "invalid mixed"] as const)(
-    "rejects %s without disclosing setup state",
-    async (kind) => {
-      const { setupId } = node;
-      const invalid = kind.startsWith("invalid");
-      const issued =
-        kind === "non-cloud"
-          ? await pendingSetupToken(setupId, nodeProfile)
-          : kind === "wrong setup"
-            ? await issueDevicePairSetupBootstrapToken({ profile: cloudProfile })
-            : { token: "invalid-startup-token", setupId };
-      const rateLimiter = invalid
-        ? createGatewayAuthRateLimiter(
-            { maxAttempts: 1, windowMs: 60_000, lockoutMs: 60_000, exemptLoopback: false },
-            { scheduler: createTestGatewayScheduler() },
-          )
-        : undefined;
-      try {
-        const harness = await connectNode({
-          bootstrapToken: issued.token,
-          ...(kind === "invalid mixed"
-            ? { sharedToken: "invalid-shared-token", gatewayToken: "expected-shared-token" }
-            : {}),
-          rateLimiter,
+  it("keeps non-cloud and wrong cloud setup tokens startup-unavailable", async () => {
+    await withStartupTestState(
+      { label: "gateway-startup-cloud-worker-reject", layout: "state-only" },
+      async (state) => {
+        const { store, setupId } = await seedProvisioningNodeSetup();
+        const nonCloud = await ensureDevicePairSetupBootstrapToken({
+          setupId,
+          profile: NODE_PAIRING_SETUP_BOOTSTRAP_PROFILE,
         });
-        await expect(harness.response).resolves.toMatchObject(retryableUnavailable);
-        if (kind === "wrong setup") {
-          expect(harness.pendingSetup).toHaveBeenCalledWith(
-            issued.setupId,
-            harness.identity.deviceId,
+        if (nonCloud.status !== "pending") {
+          throw new Error("expected pending node setup token");
+        }
+        const nonCloudHarness = await attachStartupNodeConnect({
+          bootstrapToken: nonCloud.token,
+          identityPath: state.path("non-cloud-node.sqlite"),
+          isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
+            store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
+        });
+
+        await expect(nonCloudHarness.response).resolves.toMatchObject({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            retryable: true,
+            details: { reason: GATEWAY_STARTUP_UNAVAILABLE_REASON },
+          },
+        });
+        expect(nonCloudHarness.pendingSetup).not.toHaveBeenCalled();
+        expect(nonCloudHarness.nodeRegistry.register).not.toHaveBeenCalled();
+        nonCloudHarness.socket.emit("close", GATEWAY_STARTUP_CLOSE_CODE, Buffer.alloc(0));
+        await nonCloudHarness.connectionWork.drain();
+
+        resetGatewayWorkAdmission();
+        const wrongSetup = await issueDevicePairSetupBootstrapToken({
+          profile: CLOUD_WORKER_PAIRING_SETUP_BOOTSTRAP_PROFILE,
+        });
+        const wrongSetupHarness = await attachStartupNodeConnect({
+          bootstrapToken: wrongSetup.token,
+          identityPath: state.path("wrong-setup-node.sqlite"),
+          isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
+            store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
+        });
+
+        await expect(wrongSetupHarness.response).resolves.toMatchObject({
+          ok: false,
+          error: {
+            code: "UNAVAILABLE",
+            retryable: true,
+            details: { reason: GATEWAY_STARTUP_UNAVAILABLE_REASON },
+          },
+        });
+        expect(wrongSetupHarness.pendingSetup).toHaveBeenCalledWith(
+          wrongSetup.setupId,
+          wrongSetupHarness.identity.deviceId,
+        );
+        expect(wrongSetupHarness.nodeRegistry.register).not.toHaveBeenCalled();
+        wrongSetupHarness.socket.emit("close", GATEWAY_STARTUP_CLOSE_CODE, Buffer.alloc(0));
+      },
+    );
+  });
+
+  it.each(["exact bootstrap", "mixed bootstrap and shared token"] as const)(
+    "keeps an invalid %s opaque and rate-limited without consulting setup state",
+    async (credentialShape) => {
+      await withStartupTestState(
+        { label: "gateway-startup-cloud-worker-invalid", layout: "state-only" },
+        async (state) => {
+          const { store } = await seedProvisioningNodeSetup();
+          const rateLimiter = createGatewayAuthRateLimiter(
+            {
+              maxAttempts: 1,
+              windowMs: 60_000,
+              lockoutMs: 60_000,
+              exemptLoopback: false,
+            },
+            { scheduler: createTestGatewayScheduler() },
           );
-        } else {
-          expect(harness.pendingSetup).not.toHaveBeenCalled();
-        }
-        expect(harness.registered).not.toHaveBeenCalled();
-        if (rateLimiter) {
-          expect(
-            rateLimiter.check("127.0.0.1", AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN).allowed,
-          ).toBe(false);
-        }
-        harness.socket.emit("close", STARTUP_CODE, Buffer.alloc(0));
-        await harness.connectionWork.drain();
-      } finally {
-        rateLimiter?.dispose();
-      }
+          try {
+            const harness = await attachStartupNodeConnect({
+              bootstrapToken: "invalid-startup-token",
+              ...(credentialShape === "mixed bootstrap and shared token"
+                ? { sharedToken: "invalid-shared-token", gatewayToken: "expected-shared-token" }
+                : {}),
+              identityPath: state.path("invalid-token-node.sqlite"),
+              isPendingWorkerNodeSetup: (candidateSetupId, deviceId) =>
+                store.hasPendingNodeEnrollmentSetup(candidateSetupId, deviceId),
+              rateLimiter,
+            });
+
+            await expect(harness.response).resolves.toMatchObject({
+              ok: false,
+              error: {
+                code: "UNAVAILABLE",
+                retryable: true,
+                details: { reason: GATEWAY_STARTUP_UNAVAILABLE_REASON },
+              },
+            });
+            expect(harness.pendingSetup).not.toHaveBeenCalled();
+            expect(harness.nodeRegistry.register).not.toHaveBeenCalled();
+            expect(
+              rateLimiter.check("127.0.0.1", AUTH_RATE_LIMIT_SCOPE_BOOTSTRAP_TOKEN).allowed,
+            ).toBe(false);
+            harness.socket.emit("close", GATEWAY_STARTUP_CLOSE_CODE, Buffer.alloc(0));
+          } finally {
+            rateLimiter.dispose();
+          }
+        },
+      );
     },
   );
 });

@@ -10,7 +10,7 @@ import { contextBudgetStatusFixture } from "../../config/sessions/context-budget
 import { SESSION_TOTAL_TOKENS_VERSION, type SessionEntry } from "../../config/sessions/types.js";
 import { withSessionTurn } from "../../sessions/session-controller.admission.js";
 import { useSessionStoreTempDirs } from "../../test-utils/session-state-cleanup.js";
-import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import type { RunCronAgentTurnParams } from "./run-prepare-runtime.js";
 import { realCronSession } from "./run.session.test-support.js";
 import * as harness from "./run.test-harness.js";
@@ -33,12 +33,12 @@ function startCron(
     makeIsolatedAgentParamsFixture({
       agentId: "main",
       sessionKey: target.sessionKey,
-      job: {
+      job: makeIsolatedAgentJobFixture({
         id: options.name ?? "scheduled-turn",
         name: options.name ?? "Scheduled turn",
         sessionTarget: `session:${target.sessionKey}`,
         delivery: { mode: "none" },
-      },
+      }),
       cfg: { session: { store: target.storePath, reset: { mode: "idle", idleMinutes: 60 } } },
       abortSignal: options.abortSignal,
       onLaneWait: options.onLaneWait,

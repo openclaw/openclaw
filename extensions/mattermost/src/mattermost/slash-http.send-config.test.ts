@@ -74,6 +74,7 @@ vi.mock("openclaw/plugin-sdk/session-transcript-runtime", async (importOriginal)
   recordDeliveredCommandExchange: mockState.recordDeliveredCommandExchange,
 }));
 
+// mock-isolation: Exercise HTTP command delivery without the plugin runtime or request transport.
 vi.mock("./runtime-api.js", () => ({
   buildPreparedModelsProviderData: mockState.buildPreparedModelsProviderData,
   isRequestBodyLimitError: vi.fn(() => false),

@@ -36,10 +36,10 @@ describe("entry run-main boundary", () => {
       phase === "expected"
         ? new ExpectedCliError({ message, humanOutput: message, machineOutput: message })
         : new Error("synthetic CLI failure");
-    // mock-isolation: Distinguish import failure from failure inside the loaded command.
     const runCli = async () => {
       throw error;
     };
+    // mock-isolation: Distinguish import failure from failure inside the loaded command.
     vi.doMock("./cli/run-main.js", async () => (phase === "startup" ? runCli() : { runCli }));
     await runMainOrRootHelp(["node", "openclaw", "status"]);
     expect(process.exitCode).toBe(1);
@@ -88,10 +88,10 @@ describe("entry run-main boundary", () => {
     const host = new Command();
     await registrar?.({ program: host, parentPath: [], config: {}, logger: api.logger });
     const stdout = vi.spyOn(process.stdout, "write").mockReturnValue(true);
-    // mock-isolation: This command runs on the fixture program, not the real CLI runtime.
     const runCli = vi.fn(async (argv: string[]) => {
       await host.parseAsync(argv);
     });
+    // mock-isolation: This command runs on the fixture program, not the real CLI runtime.
     vi.doMock("./cli/run-main.js", async () => ({ runCli }));
     const argv = ["node", "openclaw", "fail", ...(json ? ["--json"] : [])];
     await runMainOrRootHelp(argv);
