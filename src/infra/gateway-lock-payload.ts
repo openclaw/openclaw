@@ -145,17 +145,19 @@ export function classifyGatewayOwnerProcessNamespace(
 }
 
 /**
- * Whether the recorded owner is a local process of this host and platform, where a
- * local PID probe is authoritative. A foreign namespace cannot supply that evidence,
- * so its heartbeat verdict stands on its own.
+ * Whether the recorded owner is a Windows process of this host. Windows can report
+ * two valid but different boot identities for one boot, so a different identity
+ * there is not proof of a previous boot; Linux boot and PID-namespace identities
+ * stay authoritative.
  */
-export function gatewayLockOwnerIsLocalProcessNamespace(value: unknown): boolean {
+export function gatewayLockOwnerIsSameHostWindowsNamespace(value: unknown): boolean {
   const owner = GatewayProcessNamespaceSchema.safeParse(value).data;
   const current = readGatewayLockProcessNamespace();
   return (
     owner !== undefined &&
     current !== null &&
-    owner.platform === current.platform &&
+    owner.platform === "win32" &&
+    current.platform === "win32" &&
     owner.host === current.host
   );
 }

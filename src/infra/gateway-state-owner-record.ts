@@ -5,18 +5,40 @@ import { isMainThread } from "node:worker_threads";
 import { extractErrorCode } from "@openclaw/normalization-core/error-coercion";
 import { isRecord } from "@openclaw/normalization-core/record-coerce";
 import { getCliParentPid } from "../../cli-parent-lifetime.mjs";
-import { resolveGlobalSingleton } from "../shared/global-singleton.js";
 import { getFileLockProcessStartTime, isPidAlive } from "../shared/pid-alive.js";
 import { resolveOpenClawStateDirForDatabasePath } from "../state/openclaw-state-db.paths.js";
 import {
   classifyGatewayLockProcessNamespace,
   GatewayLockNamespaceError,
-  gatewayLockOwnerIsLocalProcessNamespace,
+  gatewayLockOwnerIsSameHostWindowsNamespace,
   parseGatewayLockPayload,
   readGatewayLockProcessNamespace,
   type LockPayload,
 } from "./gateway-lock-payload.js";
+import {
+  StateDatabaseAccessError,
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseOfflineMaintenanceError,
+} from "./gateway-state-owner-errors.js";
 import { isLockOwnerDefinitelyStale } from "./stale-lock-file.js";
+
+/**
+ * Positive evidence only: the recorded process is alive and its observed start
+ * identity still equals the recorded one. A record without a start time never
+ * qualifies, so reclamation cannot be blocked indefinitely by missing evidence.
+ */
+function processIdentityStillMatchesRecord(payload: Record<string, unknown> | null): boolean {
+  if (
+    payload === null ||
+    typeof payload.pid !== "number" ||
+    typeof payload.startTime !== "number"
+  ) {
+    return false;
+  }
+  return !isLockOwnerDefinitelyStale({
+    payload: { pid: payload.pid, starttime: payload.startTime },
+  });
+}
 
 /** Admission and reclamation use the same namespace-qualified PID evidence. */
 export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: string): boolean {
@@ -25,87 +47,26 @@ export function isGatewayStateOwnerDefinitelyStale(value: unknown, lockPath: str
   if (namespace === "unknown") {
     throw new GatewayLockNamespaceError(payload ?? {}, lockPath);
   }
-  const staleByProcess = isLockOwnerDefinitelyStale({
-    payload: payload ? { pid: payload.pid, starttime: payload.startTime } : null,
-  });
-  if (staleByProcess) {
-    return true;
+  if (namespace !== "dead") {
+    return false;
   }
-  // A live owner with its recorded start identity blocks reclamation. Two valid but
-  // different boot identities on this host (Windows) must not revoke it; only a
-  // foreign namespace keeps its heartbeat verdict (#174895).
-  return (
-    namespace === "dead" && !gatewayLockOwnerIsLocalProcessNamespace(payload?.processNamespace)
+  // Windows can report two valid but different boot identities for one boot, so a
+  // different identity there is not proof of a previous boot. A same-host Windows
+  // owner whose recorded process is still alive with its recorded start identity
+  // blocks reclamation; Linux boot/PID-namespace and heartbeat verdicts stay as they
+  // were, including previous-boot recovery (#174895).
+  return !(
+    gatewayLockOwnerIsSameHostWindowsNamespace(payload?.processNamespace) &&
+    processIdentityStillMatchesRecord(payload)
   );
 }
 
-export class StateDatabaseAccessError extends Error {
-  override name = "StateDatabaseAccessError";
-}
-
-export const GatewayStateOwnerContentionError = resolveGlobalSingleton(
-  Symbol.for("openclaw.gatewayStateOwnerContentionError"),
-  () =>
-    class StateOwnerContentionError extends Error {
-      constructor(
-        public readonly databasePath: string,
-        public override readonly cause?: unknown,
-        public readonly holderDetail?: string,
-        /** Recorded holder identity: diagnostic evidence for waiting, never ownership authority. */
-        public readonly holder?: Pick<LockPayload, "pid" | "role">,
-      ) {
-        super(
-          `OpenClaw state database is busy at ${databasePath}. ${holderDetail ? `${holderDetail} ` : ""}Wait for the other OpenClaw process to finish, then retry. If it persists, run \`openclaw gateway status\` and check for other OpenClaw processes using the same state directory. A running Gateway can hold this ownership until it stops; stop it through its service manager or original terminal before retrying.`,
-        );
-        this.name = "GatewayStateOwnerContentionError";
-      }
-    },
-);
-export type GatewayStateOwnerContentionError = InstanceType<
-  typeof GatewayStateOwnerContentionError
->;
-
-/** A local holder exists, but the caller has no live lexical maintenance authority. */
-export const StateDatabaseMaintenanceScopeError = resolveGlobalSingleton(
-  Symbol.for("openclaw.stateDatabaseMaintenanceScopeError"),
-  () =>
-    class extends StateDatabaseAccessError {
-      override name = "StateDatabaseMaintenanceScopeError";
-
-      constructor(readonly databasePath: string) {
-        super(
-          `Internal state ownership error at ${databasePath}: this process holds maintenance ownership without an active schema lease or maintenance scope. Retry the command; if it persists, report this error.`,
-        );
-      }
-    },
-);
-
-export const StateDatabaseAdmissionPendingError = resolveGlobalSingleton(
-  Symbol.for("openclaw.stateDatabaseAdmissionPendingError"),
-  () =>
-    class extends StateDatabaseAccessError {
-      constructor(
-        readonly databasePath: string,
-        message: string,
-      ) {
-        super(message);
-      }
-    },
-);
-
-/** A live foreign process holds offline-maintenance custody of this database. */
-export const StateDatabaseOfflineMaintenanceError = resolveGlobalSingleton(
-  Symbol.for("openclaw.stateDatabaseOfflineMaintenanceError"),
-  () =>
-    class extends StateDatabaseAccessError {
-      constructor(
-        readonly databasePath: string,
-        message: string,
-      ) {
-        super(message);
-      }
-    },
-);
+export {
+  GatewayStateOwnerContentionError,
+  StateDatabaseAdmissionPendingError,
+  StateDatabaseMaintenanceScopeError,
+  StateDatabaseOfflineMaintenanceError,
+} from "./gateway-state-owner-errors.js";
 
 export const isStateDatabaseMaintenanceContention = (error: unknown): boolean =>
   error instanceof AggregateError
