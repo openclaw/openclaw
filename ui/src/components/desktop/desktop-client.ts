@@ -83,7 +83,7 @@ export class DesktopClient {
     };
     socket.addEventListener("close", trackSocketClose, { once: true });
     const stopSocketClose = () => socket.removeEventListener("close", trackSocketClose);
-    const viewport = createDesktopViewport(options.target);
+    const viewport = createDesktopViewport(options.target, desktopCanvas);
     let rfb: RfbClient;
     try {
       rfb = new Rfb(

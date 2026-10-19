@@ -1,7 +1,10 @@
 import type { DesktopSizingMode } from "./desktop-panel-state.ts";
 
 /** Connection-local geometry; noVNC still owns canvas scaling and input coordinates. */
-export function createDesktopViewport(host: HTMLElement) {
+export function createDesktopViewport(
+  host: HTMLElement,
+  readCanvas: (target: HTMLElement) => HTMLCanvasElement | null,
+) {
   const viewport = host.ownerDocument.createElement("div");
   viewport.style.cssText = "width:100%;height:100%;overflow:hidden";
   const target = host.ownerDocument.createElement("div");
@@ -13,7 +16,7 @@ export function createDesktopViewport(host: HTMLElement) {
   let framebuffer: MutationObserver | undefined;
 
   const update = () => {
-    const canvas = target.querySelector("canvas");
+    const canvas = readCanvas(target);
     if (!canvas?.width || !canvas.height) {
       return;
     }
