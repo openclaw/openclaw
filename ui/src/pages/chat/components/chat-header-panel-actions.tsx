@@ -174,6 +174,19 @@ export function chatPaneLayoutModel(props: ChatPaneLayoutMenuProps) {
       });
     }
   }
+  const createClaw =
+    layout && isSidebarSlotVisible(layout, "companion")
+      ? definitions.find((definition) => definition.slot === "companion")?.view?.onCreateClaw
+      : undefined;
+  if (createClaw) {
+    actions.push({
+      id: "create-claw",
+      label: t("clawsDraft.title"),
+      description: t("clawsDraft.railHint"),
+      icon: "box",
+      onActivate: createClaw,
+    });
+  }
   const panelActions: ChatQuickAction[] = props.panelMenuActions ?? [];
   const allActions = [...actions, ...panelActions];
   return {
