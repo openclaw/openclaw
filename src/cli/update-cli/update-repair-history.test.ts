@@ -72,26 +72,38 @@ async function abandonedWarnings() {
   );
 }
 
-it("clears older Doctor warnings after full repair despite a newer successful update", async () => {
-  const previous = seedHistory(2 * ABANDONED_UPDATE_RUN_MS);
-  finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
-  expect(await abandonedWarnings()).toHaveLength(1);
-  await repair();
-  expect(mocks.doctor).toHaveBeenCalledOnce();
-  expect(mocks.plugins).toHaveBeenCalledOnce();
-  const repaired = getUpdateRun(previous.runId)!;
-  expect(isAcknowledgedAbandonedUpdateRun(repaired)).toBe(true);
-  expect(repaired).toMatchObject({
-    ...previous,
-    updatedAtMs: expect.any(Number),
-    steps: expect.arrayContaining(previous.steps),
-  });
-  expect(jsonResult()).toMatchObject({ status: "ok", reconciledRuns: [previous.runId] });
-  expect(await abandonedWarnings()).toEqual([]);
-  await repair();
-  expect(getUpdateRun(previous.runId)).toEqual(repaired);
-  expect(mocks.doctor).toHaveBeenCalledTimes(2);
-});
+it.each([1, 99])(
+  "acknowledges captured history behind %s newer successful updates",
+  async (count) => {
+    const outside = count === 99 ? seedHistory(10 * ABANDONED_UPDATE_RUN_MS) : undefined;
+    const previous = seedHistory((count === 99 ? 9 : 2) * ABANDONED_UPDATE_RUN_MS);
+    for (let index = 0; index < count; index++) {
+      finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
+    }
+    if (outside) {
+      expect(listUpdateRuns({ limit: 100 }).at(-1)?.runId).toBe(previous.runId);
+    }
+    expect(await abandonedWarnings()).toEqual([expect.stringContaining(previous.runId)]);
+    await repair();
+    expect(mocks.doctor).toHaveBeenCalledOnce();
+    expect(mocks.plugins).toHaveBeenCalledOnce();
+    const repaired = getUpdateRun(previous.runId)!;
+    expect(isAcknowledgedAbandonedUpdateRun(repaired)).toBe(true);
+    expect(repaired).toMatchObject({
+      ...previous,
+      updatedAtMs: expect.any(Number),
+      steps: expect.arrayContaining(previous.steps),
+    });
+    expect(jsonResult()).toMatchObject({ status: "ok", reconciledRuns: [previous.runId] });
+    if (outside) {
+      expect(getUpdateRun(outside.runId)).toEqual(outside);
+    }
+    expect(await abandonedWarnings()).toEqual([]);
+    await repair();
+    expect(getUpdateRun(previous.runId)).toEqual(repaired);
+    expect(mocks.doctor).toHaveBeenCalledTimes(2);
+  },
+);
 
 it.each(["ok", "warning"] as const)(
   "acknowledges multiple rows only after %s convergence, excluding a newly admitted row",
@@ -144,20 +156,6 @@ it.each([
   if (phase !== "retained recovery") {
     expect(await abandonedWarnings()).toHaveLength(2);
   }
-});
-
-it("retains the hundredth captured row when finalization creates a newer run", async () => {
-  const outside = seedHistory(10 * ABANDONED_UPDATE_RUN_MS);
-  const boundary = seedHistory(9 * ABANDONED_UPDATE_RUN_MS);
-  for (let index = 0; index < 99; index++) {
-    finishUpdateRun(createUpdateRun({ trigger: "cli" }).runId, { status: "succeeded" });
-  }
-  expect(listUpdateRuns({ limit: 100 }).at(-1)?.runId).toBe(boundary.runId);
-  expect(await abandonedWarnings()).toEqual([expect.stringContaining(boundary.runId)]);
-  await repair();
-  expect(isAcknowledgedAbandonedUpdateRun(getUpdateRun(boundary.runId)!)).toBe(true);
-  expect(getUpdateRun(outside.runId)).toEqual(outside);
-  expect(jsonResult()).toMatchObject({ reconciledRuns: [boundary.runId] });
 });
 
 it("acknowledges historical rows while continuing its live owning update", async () => {

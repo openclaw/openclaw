@@ -39,6 +39,7 @@ import {
 } from "../../state/openclaw-state-db.js";
 import { runRegisteredCli } from "../../test-utils/command-runner.js";
 import { registerUpdateCli } from "../update-cli.js";
+import { expectNoCalls } from "./update-boundary.test-support.js";
 import { updateRepairCommand } from "./update-repair-command.js";
 
 const mocks = vi.hoisted(() => {
@@ -199,9 +200,8 @@ describe("update repair ledger recovery", () => {
     await expect(updateRepairCommand({ json: true })).rejects.toThrow(
       /Stop the Gateway first \(openclaw gateway stop\)/,
     );
-    expect(mocks.finalize).not.toHaveBeenCalled();
+    expectNoCalls(mocks.finalize, mocks.reachable);
     expect(getUpdateRun(run.runId)).toEqual(run);
-    expect(mocks.reachable).not.toHaveBeenCalled();
   });
   it.each(["aborted", "publishing"])(
     "exits nonzero while a released %s package record remains pending",
@@ -251,18 +251,13 @@ describe("update repair ledger recovery", () => {
       const run = createUpdateRun({ trigger: "cli", before: { version: "2026.9.2" } });
       const detail =
         "Update refused: package manager owner is unknown; no changes were made. Run this OpenClaw install through its active npm, pnpm, or Bun global shim, or reinstall it with that package manager, then retry.";
-      const captureSteps: UpdateRunRecord["steps"] = [
-        {
-          step: "original-state-capture",
-          status: "completed",
-          detail: "Original state retained for manual recovery.",
-        },
-        {
-          step: "warning:original-state-capture:1",
-          status: "completed",
-          detail: "Optional plugin files could not be captured.",
-        },
-      ];
+      const captureSteps = ["original-state-capture", "warning:original-state-capture:1"].map<
+        UpdateRunRecord["steps"][number]
+      >((step) => ({
+        step,
+        status: "completed",
+        detail: `Retained ${step}`,
+      }));
       recordUpdateRunStep(run.runId, { step: "driver:adopted", status: "completed" });
       if (legacy) {
         recordUpdateRunStep(run.runId, { step: "requested", status: "failed", detail });
@@ -280,9 +275,7 @@ describe("update repair ledger recovery", () => {
 
       await registeredRepair("--yes", "--json");
 
-      expect(mocks.finalize).not.toHaveBeenCalled();
-      expect(mocks.reachable).not.toHaveBeenCalled();
-      expect(mocks.readiness).not.toHaveBeenCalled();
+      expectNoCalls(mocks.finalize, mocks.reachable, mocks.readiness);
       const runStatus = await readUpdateRunStatus();
       if (runStatus.runStatusError !== undefined) {
         throw new Error(runStatus.runStatusError);
@@ -563,12 +556,12 @@ describe("update repair ledger recovery", () => {
     },
   );
 
-  it.each<{
-    opts?: Parameters<typeof updateRepairCommand>[0];
-    phase?: UpdateRunRecord["phase"];
-    reconciled?: boolean;
-    failedStep?: boolean;
-  }>([
+  it.each<
+    NonNullable<Parameters<typeof seedRun>[0]> & {
+      opts?: Parameters<typeof updateRepairCommand>[0];
+      reconciled?: boolean;
+    }
+  >([
     { opts: { channel: "beta" } },
     { opts: { acceptCapabilities: true } },
     { phase: "activating" },
@@ -576,23 +569,18 @@ describe("update repair ledger recovery", () => {
     { phase: "verifying" },
     { phase: "repairing" },
     { phase: "verifying", reconciled: true },
-    { failedStep: true },
+    { steps: [{ step: "finalize:doctor", status: "failed" }] },
   ])(
     "retains full repair for post-core work or explicit changes: %j",
-    async ({ opts = {}, phase, reconciled, failedStep }) => {
-      const run = seedRun({
-        phase: phase === "repairing" ? ["verifying", phase] : phase,
-        steps: failedStep ? [{ step: "finalize:doctor", status: "failed" }] : [],
-      });
+    async ({ opts = {}, reconciled, ...fixture }) => {
+      const run = seedRun(fixture);
       if (reconciled) {
         finishUpdateRun(run.runId, { status: "failed", reason: "abandoned" });
       }
       const recorded = getUpdateRun(run.runId);
       await expectFullRepair(opts);
       expect(getUpdateRun(run.runId)).toEqual(recorded);
-      if (failedStep) {
-        expect(getUpdateRun(run.runId)?.status).toBe("running");
-      }
+      expect(getUpdateRun(run.runId)?.status).toBe(reconciled ? "failed" : "running");
       expect(mocks.finalize).toHaveBeenCalledWith(opts, [run.runId], undefined);
     },
   );
@@ -669,7 +657,7 @@ describe("update repair ledger recovery", () => {
       let injected = false;
       let selectedAfterInjection: UpdateRunRecord | undefined;
       let added: UpdateRunRecord | undefined;
-      const admission = vi
+      using admission = vi
         .spyOn(sqliteWorkerStore, "createSqliteWorkerWriteAdmission")
         .mockImplementationOnce((assertCurrent, nativeLocations) => {
           const factory = createAdmission(assertCurrent, nativeLocations);
@@ -697,38 +685,34 @@ describe("update repair ledger recovery", () => {
             return factory(operation);
           };
         });
-      try {
-        await registeredRepair();
-        expect(injected).toBe(true);
-        expect(mocks.finalize).not.toHaveBeenCalled();
-        if (added) {
-          expect(getUpdateRun(added.runId)).toEqual(added);
-        }
-        expect(listUpdateRuns()).toHaveLength(added ? 2 : 1);
-        if (change === "newer preflight failure") {
-          expect(mocks.runtime.error).not.toHaveBeenCalled();
-          expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
-          expect(getUpdateRun(created.runId)).toMatchObject({
-            status: "failed",
-            reason: "abandoned",
-            steps: completedSteps("reconcile:acknowledged"),
-          });
-          expect(listUpdateRuns({ active: true })).toEqual([]);
-          expect(mocks.runtime.log).toHaveBeenCalledWith(reconciledMessage);
-        } else {
-          expect(mocks.runtime.error).toHaveBeenCalledWith(
-            expect.stringContaining("needs post-core maintenance"),
-          );
-          expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
-          expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Reconciled"));
-          expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
-          expect(getUpdateRun(created.runId)).toEqual(selectedAfterInjection);
-          expect(getUpdateRun(created.runId)?.steps).not.toContainEqual(
-            expect.objectContaining({ step: "reconcile:acknowledged" }),
-          );
-        }
-      } finally {
-        admission.mockRestore();
+      await registeredRepair();
+      expect(injected).toBe(true);
+      expect(mocks.finalize).not.toHaveBeenCalled();
+      if (added) {
+        expect(getUpdateRun(added.runId)).toEqual(added);
+      }
+      expect(listUpdateRuns()).toHaveLength(added ? 2 : 1);
+      if (change === "newer preflight failure") {
+        expect(mocks.runtime.error).not.toHaveBeenCalled();
+        expect(mocks.runtime.exit).not.toHaveBeenCalledWith(1);
+        expect(getUpdateRun(created.runId)).toMatchObject({
+          status: "failed",
+          reason: "abandoned",
+          steps: completedSteps("reconcile:acknowledged"),
+        });
+        expect(listUpdateRuns({ active: true })).toEqual([]);
+        expect(mocks.runtime.log).toHaveBeenCalledWith(reconciledMessage);
+      } else {
+        expect(mocks.runtime.error).toHaveBeenCalledWith(
+          expect.stringContaining("needs post-core maintenance"),
+        );
+        expect(mocks.runtime.exit).toHaveBeenCalledWith(1);
+        expect(mocks.runtime.log).not.toHaveBeenCalledWith(expect.stringContaining("Reconciled"));
+        expect(mocks.runtime.writeJson).not.toHaveBeenCalled();
+        expect(getUpdateRun(created.runId)).toEqual(selectedAfterInjection);
+        expect(getUpdateRun(created.runId)?.steps).not.toContainEqual(
+          expect.objectContaining({ step: "reconcile:acknowledged" }),
+        );
       }
     },
   );

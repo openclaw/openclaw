@@ -64,9 +64,7 @@ function legacyPayload(helper: typeof fixture.helper, executor = helper) {
 }
 
 function expectAbsent(...roots: string[]) {
-  for (const root of roots) {
-    expect(fixture.store.read(root)).toEqual({ kind: "absent" });
-  }
+  roots.forEach((root) => expect(fixture.store.read(root)).toEqual({ kind: "absent" }));
 }
 
 function expectSettlement(detail: string) {
@@ -99,31 +97,6 @@ beforeEach(async () => {
 afterEach(async () => {
   vi.restoreAllMocks();
   await state.cleanup();
-});
-
-it("registered update repair settles a dead uncertain lease and admits the next updater", async () => {
-  fixture.seed();
-  mocks.doctor.mockImplementation(async () => {
-    expect(fixture.readMetadata(fixture.current())?.facts.runIds).toEqual([
-      "retained-update",
-      listUpdateRuns()[0]?.runId,
-    ]);
-  });
-  await expect(
-    withUpdateCommandExecutor("blocked-before-repair", async (executor) => {
-      await executor.enter(state.root);
-    }),
-  ).rejects.toThrow("Another update executor owns this installation");
-
-  await repair();
-
-  expect(mocks.doctor).toHaveBeenCalledOnce();
-  expect(mocks.plugins).toHaveBeenCalledOnce();
-  expectAbsent(state.root);
-  expect(listUpdateRuns()).toHaveLength(1);
-  expectSettlement("legacy handoff lease reclaimed");
-  expect(defaultRuntime.writeJson).toHaveBeenCalledWith(expect.objectContaining({ status: "ok" }));
-  await expectAdmitted("next-update");
 });
 
 it("does not reclaim a handoff from a programmatic call without CLI process ownership", async () => {
@@ -191,16 +164,39 @@ function seedLegacyLineage(nested = false, bound = false) {
   return key;
 }
 
-it.each(["dead", "reused", "nested"] as const)(
-  "repair reclaims a %s legacy child-lineage owner and admits the next update",
+it.each(["root", "dead", "reused", "nested"] as const)(
+  "repair reclaims a %s handoff owner and admits the next update",
   async (identity) => {
-    const key = seedLegacyLineage(identity === "nested");
+    const root = identity === "root";
+    const key = root ? state.root : seedLegacyLineage(identity === "nested");
+    if (root) {
+      fixture.seed();
+      mocks.doctor.mockImplementation(async () => {
+        expect(fixture.readMetadata(fixture.current())?.facts.runIds).toEqual([
+          "retained-update",
+          listUpdateRuns()[0]?.runId,
+        ]);
+      });
+      await expect(
+        withUpdateCommandExecutor("blocked-before-repair", async (executor) => {
+          await executor.enter(state.root);
+        }),
+      ).rejects.toThrow("Another update executor owns this installation");
+    }
     if (identity === "reused") {
       fixture.births.set(fixture.helper.pid, 99);
     }
     await repair();
+    expect(mocks.doctor).toHaveBeenCalledOnce();
+    expect(mocks.plugins).toHaveBeenCalledOnce();
     expectAbsent(key, `${key}/.openclaw-update-child-nested`);
-    expectSettlement(key);
+    if (root) {
+      expect(listUpdateRuns()).toHaveLength(1);
+    }
+    expectSettlement(root ? "legacy handoff lease reclaimed" : key);
+    expect(defaultRuntime.writeJson).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "ok" }),
+    );
     await expectAdmitted("after-lineage-repair");
   },
 );
