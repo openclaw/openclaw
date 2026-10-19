@@ -2873,6 +2873,19 @@ export const en: TranslationMap & {
     errorStartSummary: "Couldn't start this conversation. Open Settings → Logs for details.",
     checkStatus: "Check status",
     details: "Details",
+    usageLimit: {
+      title: "ChatGPT usage limit reached",
+      businessBody:
+        "You’ve reached your workspace's limit for using your ChatGPT plan in other apps. Copy a message below to ask your workspace admin for increased usage limits.",
+      consumerBody: "Review your usage settings in ChatGPT.",
+      request:
+        "I’ve reached the limit for using my ChatGPT plan in OpenClaw. Could you increase our workspace’s usage limits so I can continue?\n\nGo to admin.openai.com → Workspace → Usage limits. Thank you!",
+      copy: "Copy request for admin",
+      copied: "Request copied. Send it to your workspace admin.",
+      copyFailed:
+        "Couldn't copy the request. Select and copy the text below, then send it to your workspace admin.",
+      manage: "Manage usage",
+    },
     copyError: "Copy error",
     providerAccessRemoved:
       "This reply stopped because the provider was signed out. Sign in again or choose another model.",

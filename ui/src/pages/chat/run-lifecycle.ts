@@ -50,7 +50,12 @@ export type ChatHistoryRunObservation = {
 };
 
 export type ChatRunError = {
-  kind?: "auth_refresh" | "state_contention" | "stop";
+  kind?:
+    | "auth_refresh"
+    | "state_contention"
+    | "stop"
+    | "chatgpt_business_usage_limit"
+    | "chatgpt_consumer_usage_limit";
   summary: string;
   /** Display ownership only; the session reducer retains each run's diagnostic. */
   runId?: string;
