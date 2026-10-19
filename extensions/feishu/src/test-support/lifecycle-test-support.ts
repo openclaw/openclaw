@@ -1,4 +1,3 @@
-// Feishu plugin module implements lifecycle test support behavior.
 import { randomUUID } from "node:crypto";
 import { EventDispatcher } from "@larksuiteoapi/node-sdk";
 import {
@@ -7,7 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-test-helpers";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { closeOpenClawStateDatabaseAsync } from "openclaw/plugin-sdk/sqlite-runtime-testing";
-import { expect, vi, type Mock } from "vitest";
+import { expect, vi } from "vitest";
 import type { ClawdbotConfig, PluginRuntime, RuntimeEnv } from "../../runtime-api.js";
 import { getFeishuLifecycleTestMocks } from "../lifecycle.test-support.js";
 import { createFeishuTestIngressQueue } from "../monitor.test-mocks.js";
@@ -44,40 +43,12 @@ type InboundDebouncerParams<T> = {
   ) => InboundDebounceFlush;
   onError?: (err: unknown, items: T[]) => void;
 };
-type AsyncUnknownMock = Mock<(...args: unknown[]) => Promise<unknown>>;
-type FeishuDispatchReplyCounts = {
-  final: number;
-  block?: number;
-  tool?: number;
-};
-type FeishuDispatchReplyContext = Record<string, unknown> & {
-  SessionKey?: string;
-};
-type FeishuDispatchReplyDispatcher = {
-  sendFinalReply: (payload: { text: string }) => unknown;
-};
-type FeishuDispatchReplyMock = Mock<
-  (args: {
-    ctx: FeishuDispatchReplyContext;
-    dispatcher: FeishuDispatchReplyDispatcher;
-    replyOptions?: {
-      turnAdoptionLifecycle?: {
-        onAdopted: () => void | Promise<void>;
-      };
-    };
-  }) => Promise<{ queuedFinal: boolean; counts: FeishuDispatchReplyCounts }>
->;
+type FeishuDispatchReplyMock = ReturnType<
+  typeof getFeishuLifecycleTestMocks
+>["dispatchReplyFromConfigMock"];
 type RuntimeReplyDispatcher = NonNullable<
   Parameters<PluginRuntime["channel"]["reply"]["withReplyDispatcher"]>[0]["dispatcher"]
 >;
-type FeishuLifecycleReplyDispatcher = {
-  dispatcherOptions: Record<string, never>;
-  delivery: {
-    deliver: AsyncUnknownMock;
-  };
-  replyOptions: Record<string, never>;
-  ensureNoVisibleReplyFallback: AsyncUnknownMock;
-};
 
 export function setFeishuLifecycleStateDir(prefix: string) {
   process.env.OPENCLAW_STATE_DIR = `/tmp/${prefix}-${randomUUID()}`;
@@ -91,12 +62,7 @@ export function restoreFeishuLifecycleStateDir(originalStateDir: string | undefi
   process.env.OPENCLAW_STATE_DIR = originalStateDir;
 }
 
-const FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE = {
-  kind: "prefetched",
-  botOpenId: "ou_bot_1",
-} as const;
-
-export function createFeishuLifecycleReplyDispatcher(): FeishuLifecycleReplyDispatcher {
+export function createFeishuLifecycleReplyDispatcher() {
   return {
     dispatcherOptions: {},
     delivery: { deliver: vi.fn(async () => {}) },
@@ -124,21 +90,25 @@ function createImmediateInboundDebounce() {
   };
 }
 
-function installFeishuLifecycleRuntime(params: {
-  resolveAgentRoute: PluginRuntime["channel"]["routing"]["resolveAgentRoute"];
-  dispatchReplyFromConfig: PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
-  withReplyDispatcher: PluginRuntime["channel"]["reply"]["withReplyDispatcher"];
-  resolveStorePath: PluginRuntime["channel"]["session"]["resolveStorePath"];
+export function installFeishuLifecycleReplyRuntime(params: {
+  resolveAgentRouteMock: unknown;
+  dispatchReplyFromConfigMock: unknown;
+  withReplyDispatcherMock: unknown;
+  storePath: string;
 }): PluginRuntime {
+  const resolveAgentRoute =
+    params.resolveAgentRouteMock as PluginRuntime["channel"]["routing"]["resolveAgentRoute"];
+  const dispatchReplyFromConfig =
+    params.dispatchReplyFromConfigMock as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"];
+  const withReplyDispatcher =
+    params.withReplyDispatcherMock as PluginRuntime["channel"]["reply"]["withReplyDispatcher"];
   const runtime = createPluginRuntimeMock({
     state: {
       openChannelIngressQueue: createFeishuTestIngressQueue,
     },
     channel: {
       debounce: createImmediateInboundDebounce(),
-      routing: {
-        resolveAgentRoute: params.resolveAgentRoute,
-      },
+      routing: { resolveAgentRoute },
       reply: {
         dispatchReplyWithBufferedBlockDispatcher: async ({
           cfg,
@@ -164,25 +134,25 @@ function installFeishuLifecycleRuntime(params: {
             getFailedCounts: () => ({ tool: 0, block: 0, final: 0 }),
             markComplete: () => {},
           };
-          return await params.withReplyDispatcher({
+          return await withReplyDispatcher({
             dispatcher,
             run: () =>
-              params.dispatchReplyFromConfig({
+              dispatchReplyFromConfig({
                 cfg,
-                ctx: ctx as Parameters<typeof params.dispatchReplyFromConfig>[0]["ctx"],
+                ctx: ctx as Parameters<typeof dispatchReplyFromConfig>[0]["ctx"],
                 dispatcher,
                 replyOptions,
               }),
           });
         },
-        dispatchReplyFromConfig: params.dispatchReplyFromConfig,
-        withReplyDispatcher: params.withReplyDispatcher,
+        dispatchReplyFromConfig,
+        withReplyDispatcher,
       },
       commands: {
         shouldComputeCommandAuthorized: vi.fn(() => false),
       },
       session: {
-        resolveStorePath: params.resolveStorePath,
+        resolveStorePath: vi.fn(() => params.storePath),
       },
       pairing: {
         upsertPairingRequest: vi.fn(),
@@ -191,23 +161,6 @@ function installFeishuLifecycleRuntime(params: {
   }) as unknown as PluginRuntime;
   setFeishuRuntime(runtime);
   return runtime;
-}
-
-export function installFeishuLifecycleReplyRuntime(params: {
-  resolveAgentRouteMock: unknown;
-  dispatchReplyFromConfigMock: unknown;
-  withReplyDispatcherMock: unknown;
-  storePath: string;
-}): PluginRuntime {
-  return installFeishuLifecycleRuntime({
-    resolveAgentRoute:
-      params.resolveAgentRouteMock as PluginRuntime["channel"]["routing"]["resolveAgentRoute"],
-    dispatchReplyFromConfig:
-      params.dispatchReplyFromConfigMock as PluginRuntime["channel"]["reply"]["dispatchReplyFromConfig"],
-    withReplyDispatcher:
-      params.withReplyDispatcherMock as PluginRuntime["channel"]["reply"]["withReplyDispatcher"],
-    resolveStorePath: vi.fn(() => params.storePath),
-  });
 }
 
 export function mockFeishuReplyOnceDispatch(params: {
@@ -230,76 +183,57 @@ export function mockFeishuReplyOnceDispatch(params: {
   );
 }
 
-export function createFeishuLifecycleConfig(params: {
-  accountId: string;
-  appId: string;
-  appSecret: string;
+type LifecycleCredentials = { accountId: string; appId: string; appSecret: string };
+type LifecycleConfigParams = LifecycleCredentials & {
   channelConfig?: Record<string, unknown>;
   accountConfig?: Record<string, unknown>;
   extraConfig?: Record<string, unknown>;
-}): ClawdbotConfig {
+};
+const lifecycleDefaults = {
+  enabled: true,
+  requireMention: false,
+  resolveSenderNames: false,
+};
+const lifecycleAccountDefaults = { ...lifecycleDefaults, connectionMode: "websocket" };
+
+export function createFeishuLifecycleConfig(params: LifecycleConfigParams): ClawdbotConfig {
   const extraConfig = params.extraConfig ?? {};
   return {
     ...extraConfig,
     channels: {
       ...(extraConfig.channels as Record<string, unknown> | undefined),
       feishu: {
-        enabled: true,
-        requireMention: false,
-        resolveSenderNames: false,
+        ...lifecycleDefaults,
         ...params.channelConfig,
         accounts: {
           [params.accountId]: {
-            enabled: true,
+            ...lifecycleAccountDefaults,
             appId: params.appId,
             appSecret: params.appSecret, // pragma: allowlist secret
-            connectionMode: "websocket",
-            requireMention: false,
-            resolveSenderNames: false,
             ...params.accountConfig,
           },
         },
       },
     },
-    messages: {
-      inbound: {
-        debounceMs: 0,
-        byChannel: {
-          feishu: 0,
-        },
-      },
-    },
+    messages: { inbound: { debounceMs: 0, byChannel: { feishu: 0 } } },
   } as ClawdbotConfig;
 }
 
-export function createFeishuLifecycleFixture(params: {
-  accountId: string;
-  appId: string;
-  appSecret: string;
-  channelConfig?: Record<string, unknown>;
-  accountConfig?: Record<string, unknown>;
-  extraConfig?: Record<string, unknown>;
-}) {
+export function createFeishuLifecycleFixture(params: LifecycleConfigParams) {
   return {
     cfg: createFeishuLifecycleConfig(params),
     account: createResolvedFeishuLifecycleAccount({
       accountId: params.accountId,
       appId: params.appId,
       appSecret: params.appSecret,
-      config: {
-        ...params.channelConfig,
-        ...params.accountConfig,
-      },
+      config: { ...params.channelConfig, ...params.accountConfig },
     }),
   };
 }
 
-export function createResolvedFeishuLifecycleAccount(params: {
-  accountId: string;
-  appId: string;
-  appSecret: string;
-  config: Record<string, unknown>;
-}): ResolvedFeishuAccount {
+export function createResolvedFeishuLifecycleAccount(
+  params: LifecycleCredentials & { config: Record<string, unknown> },
+): ResolvedFeishuAccount {
   return {
     accountId: params.accountId,
     selectionSource: "config",
@@ -308,13 +242,7 @@ export function createResolvedFeishuLifecycleAccount(params: {
     appId: params.appId,
     appSecret: params.appSecret, // pragma: allowlist secret
     domain: "feishu",
-    config: {
-      enabled: true,
-      connectionMode: "websocket",
-      requireMention: false,
-      resolveSenderNames: false,
-      ...params.config,
-    },
+    config: { ...lifecycleAccountDefaults, ...params.config },
   } as unknown as ResolvedFeishuAccount;
 }
 
@@ -356,13 +284,19 @@ async function expectFeishuLifecycleEventually(
   }
 }
 
-async function replayFeishuLifecycleEvent(params: {
+type LifecycleAssertion = () => void | Promise<void>;
+type LifecycleReplay = {
   handler: (data: unknown) => Promise<void>;
   event: unknown;
-  waitForFirst: () => void | Promise<void>;
-  waitForSecond?: () => void | Promise<void>;
   waitTimeoutMs?: number;
-}) {
+};
+
+async function replayFeishuLifecycleEvent(
+  params: LifecycleReplay & {
+    waitForFirst: LifecycleAssertion;
+    waitForSecond?: LifecycleAssertion;
+  },
+) {
   const waitTimeoutMs = params.waitTimeoutMs ?? FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS;
   await params.handler(params.event);
   await expectFeishuLifecycleEventually(params.waitForFirst, waitTimeoutMs);
@@ -372,7 +306,7 @@ async function replayFeishuLifecycleEvent(params: {
 
 export async function runFeishuLifecycleSequence(
   deliveries: Array<() => Promise<void>>,
-  waits: Array<() => void | Promise<void>>,
+  waits: LifecycleAssertion[],
 ) {
   for (const [index, deliver] of deliveries.entries()) {
     await deliver();
@@ -399,18 +333,14 @@ export async function expectFeishuSingleEffectAcrossReplay(params: {
   });
 }
 
-export async function expectFeishuReplyPipelineDedupedAcrossReplay(params: {
-  handler: (data: unknown) => Promise<void>;
-  event: unknown;
-  dispatchReplyFromConfigMock: ReturnType<typeof vi.fn>;
-  createFeishuReplyDispatcherMock: ReturnType<typeof vi.fn>;
-  waitTimeoutMs?: number;
-}) {
-  const waitTimeoutMs = params.waitTimeoutMs ?? FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS;
+export async function expectFeishuReplyPipelineDedupedAcrossReplay(
+  params: LifecycleReplay & {
+    dispatchReplyFromConfigMock: ReturnType<typeof vi.fn>;
+    createFeishuReplyDispatcherMock: ReturnType<typeof vi.fn>;
+  },
+) {
   await replayFeishuLifecycleEvent({
-    handler: params.handler,
-    event: params.event,
-    waitTimeoutMs,
+    ...params,
     waitForFirst: () => {
       expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
     },
@@ -421,23 +351,15 @@ export async function expectFeishuReplyPipelineDedupedAcrossReplay(params: {
   });
 }
 
-export async function expectFeishuReplyPipelineDedupedAfterPostSendFailure(params: {
-  handler: (data: unknown) => Promise<void>;
-  event: unknown;
-  dispatchReplyFromConfigMock: ReturnType<typeof vi.fn>;
-  runtimeErrorMock: ReturnType<typeof vi.fn>;
-  waitTimeoutMs?: number;
-}) {
-  const waitTimeoutMs = params.waitTimeoutMs ?? FEISHU_LIFECYCLE_WAIT_TIMEOUT_MS;
+export async function expectFeishuReplyPipelineDedupedAfterPostSendFailure(
+  params: LifecycleReplay & {
+    dispatchReplyFromConfigMock: ReturnType<typeof vi.fn>;
+    runtimeErrorMock: ReturnType<typeof vi.fn>;
+  },
+) {
   await replayFeishuLifecycleEvent({
-    handler: params.handler,
-    event: params.event,
-    waitTimeoutMs,
+    ...params,
     waitForFirst: () => {
-      expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
-      expect(params.runtimeErrorMock).toHaveBeenCalledTimes(1);
-    },
-    waitForSecond: () => {
       expect(params.dispatchReplyFromConfigMock).toHaveBeenCalledTimes(1);
       expect(params.runtimeErrorMock).toHaveBeenCalledTimes(1);
     },
@@ -451,11 +373,6 @@ export function expectFeishuReplyDispatcherSentFinalReplyOnce(params: {
     deliver: ReturnType<typeof vi.fn>;
   };
   expect(delivery.deliver).toHaveBeenCalledTimes(1);
-}
-
-async function loadMonitorSingleAccount() {
-  const module = await import("../monitor.account.js");
-  return module.monitorSingleAccount;
 }
 
 export async function setupFeishuLifecycleHandler(params: {
@@ -481,7 +398,7 @@ export async function setupFeishuLifecycleHandler(params: {
     () => params.cfg,
   ) as unknown as PluginRuntime["config"]["current"];
 
-  const monitorSingleAccount = await loadMonitorSingleAccount();
+  const { monitorSingleAccount } = await import("../monitor.account.js");
   const started = createDeferred<void>();
   const controller = new AbortController();
   getFeishuLifecycleTestMocks().monitorWebSocketMock.mockImplementationOnce(async () => {
@@ -496,7 +413,7 @@ export async function setupFeishuLifecycleHandler(params: {
     cfg: params.cfg,
     account: params.account,
     runtime: params.runtime,
-    botOpenIdSource: FEISHU_PREFETCHED_BOT_OPEN_ID_SOURCE,
+    botOpenIdSource: { kind: "prefetched", botOpenId: "ou_bot_1" },
     fireAndForget: false,
     abortSignal: controller.signal,
   });
