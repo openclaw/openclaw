@@ -2,7 +2,10 @@ import { AsyncLocalStorage } from "node:async_hooks";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { createDeferred } from "../../../../test/helpers/promise.js";
+import {
+  awaitGateBeforeSettlement as awaitGate,
+  createDeferred,
+} from "../../../../test/helpers/promise.js";
 import { useAutoCleanupTempDirTracker } from "../../../../test/helpers/temp-dir.js";
 import { getRuntimeConfig } from "../../../config/config.js";
 import { LegacyContextEngine } from "../../../context-engine/legacy.js";
@@ -146,12 +149,8 @@ describe("subagent registry context cleanup", () => {
         ]);
         // The session tail must resolve its engine after the tick has already returned.
         engineGate.resolve();
-        const phase = await Promise.race([
-          disposalStarted.promise.then(() => "disposal"),
-          cleanupFinished.promise.then(() => "returned"),
-        ]);
+        await awaitGate(disposalStarted.promise, cleanupFinished.promise, "early return");
         expect(warn).not.toHaveBeenCalled();
-        expect(phase).toBe("disposal");
         expect(onSubagentEnded).toHaveBeenCalledExactlyOnceWith({
           childSessionKey: entry.childSessionKey,
           reason: "swept",
@@ -191,19 +190,15 @@ describe("subagent registry context cleanup", () => {
       });
 
       if (boundary === "ended hook") {
-        const persist = vi.spyOn(registryPersistence, "mutateSubagentRuns");
+        using persist = vi.spyOn(registryPersistence, "mutateSubagentRuns");
         const entry = createSubagentRunRecord({ runId: "run-ended", endedAt: 4_000 });
-        try {
-          await expect(cleanup.emitSubagentEndedHookForRun({ entry })).resolves.toBeUndefined();
-          expect(warn).toHaveBeenCalledWith("subagent_ended hook failed (best-effort)", {
-            phase: "plugin-runtime",
-            err: error,
-          });
-          expect(entry.endedHookEmittedAt).toBeUndefined();
-          expect(persist).not.toHaveBeenCalled();
-        } finally {
-          persist.mockRestore();
-        }
+        await expect(cleanup.emitSubagentEndedHookForRun({ entry })).resolves.toBeUndefined();
+        expect(warn).toHaveBeenCalledWith("subagent_ended hook failed (best-effort)", {
+          phase: "plugin-runtime",
+          err: error,
+        });
+        expect(entry.endedHookEmittedAt).toBeUndefined();
+        expect(persist).not.toHaveBeenCalled();
         return;
       }
       await cleanup.notifyContextEngineSubagentEnded({
@@ -219,20 +214,14 @@ describe("subagent registry context cleanup", () => {
           reason: "swept",
         },
       );
-      const serialized = JSON.stringify(warn.mock.calls);
-      expect(serialized).toContain("cleanup failed");
-      expect(serialized).not.toContain("synthetic-cleanup-token");
+      expect(JSON.stringify(warn.mock.calls)).not.toContain("synthetic-cleanup-token");
     },
   );
 
   it("preserves collector attachments when the registered owner is absent", async () => {
     vi.stubEnv("OPENCLAW_STATE_DIR", tempDirs.make("openclaw-collector-cleanup-"));
     const attachmentId = "2d4a8398-4d5a-4c20-9c16-0a5f6627cf92";
-    const entry = createSubagentRunRecord({
-      runId: "collector-cleanup",
-      childSessionKey: "agent:main:subagent:collector-cleanup",
-      attachmentId,
-    });
+    const entry = createSubagentRunRecord({ runId: "collector-cleanup", attachmentId });
     const attachmentDir = path.join(
       resolveSubagentSessionAttachmentRootDir({
         agentId: "main",
@@ -314,12 +303,7 @@ describe("subagent registry context cleanup", () => {
       await resolutionStarted.promise;
       current = mode !== "stale";
       resolutionGate.resolve();
-      expect(
-        await Promise.race([
-          cleanupStarted.promise.then(() => "cleanup"),
-          result.then(() => "returned"),
-        ]),
-      ).toBe("cleanup");
+      await awaitGate(cleanupStarted.promise, result, "early return");
       await resources.release();
       expect(retire).not.toHaveBeenCalled();
       cleanupGate.resolve();

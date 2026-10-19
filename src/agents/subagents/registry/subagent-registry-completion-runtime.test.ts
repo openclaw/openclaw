@@ -63,6 +63,15 @@ function createHarness() {
     reason: SUBAGENT_ENDED_REASON_ERROR,
     triggerCleanup: true,
   };
+  const state = () => ({
+    completed: dependencies.completeSubagentRun.mock.calls.length,
+    resumes: dependencies.resumeRun.mock.calls.length,
+    sweeps: dependencies.scheduleSweep.mock.calls.length,
+    timers: dependencies.retryTimers.size,
+    roots: getActiveGatewayRootWorkCount(),
+    handled: entry.cleanupHandled,
+    retained: dependencies.resumed.has(getSubagentRunRuntimeKey(entry)),
+  });
   return {
     ...dependencies,
     entry,
@@ -73,12 +82,9 @@ function createHarness() {
       runtime.completeSubagentRunWithRecovery({ ...request, ...overrides }, source),
     finalize: () =>
       runtime.finalizeInterruptedSubagentRun({ runId: entry.runId, error: "interrupted" }),
+    expectState: (expected: Partial<ReturnType<typeof state>>) =>
+      expect(state()).toMatchObject(expected),
   };
-}
-
-function expectNoRecovery(h: ReturnType<typeof createHarness>) {
-  expect(h.scheduleSweep).not.toHaveBeenCalled();
-  expect(h.resumeRun).not.toHaveBeenCalled();
 }
 
 async function bindCompletionToLaunch(
@@ -163,7 +169,7 @@ describe("subagent completion rejection ownership", () => {
         expect(getActiveGatewayRootWorkCount()).toBe(1);
         finishCleanup.resolve();
         await Promise.all(tails);
-        expectNoRecovery(h);
+        h.expectState({ resumes: 0, sweeps: 0 });
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
       } finally {
         finishCapture.resolve();
@@ -171,7 +177,6 @@ describe("subagent completion rejection ownership", () => {
         await completion;
         await Promise.allSettled(tails);
         await vi.waitFor(() => expect(getActiveGatewayRootWorkCount()).toBe(0));
-        await launch.drain();
       }
     },
   );
@@ -185,34 +190,21 @@ describe("subagent completion rejection ownership", () => {
         h.complete("subagent-wait"),
       );
       await launch.drain();
-      try {
-        markGatewayRestartDraining();
-        await invoke();
-        expect(h.completeSubagentRun).not.toHaveBeenCalled();
-        expect(h.retryTimers.size).toBe(1);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-        expect(h.warn).toHaveBeenCalledWith("subagent completion deferred during gateway restart", {
-          source: "subagent-wait",
-          runId: h.entry.runId,
-        });
-        if (change === "replacement") {
-          h.runs.set(h.entry.runId, { ...h.entry });
-        } else if (change === "generation") {
-          h.entry.generation = 2;
-        }
-        resetGatewayWorkAdmission();
-        await vi.advanceTimersByTimeAsync(1_000);
-        expect(h.completeSubagentRun).toHaveBeenCalledTimes(change === "current" ? 1 : 0);
-        expect(h.retryTimers.size).toBe(0);
-        expect(getActiveGatewayRootWorkCount()).toBe(0);
-      } finally {
-        for (const timer of h.retryTimers) {
-          clearTimeout(timer);
-        }
-        h.retryTimers.clear();
-        resetGatewayWorkAdmission();
-        await launch.drain();
+      markGatewayRestartDraining();
+      await invoke();
+      h.expectState({ completed: 0, timers: 1, roots: 0 });
+      expect(h.warn).toHaveBeenCalledWith("subagent completion deferred during gateway restart", {
+        source: "subagent-wait",
+        runId: h.entry.runId,
+      });
+      if (change === "replacement") {
+        h.runs.set(h.entry.runId, { ...h.entry });
+      } else if (change === "generation") {
+        h.entry.generation = 2;
       }
+      resetGatewayWorkAdmission();
+      await vi.advanceTimersByTimeAsync(1_000);
+      h.expectState({ completed: change === "current" ? 1 : 0, timers: 0, roots: 0 });
     },
   );
 
@@ -226,7 +218,7 @@ describe("subagent completion rejection ownership", () => {
         : h.runtime.pendingLifecycle.scheduleCancellation;
     schedule({ runId: h.entry.runId, expectedEntry: h.entry, endedAt: 1, error: "failed" });
     await vi.advanceTimersByTimeAsync(AGENT_RUN_TERMINAL_RETRY_GRACE_MS);
-    expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
+    h.expectState({ completed: 2, retained: false, roots: 0 });
     expect(h.completeSubagentRun).toHaveBeenLastCalledWith(expect.objectContaining({ reason }));
     expect(h.resumeRun).toHaveBeenCalledExactlyOnceWith(h.entry.runId);
     expect(h.warn).toHaveBeenLastCalledWith("failed to complete subagent run in background", {
@@ -236,8 +228,6 @@ describe("subagent completion rejection ownership", () => {
     });
     expect(isSameSubagentRunOwner(h.runs.get(h.entry.runId), h.entry)).toBe(true);
     expect(h.runs.get(h.entry.runId)?.cleanupHandled).toBe(false);
-    expect(h.resumed.has(getSubagentRunRuntimeKey(h.entry))).toBe(false);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
   });
 
   it("retains the interrupted-finalization restart diagnostic and retires the fired timer", async () => {
@@ -254,9 +244,7 @@ describe("subagent completion rejection ownership", () => {
         error: h.resumeError,
       },
     );
-    expect(h.completeSubagentRun).toHaveBeenCalledTimes(3);
-    expect(h.retryTimers.size).toBe(0);
-    expect(getActiveGatewayRootWorkCount()).toBe(0);
+    h.expectState({ completed: 3, timers: 0, roots: 0 });
   });
 
   it("propagates an unknown SQLite outcome from interrupted finalization during restart drain", async () => {
@@ -265,9 +253,7 @@ describe("subagent completion rejection ownership", () => {
     markGatewayRestartDraining();
 
     await expect(h.finalize()).rejects.toBe(error);
-    expect(h.completeSubagentRun).toHaveBeenCalledOnce();
-    expect(h.retryTimers.size).toBe(0);
-    expectNoRecovery(h);
+    h.expectState({ completed: 1, timers: 0, resumes: 0, sweeps: 0 });
     expect(h.warn).not.toHaveBeenCalled();
   });
 
@@ -302,10 +288,7 @@ describe("subagent completion rejection ownership", () => {
         }
         release.resolve();
         await completion;
-        expect(h.completeSubagentRun).toHaveBeenCalledTimes(attempt);
-        expectNoRecovery(h);
-        expect(h.entry.cleanupHandled).toBe(true);
-        expect(h.resumed.has(getSubagentRunRuntimeKey(h.entry))).toBe(true);
+        h.expectState({ completed: attempt, resumes: 0, sweeps: 0, handled: true, retained: true });
       } finally {
         release.resolve();
         await completion;
@@ -386,11 +369,11 @@ describe("subagent completion rejection ownership", () => {
           await vi.advanceTimersByTimeAsync(1_000);
           expect(h.retryTimers.size).toBe(0);
         }
-        expect(h.completeSubagentRun).toHaveBeenCalledTimes(
-          (retry === "restart" ? 2 : 1) + (change === "unchanged" ? 1 : 0),
-        );
-        expect(h.resumeRun).toHaveBeenCalledTimes(retry === "restart" ? 1 : 0);
-        expect(h.scheduleSweep).not.toHaveBeenCalled();
+        h.expectState({
+          completed: (retry === "restart" ? 2 : 1) + (change === "unchanged" ? 1 : 0),
+          resumes: retry === "restart" ? 1 : 0,
+          sweeps: 0,
+        });
       } finally {
         release.resolve();
         await completion;
@@ -408,10 +391,7 @@ describe("subagent completion rejection ownership", () => {
         h.entry.pauseReason = "sessions_yield";
       }
       await h.complete("subagent-wait");
-      expect(h.completeSubagentRun).toHaveBeenCalledTimes(2);
-      expect(h.resumeRun).not.toHaveBeenCalled();
-      expect(h.entry.cleanupHandled).toBe(true);
-      expect(h.resumed.has(getSubagentRunRuntimeKey(h.entry))).toBe(true);
+      h.expectState({ completed: 2, resumes: 0, handled: true, retained: true });
       if (state === "running") {
         expect(h.scheduleSweep).toHaveBeenCalledExactlyOnceWith({ delayMs: 1_000 });
       } else {

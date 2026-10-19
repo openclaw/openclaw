@@ -160,7 +160,7 @@ export function registerSubagentRegistrationOwnershipTests({
             }
             return scope.execute(command, options);
           });
-          let ownership: SubagentRegistrationScope | undefined;
+          const retainOwnership = vi.fn<(scope: SubagentRegistrationScope) => void>();
           try {
             await expect(
               registerSubagentRun(
@@ -176,16 +176,13 @@ export function registerSubagentRegistrationOwnershipTests({
                     maxConcurrent: 1,
                   },
                 }),
-                {
-                  retainOwnership: (scope) => {
-                    ownership = scope;
-                  },
-                },
+                { retainOwnership },
               ),
             ).rejects.toThrow("registration write refused");
           } finally {
             refusal.mockRestore();
           }
+          const ownership = retainOwnership.mock.lastCall?.[0];
           if (!ownership) {
             throw new Error("Refused registration did not retain its cleanup scope");
           }
@@ -245,16 +242,12 @@ export function registerSubagentRegistrationOwnershipTests({
           subagentRuns.delete("unknown-global");
           subagentRuns.delete("other-global");
         }
-        let ownership: SubagentRegistrationScope | undefined;
-        await registerSubagentRun(paramsFor("owned-global"), {
-          retainOwnership: (scope) => {
-            ownership = scope;
-          },
-        });
+        const retainOwnership = vi.fn<(scope: SubagentRegistrationScope) => void>();
+        await registerSubagentRun(paramsFor("owned-global"), { retainOwnership });
         const persisted = loadSubagentRegistryFromSqlite();
         expect(persisted.get("owned-global")?.generation).toBe(8);
         expect(persisted.get("unknown-global")).toEqual(unknown);
-        expect(ownership?.canLaunch()).toBe(true);
+        expect(retainOwnership.mock.lastCall?.[0].canLaunch()).toBe(true);
       });
     },
   );
@@ -336,17 +329,16 @@ export function registerSubagentRegistrationOwnershipTests({
           subagentRuns.delete(params.runId);
           vi.mocked(callGateway).mockClear();
           if (childSessionKey === "global") {
-            let ownership: SubagentRegistrationScope | undefined;
+            const retainOwnership = vi.fn<(scope: SubagentRegistrationScope) => void>();
             await expect(
               registerSubagentRun(params, {
                 acceptedRunReplay,
-                retainOwnership: (scope) => {
-                  ownership = scope;
-                },
+                retainOwnership,
               }),
             ).rejects.toThrow("unresolved or different child owner");
             expect(loadSubagentRegistryFromSqlite().get(params.runId)).toEqual(historical);
             expect(callGateway).not.toHaveBeenCalled();
+            const ownership = retainOwnership.mock.lastCall?.[0];
             expect(ownership?.canAbortAcceptedRun()).toBe(false);
             expect(ownership?.canCleanupSession()).toBe(false);
           } else {

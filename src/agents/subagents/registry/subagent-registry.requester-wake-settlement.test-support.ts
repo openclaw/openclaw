@@ -2,7 +2,6 @@ import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
 import type { GatewayRequestContext } from "../../../gateway/server-methods/types.js";
 import type { onAgentEvent } from "../../../infra/agent-events.js";
-import { captureOpenClawStateWorkerContext } from "../../../state/openclaw-state-worker-context.js";
 import { maybeWakeRequesterAfterAllChildrenSettled } from "../announce/subagent-announce.requester-settle-wake.js";
 import { mutateRequesterCompletionBatch } from "../completion/subagent-completion-admission.store.js";
 import { subagentRuns } from "./subagent-registry-memory.js";
@@ -44,13 +43,8 @@ export function registerRequesterWakeSettlementBoundaryTests({
   useGlobalSessionScope: () => void;
 }): void {
   const readRun = registry.getSubagentRunByRunId;
-  async function settleYieldedTurn(
-    requesterTurnRunId: string,
-    callId: string,
-    children: ReturnType<typeof visibleChild>[],
-    payloads?: [],
-  ) {
-    await createRequesterYieldTool(requesterSessionKey, requesterTurnRunId).execute(callId, {});
+  async function settleYield(runId: string, children: ReturnType<typeof visibleChild>[]) {
+    await createRequesterYieldTool(requesterSessionKey, runId).execute(runId, {});
     const { withLocalSessionPlacementTurnSettlement } =
       await import("../../session-placement-admission.js");
     await withLocalSessionPlacementTurnSettlement(
@@ -58,16 +52,11 @@ export function registerRequesterWakeSettlementBoundaryTests({
         sessionId: "sess-main",
         sessionKey: requesterSessionKey,
         agentId: "main",
-        runId: requesterTurnRunId,
+        runId,
       },
       async () => ({
-        ...(payloads ? { payloads } : {}),
         acceptedSessionSpawns: children,
-        meta: {
-          durationMs: 1,
-          yielded: true,
-          executionTrace: { runner: "cli", attempts: [], fallbackUsed: false },
-        },
+        meta: { durationMs: 1, yielded: true },
       }),
     );
   }
@@ -89,7 +78,6 @@ export function registerRequesterWakeSettlementBoundaryTests({
     await addRun("old-parent", oldParentKey, {
       childAgentId: "main",
       createdAt: oldTime,
-      startedAt: oldTime,
       endedAt: oldTime + 100,
       delivery: { status: "delivered", disposition: "delivered" },
       cleanupCompletedAt: oldTime + 100,
@@ -98,20 +86,15 @@ export function registerRequesterWakeSettlementBoundaryTests({
       childAgentId: "main",
       requesterSessionKey: oldParentKey,
       createdAt: oldTime + 10,
-      startedAt: oldTime + 10,
       endedAt: oldTime + 50,
       outcome: { status: "error", error: "Gateway lifecycle dispatch unavailable" },
       completion: { required: true, resultText: "unrelated old result" },
     });
 
     const requesterTurnRunId = "current-requester";
-    const child = {
-      runId: "current-child",
-      childSessionKey: "agent:main:subagent:current-child",
-      expectsCompletionMessage: true,
-    };
+    const child = visibleChild("current-child");
     await spawnVisibleChild({ ...child, requesterTurnRunId });
-    await settleYieldedTurn(requesterTurnRunId, "yield-current-result", [child]);
+    await settleYield(requesterTurnRunId, [child]);
     emitCompleted(child.runId, child.childSessionKey, "current counting result");
     await flushOwnedWork();
     await waitForDeliveredCleanup(child.runId);
@@ -130,7 +113,6 @@ export function registerRequesterWakeSettlementBoundaryTests({
     useGlobalSessionScope();
     await addRun("run-main-batch", "agent:main:subagent:batch", {
       createdAt: 1_000,
-      startedAt: 1_100,
       endedAt: 1_200,
       outcome: { status: "ok" },
       expectsCompletionMessage: true,
@@ -145,7 +127,6 @@ export function registerRequesterWakeSettlementBoundaryTests({
     await addRun("run-main-stale", "agent:main:subagent:stale", {
       requesterSessionKey: "agent:main:subagent:batch",
       createdAt: 2_000,
-      startedAt: 2_100,
       endedAt: 2_200,
       outcome: { status: "ok" },
       expectsCompletionMessage: true,
@@ -153,14 +134,13 @@ export function registerRequesterWakeSettlementBoundaryTests({
     await addRun("run-research-active", "agent:research:subagent:active", {
       requesterAgentId: "research",
       createdAt: 3_000,
-      startedAt: 3_100,
     });
 
     const transitions: Array<{ status: string; attemptCount: number }> = [];
     const waits: Array<number | undefined> = [];
     const completions: Array<{ delivered: boolean; error?: string }> = [];
-    const runWake = () => {
-      return maybeWakeRequesterAfterAllChildrenSettled({
+    const runWake = () =>
+      maybeWakeRequesterAfterAllChildrenSettled({
         isSourceCurrent: () => true,
         requesterSessionKey,
         settledEntry: expectDefined(readRun("run-main-batch"), "main requester batch"),
@@ -169,9 +149,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
           const publication = await mutateRequesterCompletionBatch({
             entries,
             operation: { kind: "transition", state },
-            context: captureOpenClawStateWorkerContext(),
             assertCurrent: () => {},
-            onCommitted: () => {},
             onPublished: () =>
               onPublished?.(entries.map((entry) => subagentRuns.get(entry.runId)!)),
           });
@@ -179,19 +157,16 @@ export function registerRequesterWakeSettlementBoundaryTests({
           transitions.push({ status: state.status, attemptCount: state.attemptCount });
         },
         completeBatch: async (entries, _rearmGeneration, outcome) => {
-          if (!outcome) {
-            throw new Error("Expected a requester delivery outcome");
-          }
+          const delivery = expectDefined(outcome, "requester delivery outcome");
           const publication = await mutateRequesterCompletionBatch({
             entries,
-            operation: { kind: "settle", outcome },
+            operation: { kind: "settle", outcome: delivery },
             assertCurrent: () => {},
           });
           expect(publication).toEqual({ applied: true, publication: "published" });
-          completions.push({ delivered: outcome.delivered, error: outcome.error });
+          completions.push({ delivered: delivery.delivered, error: delivery.error });
         },
       });
-    };
 
     await expect(runWake()).resolves.toBe(false);
     expect(transitions).toEqual([]);
@@ -235,7 +210,7 @@ export function registerRequesterWakeSettlementBoundaryTests({
     for (const child of [stopped, finished]) {
       await spawnVisibleChild({ ...child, requesterTurnRunId });
     }
-    await settleYieldedTurn(requesterTurnRunId, "yield-stopped-pair", [stopped, finished], []);
+    await settleYield(requesterTurnRunId, [stopped, finished]);
     const lifecycleHandler = expectDefined(getLifecycleHandler(), "lifecycle listener before Stop");
     lifecycleHandler({
       stream: "lifecycle",

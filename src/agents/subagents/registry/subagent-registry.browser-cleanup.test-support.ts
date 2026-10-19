@@ -20,7 +20,7 @@ function createRootAdmissionObservation() {
   ).map((name) => {
     const original: typeof gatewayWorkAdmission.runWithGatewayIndependentRootWorkAdmission =
       gatewayWorkAdmission[name];
-    const observe: typeof original = (run, origin, signal) => {
+    return vi.spyOn(gatewayWorkAdmission, name).mockImplementation((run, origin, signal) => {
       const entry = { entered: false };
       const result = original(
         () => {
@@ -32,8 +32,7 @@ function createRootAdmissionObservation() {
       );
       admitted.set(result, entry);
       return result;
-    };
-    return vi.spyOn(gatewayWorkAdmission, name).mockImplementation(observe);
+    });
   });
   return { admitted, admissions, subscribers: 0 };
 }
@@ -136,11 +135,11 @@ export function registerBrowserCleanupBoundaryTests({
       });
       const settleRootWork = observeRootWork();
       const childSessionKey = "agent:main:subagent:child";
-      const runId = "run-browser-activation-old";
-      const successorRunId = owner === "replacement row" ? runId : "run-browser-activation-new";
+      const runId = "browser-old";
+      const successorRunId = owner === "replacement row" ? runId : "browser-new";
 
       try {
-        await mod.registerSubagentRun({ runId, childSessionKey, task: "finish browser work" });
+        await mod.registerSubagentRun({ runId, childSessionKey, task: "finish" });
         await activationEntered.promise;
         expect(loadBrowserMaintenanceSurface).toHaveBeenCalledOnce();
         expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBeGreaterThan(0);
@@ -152,7 +151,7 @@ export function registerBrowserCleanupBoundaryTests({
           await mod.registerSubagentRun({
             runId: successorRunId,
             childSessionKey,
-            task: "continue using the same browser session",
+            task: "continue",
           });
         }
       } finally {
@@ -190,10 +189,7 @@ export function registerBrowserCleanupBoundaryTests({
     });
     const settleRootWork = observeRootWork();
     try {
-      await getRegistry().registerSubagentRun({
-        runId: "run-cleanup-warning",
-        task: "finish despite cleanup warning",
-      });
+      await getRegistry().registerSubagentRun({ runId: "browser-warning", task: "finish" });
       await cleanupEntered.promise;
     } finally {
       await settleRootWork();
@@ -201,14 +197,13 @@ export function registerBrowserCleanupBoundaryTests({
 
     expect(gatewayWorkAdmission.getActiveGatewayRootWorkCount()).toBe(0);
     expect(mocks.cleanupBrowserSessionsForLifecycleEnd).toHaveBeenCalledOnce();
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledOnce();
-    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledWith(
+    expect(mocks.runSubagentAnnounceFlow).toHaveBeenCalledExactlyOnceWith(
       expect.objectContaining({
         childSessionKey: "agent:main:subagent:child",
-        childRunId: "run-cleanup-warning",
-        task: "finish despite cleanup warning",
+        childRunId: "browser-warning",
+        task: "finish",
       }),
     );
-    expect(findRequesterRun("run-cleanup-warning")?.cleanupCompletedAt).toBeTypeOf("number");
+    expect(findRequesterRun("browser-warning")?.cleanupCompletedAt).toBeTypeOf("number");
   });
 }
