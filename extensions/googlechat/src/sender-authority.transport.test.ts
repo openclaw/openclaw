@@ -1,5 +1,4 @@
 import type { ServerResponse } from "node:http";
-import { text as readText } from "node:stream/consumers";
 import type { ChannelMessageActionContext } from "openclaw/plugin-sdk/channel-contract";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { withServer } from "openclaw/plugin-sdk/test-env";
@@ -61,32 +60,17 @@ const cfg = {
 function createAuthority() {
   let current = true;
   const error = new Error("Google Chat send authority revoked");
-  const assert = vi.fn(() => {
-    if (!current) {
-      throw error;
-    }
-  });
   return {
     error,
     revoke: () => {
       current = false;
     },
-    assert,
-    hooks: (onPlatformSendDispatch?: SendHooks["onPlatformSendDispatch"]): SendHooks => ({
-      assertDirectAdapterHandoff: assert,
-      ...(onPlatformSendDispatch ? { onPlatformSendDispatch } : {}),
+    assert: vi.fn(() => {
+      if (!current) {
+        throw error;
+      }
     }),
   };
-}
-
-function attempt(
-  route: SendRoute,
-  authority: ReturnType<typeof createAuthority>,
-  to?: string,
-  dispatch?: SendHooks["onPlatformSendDispatch"],
-  accountId?: string,
-) {
-  return send(route, authority.hooks(dispatch), to, accountId).catch((error: unknown) => error);
 }
 
 async function send(route: SendRoute, hooks: SendHooks, to = "spaces/AAA", accountId = "default") {
@@ -116,15 +100,22 @@ async function withChatServer(
 ) {
   const requests: ObservedRequest[] = [];
   await withServer(
-    async (request, response) => {
-      const observed = {
-        method: request.method,
-        path: request.url,
-        authorization: request.headers.authorization,
-        body: await readText(request),
-      };
-      requests.push(observed);
-      handleRequest(observed, response);
+    (request, response) => {
+      let body = "";
+      request.setEncoding("utf8");
+      request.on("data", (chunk: string) => {
+        body += chunk;
+      });
+      request.on("end", () => {
+        const observed = {
+          method: request.method,
+          path: request.url,
+          authorization: request.headers.authorization,
+          body,
+        };
+        requests.push(observed);
+        handleRequest(observed, response);
+      });
     },
     async (baseUrl) => {
       transport.baseUrl = baseUrl;
@@ -159,7 +150,11 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
         return token.promise;
       });
       await withChatServer(respondWithMessage, async (requests) => {
-        const sending = attempt(route, authority, "users/alice@example.test");
+        const sending = send(
+          route,
+          { assertDirectAdapterHandoff: authority.assert },
+          "users/alice@example.test",
+        ).catch((error: unknown) => error);
         await tokenStarted.promise;
         authority.revoke();
         token.resolve("test-default");
@@ -182,7 +177,11 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
         }
       },
       async (requests) => {
-        const sending = attempt("preferred", authority, "users/alice@example.test", dispatch);
+        const sending = send(
+          "preferred",
+          { assertDirectAdapterHandoff: authority.assert, onPlatformSendDispatch: dispatch },
+          "users/alice@example.test",
+        ).catch((error: unknown) => error);
         const response = await lookup.promise;
         expect(dispatch).not.toHaveBeenCalled();
         authority.revoke();
@@ -206,7 +205,10 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
       authority.revoke();
     });
     await withChatServer(respondWithMessage, async (requests) => {
-      const outcome = await attempt("generic", authority, undefined, dispatch);
+      const outcome = await send("generic", {
+        assertDirectAdapterHandoff: authority.assert,
+        onPlatformSendDispatch: dispatch,
+      }).catch((error: unknown) => error);
       expect(outcome).toBe(authority.error);
       expect(dispatch).toHaveBeenCalledOnce();
       expect(requests).toEqual([]);
@@ -226,7 +228,9 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
         }
       },
       async (requests) => {
-        const outcome = await attempt("generic", authority);
+        const outcome = await send("generic", {
+          assertDirectAdapterHandoff: authority.assert,
+        }).catch((error: unknown) => error);
         expect(outcome).toBe(authority.error);
         expect(requests.map(({ method, path }) => ({ method, path }))).toEqual([
           { method: "POST", path: "/v1/spaces/AAA/messages" },
@@ -304,9 +308,25 @@ describe("Google Chat sender authority through real guarded HTTP", () => {
     const dispatchA = vi.fn(async () => {});
     const dispatchB = vi.fn(async () => {});
     await withChatServer(respondWithMessage, async (requests) => {
-      const sendingA = attempt("preferred", authorityA, "spaces/AAA", dispatchA, "account-a");
+      const sendingA = send(
+        "preferred",
+        {
+          assertDirectAdapterHandoff: authorityA.assert,
+          onPlatformSendDispatch: dispatchA,
+        },
+        "spaces/AAA",
+        "account-a",
+      ).catch((error: unknown) => error);
       await tokenStarted.promise;
-      const resultB = await send("generic", authorityB.hooks(dispatchB), "spaces/BBB", "account-b");
+      const resultB = await send(
+        "generic",
+        {
+          assertDirectAdapterHandoff: authorityB.assert,
+          onPlatformSendDispatch: dispatchB,
+        },
+        "spaces/BBB",
+        "account-b",
+      );
       authorityA.revoke();
       tokenA.resolve("test-account-a");
       expect(await sendingA).toBe(authorityA.error);
