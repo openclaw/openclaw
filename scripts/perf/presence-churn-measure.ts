@@ -7,14 +7,13 @@ import { setTimeout as delay } from "node:timers/promises";
 import { pathToFileURL } from "node:url";
 import { parseArgs } from "node:util";
 import { buildDeviceAuthPayloadV3 } from "../../packages/gateway-client/src/device-auth.ts";
+import type { HelloOk } from "../../packages/gateway-protocol/src/index.js";
 import { PROTOCOL_VERSION } from "../../packages/gateway-protocol/src/version.ts";
 import { isRecord } from "../../packages/normalization-core/src/record-coerce.ts";
 import {
   publicKeyRawBase64UrlFromEd25519Pem,
   signEd25519Payload,
 } from "../../src/infra/ed25519-signature.ts";
-import type { GatewayHelloOk } from "../../ui/src/api/gateway.ts";
-import type { ApplicationGateway } from "../../ui/src/app/gateway.ts";
 import { BASE_GATEWAY_BENCH_CONFIG } from "../lib/gateway-bench-runtime.ts";
 import { createGatewayWsClient } from "../lib/gateway-ws-client.ts";
 import { parseStrictIntegerOption } from "../lib/strict-integer-option.ts";
@@ -65,9 +64,6 @@ Object.assign(process.env, {
   TMPDIR: path.join(root, "tmp"),
 });
 const { startGatewayServer } = await import("../../src/gateway/server.js");
-const { sessionViewerPresenceForGateway } = (await import(
-  pathToFileURL(path.resolve(values["viewer-owner"])).href
-)) as typeof import("../../ui/src/lib/session-viewer-presence.ts");
 const server = await startGatewayServer(port, { bind: "loopback", controlUiEnabled: false });
 const peers: ReturnType<typeof createGatewayWsClient>[] = [];
 const traffic = { delta: { frames: 0, bytes: 0 }, legacy: { frames: 0, bytes: 0 } };
@@ -80,7 +76,7 @@ async function rpc(peer: (typeof peers)[number], method: string, params: unknown
   return result.payload;
 }
 try {
-  let actorHello: GatewayHelloOk | undefined;
+  let actorHello: HelloOk | undefined;
   for (let index = 0; index < clients; index++) {
     const mode = index < 2 ? "legacy" : "delta";
     const challenge = Promise.withResolvers<{ nonce: string; ts: number }>();
@@ -150,11 +146,12 @@ try {
         ),
       },
       caps: mode === "delta" ? ["presence-deltas"] : [],
-    })) as GatewayHelloOk;
+    })) as HelloOk;
     if (index === clients - 1) {
       actorHello = hello;
     }
   }
+  assert(actorHello);
   const actor = peers.at(-1)!;
   const keys = ["agent:main:presence-bench-a", "agent:main:presence-bench-b"];
   for (const key of keys) {
@@ -167,7 +164,7 @@ try {
   // Adapt the live transport to the same plain owner used by mounted chat pages.
   const gateway = {
     snapshot: {
-      phase: "connected",
+      phase: "connected" as const,
       hello: actorHello,
       assistantAgentId: "main",
       client: {
@@ -185,7 +182,16 @@ try {
       },
     },
     subscribe: () => () => {},
-  } as unknown as ApplicationGateway;
+  };
+  // The selectable owner consumes this transport adapter, not the browser application.
+  const { sessionViewerPresenceForGateway } = (await import(
+    pathToFileURL(path.resolve(values["viewer-owner"])).href
+  )) as {
+    sessionViewerPresenceForGateway: (adapter: typeof gateway) => {
+      watch: (owner: object, sessionKeys: readonly string[]) => void;
+      unwatch: (owner: object) => void;
+    };
+  };
   const store = sessionViewerPresenceForGateway(gateway);
   let owner = {};
   store.watch(owner, [keys[0]!]);
