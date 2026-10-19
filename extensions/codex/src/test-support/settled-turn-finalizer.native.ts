@@ -1,6 +1,8 @@
+import { once } from "node:events";
 import fs from "node:fs/promises";
 import http from "node:http";
 import path from "node:path";
+import { buffer } from "node:stream/consumers";
 import type { AuthProfileStore } from "openclaw/plugin-sdk/agent-runtime";
 import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { expect, vi } from "vitest";
@@ -28,6 +30,11 @@ export type NativeFixture = Awaited<ReturnType<typeof createNativeFixture>>;
 export type Cleanup = () => Promise<void>;
 type NativePhase = "probe" | "action" | "side" | "hold" | "summary" | "health";
 
+const sseHeaders = { "Content-Type": "text/event-stream" };
+function event(type: string, fields: JsonObject) {
+  return `event: ${type}\ndata: ${JSON.stringify({ type, ...fields })}\n\n`;
+}
+
 async function createNativeFixture(
   requestedRoot: string,
   cleanups: Cleanup[],
@@ -39,6 +46,7 @@ async function createNativeFixture(
   }
   const root = await fs.realpath(requestedRoot);
   const native = await createCodexNativeTestState(root);
+  const marker = path.join(native.cwd, "completed-actions.txt");
   for (const [name, value] of Object.entries(native.env)) {
     if (value !== undefined) {
       vi.stubEnv(name, value);
@@ -51,145 +59,118 @@ async function createNativeFixture(
   const livePhases: NativePhase[] = [];
   let emptyTerminalInjections = 0;
   const upstreamAbort = new AbortController();
-  const server = http.createServer((request, response) => {
-    let body = "";
-    request.setEncoding("utf8");
-    request.on("data", (chunk: string) => {
-      body += chunk;
-    });
-    const respond = async () => {
-      try {
-        if (request.url === "/v1/responses" && request.method === "GET") {
-          // Codex selects HTTP immediately on 426 instead of retrying this SSE-only fixture.
-          response.writeHead(426).end();
-          return;
-        }
-        if (request.url !== "/v1/responses" || request.method !== "POST") {
-          response.writeHead(404).end();
-          return;
-        }
-        const parsed: unknown = JSON.parse(body);
-        if (!isJsonObject(parsed)) {
-          response.writeHead(400).end();
-          return;
-        }
-        const account = request.headers.authorization;
-        requests.push({ body: parsed, account });
-        requestReceived.resolve();
-        if (account !== `Bearer ${NATIVE_KEY}` && account !== `Bearer ${HOST_KEY}`) {
-          response.writeHead(401).end();
-          return;
-        }
-        if (parsed.model !== NATIVE_MODEL && parsed.model !== HOST_MODEL) {
-          response.writeHead(400).end();
-          return;
-        }
-        if (phase === "hold") {
-          response.writeHead(200, { "Content-Type": "text/event-stream" });
-          response.write(
-            `event: response.created\ndata: ${JSON.stringify({ type: "response.created", response: { id: `response-${requests.length}` } })}\n\n`,
-          );
-          return;
-        }
-        if (phase === "action" || phase === "side") {
-          actionRequests += 1;
-        }
-        if (live && liveProvider) {
-          const settledAction =
-            phase === "action" &&
-            Array.isArray(parsed.input) &&
-            parsed.input.some(
-              (item) =>
-                isJsonObject(item) &&
-                (item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
-                typeof item.call_id === "string" &&
-                (typeof item.output === "string"
-                  ? item.output.includes("completed-once")
-                  : Array.isArray(item.output) &&
-                    item.output.some(
-                      (content) =>
-                        isJsonObject(content) &&
-                        content.type === "input_text" &&
-                        typeof content.text === "string" &&
-                        content.text.includes("completed-once"),
-                    )),
-            );
-          if (settledAction && emptyTerminalInjections === 0) {
-            expect(await fs.readFile(path.join(native.cwd, "completed-actions.txt"), "utf8")).toBe(
-              "completed-once\n",
-            );
-            emptyTerminalInjections += 1;
-          } else {
-            const upstream = await fetch(liveProvider.url, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                Authorization: `Bearer ${liveProvider.apiKey}`,
-              },
-              body,
-              signal: AbortSignal.any([upstreamAbort.signal, AbortSignal.timeout(120_000)]),
-            });
-            if (!upstream.ok) {
-              throw new Error(`Live OpenAI request failed with HTTP ${upstream.status}`);
-            }
-            livePhases.push(phase);
-            response.writeHead(200, { "Content-Type": "text/event-stream" });
-            response.end(await upstream.text());
-            return;
-          }
-        }
-        const item = live
-          ? undefined
-          : phase === "action" || (phase === "side" && actionRequests === 1)
-            ? actionRequests === 1
-              ? {
-                  type: "function_call",
-                  call_id: "completed-action",
-                  name: "exec_command",
-                  arguments: JSON.stringify({
-                    cmd: "printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt",
-                    shell: "/bin/sh",
-                    login: false,
-                    max_output_tokens: 1000,
-                  }),
-                }
-              : undefined
-            : {
-                type: "message",
-                role: "assistant",
-                id: `answer-${requests.length}`,
-                content: [
-                  {
-                    type: "output_text",
-                    text: phase === "summary" || phase === "side" ? SUMMARY : "Ready.",
-                  },
-                ],
-              };
-        const events = [
-          { type: "response.created", response: { id: `response-${requests.length}` } },
-          ...(item ? [{ type: "response.output_item.done", item }] : []),
-          {
-            type: "response.completed",
-            response: {
-              id: `response-${requests.length}`,
-              usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
-            },
-          },
-        ];
-        response.writeHead(200, { "Content-Type": "text/event-stream" });
-        response.end(
-          events
-            .map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`)
-            .join(""),
-        );
-      } catch (error) {
-        failures.push(error);
-        response.writeHead(500).end();
+  const server = http.createServer(async (request, response) => {
+    try {
+      const body = (await buffer(request)).toString("utf8");
+      if (request.url === "/v1/responses" && request.method === "GET") {
+        // Codex selects HTTP immediately on 426 instead of retrying this SSE-only fixture.
+        return response.writeHead(426).end();
       }
-    };
-    request.on("end", () => {
-      void respond();
-    });
+      if (request.url !== "/v1/responses" || request.method !== "POST") {
+        return response.writeHead(404).end();
+      }
+      const parsed: unknown = JSON.parse(body);
+      if (!isJsonObject(parsed)) {
+        return response.writeHead(400).end();
+      }
+      const account = request.headers.authorization;
+      requests.push({ body: parsed, account });
+      requestReceived.resolve();
+      if (account !== `Bearer ${NATIVE_KEY}` && account !== `Bearer ${HOST_KEY}`) {
+        return response.writeHead(401).end();
+      }
+      if (parsed.model !== NATIVE_MODEL && parsed.model !== HOST_MODEL) {
+        return response.writeHead(400).end();
+      }
+      if (phase === "hold") {
+        response.writeHead(200, sseHeaders);
+        response.write(
+          event("response.created", { response: { id: `response-${requests.length}` } }),
+        );
+        return;
+      }
+      if (phase === "action" || phase === "side") {
+        actionRequests += 1;
+      }
+      if (live && liveProvider) {
+        const settledAction =
+          phase === "action" &&
+          Array.isArray(parsed.input) &&
+          parsed.input.some(
+            (item) =>
+              isJsonObject(item) &&
+              (item.type === "function_call_output" || item.type === "custom_tool_call_output") &&
+              typeof item.call_id === "string" &&
+              (typeof item.output === "string"
+                ? item.output.includes("completed-once")
+                : Array.isArray(item.output) &&
+                  item.output.some(
+                    (content) =>
+                      isJsonObject(content) &&
+                      content.type === "input_text" &&
+                      typeof content.text === "string" &&
+                      content.text.includes("completed-once"),
+                  )),
+          );
+        if (settledAction && emptyTerminalInjections === 0) {
+          expect(await fs.readFile(marker, "utf8")).toBe("completed-once\n");
+          emptyTerminalInjections += 1;
+        } else {
+          const upstream = await fetch(liveProvider.url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${liveProvider.apiKey}`,
+            },
+            body,
+            signal: AbortSignal.any([upstreamAbort.signal, AbortSignal.timeout(120_000)]),
+          });
+          if (!upstream.ok) {
+            throw new Error(`Live OpenAI request failed with HTTP ${upstream.status}`);
+          }
+          livePhases.push(phase);
+          response.writeHead(200, sseHeaders);
+          response.end(await upstream.text());
+          return;
+        }
+      }
+      let item: JsonObject | undefined;
+      if (!live) {
+        if (actionRequests === 1 && (phase === "action" || phase === "side")) {
+          item = {
+            type: "function_call",
+            call_id: "completed-action",
+            name: "exec_command",
+            arguments: JSON.stringify({
+              cmd: "printf 'completed-once\\n' >> completed-actions.txt; cat completed-actions.txt",
+              shell: "/bin/sh",
+              login: false,
+              max_output_tokens: 1000,
+            }),
+          };
+        } else if (phase !== "action") {
+          const output = phase === "summary" || phase === "side" ? SUMMARY : "Ready.";
+          item = {
+            type: "message",
+            role: "assistant",
+            id: `answer-${requests.length}`,
+            content: [{ type: "output_text", text: output }],
+          };
+        }
+      }
+      const id = `response-${requests.length}`;
+      response.writeHead(200, sseHeaders);
+      response.end(
+        event("response.created", { response: { id } }) +
+          (item ? event("response.output_item.done", { item }) : "") +
+          event("response.completed", {
+            response: { id, usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 } },
+          }),
+      );
+    } catch (error) {
+      failures.push(error);
+      response.writeHead(500).end();
+    }
   });
   cleanups.push(async () => {
     upstreamAbort.abort();
@@ -198,13 +179,7 @@ async function createNativeFixture(
       server.close((error) => (error ? reject(error) : resolve()));
     });
   });
-  await new Promise<void>((resolve, reject) => {
-    server.once("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      server.removeListener("error", reject);
-      resolve();
-    });
-  });
+  await once(server.listen(0, "127.0.0.1"), "listening");
   const address = server.address();
   if (!address || typeof address === "string") {
     throw new Error("Loopback provider has no TCP address");
@@ -236,7 +211,7 @@ async function createNativeFixture(
     requests,
     livePhases,
     injectedEmptyTerminals: () => emptyTerminalInjections,
-    marker: path.join(native.cwd, "completed-actions.txt"),
+    marker,
     waitForRequest: () => requestReceived.promise,
     setPhase(next: NativePhase) {
       phase = next;
