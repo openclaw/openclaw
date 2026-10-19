@@ -41,9 +41,7 @@ export function visitorGate() {
 }
 
 export function closeVisitorFixtures(): void {
-  for (const service of services) {
-    service.close();
-  }
+  services.forEach((service) => service.close());
   services.clear();
 }
 
@@ -87,21 +85,13 @@ function requestUrl(input: Parameters<typeof fetch>[0]): URL {
   return new URL(input instanceof Request ? input.url : input);
 }
 
-type PolicyFixture = {
-  id: string;
-  name: string;
-  decision: string;
-  include: Array<
-    | { email: { email: string } }
-    | { oidc: { identity_provider_id: string; claim_name: string; claim_value: string } }
-  >;
-};
+type PolicyFixture = ReturnType<typeof namedPolicy>;
 
 export function namedPolicy(
   targets: VisitorTarget[] = ["first@example.com"],
   name = visitorConfig.policyName,
   provider = githubProvider,
-): PolicyFixture {
+) {
   const oidc = {
     identity_provider_id: provider.providerId,
     claim_name: provider.githubAccountIdClaim,
@@ -172,15 +162,15 @@ export function visitorProfileFixture(
   > = async ({ profileId, emails, githubAccountIds }, run) => {
     const assertCurrent = () => {
       const profile = profiles.find(({ id }) => id === profileId);
+      const linkedAccounts = new Set(
+        githubProfiles
+          .filter((identity) => identity.profileId === profileId)
+          .map((identity) => identity.accountId),
+      );
       if (
         !profile ||
         emails.some((email) => !profile.emails.includes(email)) ||
-        githubAccountIds?.some(
-          (accountId) =>
-            !githubProfiles.some(
-              (identity) => identity.accountId === accountId && identity.profileId === profileId,
-            ),
-        )
+        githubAccountIds?.some((accountId) => !linkedAccounts.has(accountId))
       ) {
         throw new Error("Profile bindings changed");
       }
@@ -237,9 +227,7 @@ export function visitorFixture(
   );
   const targets: VisitorTarget[] = [...(options.emails ?? []), ...(options.githubAccountIds ?? [])];
   const store: PluginStateKeyedStore<VisitorGrant> = {
-    async register(key, grant) {
-      grants.set(key, structuredClone(grant));
-    },
+    register: async (key, grant) => void grants.set(key, structuredClone(grant)),
     registerIfAbsent: unexpected,
     lookup: async (key) => structuredClone(grants.get(key)),
     consume: unexpected,
@@ -276,13 +264,7 @@ export function visitorFixture(
       });
     },
   };
-  const cloudflare: {
-    policy: PolicyFixture | undefined;
-    failWrites: boolean;
-    loseWriteResponse: boolean;
-    beforeWrite: () => Promise<void>;
-    afterWrite: () => void;
-  } = {
+  const cloudflare = {
     policy: targets.length ? namedPolicy(targets, resolved.policyName, oidcProvider) : undefined,
     failWrites: false,
     loseWriteResponse: false,
@@ -293,28 +275,26 @@ export function visitorFixture(
   const fetcher = vi.fn<typeof fetch>(async (input, init) => {
     const url = requestUrl(input);
     const method = init?.method ?? "GET";
+    const collection = url.pathname === policiesPath;
+    const detail = url.pathname === `${policiesPath}/visitors`;
     if (url.origin !== "https://api.cloudflare.com" || !url.pathname.startsWith(policiesPath)) {
       throw new Error("Unexpected Cloudflare endpoint");
     }
     if (method === "GET") {
-      if (url.pathname === policiesPath) {
-        return response(cloudflare.policy ? [cloudflare.policy] : []);
+      if (!collection && !(detail && cloudflare.policy)) {
+        throw new Error("Unknown policy read");
       }
-      if (url.pathname === `${policiesPath}/visitors` && cloudflare.policy) {
-        return response(cloudflare.policy);
-      }
-      throw new Error("Unknown policy read");
+      return response(
+        collection ? (cloudflare.policy ? [cloudflare.policy] : []) : cloudflare.policy,
+      );
     }
     await cloudflare.beforeWrite();
     if (cloudflare.failWrites) {
       return new Response("Unavailable", { status: 503 });
     }
-    if (method === "DELETE" && url.pathname === `${policiesPath}/visitors`) {
+    if (method === "DELETE" && detail) {
       cloudflare.policy = undefined;
-    } else if (
-      (method === "POST" && url.pathname === policiesPath) ||
-      (method === "PUT" && url.pathname === `${policiesPath}/visitors`)
-    ) {
+    } else if ((method === "POST" && collection) || (method === "PUT" && detail)) {
       if (typeof init?.body !== "string") {
         throw new Error("Expected a JSON policy");
       }
@@ -382,11 +362,10 @@ export function visitorFixture(
     revoke: (input: unknown) => service.revoke(input, assertCurrent),
     list: () => service.list(assertCurrent),
     emails: () =>
-      cloudflare.policy?.include.flatMap((rule) => ("email" in rule ? [rule.email.email] : [])) ??
-      [],
+      cloudflare.policy?.include.flatMap((rule) => (rule.email ? [rule.email.email] : [])) ?? [],
     targets: () =>
       cloudflare.policy?.include.map((rule) =>
-        "email" in rule ? rule.email.email : Number(rule.oidc.claim_value),
+        rule.email ? rule.email.email : Number(rule.oidc.claim_value),
       ) ?? [],
     mutations: () =>
       fetcher.mock.calls.filter(([, init]) => init?.method !== "GET" && init?.method),

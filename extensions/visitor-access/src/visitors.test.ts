@@ -25,7 +25,6 @@ describe("VisitorAccessService", () => {
 
   it("invites the runtime-resolved numeric GitHub account and explains login", async () => {
     const fixture = visitorFixture({
-      githubAccountId: 42,
       githubLogin: "Current-Visitor",
       profiles: [{ id: "unlinked-person", emails: [EMAIL], role: "staff" }],
       githubProfiles: [{ accountId: 84, profileId: "unlinked-person" }],
@@ -50,16 +49,12 @@ describe("VisitorAccessService", () => {
       login: "visitor",
       signal: undefined,
     });
-    expect(result.text).toContain("@Current-Visitor");
-    expect(result.text).toContain("GitHub account 42");
+    expect(result.text).toMatch(
+      /@Current-Visitor.*GitHub account 42.*2026-09-11T12:00:00\.000Z.*restricted guest.*first sign-in pending.*https:\/\/team\.openclaw\.ai.*Team's existing login/,
+    );
     expect(result.text).not.toContain(EMAIL);
     expect(result.details).toMatchObject({ githubAccountId: 42, githubLogin: "Current-Visitor" });
     expect(result.details).not.toHaveProperty("email");
-    expect(result.text).toContain("2026-09-11T12:00:00.000Z");
-    expect(result.text).toContain("https://team.openclaw.ai");
-    expect(result.text).toContain("Team's existing login");
-    expect(result.text).toContain("restricted guest");
-    expect(result.text).toContain("first sign-in pending");
     expect(fixture.gatewayRequest).toHaveBeenCalledWith(
       "users.list",
       { githubAccountIds: [42] },
@@ -217,11 +212,10 @@ describe("VisitorAccessService", () => {
       const lookup = vi.spyOn(fixture.store, "lookup");
       const entries = vi.spyOn(fixture.store, "entries");
 
-      await expect(
-        operation === "invite"
-          ? fixture.invite({ github: "visitor" })
-          : fixture.revoke({ github: "visitor" }),
-      ).rejects.toThrow(/Update OpenClaw before managing visitors/);
+      const run = operation === "invite" ? fixture.invite : fixture.revoke;
+      await expect(run({ github: "visitor" })).rejects.toThrow(
+        /Update OpenClaw before managing visitors/,
+      );
 
       expect(lookup).not.toHaveBeenCalled();
       expect(entries).not.toHaveBeenCalled();
@@ -319,9 +313,8 @@ describe("VisitorAccessService", () => {
       const fixture = visitorFixture(
         operation === "revoke" ? { grants: [grant], emails: [grant.email] } : {},
       );
-      await expect(
-        operation === "invite" ? fixture.invite(input) : fixture.revoke(input),
-      ).rejects.toBeInstanceOf(VisitorAccessError);
+      const run = operation === "invite" ? fixture.invite : fixture.revoke;
+      await expect(run(input)).rejects.toBeInstanceOf(VisitorAccessError);
       expect(fixture.fetcher).not.toHaveBeenCalled();
       expect([...fixture.grants.values()]).toEqual(operation === "revoke" ? [grant] : []);
       expect(fixture.emails()).toEqual(operation === "revoke" ? [grant.email] : []);
@@ -444,7 +437,6 @@ describe("VisitorAccessService", () => {
     expect([...fixture.grants.values()]).toEqual([grant]);
     expect(fixture.targets()).toEqual([grant.email]);
 
-    fixture.fetcher.mockClear();
     fixture.gatewayRequest.mockClear();
     fixture.gatewayRequest.mockRejectedValue(new Error("Profile directory unavailable"));
     await expect(fixture.revoke({ email: grant.email, github: "visitor" })).resolves.toMatchObject({

@@ -57,23 +57,34 @@ describe("VisitorAccessService authority", () => {
     expect(() => original.assertCurrent()).toThrow(/stopping/);
   });
 
-  it("ends access at the deadline while another serialized provider write is waiting", async () => {
-    const grant = visitorGrant(EMAIL, { expiresAt: NOW + 1_000 });
-    const fixture = visitorFixture({ grants: [grant], emails: [grant.email] });
-    await fixture.service.initialize();
-    const authority = fixture.authorize([grant.email]);
-    const gate = visitorGate();
-    fixture.cloudflare.beforeWrite = gate.wait;
-    const pending = fixture.invite({ email: "other@example.com" });
-    await gate.entered;
-    await vi.advanceTimersByTimeAsync(1_000);
-    expect(authority.signal.aborted).toBe(true);
-    expect(() => authority.assertCurrent()).toThrow(/access ended/);
-    expect(() => fixture.authorize(["other@example.com"])).toThrow(/active visitor invitation/);
-    gate.release();
-    await pending;
-    expect(() => fixture.authorize(["other@example.com"]).assertCurrent()).not.toThrow();
-  });
+  it.each(["expiry", "revocation"] as const)(
+    "fences %s during a blocked write, then admits queued access",
+    async (boundary) => {
+      const expiring = boundary === "expiry";
+      const grant = visitorGrant(EMAIL, { expiresAt: NOW + (expiring ? 1_000 : DAY_MS) });
+      const fixture = visitorFixture({ grants: [grant], emails: [grant.email] });
+      await fixture.service.initialize();
+      const authority = fixture.authorize([grant.email]);
+      const gate = visitorGate();
+      fixture.cloudflare.beforeWrite = gate.wait;
+      const target = expiring ? "other@example.com" : EMAIL;
+      const pending = expiring
+        ? fixture.invite({ email: target })
+        : fixture.revoke({ email: EMAIL });
+      await gate.entered;
+      const renewal = expiring ? undefined : fixture.invite({ email: EMAIL });
+      if (expiring) {
+        await vi.advanceTimersByTimeAsync(1_000);
+      }
+      expect(authority.signal.aborted).toBe(true);
+      expect(() => authority.assertCurrent()).toThrow(/access ended/);
+      expect(() => fixture.authorize([target])).toThrow(/active visitor invitation/);
+      gate.release();
+      await Promise.all([pending, renewal]);
+      expect(() => fixture.authorize([target]).assertCurrent()).not.toThrow();
+      expect(() => authority.assertCurrent()).toThrow(/access ended/);
+    },
+  );
 
   it("preserves an account grant UUID through login changes, renewal and restart, but never resumes its expired authority", async () => {
     const grant = visitorGrant(42, { githubLogin: "original-login" });
@@ -134,24 +145,6 @@ describe("VisitorAccessService authority", () => {
     expect(() => replacement.assertCurrent()).not.toThrow();
     expect(restarted.resume([other.email], grantId, [42])).toBeUndefined();
     expect(() => resumed.assertCurrent()).toThrow(/access ended/);
-  });
-
-  it("closes retained access before provider revocation settles and serializes a later renewal", async () => {
-    const grant = visitorGrant(EMAIL);
-    const fixture = visitorFixture({ grants: [grant], emails: [grant.email] });
-    await fixture.service.initialize();
-    const authority = fixture.authorize([grant.email]);
-    const gate = visitorGate();
-    fixture.cloudflare.beforeWrite = gate.wait;
-    const revoking = fixture.revoke({ email: grant.email });
-    await gate.entered;
-    const renewing = fixture.invite({ email: grant.email });
-    expect(authority.signal.aborted).toBe(true);
-    expect(() => fixture.authorize([grant.email])).toThrow(/active visitor invitation/);
-    gate.release();
-    await Promise.all([revoking, renewing]);
-    expect(() => fixture.authorize([grant.email]).assertCurrent()).not.toThrow();
-    expect(() => authority.assertCurrent()).toThrow(/access ended/);
   });
 
   it("does not start a durable revocation after closing during the grant read", async () => {

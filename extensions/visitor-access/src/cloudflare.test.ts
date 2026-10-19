@@ -17,6 +17,7 @@ const oidc = (overrides: Record<string, unknown> = {}) => ({
 function cloudflareResponse(result: unknown, resultInfo?: unknown) {
   return Response.json({ success: true, result, result_info: resultInfo });
 }
+const policyPage = (policies: unknown[]) => cloudflareResponse(policies, { total_pages: 2 });
 
 function fetchSequence(...responses: unknown[]) {
   const fetcher = vi.fn<typeof fetch>();
@@ -141,38 +142,32 @@ describe("VisitorPolicyClient", () => {
       const policy = namedPolicy();
       const fetcher = fetchSequence([policy], { ...policy, ...override });
       const change = vi.fn(() => ["next@example.com"]);
-      await expect(
-        new VisitorPolicyClient(config, fetcher, undefined, () => provider ?? undefined).update(
-          change,
-        ),
-      ).rejects.toBeInstanceOf(VisitorAccessError);
+      const readProvider = () => provider ?? undefined;
+      const client = new VisitorPolicyClient(config, fetcher, undefined, readProvider);
+      await expect(client.update(change)).rejects.toBeInstanceOf(VisitorAccessError);
       expect(change).not.toHaveBeenCalled();
       expect(fetcher.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
     },
   );
 
-  it("finds a policy on later pages and refuses duplicate configured names across pages", async () => {
-    const other = { id: "other", name: "Maintainers" };
+  it.each([false, true])("discovers policies; rejects duplicates: %s", async (duplicate) => {
     const policy = namedPolicy();
     const fetcher = fetchSequence(
-      cloudflareResponse([other], { total_pages: 2 }),
-      cloudflareResponse([policy], { total_pages: 2 }),
-      cloudflareResponse(policy),
+      policyPage([duplicate ? policy : { id: "other", name: "Maintainers" }]),
+      policyPage([{ ...policy, id: duplicate ? "duplicate" : policy.id }]),
+      ...(duplicate ? [] : [policy]),
     );
-    await expect(new VisitorPolicyClient(config, fetcher).read()).resolves.toEqual({
-      id: policy.id,
-      targets: ["first@example.com"],
-    });
+    const client = new VisitorPolicyClient(config, fetcher);
+    if (duplicate) {
+      await expect(client.update(() => [])).rejects.toBeInstanceOf(VisitorAccessError);
+    } else {
+      await expect(client.read()).resolves.toEqual({
+        id: policy.id,
+        targets: ["first@example.com"],
+      });
+    }
     expect(fetcher.mock.calls[1]?.[0]).toBe(`${collectionUrl}?page=2&per_page=100`);
-
-    const duplicates = fetchSequence(
-      cloudflareResponse([policy], { total_pages: 2 }),
-      cloudflareResponse([{ ...policy, id: "duplicate" }], { total_pages: 2 }),
-    );
-    await expect(
-      new VisitorPolicyClient(config, duplicates).update(() => []),
-    ).rejects.toBeInstanceOf(VisitorAccessError);
-    expect(duplicates.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
+    expect(fetcher.mock.calls.every(([, options]) => options?.method === "GET")).toBe(true);
   });
 
   it.each([
