@@ -26,7 +26,6 @@ import {
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import { retireTerminalRestartRecoverySourceClaim } from "./restart-recovery-source.js";
 
-// Fixture writes must not schedule retention work into the cleanup request census.
 // mock-isolation: Fixture seed writes must not schedule retention requests into this census.
 vi.mock("../../config/sessions/session-accessor.sqlite-maintenance-kick.js", () => ({
   kickSessionEntryMaintenanceAfterWrite() {},
@@ -41,10 +40,16 @@ describe("pending final delivery restart proof", () => {
     storePath = path.join(sessionDirs.make(), "sessions.json");
   });
 
+  const scope = () => ({ storePath, sessionKey });
+  const readEntry = () => loadSessionEntry(scope()) as SessionEntry;
+  const deliveries = (...states: ("prepared" | "delivered")[]) =>
+    states.map((state, index) => ({ id: `delivery-${index + 1}`, state }));
+
   async function writePendingFinal(
     beforeAgentReplyState: "handled-reply" | undefined,
     state: "prepared" | "delivered" = "delivered",
     updatedAt = Date.now(),
+    deliveryStates = [state],
   ): Promise<void> {
     const entry: SessionEntry = {
       sessionId: "session",
@@ -56,13 +61,13 @@ describe("pending final delivery restart proof", () => {
         text: "hook reply",
         createdAt: 1,
         intentId: "intent-1",
-        deliveries: [{ id: "delivery-1", state }],
+        deliveries: deliveries(...deliveryStates),
       },
       restartRecoveryBeforeAgentReplyState: beforeAgentReplyState,
       restartRecoveryForceSafeTools: beforeAgentReplyState === "handled-reply" ? true : undefined,
       restartRecoverySourceIngress: "channel",
     };
-    await replaceSessionEntry({ storePath, sessionKey }, entry);
+    await replaceSessionEntry(scope(), entry);
   }
 
   function pendingFinalPayload(deliveryId = "delivery-1"): ReplyPayload {
@@ -116,13 +121,13 @@ describe("pending final delivery restart proof", () => {
       sql.restore();
     }
 
-    const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry | undefined;
+    const entry = readEntry();
     expect(entry?.pendingFinalDelivery).toBeUndefined();
     expect(entry?.restartRecoveryBeforeAgentReplyState).toBeUndefined();
     expect(entry?.restartRecoveryForceSafeTools).toBeUndefined();
     expect(entry?.restartRecoverySourceIngress).toBeUndefined();
-    expect(entry?.status).toBe("done");
     expect(entry?.lifecycleRunId).toBeUndefined();
+    expect(entry?.status).toBe("done");
     expect(entry?.abortedLastRun).toBe(false);
     expect(entry?.endedAt).toBeTypeOf("number");
     expect(entry?.runtimeMs).toBeGreaterThanOrEqual(0);
@@ -130,32 +135,13 @@ describe("pending final delivery restart proof", () => {
   });
 
   it("clears a skipped turn only after every sendable final is suppressed", async () => {
-    await writePendingFinal(undefined, "prepared", 1);
-    await replaceSessionEntry(
-      { storePath, sessionKey },
-      {
-        ...(loadSessionEntry({ sessionKey, storePath }) as SessionEntry),
-        pendingFinalDelivery: {
-          kind: "replayable",
-          text: "hook reply",
-          createdAt: 1,
-          intentId: "intent-1",
-          deliveries: [
-            { id: "delivery-1", state: "prepared" },
-            { id: "delivery-2", state: "prepared" },
-          ],
-        },
-      },
-    );
+    await writePendingFinal(undefined, "prepared", 1, ["prepared", "prepared"]);
 
     await suppressPendingFinalDelivery(pendingFinalPayload("delivery-1"), {
       preserveActivity: true,
     });
 
-    expect(
-      (loadSessionEntry({ sessionKey, storePath }) as SessionEntry).pendingFinalDelivery
-        ?.deliveries,
-    ).toEqual([
+    expect(readEntry().pendingFinalDelivery?.deliveries).toEqual([
       { id: "delivery-1", state: "suppressed" },
       { id: "delivery-2", state: "prepared" },
     ]);
@@ -164,7 +150,7 @@ describe("pending final delivery restart proof", () => {
       preserveActivity: true,
     });
 
-    const entry = loadSessionEntry({ sessionKey, storePath }) as SessionEntry;
+    const entry = readEntry();
     expect(entry.pendingFinalDelivery).toBeUndefined();
     expect(entry.restartRecoverySourceIngress).toBeUndefined();
     expect(entry.status).toBeUndefined();
@@ -174,8 +160,8 @@ describe("pending final delivery restart proof", () => {
 
   it("cleans only the current completed intent in one worker request after a foreign commit", async () => {
     await writePendingFinal("handled-reply", "delivered", 1);
-    const scope = { sessionKey, storePath };
-    const original = loadSessionEntry(scope) as SessionEntry;
+    const targetScope = scope();
+    const original = readEntry();
     const identity = getReplyPayloadMetadata(pendingFinalPayload())?.pendingFinalDeliveryCompletion;
     const commands: string[] = [];
     let beforeCommit: (() => void) | undefined;
@@ -227,15 +213,15 @@ describe("pending final delivery restart proof", () => {
           },
         },
       ]) {
-        replaceSessionEntrySync(scope, original);
+        replaceSessionEntrySync(targetScope, original);
         const foreign = { ...original, ...change };
-        beforeCommit = () => replaceSessionEntrySync(scope, foreign);
+        beforeCommit = () => replaceSessionEntrySync(targetScope, foreign);
         commands.length = 0;
         await expect(
           clearPendingFinalDeliveryAfterSuccess(identity, { preserveActivity: true }),
         ).resolves.toBeUndefined();
         expect(commands).toEqual(["session.entry.patch.commit"]);
-        const persisted = loadSessionEntry(scope) as SessionEntry;
+        const persisted = readEntry();
         if ("label" in change) {
           expect(persisted.label).toBe("foreign metadata");
           expect(persisted.pendingFinalDelivery).toBeUndefined();
@@ -254,18 +240,15 @@ describe("pending final delivery restart proof", () => {
   });
 
   it("does not retire a source while its terminal provider outcome is unknown", async () => {
-    await replaceSessionEntry(
-      { storePath, sessionKey },
-      {
-        sessionId: "session",
-        status: "done",
-        updatedAt: Date.now(),
-        restartRecoveryDeliveryReceiptState: "terminal-pending",
-        restartRecoveryDeliveryToolCallId: "message-call-1",
-        restartRecoveryDeliveryRunId: "recovery-1",
-        restartRecoveryDeliverySourceRunId: "source-1",
-      },
-    );
+    await replaceSessionEntry(scope(), {
+      sessionId: "session",
+      status: "done",
+      updatedAt: Date.now(),
+      restartRecoveryDeliveryReceiptState: "terminal-pending",
+      restartRecoveryDeliveryToolCallId: "message-call-1",
+      restartRecoveryDeliveryRunId: "recovery-1",
+      restartRecoveryDeliverySourceRunId: "source-1",
+    });
 
     let target: SessionEntryTargetPatchScope | undefined;
     await readSessionEntryInWorker(
@@ -286,14 +269,12 @@ describe("pending final delivery restart proof", () => {
       }),
     ).resolves.toBeUndefined();
 
-    expect(loadSessionEntry({ sessionKey, storePath })).toMatchObject({
+    expect(readEntry()).toMatchObject({
       restartRecoveryDeliveryReceiptState: "terminal-pending",
       restartRecoveryDeliveryToolCallId: "message-call-1",
       restartRecoveryDeliveryRunId: "recovery-1",
       restartRecoveryDeliverySourceRunId: "source-1",
     });
-    expect(
-      loadSessionEntry({ sessionKey, storePath })?.restartRecoveryTerminalRunIds,
-    ).toBeUndefined();
+    expect(readEntry()?.restartRecoveryTerminalRunIds).toBeUndefined();
   });
 });

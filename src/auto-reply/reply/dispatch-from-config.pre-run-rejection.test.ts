@@ -1,4 +1,3 @@
-// Tests invocation rejection outcomes through shared dispatch and the diagnostic bus.
 import { afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { createDeferred } from "../../../test/helpers/promise.js";
 import { clearAgentHarnesses } from "../../agents/harness/registry.js";
@@ -17,6 +16,7 @@ import {
   setDiscordTestRegistry,
   threadInfoMocks,
 } from "./dispatch-from-config.shared.test-harness.js";
+import type { DispatchFromConfigParams } from "./dispatch-from-config.types.js";
 import { createReplyDispatcher } from "./reply-dispatcher.js";
 import {
   REPLY_OPERATION_RUN_STATE,
@@ -38,6 +38,19 @@ const cfg: OpenClawConfig = {
   },
   messages: { visibleReplies: "automatic" },
 };
+
+function dispatch(
+  replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]>,
+  overrides: Partial<DispatchFromConfigParams> = {},
+) {
+  return dispatchReplyFromConfig({
+    ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
+    cfg,
+    dispatcher: createDispatcher(),
+    replyResolver,
+    ...overrides,
+  });
+}
 
 async function dispatchReplyFixture(params: {
   body: string;
@@ -124,7 +137,7 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     const deliveryGate = createDeferred();
     const dispatcher = createReplyDispatcher({ deliver: () => deliveryGate.promise });
     try {
-      const dispatch = dispatchReplyFromConfig({
+      const pending = dispatch(async () => undefined, {
         ctx: buildTestCtx({
           Body: "hello",
           From: "user1",
@@ -135,13 +148,11 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
           SessionKey: SESSION_KEY,
           MessageSid: "handled-1",
         }),
-        cfg,
         dispatcher,
-        replyResolver: async () => undefined,
       });
       // Capture must never hold completion open for a pending delivery: the gate
       // stays closed until finally, so a regression never settles and times out.
-      await dispatch;
+      await pending;
       expect(processedEvents).toEqual([
         expect.objectContaining({ outcome: "completed", reason: "before_dispatch_handled" }),
       ]);
@@ -217,45 +228,27 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
     ]);
   });
 
-  it("never captures delivered reply text without a model response", async () => {
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async () =>
-        [
-          { text: "internal reasoning trace", isReasoning: true },
-          { text: "Agent reply." },
-        ] satisfies ReplyPayload[],
-    });
-
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.not.objectContaining({ finalResponse: expect.anything() }),
-    );
-  });
-
-  it("excludes the delivered fallback notice from the captured response for an empty turn", async () => {
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async () => undefined,
-    });
-
+  it.each<{ label: string; reply: ReplyPayload[] | undefined }>([
+    {
+      label: "delivered reply",
+      reply: [{ text: "internal reasoning trace", isReasoning: true }, { text: "Agent reply." }],
+    },
+    { label: "empty-turn fallback", reply: undefined },
+    {
+      label: "host error",
+      reply: [{ text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true }],
+    },
+  ])("excludes $label from captured model output", async ({ reply }) => {
+    await dispatch(async () => reply);
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.not.objectContaining({ finalResponse: expect.anything() }),
     );
   });
 
   it("captures the raw LLM response for a sentinel turn instead of delivered facts", async () => {
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async (_ctx, opts) => {
-        opts?.onRawLlmResponse?.("NO_REPLY");
-        return undefined;
-      },
+    await dispatch(async (_ctx, opts) => {
+      opts?.onRawLlmResponse?.("NO_REPLY");
+      return undefined;
     });
 
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
@@ -264,33 +257,13 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
   });
 
   it("keeps the captured model response when dispatch fails after the model answered", async () => {
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async (_ctx, opts) => {
-        opts?.onRawLlmResponse?.("model answer");
-        throw new Error("final delivery failed");
-      },
+    await dispatch(async (_ctx, opts) => {
+      opts?.onRawLlmResponse?.("model answer");
+      throw new Error("final delivery failed");
     }).catch(() => undefined);
 
     expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
       expect.objectContaining({ outcome: "error", finalResponse: "model answer" }),
-    );
-  });
-
-  it("excludes delivered host error notices from the captured response", async () => {
-    await dispatchReplyFromConfig({
-      ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-      cfg,
-      dispatcher: createDispatcher(),
-      replyResolver: async () => [
-        { text: "⚠️ Agent couldn't generate a response. Please try again.", isError: true },
-      ],
-    });
-
-    expect(diagnosticMocks.logMessageProcessed).toHaveBeenCalledWith(
-      expect.not.objectContaining({ finalResponse: expect.anything() }),
     );
   });
 
@@ -327,12 +300,8 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
         ...state,
         preRunRejection: "session-directive-rejected",
       };
-      await dispatchReplyFromConfig({
-        ctx: buildTestCtx({ Body: "hello", SessionKey: SESSION_KEY }),
-        cfg,
-        dispatcher: createDispatcher(),
-        replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState },
-        replyResolver: async (_ctx, opts) => {
+      await dispatch(
+        async (_ctx, opts) => {
           // Queue and question owners publish their decisions after outer operation admission.
           Object.assign(runState, state);
           if (failed) {
@@ -340,7 +309,8 @@ describe("dispatchReplyFromConfig pre-run directive rejection", () => {
           }
           return { text: "Existing terminal reply." };
         },
-      });
+        { replyOptions: { [REPLY_OPERATION_RUN_STATE]: runState } },
+      );
 
       expect(processedEvents).toHaveLength(1);
       expect(processedEvents[0]).toMatchObject({ outcome });

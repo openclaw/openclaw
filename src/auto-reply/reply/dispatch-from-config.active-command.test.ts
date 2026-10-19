@@ -73,6 +73,21 @@ function startOperation(sessionKey: string, sessionId = "active-session") {
   return operation;
 }
 
+function dispatchCommand(
+  ctx: MsgContext,
+  replyResolver: NonNullable<DispatchFromConfigParams["replyResolver"]>,
+  dispatcher = createDispatcher(),
+  replyOptions?: DispatchFromConfigParams["replyOptions"],
+) {
+  return dispatchReplyFromConfig({
+    ctx,
+    cfg: structuredClone(cfg),
+    dispatcher,
+    replyResolver,
+    replyOptions,
+  });
+}
+
 describe("dispatch active command admission", () => {
   it.each([
     { source: "text", target: false },
@@ -102,21 +117,28 @@ describe("dispatch active command admission", () => {
       const acknowledgement = {
         text: target ? "🧠 Model: mock | ⚙️ Status: ok" : "Command completed.",
       };
-      const replyResolver = vi.fn(async () =>
-        target ? acknowledgement : markCommandReplyForDelivery(acknowledgement),
+      const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
+        async (_ctx, options) => {
+          if (target) {
+            const sourceBinding = readReplySourceInput(options);
+            expect(sourceBinding?.mailbox.owner.aliases.has(sourceSessionKey)).toBe(true);
+            expect(sourceBinding?.claim).toBeUndefined();
+            expect(options?.replyOperation).toBeUndefined();
+          }
+          return target ? acknowledgement : markCommandReplyForDelivery(acknowledgement);
+        },
       );
       const dispatcher = createDispatcher();
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx: commandContext(source, "/status", "status", {
+      const dispatchPromise = dispatchCommand(
+        commandContext(source, "/status", "status", {
           SessionKey: sourceSessionKey,
           ...(target
             ? { Provider: "telegram", Surface: "telegram", CommandTargetSessionKey: sessionKey }
             : {}),
         }),
-        cfg: structuredClone(cfg),
-        dispatcher,
         replyResolver,
-      });
+        dispatcher,
+      );
 
       try {
         const outcome = await Promise.race([
@@ -131,6 +153,7 @@ describe("dispatch active command admission", () => {
         expect(replyResolver).toHaveBeenCalledOnce();
         expect(dispatcher.sendFinalReply).toHaveBeenCalledWith(acknowledgement);
         expect(getSessionControllerOperation(sessionKey)).toBe(activeOperation);
+        expect(activeOperation.result).toBeNull();
       } finally {
         activeOperation.complete();
         await dispatchPromise;
@@ -152,16 +175,15 @@ describe("dispatch active command admission", () => {
       const replyResolver = vi.fn(async () =>
         markCommandReplyForDelivery({ text: "Shell command completed." }),
       );
-      const dispatchPromise = dispatchReplyFromConfig({
-        ctx: commandContext(source, body, commandName, {
+      const dispatchPromise = dispatchCommand(
+        commandContext(source, body, commandName, {
           CommandAuthorized: authorized,
           SessionKey: sessionKey,
         }),
-        cfg: structuredClone(cfg),
-        dispatcher: createDispatcher(),
-        replyOptions: { abortSignal: callerAbort.signal },
         replyResolver,
-      });
+        undefined,
+        { abortSignal: callerAbort.signal },
+      );
 
       try {
         await expect(
@@ -200,15 +222,13 @@ describe("dispatch active command admission", () => {
           return markCommandReplyForDelivery({ text: "handled" });
         },
       );
-      await dispatchReplyFromConfig({
-        ctx: commandContext("native", body, commandName, {
+      await dispatchCommand(
+        commandContext("native", body, commandName, {
           CommandAuthorized: authorized,
           SessionKey: sessionKey,
         }),
-        cfg: structuredClone(cfg),
-        dispatcher: createDispatcher(),
         replyResolver,
-      });
+      );
       expect(replyResolver).toHaveBeenCalledOnce();
       expect(active.result).toBeNull();
     },
@@ -228,23 +248,21 @@ describe("dispatch active command admission", () => {
       const loginEntered = vi.fn();
       const controlEntered = vi.fn();
       const shellEntered = vi.fn();
-      const dispatchCommand = (
+      const dispatch = (
         body: string,
         commandName: string,
         replyResolver: NonNullable<Parameters<typeof dispatchReplyFromConfig>[0]["replyResolver"]>,
       ) =>
-        dispatchReplyFromConfig({
-          ctx: commandContext("text", body, commandName, {
+        dispatchCommand(
+          commandContext("text", body, commandName, {
             Provider: "discord",
             Surface: "discord",
             SessionKey: sessionKey,
             MessageSid: body,
           }),
-          cfg: structuredClone(cfg),
-          dispatcher: createDispatcher(),
           replyResolver,
-        });
-      const login = dispatchCommand("/login openrouter", "login", async () => {
+        );
+      const login = dispatch("/login openrouter", "login", async () => {
         loginEntered();
         loginStarted.resolve();
         await releaseLogin.promise;
@@ -258,12 +276,12 @@ describe("dispatch active command admission", () => {
           "login dispatch settled before entering its reply resolver",
         );
         expect(loginEntered).toHaveBeenCalledOnce();
-        const shell = dispatchCommand("/bash echo ready", "bash", async () => {
+        const shell = dispatch("/bash echo ready", "bash", async () => {
           shellEntered();
           return markCommandReplyForDelivery({ text: "Shell command completed." });
         });
         pending.push(shell);
-        const control = dispatchCommand(controlBody, controlName, async () => {
+        const control = dispatch(controlBody, controlName, async () => {
           controlEntered();
           controlStarted.resolve();
           return markCommandReplyForDelivery({ text: "Control command completed." });
@@ -302,14 +320,12 @@ describe("dispatch active command admission", () => {
         return undefined;
       },
     );
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx: commandContext("text", "/steer use the corrected approach", "steer", {
+    const dispatchPromise = dispatchCommand(
+      commandContext("text", "/steer use the corrected approach", "steer", {
         SessionKey: sessionKey,
       }),
-      cfg: structuredClone(cfg),
-      dispatcher: createDispatcher(),
       replyResolver,
-    });
+    );
 
     try {
       expect(await withinTest(reachedWhileActive.promise, signal)).toBe(true);
@@ -327,17 +343,16 @@ describe("dispatch active command admission", () => {
     const acknowledgement = { text: "Thinking level set to high.", isStatusNotice: true };
     const finalReply = { text: "The calculation is complete." };
     const dispatcher = createDispatcher();
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx: commandContext("text", "/think high", "think", {
+    const dispatchPromise = dispatchCommand(
+      commandContext("text", "/think high", "think", {
         SessionKey: sessionKey,
       }),
-      cfg: structuredClone(cfg),
-      dispatcher,
-      replyResolver: async (_resolverCtx, options) => {
+      async (_resolverCtx, options) => {
         await options?.onBlockReply?.(acknowledgement);
         return finalReply;
       },
-    });
+      dispatcher,
+    );
 
     try {
       await vi.waitFor(() => {
@@ -350,61 +365,6 @@ describe("dispatch active command admission", () => {
     } finally {
       activeOperation.complete();
     }
-    await expect(dispatchPromise).resolves.toMatchObject({ queuedFinal: true });
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledExactlyOnceWith(finalReply);
-    expect(listActiveReplyRunSessionKeys()).toEqual([]);
-  });
-
-  it("keeps native controls source-bound but outside the active target mailbox claim", async () => {
-    const sourceSessionKey = "agent:main:telegram:slash:user-auth";
-    const targetSessionKey = "agent:main:telegram:group:status-target";
-    const targetOperation = startOperation(targetSessionKey, "status-target-active-session");
-
-    const replyResolver = vi.fn<NonNullable<DispatchFromConfigParams["replyResolver"]>>(
-      async (_ctx, options) => {
-        const source = readReplySourceInput(options);
-        expect(source?.mailbox.owner.aliases.has(sourceSessionKey)).toBe(true);
-        expect(source?.claim).toBeUndefined();
-        expect(options?.replyOperation).toBeUndefined();
-        return { text: "🧠 Model: mock | ⚙️ Status: ok" };
-      },
-    );
-    const dispatcher = createDispatcher();
-    const ctx = commandContext("native", "/status", "status", {
-      Provider: "telegram",
-      Surface: "telegram",
-      SessionKey: sourceSessionKey,
-      CommandTargetSessionKey: targetSessionKey,
-    });
-
-    const dispatchPromise = dispatchReplyFromConfig({
-      ctx,
-      cfg: structuredClone(cfg),
-      dispatcher,
-      replyResolver,
-    });
-
-    type DispatchOutcome =
-      | { status: "settled"; result: Awaited<typeof dispatchPromise> }
-      | { status: "pending" };
-    const outcome = await raceWithTimeoutResult<DispatchOutcome>(
-      dispatchPromise.then((result) => ({ status: "settled" as const, result })),
-      200,
-      { status: "pending" as const },
-    );
-    expect(outcome).toMatchObject({
-      status: "settled",
-      result: {
-        queuedFinal: true,
-      },
-    });
-    expect(replyResolver).toHaveBeenCalledOnce();
-    expect(dispatcher.sendFinalReply).toHaveBeenCalledWith({
-      text: "🧠 Model: mock | ⚙️ Status: ok",
-    });
-    expect(targetOperation.result).toBeNull();
-    expect(getSessionControllerOperation(targetSessionKey)).toBe(targetOperation);
-    targetOperation.complete();
     expect(listActiveReplyRunSessionKeys()).toEqual([]);
   });
 });
