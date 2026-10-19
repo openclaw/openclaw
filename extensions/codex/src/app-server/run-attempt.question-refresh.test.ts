@@ -153,9 +153,7 @@ it.each([
       toolAuthorityFingerprint: params.toolAuthorityFingerprint,
       userTurnTranscriptRecorder: sourceRecorder,
     });
-    await expect(response).resolves.toEqual({
-      answers: { mode: { answers: ["Deep"] } },
-    });
+    await expect(response).resolves.toEqual({ answers: { mode: { answers: ["Deep"] } } });
     expect(onRunProgress).toHaveBeenCalledWith(answered);
     expect(onQuestionAccepted).toHaveBeenCalledWith(true);
     expect(request.mock.calls.filter(([method]) => method === "turn/steer")).toHaveLength(1);
@@ -196,11 +194,7 @@ it.each([
           name: "request_user_input",
           arguments: {
             questions: [
-              expect.objectContaining({
-                id: "mode",
-                question: "Pick a mode",
-                isSecret: false,
-              }),
+              expect.objectContaining({ id: "mode", question: "Pick a mode", isSecret: false }),
             ],
           },
         },

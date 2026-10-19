@@ -1,9 +1,8 @@
 import path from "node:path";
-import { createDeferred } from "openclaw/plugin-sdk/extension-shared";
 import { describe, expect, it, vi } from "vitest";
 import type { JsonObject } from "./protocol.js";
 import { itemNotification, rawItemCompleted, turnCompleted } from "./protocol.test-helpers.js";
-import * as attemptActiveTurn from "./run-attempt-active-turn.js";
+import { observeAttemptProjectionReady } from "./run-attempt-lifecycle.test-support.js";
 import {
   createParams,
   createTestParams,
@@ -43,24 +42,17 @@ async function checkpointParams() {
 async function startCheckpointAttempt(params: ReturnType<typeof createParams>) {
   // Keep the attempt budget controlled while the real SQLite workers progress.
   vi.useFakeTimers({ toFake: ["Date", "setTimeout", "clearTimeout"] });
-  const activate = attemptActiveTurn.activateCodexAttemptTurn;
-  const activated = createDeferred<ReturnType<typeof activate>>();
-  vi.spyOn(attemptActiveTurn, "activateCodexAttemptTurn").mockImplementation((...args) => {
-    const turn = activate(...args);
-    activated.resolve(turn);
-    return turn;
-  });
+  const waitForProjection = observeAttemptProjectionReady();
   const harness = createStartedThreadHarness();
   const run = runCodexAppServerAttempt(params);
-  const turn = await Promise.race([
-    activated.promise,
+  await Promise.race([
+    waitForProjection(),
     run.then(() => {
       throw new Error("Codex attempt ended before projection activation");
     }),
   ]);
   // A turn/start request precedes the prompt mirror and notification binding.
   // Once ready, awaited notifications include their canonical checkpoint work.
-  await turn.ready;
   return {
     harness,
     run,
@@ -167,10 +159,7 @@ describe("runCodexAppServerAttempt", () => {
 
   it("checkpoints raw patch output and network provenance without persisting commentary", async () => {
     const params = await checkpointParams();
-    params.config = {
-      ...params.config,
-      ui: { prefs: { chatPersistCommentary: false } },
-    };
+    params.config = { ...params.config, ui: { prefs: { chatPersistCommentary: false } } };
     const { harness, run, raw, completed } = await startCheckpointAttempt(params);
     const patchId = "patch-1";
     await raw({

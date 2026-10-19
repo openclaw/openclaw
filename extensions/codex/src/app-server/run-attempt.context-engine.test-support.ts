@@ -119,10 +119,7 @@ export function runCodexAppServerAttempt(
           ...params.config?.tools,
           web: {
             ...params.config?.tools?.web,
-            search: {
-              ...params.config?.tools?.web?.search,
-              enabled: false,
-            },
+            search: { ...params.config?.tools?.web?.search, enabled: false },
           },
         },
       },
@@ -165,11 +162,7 @@ export function makeThreadBootstrapBinding(params: {
       schemaVersion: 1,
       engineId: "lossless-claw",
       policyFingerprint,
-      projection: {
-        schemaVersion: 1,
-        mode: "thread_bootstrap",
-        epoch,
-      },
+      projection: { schemaVersion: 1, mode: "thread_bootstrap", epoch },
     },
   };
 }

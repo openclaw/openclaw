@@ -130,9 +130,7 @@ export function registerCodexUsageLimitTests() {
           return undefined;
         });
         if (!primary) {
-          rememberCodexRateLimitsRead(harness.client, {
-            rateLimits: exhaustedLimit(resetsAt),
-          });
+          rememberCodexRateLimitsRead(harness.client, { rateLimits: exhaustedLimit(resetsAt) });
         }
         const params = createUsageParams(primary ? "agent" : undefined);
         const result = await runCodexAppServerAttempt(params);
@@ -203,13 +201,7 @@ export function registerCodexUsageLimitTests() {
       saveAuthProfileStore(params.authProfileStore, params.agentDir);
       const run = runCodexAppServerAttempt(params);
       await waitForRequest(harness, run, "turn/start");
-      await harness.notify(
-        turnCompleted({
-          id: "turn-1",
-          status: "failed",
-          error: usageError,
-        }),
-      );
+      await harness.notify(turnCompleted({ id: "turn-1", status: "failed", error: usageError }));
 
       const result = await run;
 
@@ -222,10 +214,7 @@ export function registerCodexUsageLimitTests() {
     });
 
     it.each([
-      {
-        error: usageError,
-        blocked: true,
-      },
+      { error: usageError, blocked: true },
       {
         error: {
           message: "Too many requests; please retry later.",

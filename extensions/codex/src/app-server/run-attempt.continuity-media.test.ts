@@ -247,9 +247,7 @@ describe("Codex attachment continuity", () => {
           media: [
             { url: `media://inbound/${saved.id}`, contentType: "image/png", fileName: "blue.png" },
           ],
-          mediaImageLayout: {
-            slots: [{ kind: "offloaded", factIndex: 0 }],
-          },
+          mediaImageLayout: { slots: [{ kind: "offloaded", factIndex: 0 }] },
         },
       });
       params.prompt = mode === "current" ? "Read this image." : "Can you hear me?";
