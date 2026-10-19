@@ -8,7 +8,7 @@ import {
 } from "../../test-helpers/gateway-client.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
 import { mountSolid } from "../../test-helpers/mount-solid.ts";
-import { SecretsPageState } from "./secrets-page.tsx";
+import { SecretsPageState } from "./state.ts";
 import { SecretsStore } from "./view.tsx";
 
 const mounts: ReturnType<typeof mountSolid>[] = [];

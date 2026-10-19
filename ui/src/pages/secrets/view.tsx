@@ -15,7 +15,7 @@ import { getLocale, t } from "../../lib/reactive/i18n.ts";
 import { loadSecretsStore } from "../../lib/secrets-store/index.ts";
 import type { JSX as SolidJSX } from "../../types/solid-elements.d.ts";
 import "../../styles/secrets-store.css";
-import type { SecretsPageState } from "./secrets-page.tsx";
+import type { SecretsPageState } from "./state.ts";
 
 type SecretsStoreViewProps = {
   state: SecretsPageState;
