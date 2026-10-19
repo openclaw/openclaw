@@ -1,6 +1,6 @@
 import path from "node:path";
 import { parentPort, workerData } from "node:worker_threads";
-import { openExistingStatePostgresConnection } from "../state/openclaw-state-db-engine.js";
+import { openExistingStatePostgresConnectionFromAnchor } from "../state/openclaw-state-db-engine.js";
 import { readStateSchemaContentVersion } from "../state/openclaw-state-db-schema-version.js";
 import { isNativeClientCredentialBootstrap } from "./client-credential-native-bootstrap.js";
 import { runEngineStoreReadSnapshot } from "./database-engine/adapters.js";
@@ -123,10 +123,11 @@ if (parentPort && workerData?.updatePostgresState === true) {
         snapshot.cleanup();
       }
     }
-    const connection = openExistingStatePostgresConnection(shared);
-    if (!connection) {
-      throw new Error("PostgreSQL update preflight requires the configured state connection.");
-    }
+    // Capture already holds maintenance custody; inspection retains its read-only anchor.
+    const connection = openExistingStatePostgresConnectionFromAnchor(
+      openNodeSqliteDatabase(shared, { readOnly: true }),
+      shared,
+    );
     const { db } = connection.database;
     try {
       // The existing owner admits the installed version without migrating or resealing it.

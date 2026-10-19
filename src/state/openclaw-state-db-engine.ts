@@ -1,3 +1,4 @@
+import type { DatabaseSync } from "node:sqlite";
 import { getEnvironmentData } from "node:worker_threads";
 import {
   getDatabaseEngineInput,
@@ -298,13 +299,24 @@ export function ensureStatePostgresFragment(db: PostgresSqlConnection, table: st
 }
 
 export function openExistingStatePostgresConnection(pathname: string, expectedIdentity?: string) {
-  const input = stateEngineInput();
-  if (!input) {
+  if (!stateEngineInput()) {
     return undefined;
   }
   const anchor = openTrackedStateDatabase(pathname, { existingOnly: true, expectedIdentity });
+  return openExistingStatePostgresConnectionFromAnchor(anchor, pathname);
+}
+
+/** Consumes an anchor whose caller owns path admission, including updater read-only custody. */
+export function openExistingStatePostgresConnectionFromAnchor(
+  anchor: DatabaseSync,
+  pathname: string,
+) {
   let db: PostgresSqlConnection | undefined;
   try {
+    const input = stateEngineInput();
+    if (!input) {
+      throw new Error("PostgreSQL state inspection requires the configured state connection.");
+    }
     admitStateSchemaFacts(anchor, pathname);
     const selected = openEngineStore({
       anchor,
