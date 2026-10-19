@@ -72,7 +72,11 @@ it("redraws the reply connector from the current avatar after its presentation c
       { key: "answer", message: { role: "assistant", content: "Answer" }, hasVisibleContent: true },
     ],
   };
-  const options = { avatarPlacement: "gutter" as const, showToolCalls: false };
+  const options = {
+    avatarPlacement: "gutter" as const,
+    showToolCalls: false,
+    showReasoning: false,
+  };
   harness.render(group, options);
   await waitForSolid(() =>
     expect(container.querySelector(".chat-reply-connector path")).not.toBeNull(),
