@@ -1,7 +1,78 @@
+import { expectDefined } from "@openclaw/normalization-core/expect";
+import { expect } from "vitest";
+import {
+  createOperationalRunInstanceRef,
+  prepareAgentRunAdmission,
+} from "../agents/admitted-run-context.js";
+import type { AnyAgentTool } from "../agents/tools/common.js";
+import {
+  activateMcpLoopbackClientGrantCapture,
+  mintMcpLoopbackClientGrant,
+} from "./mcp-grant-store.js";
+import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
+
+export const runtime = () => expectDefined(getActiveMcpLoopbackRuntime(), "MCP runtime");
+
+export function probeTools(name: string, execute: AnyAgentTool["execute"]) {
+  return {
+    agentId: "main",
+    tools: [
+      {
+        name,
+        label: name,
+        description: name,
+        parameters: { type: "object", properties: {} },
+        execute,
+      },
+    ],
+  };
+}
+
+type AdmissionOptions = Pick<
+  Parameters<typeof prepareAgentRunAdmission>[0],
+  "cfg" | "operatorAuthority"
+>;
+
+export function prepareAdmission(
+  runId: string,
+  boundary: string,
+  {
+    cfg = {},
+    agentId = "main",
+    kind = "system",
+    ...options
+  }: Partial<AdmissionOptions> & { agentId?: string; kind?: "system" | "schedule" } = {},
+) {
+  return prepareAgentRunAdmission({
+    cfg,
+    ...options,
+    operationalRunInstance: createOperationalRunInstanceRef(runId),
+    facts: { runId, agentId, ingress: { kind, boundary, state: "present" } },
+  });
+}
+
+export function captureGrant(
+  params: Parameters<typeof mintMcpLoopbackClientGrant>[0],
+  captureKey: string,
+  registerCleanup?: (token: string) => void,
+) {
+  const grant = mintMcpLoopbackClientGrant(params);
+  // Failed capture setup must still revoke the freshly minted grant.
+  registerCleanup?.(grant.token);
+  expect(
+    activateMcpLoopbackClientGrantCapture({
+      token: grant.token,
+      runtimeOwnerToken: params.runtimeOwnerToken,
+      captureKey,
+    }),
+  ).not.toBe(false);
+  return { ...grant, captureKey };
+}
+
 type Runtime = { port: number; ownerToken: string };
 
-export function requestMcp(
-  runtime: Runtime,
+export function request(
+  listener: Runtime,
   message: unknown,
   options: {
     token?: string;
@@ -12,11 +83,11 @@ export function requestMcp(
     method?: "GET" | "POST";
   } = {},
 ) {
-  return fetch(`http://127.0.0.1:${runtime.port}/mcp`, {
+  return fetch(`http://127.0.0.1:${listener.port}/mcp`, {
     method: options.method ?? "POST",
     signal: options.signal,
     headers: {
-      authorization: `Bearer ${options.token ?? runtime.ownerToken}`,
+      authorization: `Bearer ${options.token ?? listener.ownerToken}`,
       "content-type": "application/json",
       ...(options.captureKey ? { "x-openclaw-cli-capture-key": options.captureKey } : {}),
       ...(options.sessionKey ? { "x-session-key": options.sessionKey } : {}),

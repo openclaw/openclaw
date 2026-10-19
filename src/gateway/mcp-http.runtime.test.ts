@@ -2,8 +2,6 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { createDeferred } from "../../test/helpers/promise.js";
 import {
   createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
   readAdmittedRunOperatorAuthority,
 } from "../agents/admitted-run-context.js";
 import { createComputerTool } from "../agents/tools/computer-tool.js";
@@ -12,6 +10,7 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "./mcp-http.runtime.js";
+import * as mcp from "./mcp-http.test-request.js";
 
 const resolveGatewayScopedTools = vi.hoisted(() => vi.fn());
 const listNodes = vi.hoisted(() => vi.fn());
@@ -95,12 +94,10 @@ function scopeParams({
 }
 
 beforeEach(() => {
-  listNodes.mockReset();
-  listNodes.mockResolvedValue([]);
-  resolveGatewayScopedTools.mockReset();
-  resolveGatewayScopedTools.mockReturnValue(
-    scopedToolFixture(["memory_search", "memory_get", "message", "cron"]),
-  );
+  listNodes.mockReset().mockResolvedValue([]);
+  resolveGatewayScopedTools
+    .mockReset()
+    .mockReturnValue(scopedToolFixture(["memory_search", "memory_get", "message", "cron"]));
 });
 
 describe("resolveMcpLoopbackScopedTools", () => {
@@ -140,15 +137,7 @@ describe("resolveMcpLoopbackScopedTools", () => {
     "materializes policy expressions into concrete loopback tools: $allow",
     async ({ allow, expected }) => {
       resolveGatewayScopedTools.mockReturnValue(
-        scopedToolFixture([
-          "read",
-          "write",
-          "edit",
-          "apply_patch",
-          "web_search",
-          "web_fetch",
-          "message",
-        ]),
+        scopedToolFixture(["read", "write", "apply_patch", "message"]),
       );
 
       const scoped = await resolveMcpLoopbackPolicyTools(scopeParams({ toolsAllow: allow }));
@@ -172,16 +161,8 @@ describe("McpLoopbackToolCache", () => {
       signal: controller.signal,
       assertCurrent: () => {},
     });
-    const runId = "cached-session-controls";
-    const admission = prepareAgentRunAdmission({
-      cfg: {},
+    const admission = mcp.prepareAdmission("cached-session-controls", "mcp-cache-test", {
       operatorAuthority: authority,
-      operationalRunInstance: createOperationalRunInstanceRef(runId),
-      facts: {
-        runId,
-        agentId: "main",
-        ingress: { kind: "system", boundary: "mcp-cache-test", state: "present" },
-      },
     });
     resolveGatewayScopedTools.mockImplementation(
       ({ admittedRunContext }: Pick<ScopeParams, "admittedRunContext">) =>
@@ -212,69 +193,58 @@ describe("McpLoopbackToolCache", () => {
     }
   });
 
-  it.each(["evict", "clear"])(
-    "does not resurrect cache rows when %s overtakes discovery",
-    async (action) => {
-      const params = scopeParams({ nodeExecAllowed: true, grantToken: "pending-grant" });
-      const entered = createDeferred();
-      const inventory = createDeferred<unknown[]>();
-      listNodes.mockImplementationOnce(() => {
-        entered.resolve();
-        return inventory.promise;
-      });
-      const pending = cache.resolve(params);
-      await entered.promise;
-      if (action === "evict") {
-        cache.evictGrant("pending-grant");
-      } else {
-        cache.clear();
-      }
-      inventory.resolve([]);
-      await pending;
-      expect(cache.evictGrant("pending-grant")).toBe(false);
-      await cache.resolve(params);
-      expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(2);
-    },
-  );
-
-  it.each(["discovery", "construction"] as const)(
-    "does not cache tools when cancellation overtakes %s",
-    async (stage) => {
-      const params = scopeParams({ nodeExecAllowed: true, grantToken: "cancelled-grant" });
-      const controller = new AbortController();
-      const reason = new Error("synthetic request cancelled");
-      const entered = createDeferred();
-      const resume = createDeferred();
-      if (stage === "discovery") {
-        listNodes.mockImplementationOnce(async () => {
-          entered.resolve();
-          await resume.promise;
-          return [];
-        });
-      } else {
-        resolveGatewayScopedTools.mockImplementationOnce(async () => {
-          entered.resolve();
-          await resume.promise;
-          return scopedToolFixture(["memory_search"]);
-        });
-      }
-      const rejected = expect(cache.resolve({ ...params, signal: controller.signal })).rejects.toBe(
-        reason,
+  it.each([
+    { action: "evict", stage: "discovery" },
+    { action: "clear", stage: "discovery" },
+    { action: "abort", stage: "discovery" },
+    { action: "abort", stage: "construction" },
+  ])("does not cache tools when $action overtakes $stage", async ({ action, stage }) => {
+    const params = scopeParams({ nodeExecAllowed: true, grantToken: "pending-grant" });
+    const controller = new AbortController();
+    const reason = new Error("synthetic request cancelled");
+    const entered = createDeferred();
+    const resume = createDeferred();
+    const pause = async <T>(value: T) => {
+      entered.resolve();
+      await resume.promise;
+      return value;
+    };
+    if (stage === "discovery") {
+      listNodes.mockImplementationOnce(() => pause([]));
+    } else {
+      resolveGatewayScopedTools.mockImplementationOnce(() =>
+        pause(scopedToolFixture(["memory_search"])),
       );
-      await entered.promise;
+    }
+    const pending = cache.resolve(
+      action === "abort" ? { ...params, signal: controller.signal } : params,
+    );
+    const settled = action === "abort" ? expect(pending).rejects.toBe(reason) : pending;
+    await entered.promise;
+    if (action === "abort") {
       expect(listNodes).toHaveBeenCalledWith(controller.signal);
       controller.abort(reason);
-      resume.resolve();
-      await rejected;
-      expect(cache.evictGrant("cancelled-grant")).toBe(false);
+    } else if (action === "evict") {
+      cache.evictGrant("pending-grant");
+    } else {
+      cache.clear();
+    }
+    resume.resolve();
+    await settled;
+    expect(cache.evictGrant("pending-grant")).toBe(false);
+    if (action === "abort") {
       const next = new AbortController();
       await cache.resolve({ ...params, signal: next.signal });
       next.abort();
       await cache.resolve({ ...params, signal: new AbortController().signal });
-      expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(stage === "discovery" ? 1 : 2);
       expect(resolveGatewayScopedTools.mock.calls[0]?.[0]).not.toHaveProperty("signal");
-    },
-  );
+    } else {
+      await cache.resolve(params);
+    }
+    expect(resolveGatewayScopedTools).toHaveBeenCalledTimes(
+      action === "abort" && stage === "discovery" ? 1 : 2,
+    );
+  });
 
   it("refreshes cached bound tools when node display names change", async () => {
     const params = scopeParams({ nodeExecAllowed: true, execOverrides: { node: "shared-name" } });

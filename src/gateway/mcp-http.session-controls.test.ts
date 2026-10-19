@@ -1,9 +1,5 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { expect, it, vi } from "vitest";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
 import * as inProcessGateway from "../agents/tools/in-process-gateway.js";
 import type { CliDeps } from "../cli/deps.types.js";
 import { setRuntimeConfigSnapshot } from "../config/runtime-snapshot.js";
@@ -21,14 +17,9 @@ import { createDeferredCore } from "../shared/deferred.js";
 import { setUserProfileRole } from "../state/user-profile-writes.worker.js";
 import { withOpenClawTestState } from "../test-utils/openclaw-test-state.js";
 import { withLocalGatewayRequestScope } from "./local-request-context.js";
-import {
-  activateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
-  revokeMcpLoopbackClientGrant,
-} from "./mcp-grant-store.js";
+import { revokeMcpLoopbackClientGrant } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
-import { requestMcp, toolCall } from "./mcp-http.test-request.js";
+import * as mcp from "./mcp-http.test-request.js";
 import { readOperatorToolGatewayAuthority } from "./operator-tool-gateway-authority.js";
 import { withOperatorToolGatewayAuthority } from "./server-plugin-in-process-dispatch.js";
 import { roleClient, rolePolicyConfig } from "./session-sharing.test-utils.js";
@@ -40,6 +31,13 @@ vi.mock("../browser-lifecycle-cleanup.js", () => ({
 const requesterKey = "agent:main:dashboard:mcp-archive-requester";
 const targetKey = "agent:main:dashboard:mcp-archive-target";
 const targetId = "mcp-archive-target-id";
+const target = { agentId: "main", sessionKey: targetKey };
+const sessionEntry = (sessionId: string, creator: string, updatedAt = 1) => ({
+  sessionId,
+  updatedAt,
+  visibility: "shared" as const,
+  createdActor: { type: "human" as const, source: "profile" as const, id: creator },
+});
 
 it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "replaced"] as const)(
   "MCP HTTP preserves archive final-effect authority: %s",
@@ -54,50 +52,32 @@ it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "rep
       setRuntimeConfigSnapshot(cfg);
       const client = roleClient("write");
       const profile = expectDefined(client.authenticatedUserProfile, "operator profile");
-      for (const [sessionKey, sessionId, creator] of [
-        [requesterKey, "mcp-archive-requester-id", profile.profileId],
-        [
-          targetKey,
+      await upsertSessionEntryCore(
+        { agentId: "main", sessionKey: requesterKey },
+        sessionEntry("mcp-archive-requester-id", profile.profileId),
+      );
+      await upsertSessionEntryCore(
+        target,
+        sessionEntry(
           targetId,
           scenario === "assigned-noncreator" ? "other-person" : profile.profileId,
-        ],
-      ] as const) {
-        await upsertSessionEntryCore(
-          { agentId: "main", sessionKey },
-          {
-            sessionId,
-            updatedAt: 1,
-            visibility: "shared",
-            createdActor: { type: "human", source: "profile", id: creator },
-          },
-        );
-      }
-      assignSessionOwner(
-        { agentId: "main", sessionKey: targetKey },
-        {
-          owner: { type: "human", id: profile.profileId },
-          assignedBy: { type: "human", id: profile.profileId },
-        },
+        ),
       );
+      const assignOwner = (id: string) =>
+        assignSessionOwner(target, {
+          owner: { type: "human", id },
+          assignedBy: { type: "human", id: profile.profileId },
+        });
+      assignOwner(profile.profileId);
       const archive = async () => {
         const operatorAuthority = expectDefined(
           readOperatorToolGatewayAuthority()?.operatorRunAuthority,
           "host-issued operator source",
         );
         const runId = "mcp-final-effect-HTTP-" + scenario;
-        const admission = prepareAgentRunAdmission({
+        const admission = mcp.prepareAdmission(runId, "mcp-final-effect-test", {
           cfg,
           operatorAuthority,
-          operationalRunInstance: createOperationalRunInstanceRef(runId),
-          facts: {
-            runId,
-            agentId: "main",
-            ingress: {
-              kind: "system",
-              boundary: "mcp-final-effect-test",
-              state: "present",
-            },
-          },
         });
         const releaseWriter = createDeferredCore();
         const atWriter = createDeferredCore();
@@ -115,38 +95,35 @@ it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "rep
           });
         try {
           const admittedRunContext = await admission.admit("gateway", "mcp-final-effect-runtime");
-          const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "MCP runtime");
-          const grant = mintMcpLoopbackClientGrant({
-            runtimeOwnerToken: runtime.ownerToken,
-            admittedRunContext,
-            context: {
-              sessionKey: requesterKey,
-              sessionId: "mcp-archive-requester-id",
-              agentId: "main",
-              runId,
-              senderIsOwner: false,
-              toolsAllow: ["sessions"],
-            },
-          });
-          grantToken = grant.token;
-          const captureKey = runId + "-capture";
-          expect(
-            activateMcpLoopbackClientGrantCapture({
-              token: grant.token,
+          const runtime = mcp.runtime();
+          const grant = mcp.captureGrant(
+            {
               runtimeOwnerToken: runtime.ownerToken,
-              captureKey,
-            }),
-          ).not.toBe(false);
+              admittedRunContext,
+              context: {
+                sessionKey: requesterKey,
+                sessionId: "mcp-archive-requester-id",
+                agentId: "main",
+                runId,
+                senderIsOwner: false,
+                toolsAllow: ["sessions"],
+              },
+            },
+            runId + "-capture",
+            (token) => {
+              grantToken = token;
+            },
+          );
           pending = (async () => {
-            const response = await requestMcp(
+            const response = await mcp.request(
               runtime,
-              toolCall("sessions", {
+              mcp.toolCall("sessions", {
                 action: "patch",
                 sessionKey: targetKey,
                 expectedSessionId: targetId,
                 archived: true,
               }),
-              { token: grant.token, captureKey },
+              grant,
             );
             const body = await response.text();
             expect(response.status, body).toBe(200);
@@ -158,29 +135,11 @@ it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "rep
           ]);
           expect(reachedWriter).toBe(scenario !== "assigned-noncreator");
           if (scenario === "reassigned") {
-            assignSessionOwner(
-              { agentId: "main", sessionKey: targetKey },
-              {
-                owner: { type: "human", id: "different-person" },
-                assignedBy: { type: "human", id: profile.profileId },
-              },
-            );
+            assignOwner("different-person");
           } else if (scenario === "profile-revoked") {
             setUserProfileRole(profile.profileId, "none");
           } else if (scenario === "replaced") {
-            await replaceSessionEntry(
-              { agentId: "main", sessionKey: targetKey },
-              {
-                sessionId: "replacement-id",
-                updatedAt: 2,
-                visibility: "shared",
-                createdActor: {
-                  type: "human",
-                  source: "profile",
-                  id: profile.profileId,
-                },
-              },
-            );
+            await replaceSessionEntry(target, sessionEntry("replacement-id", profile.profileId, 2));
           }
           releaseWriter.resolve();
           const response = await pending;
@@ -188,19 +147,11 @@ it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "rep
           expect(response, JSON.stringify(response)).toMatchObject({
             result: { isError: !archiveAllowed },
           });
-          const entry = expectDefined(
-            await readSessionEntryInWorker({
-              agentId: "main",
-              sessionKey: targetKey,
-            }),
-            "persisted target",
-          );
-          expect(entry.sessionId).toBe(scenario === "replaced" ? "replacement-id" : targetId);
-          if (archiveAllowed) {
-            expect(entry.archivedAt).toEqual(expect.any(Number));
-          } else {
-            expect(entry.archivedAt).toBeUndefined();
-          }
+          const entry = expectDefined(await readSessionEntryInWorker(target), "persisted target");
+          expect({ sessionId: entry.sessionId, archivedAt: entry.archivedAt }).toEqual({
+            sessionId: scenario === "replaced" ? "replacement-id" : targetId,
+            archivedAt: archiveAllowed ? expect.any(Number) : undefined,
+          });
         } finally {
           releaseWriter.resolve();
           await pending?.catch(() => {});
@@ -217,7 +168,6 @@ it.each(["allowed", "assigned-noncreator", "reassigned", "profile-revoked", "rep
           withLocalGatewayRequestScope(
             { deps: {} as CliDeps, getRuntimeConfig: () => cfg },
             async () => {
-              // Server creation is outside the individual operator invocation.
               await ensureMcpLoopbackServer();
               try {
                 const scope = expectDefined(

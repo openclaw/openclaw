@@ -4,11 +4,7 @@ import {
   createDeferred,
   withinTest,
 } from "../../test/helpers/promise.js";
-import {
-  createAdmittedRunOperatorAuthority,
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
+import { createAdmittedRunOperatorAuthority } from "../agents/admitted-run-context.js";
 import * as computerAvailability from "../agents/computer-use-node-capabilities.js";
 import "../agents/test-helpers/fast-bash-tools.js";
 import "../agents/test-helpers/fast-coding-tools.js";
@@ -23,6 +19,7 @@ import {
   resolveMcpLoopbackPolicyTools,
   resolveMcpLoopbackScopedTools,
 } from "./mcp-http.runtime.js";
+import * as mcp from "./mcp-http.test-request.js";
 import type { GatewayRequestContext } from "./server-methods/types.js";
 import { bindSessionRowProjection } from "./session-row-projection-access.js";
 import { createSessionRowProjection } from "./session-row-projection.js";
@@ -38,6 +35,8 @@ it.for([
 ] as const)(
   "revalidates portal catalog facts after $mode $boundary",
   async ({ mode, boundary }, { signal }) => {
+    const readiness = boundary === "readiness";
+    const publication = boundary === "final publication" || readiness;
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const cfg: OpenClawConfig = { tools: { profile: "coding", deny: ["computer"] } };
       await state.writeConfig(cfg);
@@ -51,7 +50,7 @@ it.for([
       const entry = {
         sessionId: identity.sessionId,
         updatedAt: 1,
-        modelSelectionLocked: boundary === "readiness",
+        modelSelectionLocked: readiness,
       };
       replaceSessionEntrySync(scope, entry);
       const projection = await createSessionRowProjection({ cfg });
@@ -74,14 +73,9 @@ it.for([
       const authorityAbort = new AbortController();
       const admission =
         boundary === "authority"
-          ? prepareAgentRunAdmission({
+          ? mcp.prepareAdmission("portal-controller", "portal-readiness", {
               cfg,
-              operationalRunInstance: createOperationalRunInstanceRef("portal-controller"),
-              facts: {
-                runId: "portal-controller",
-                agentId: identity.agentId,
-                ingress: { kind: "system", boundary: "portal-readiness", state: "present" },
-              },
+              agentId: identity.agentId,
               operatorAuthority: createAdmittedRunOperatorAuthority({
                 profileId: "portal-controller",
                 scopes: ["operator.write"],
@@ -96,23 +90,6 @@ it.for([
       let restore: (() => void) | undefined;
       const onAbort = () => releaseAvailability.resolve();
       signal.addEventListener("abort", onAbort, { once: true });
-      const afterCatalogRead = (effect: () => void) => {
-        const prepare = projection.withPreparedExactRows.bind(projection);
-        const spy = vi
-          .spyOn(projection, "withPreparedExactRows")
-          .mockImplementation((queries, consume, options) =>
-            prepare(
-              queries,
-              (read) => {
-                const catalog = consume(read);
-                effect();
-                return catalog;
-              },
-              options,
-            ),
-          );
-        restore = () => spy.mockRestore();
-      };
       try {
         await projection.ensureMaterialized();
         await withPluginRuntimeGatewayContextResolver(
@@ -128,10 +105,7 @@ it.for([
                 ...identity,
                 senderIsOwner: false,
                 modelHasVision: true,
-                toolsAllow:
-                  boundary === "final publication" || boundary === "readiness"
-                    ? ["portal"]
-                    : ["portal", "computer"],
+                toolsAllow: publication ? ["portal"] : ["portal", "computer"],
               },
             };
             const resolve =
@@ -141,46 +115,53 @@ it.for([
                   ? resolveMcpLoopbackScopedTools
                   : resolveMcpLoopbackPolicyTools;
             const primed = await resolve(params);
-            expect(primed.tools.map((tool) => tool.name)).toEqual(
-              boundary === "readiness" ? [] : ["portal"],
-            );
+            expect(primed.tools.map((tool) => tool.name)).toEqual(readiness ? [] : ["portal"]);
             const retained = prepareSessionPortalToolTarget(identity);
-            if (boundary !== "readiness") {
+            if (!readiness) {
               expect(retained).toBeDefined();
             }
 
-            if (boundary === "final publication" || boundary === "readiness") {
+            if (boundary !== "availability") {
               let published = false;
-              afterCatalogRead(() => {
-                if (!published) {
-                  published = true;
-                  replaceSessionEntrySync(scope, {
-                    ...entry,
-                    updatedAt: 2,
-                    modelSelectionLocked: boundary !== "readiness",
-                  });
-                }
-              });
+              const prepare = projection.withPreparedExactRows.bind(projection);
+              const spy = vi
+                .spyOn(projection, "withPreparedExactRows")
+                .mockImplementation((queries, consume, options) =>
+                  prepare(
+                    queries,
+                    (read) => {
+                      const catalog = consume(read);
+                      if (boundary === "authority") {
+                        authorityAbort.abort(new Error("Synthetic controller retirement"));
+                      } else if (!published) {
+                        published = true;
+                        replaceSessionEntrySync(scope, {
+                          ...entry,
+                          updatedAt: 2,
+                          modelSelectionLocked: !readiness,
+                        });
+                      }
+                      return catalog;
+                    },
+                    options,
+                  ),
+                );
+              restore = () => spy.mockRestore();
               const resolving = resolve(params);
               pending = resolving;
+              if (boundary === "authority") {
+                await expect(resolving).rejects.toThrow(
+                  "admitted run operator authority is no longer active",
+                );
+                return;
+              }
               expect((await withinTest(resolving, signal)).tools.map((tool) => tool.name)).toEqual(
-                boundary === "readiness" ? ["portal"] : [],
+                readiness ? ["portal"] : [],
               );
               expect(published).toBe(true);
               if (retained) {
                 expect(() => retained.assertCurrent()).toThrow();
               }
-              return;
-            }
-
-            if (boundary === "authority") {
-              afterCatalogRead(() => {
-                authorityAbort.abort(new Error("Synthetic controller retirement"));
-              });
-              pending = resolve(params);
-              await expect(pending).rejects.toThrow(
-                "admitted run operator authority is no longer active",
-              );
               return;
             }
 

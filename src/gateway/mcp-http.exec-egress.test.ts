@@ -1,10 +1,6 @@
 import { expectDefined } from "@openclaw/normalization-core/expect";
 import { afterAll, beforeAll, expect, it, vi } from "vitest";
-import {
-  createOperationalRunInstanceRef,
-  prepareAgentRunAdmission,
-  type PreparedAgentRunAdmission,
-} from "../agents/admitted-run-context.js";
+import type { PreparedAgentRunAdmission } from "../agents/admitted-run-context.js";
 import { waitForExecScope } from "../agents/bash-process-registry.js";
 import type { dispatchInboundMessageWithRoutedChannelDispatcher } from "../auto-reply/dispatch.js";
 import * as sessionEvents from "../auto-reply/reply/session-event-handoff.js";
@@ -27,15 +23,9 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../test-utils/openclaw-test-state.js";
-import {
-  activateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
-  revokeMcpLoopbackClientGrant,
-  type McpLoopbackRequestContext,
-} from "./mcp-grant-store.js";
+import { revokeMcpLoopbackClientGrant, type McpLoopbackRequestContext } from "./mcp-grant-store.js";
 import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
-import { getActiveMcpLoopbackRuntime } from "./mcp-http.loopback-runtime.js";
-import { requestMcp, toolCall } from "./mcp-http.test-request.js";
+import * as mcp from "./mcp-http.test-request.js";
 
 // mock-isolation: Keep completion admission deferred while the real process and egress owners settle.
 vi.mock("../auto-reply/dispatch.js", () => ({
@@ -136,49 +126,37 @@ async function mintExecGrant(
   turn: Partial<McpLoopbackRequestContext> = { trigger: "cron" },
   args: Record<string, unknown> = { command: "echo mcp-egress-ok", yieldMs: 10000 },
 ) {
-  const runtime = getActiveMcpLoopbackRuntime();
-  if (!runtime) {
-    throw new Error("Expected the isolated MCP runtime");
-  }
-  const admission = prepareAgentRunAdmission({
+  const runtime = mcp.runtime();
+  const admission = mcp.prepareAdmission(runId, "cron.agent", {
     cfg: config,
-    operationalRunInstance: createOperationalRunInstanceRef(runId),
-    facts: {
-      runId,
-      agentId: "probe",
-      ingress: { kind: "schedule", boundary: "cron.agent", state: "present" },
-    },
+    agentId: "probe",
+    kind: "schedule",
   });
   admissions.push(admission);
   const admittedRunContext = await admission.admit("gateway");
-  const grant = mintMcpLoopbackClientGrant({
-    runtimeOwnerToken: runtime.ownerToken,
-    admittedRunContext,
-    context: {
-      sessionKey: turn.sessionKey ?? "agent:probe:cron:mcp-egress",
-      agentId: "probe",
-      runId,
-      workspaceDir: state.workspaceDir,
-      cwd: state.workspaceDir,
-      senderIsOwner: true,
-      ...turn,
-      toolsAllow: turn.toolsAllow ?? ["exec"],
-    },
-  });
-  grants.push(grant.token);
-  const captureKey = "capture-" + runId;
-  expect(
-    activateMcpLoopbackClientGrantCapture({
-      token: grant.token,
+  const grant = mcp.captureGrant(
+    {
       runtimeOwnerToken: runtime.ownerToken,
-      captureKey,
-    }),
-  ).not.toBe(false);
+      admittedRunContext,
+      context: {
+        sessionKey: turn.sessionKey ?? "agent:probe:cron:mcp-egress",
+        agentId: "probe",
+        runId,
+        workspaceDir: state.workspaceDir,
+        cwd: state.workspaceDir,
+        senderIsOwner: true,
+        ...turn,
+        toolsAllow: turn.toolsAllow ?? ["exec"],
+      },
+    },
+    "capture-" + runId,
+    (token) => grants.push(token),
+  );
   const request = (method: "tools/list" | "tools/call") =>
-    requestMcp(
+    mcp.request(
       runtime,
-      method === "tools/call" ? toolCall("exec", args) : { jsonrpc: "2.0", id: 1, method },
-      { token: grant.token, captureKey },
+      method === "tools/call" ? mcp.toolCall("exec", args) : { jsonrpc: "2.0", id: 1, method },
+      grant,
     );
   return { token: grant.token, admission, request };
 }

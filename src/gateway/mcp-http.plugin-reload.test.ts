@@ -27,9 +27,8 @@ import { closeMcpLoopbackServer, ensureMcpLoopbackServer } from "./mcp-http.js";
 import {
   beginMcpLoopbackToolCallCapture,
   clearMcpLoopbackToolCallCapture,
-  getActiveMcpLoopbackRuntime,
 } from "./mcp-http.loopback-runtime.js";
-import { requestMcp, toolCall } from "./mcp-http.test-request.js";
+import * as mcp from "./mcp-http.test-request.js";
 
 const fixtureLifetime = createFixtureLifetime();
 const tempDirs = useAutoCleanupTempDirTracker((cleanup) =>
@@ -49,14 +48,11 @@ it.for(["plain", "shared"] as const)(
       const workspaceDir = path.join(root, "workspace");
       const observationsPath = path.join(root, "tool-completions.jsonl");
       const observationsEvent = `tool-completions:${root}`;
-      const observations = [createDeferred(), createDeferred()];
-      const onObservation = (sessionKey: string) => {
-        if (sessionKey === "agent:main:generation-before") {
-          observations[0]!.resolve();
-        } else if (sessionKey === "agent:main:generation-after") {
-          observations[1]!.resolve();
-        }
-      };
+      const observations = new Map(
+        ["before", "after"].map((phase) => [`agent:main:generation-${phase}`, createDeferred()]),
+      );
+      const onObservation = (sessionKey: string) => observations.get(sessionKey)?.resolve();
+      const content = [{ type: "text", text: "generation tool available" }];
       const captureKey = `observer-${path.basename(root)}`;
       const captured: unknown[] = [];
       const warnings = createWarnLogCapture("mcp-observer-result-isolation");
@@ -89,11 +85,8 @@ it.for(["plain", "shared"] as const)(
           return { pluginRegistry, metadataSnapshot, instance };
         });
       const callTool = async (phase: string) => {
-        const runtime = getActiveMcpLoopbackRuntime();
-        if (!runtime) {
-          throw new Error("MCP listener did not start");
-        }
-        const response = await requestMcp(runtime, toolCall("generation_probe", {}, phase), {
+        const runtime = mcp.runtime();
+        const response = await mcp.request(runtime, mcp.toolCall("generation_probe", {}, phase), {
           signal,
           sessionKey: `agent:main:generation-${phase}`,
           captureKey,
@@ -103,15 +96,10 @@ it.for(["plain", "shared"] as const)(
         expect(response.status, JSON.stringify(payload)).toBe(200);
         const details = variant === "shared" ? { bytes: new Uint8Array(1) } : {};
         expect({ payload, callback: captured.at(-1) }).toMatchObject({
-          payload: {
-            result: {
-              content: [{ type: "text", text: "generation tool available" }],
-              isError: false,
-            },
-          },
+          payload: { result: { content, isError: false } },
           callback: {
             outcome: "completed",
-            result: { content: [{ type: "text", text: "generation tool available" }], details },
+            result: { content, details },
           },
         });
         const callback = captured.at(-1);
@@ -192,21 +180,19 @@ it.for(["plain", "shared"] as const)(
           initializeGlobalHookRunner(replacement.pluginRegistry);
           await original.instance.dispose();
           await callTool("after");
-          await withinTest(Promise.all(observations.map((entry) => entry.promise)), signal);
+          await withinTest(
+            Promise.all([...observations.values()].map((entry) => entry.promise)),
+            signal,
+          );
           expect(await warnings.findText("after_tool_call")).toBeDefined();
-          expect(
-            fs
-              .readFileSync(observationsPath, "utf8")
-              .trim()
-              .split("\n")
-              .map((line) => JSON.parse(line)),
-          ).toEqual(
+          const logged = fs.readFileSync(observationsPath, "utf8").trim().split("\n");
+          expect(logged.map((line) => JSON.parse(line))).toEqual(
             ["before", "after"].map((phase) => ({
               toolName: "generation_probe",
               sessionKey: `agent:main:generation-${phase}`,
               sameResult: true,
               result: {
-                content: [{ type: "text", text: "generation tool available" }],
+                content,
                 details: variant === "shared" ? { bytes: { 0: 0 } } : {},
               },
             })),
