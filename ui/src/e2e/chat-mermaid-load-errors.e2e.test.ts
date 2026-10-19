@@ -27,6 +27,14 @@ suite.define(() => {
           asset === "frame"
             ? controlUiE2eBuiltAssetRequest("packages/mermaid-renderer/src/frame.js")
             : controlUiE2eBuiltModuleRequest("ui/src/components/markdown-mermaid.tsx");
+        // Keep automatic chunk recovery offline until the failure assertions finish.
+        // Its document reload must not race a second, test-initiated navigation.
+        const documentProbe = "**/index.html";
+        if (asset === "markdown-mermaid") {
+          await page.route(documentProbe, (route) =>
+            route.request().method() === "HEAD" ? route.fulfill({ status: 503 }) : route.continue(),
+          );
+        }
         let blocked = 0;
         await page.route(blockedScript, (route) => {
           blocked += 1;
@@ -51,7 +59,15 @@ suite.define(() => {
         expect(await page.locator("pre code").last().textContent()).toContain(source);
 
         await page.unroute(blockedScript);
-        await page.reload();
+        if (asset === "markdown-mermaid") {
+          const recovered = page.waitForEvent("framenavigated", {
+            predicate: (frame) => frame === page.mainFrame(),
+          });
+          await page.unroute(documentProbe);
+          await recovered;
+        } else {
+          await page.reload();
+        }
         const image = page.locator("openclaw-mermaid img");
         await image.waitFor({ timeout: 25_000 });
         await image.evaluate((element: HTMLImageElement) => element.decode());

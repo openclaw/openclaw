@@ -6,6 +6,7 @@ import type { GatewayBrowserClient } from "../../api/gateway.ts";
 import { SESSION_PULL_REQUESTS_SUBSCRIBE_METHOD } from "../../lib/session-pull-requests.ts";
 import type { SessionCapability } from "../../lib/sessions/index.ts";
 import { gatewayHelloForMethods } from "../../test-helpers/gateway-methods.ts";
+import { setChatHistoryLoad } from "./chat-history-state.ts";
 import { createTestChatPane } from "./chat-pane.test-support.ts";
 import type { AfterCommitEffect } from "./render-lifecycle.ts";
 
@@ -13,7 +14,7 @@ function createSecondaryHydrationPane() {
   const secondaryResponse = new Promise<never>(() => {});
   const request = vi.fn((_method: string, _params?: unknown) => secondaryResponse);
   const listBranches = vi.fn(() => secondaryResponse);
-  const patch = vi.fn().mockResolvedValue({});
+  const patch = vi.fn(() => secondaryResponse);
   const sessions = {
     capturePullRequestEpoch: vi.fn(() => ({})),
     listBranches,
@@ -107,6 +108,18 @@ it.each([
     }
   };
   expectPending();
+  if (committed) {
+    // Successful hydration publishes accepted history before completing the transcript.
+    setChatHistoryLoad(f.state, {
+      phase: "committed",
+      sessions: f.state.sessions,
+      client: f.state.client,
+      connectionEpoch: f.state.connectionEpoch,
+      sessionKey: f.state.sessionKey,
+      requestAgentId: undefined,
+      sessionInfo: undefined,
+    });
+  }
   await commitTranscript(committed);
   expect(f.commitEffects).toHaveLength(1);
   expectPending();

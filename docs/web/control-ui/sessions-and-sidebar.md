@@ -470,6 +470,12 @@ After token or device-token authentication, the sidebar can show its cached sess
 
 Switching agents refreshes the session list even while other conversations are active. A session action finishing for another agent keeps the selected agent’s filtered sidebar and pagination active. Confirmed permission changes remain visible if their follow-up list refresh fails. Read acknowledgments for known sessions update unread and attention state from their committed receipt without reloading the roster. Older responses cannot undo confirmed read state; newer activity or a later manual unread mark still takes effect.
 
+Automatic read acknowledgments wait until the conversation is visible and its
+initial or reconnect history is ready. If newer activity arrives while a read
+acknowledgment is pending, the open conversation acknowledges it after the earlier
+request succeeds. Hidden tabs wait until you return; manual unread reminders remain
+unread until you reopen the conversation or choose **Mark as read**.
+
 **Load more sessions** stays disabled while the sidebar list is refreshing or loading another page. It becomes available again when the read finishes and more sessions remain.
 
 An older list response preserves newer session names and run status already loaded in another open session list.

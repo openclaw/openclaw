@@ -42,6 +42,7 @@ import {
 import { ChatPaneTaskSuggestions } from "./chat-pane-task-suggestions.ts";
 import { retirePullRequestRefreshes } from "./chat-pull-request-refresh.ts";
 import type { ChatPageHost } from "./chat-state-host.ts";
+import { refreshChatMetadata } from "./chat-state-refresh.ts";
 import { resolveChatAgentId, selectedChatSessionRow } from "./chat-state-route.ts";
 import {
   chatBranchId,
@@ -315,6 +316,17 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     void transcriptLoad.then(scheduleHydration, () => scheduleHydration(false));
   }
 
+  protected readonly refreshPresentedReads = () => {
+    const state = this.state;
+    if (state?.chatMetadataIsPresented?.()) {
+      void refreshChatMetadata(state, { automatic: true });
+      if (!this.resumeDeferredSessionHydration()) {
+        this.markSessionRead(selectedChatSessionRow(state));
+      }
+      void this.refreshTaskSuggestions({ automatic: true });
+    }
+  };
+
   protected resumeDeferredSessionHydration(): boolean {
     const hydration = this.deferredSessionHydration;
     if (hydration) {
@@ -331,7 +343,7 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
 
   protected markSessionRead(row: GatewaySessionRow | undefined) {
     const state = this.state;
-    if (!state?.connected || !row || !isGatewayAvailable(this.context.gateway.snapshot)) {
+    if (!state || !row || !this.secondarySessionReadsReady()) {
       return;
     }
     const failureAt = row.endedAt ?? row.updatedAt ?? 0;
@@ -378,7 +390,10 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
     guard: SessionUnreadPatchGuard,
     agentId: string | undefined,
   ) {
-    const settle = guard.settlePatch();
+    const state = this.state;
+    const sessionKey = state?.sessionKey;
+    const recheckOnSuccess = guard === this.unreadPatchGuard;
+    const settle = guard.settlePatch({ recheckOnSuccess });
     void this.context.sessions
       .patch(
         row.key,
@@ -386,7 +401,20 @@ export abstract class ChatPaneSession extends ChatPaneTaskSuggestions {
         { agentId, expectedMarkedUnreadAt: row.markedUnreadAt ?? null },
       )
       .then(
-        (result) => settle(result !== null),
+        (result) => {
+          // Row reconciliation publishes before this promise settles. Reconsider
+          // newer activity only after releasing this activation's pending read.
+          if (
+            settle(result !== null) &&
+            result &&
+            recheckOnSuccess &&
+            state &&
+            this.state === state &&
+            state.sessionKey === sessionKey
+          ) {
+            this.markSessionRead(selectedChatSessionRow(state));
+          }
+        },
         (error: unknown) => settle(false, error),
       );
   }
