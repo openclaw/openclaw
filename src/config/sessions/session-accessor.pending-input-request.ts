@@ -30,6 +30,47 @@ function preparePendingInputMessage(
   };
 }
 
+function matchAcceptedPendingInputMessage(
+  message: PersistedUserTurnMessage,
+  acceptedHash: string,
+): ReturnType<typeof preparePendingInputMessage> | undefined {
+  const request = preparePendingInputMessage(message);
+  if (request.requestHash === acceptedHash) {
+    return request;
+  }
+  const origin = message["__openclaw"]?.requesterOrigin;
+  if (!origin) {
+    return undefined;
+  }
+  // Old requester origins hashed absent fields as undefined. Prove the whole
+  // accepted hash without returning that legacy shape to persistence or comparison.
+  const legacy = preparePendingInputMessage({
+    ...message,
+    __openclaw: {
+      ...message["__openclaw"],
+      requesterOrigin: {
+        operatorProfileId: undefined,
+        messageProvider: undefined,
+        accountId: undefined,
+        chatType: undefined,
+        conversationId: undefined,
+        messageThreadId: undefined,
+        groupId: undefined,
+        groupChannel: undefined,
+        groupSpace: undefined,
+        senderId: undefined,
+        senderName: undefined,
+        senderUsername: undefined,
+        senderE164: undefined,
+        ...origin,
+      },
+    },
+  });
+  return legacy.requestHash === acceptedHash
+    ? { ...request, requestHash: acceptedHash }
+    : undefined;
+}
+
 export type PendingInputRequest = {
   message: PersistedUserTurnMessage;
   runId: string;
@@ -74,6 +115,10 @@ export function resolvePendingInputReplayRequest(
       accepted.request_hash !== prepared.requestHash &&
       !prepared.requestHash.startsWith("request:")
     ) {
+      const request = matchAcceptedPendingInputMessage(message, accepted.request_hash);
+      if (request) {
+        return { message, ...request };
+      }
       const delivery = readSessionSendDelivery(message);
       if (!delivery) {
         return original;
@@ -91,9 +136,9 @@ export function resolvePendingInputReplayRequest(
           },
         },
       };
-      const request = preparePendingInputMessage(candidate);
-      if (request.requestHash === accepted.request_hash) {
-        return { ...original, requestHash: request.requestHash };
+      const legacyRequest = matchAcceptedPendingInputMessage(candidate, accepted.request_hash);
+      if (legacyRequest) {
+        return { ...original, requestHash: legacyRequest.requestHash };
       }
     }
     return original;
@@ -108,13 +153,17 @@ export function resolvePendingInputReplayRequest(
   if (accepted?.run_id !== prepared.runId || accepted.request_hash === prepared.requestHash) {
     return original;
   }
+  const request = matchAcceptedPendingInputMessage(message, accepted.request_hash);
+  if (request) {
+    return { message, ...request };
+  }
   // v2026.9.5 keyed the wave but attributed it to the scheduling sibling.
   // Nothing else may vary, and an absent or unmatched receipt authorizes no substitution.
   for (const sourceSessionKey of new Set(replaySourceSessionKeys)) {
     const candidate = { ...message, provenance: { ...message.provenance, sourceSessionKey } };
-    const request = preparePendingInputMessage(candidate);
-    if (request.requestHash === accepted.request_hash) {
-      return { message: candidate, ...request };
+    const candidateRequest = matchAcceptedPendingInputMessage(candidate, accepted.request_hash);
+    if (candidateRequest) {
+      return { message: candidate, ...candidateRequest };
     }
   }
   return original;

@@ -129,6 +129,10 @@ main-session turns continue through normal restart recovery with the original
 operator restrictions. If the original authority is unavailable, the task stays
 owed instead of running with broader permissions.
 
+Completion replay uses the same captured requester identity as the original
+input. Optional fields absent from that identity stay absent after reload, so
+an already committed completion is reconciled without appending another notice.
+
 An already-admitted completion turn for a yielded nested requester is different
 from an orphaned child launch. Its frozen child-result batch retains the exact
 saved continuation across restart. Registry recovery waits for that owner instead
