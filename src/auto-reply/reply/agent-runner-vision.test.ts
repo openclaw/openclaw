@@ -21,6 +21,12 @@ vi.mock("../../agents/model-catalog.runtime.js", () => ({
 
 const vision = ["text", "image"] as const;
 const textOnly = ["text"] as const;
+const modelDefaults = {
+  name: "Selected",
+  reasoning: false,
+  maxTokens: 1024,
+  cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
+} as const;
 const roots: string[] = [];
 afterEach(async () => {
   vi.clearAllMocks();
@@ -63,16 +69,7 @@ describe("ordinary reply model capability at cloud media admission", () => {
                   acme: {
                     baseUrl: "https://provider.invalid/v1",
                     api: "openai-responses",
-                    models: [
-                      {
-                        id: "primary",
-                        name: "Primary",
-                        input: ["text"],
-                        reasoning: false,
-                        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
-                        maxTokens: 1024,
-                      },
-                    ],
+                    models: [{ ...modelDefaults, id: "primary", name: "Primary", input: ["text"] }],
                   },
                 },
               },
@@ -167,16 +164,13 @@ describe("ordinary reply model capability at cloud media admission", () => {
         expect(staged).toContainEqual(Buffer.from(image.data, "base64"));
       }
       const providerModel: Model = {
-        id: testCase.selected,
-        provider: "acme",
-        name: "Selected",
+        ...modelDefaults,
         api: "openai-responses",
         baseUrl: "https://provider.invalid/v1",
-        reasoning: false,
+        id: testCase.selected,
+        provider: "acme",
         input: testCase.expected ? [...vision] : [...textOnly],
         contextWindow: 8192,
-        maxTokens: 1024,
-        cost: { input: 0, output: 0, cacheRead: 0, cacheWrite: 0 },
       };
       const payload = buildOpenAIResponsesParams(
         providerModel,

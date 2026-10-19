@@ -1,4 +1,3 @@
-// Tests bash command status replies and active-process cancellation.
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { OpenClawConfig } from "../../config/config.js";
 import * as globals from "../../globals.js";
@@ -9,7 +8,6 @@ import {
   resetSystemEventsForTest,
 } from "../../infra/system-events.js";
 import { withStateDirEnv } from "../../test-helpers/state-dir-env.js";
-import type { MsgContext } from "../templating.js";
 
 const {
   cancelBackgroundExecSessionMock,
@@ -40,19 +38,9 @@ vi.mock("../../agents/bash-tools.js", () => ({
 const { handleBashChatCommand } = await import("./bash-command.js");
 
 function buildParams(commandBody: string) {
-  const cfg = {
-    commands: { bash: true },
-  } as OpenClawConfig;
-
-  const ctx = {
-    CommandBody: commandBody,
-    commandText: commandBody,
-    SessionKey: "session-key",
-  } as MsgContext;
-
   return {
-    ctx,
-    cfg,
+    ctx: { CommandBody: commandBody, commandText: commandBody, SessionKey: "session-key" },
+    cfg: { commands: { bash: true } } as OpenClawConfig,
     sessionKey: "session-key",
     isGroup: false,
     elevated: {
@@ -63,22 +51,10 @@ function buildParams(commandBody: string) {
   };
 }
 
-function buildElevatedDeniedParams(commandBody: string) {
-  const base = buildParams(commandBody);
-  return {
-    ...base,
-    ctx: {
-      ...base.ctx,
-      SessionKey: "agent:main:telegram:slash-session",
-    } as MsgContext,
-    agentId: "target",
-    sessionKey: "agent:target:telegram:direct:target-session",
-    elevated: {
-      enabled: true,
-      allowed: false,
-      failures: [],
-    },
-  };
+function mockExec(result: unknown) {
+  const execute = vi.fn().mockResolvedValue(result);
+  createExecToolMock.mockReturnValue({ execute });
+  return execute;
 }
 
 function buildRunningSession(overrides?: Record<string, unknown>) {
@@ -114,8 +90,7 @@ describe("handleBashChatCommand", () => {
 
   it("logs the background session without logging its command", async () => {
     using log = vi.spyOn(globals, "logVerbose").mockImplementation(() => {});
-    const execute = vi.fn().mockResolvedValue(backgroundExecResult("private-job"));
-    createExecToolMock.mockReturnValue({ execute });
+    const execute = mockExec(backgroundExecResult("private-job"));
 
     const result = await handleBashChatCommand(buildParams("/bash echo PRIVATE_COMMAND_123"));
 
@@ -132,11 +107,9 @@ describe("handleBashChatCommand", () => {
     { status: "completed", exitCode: 1, exitSignal: null, label: "code 1" },
     { status: "failed", exitCode: null, exitSignal: "SIGTERM", label: "signal SIGTERM" },
   ])("reports foreground $status as $label without losing diagnostics", async (outcome) => {
-    createExecToolMock.mockReturnValue({
-      execute: vi.fn().mockResolvedValue({
-        content: [{ type: "text", text: "execution diagnostic" }],
-        details: { ...outcome, aggregated: "execution diagnostic" },
-      }),
+    mockExec({
+      content: [{ type: "text", text: "execution diagnostic" }],
+      details: { ...outcome, aggregated: "execution diagnostic" },
     });
 
     const result = await handleBashChatCommand(buildParams("/bash command"));
@@ -145,42 +118,37 @@ describe("handleBashChatCommand", () => {
     expect(result.text).toContain("execution diagnostic");
   });
 
-  it.each([{ exitCode: null, exitSignal: null, label: "unknown exit code" }])(
-    "reports a retained process's $label without acknowledging delivery",
-    async (outcome) => {
-      const eventOptions = {
-        sessionKey: "agent:main:session-key",
-        contextKey: "exec:finished-status",
-      };
-      const previous = enqueueSystemEventEntry("retained diagnostic", eventOptions);
-      getFinishedSessionMock.mockReturnValue({
-        id: "finished-status",
-        scopeKey: "chat:bash",
-        terminalStatus: "failed",
-        aggregated: "retained diagnostic",
-        notifyOnExitRemoval: enqueueSystemEventWithReceipt("retained diagnostic", eventOptions, {
-          allowDuplicate: true,
-        }),
-        ...outcome,
-      });
-      expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
+  it("reports a retained process's unknown exit code without acknowledging delivery", async () => {
+    const eventOptions = {
+      sessionKey: "agent:main:session-key",
+      contextKey: "exec:finished-status",
+    };
+    const previous = enqueueSystemEventEntry("retained diagnostic", eventOptions);
+    getFinishedSessionMock.mockReturnValue({
+      id: "finished-status",
+      scopeKey: "chat:bash",
+      terminalStatus: "failed",
+      aggregated: "retained diagnostic",
+      notifyOnExitRemoval: enqueueSystemEventWithReceipt("retained diagnostic", eventOptions, {
+        allowDuplicate: true,
+      }),
+      exitCode: null,
+      exitSignal: null,
+    });
+    expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
 
-      const result = await handleBashChatCommand(buildParams("!poll finished-status"));
+    const result = await handleBashChatCommand(buildParams("!poll finished-status"));
 
-      expect(result.text).toContain(`Exit: ${outcome.label}`);
-      expect(result.text).toContain("retained diagnostic");
-      expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
-      expect(peekSystemEventEntries(eventOptions.sessionKey)).toContainEqual(previous);
+    expect(result.text).toContain("Exit: unknown exit code");
+    expect(result.text).toContain("retained diagnostic");
+    expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
+    expect(peekSystemEventEntries(eventOptions.sessionKey)).toContainEqual(previous);
 
-      await handleBashChatCommand(buildParams("!poll finished-status"));
-      expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
-    },
-  );
+    await handleBashChatCommand(buildParams("!poll finished-status"));
+    expect(peekSystemEventEntries(eventOptions.sessionKey)).toHaveLength(2);
+  });
 
   it("returns no-running-job when session is not found", async () => {
-    getSessionMock.mockReturnValue(undefined);
-    getFinishedSessionMock.mockReturnValue(undefined);
-
     const result = await handleBashChatCommand(buildParams("/bash stop session-1"));
 
     expect(result.text).toContain("No running bash job found");
@@ -188,9 +156,6 @@ describe("handleBashChatCommand", () => {
   });
 
   it("does not split boundary emoji in missing session snippets", async () => {
-    getSessionMock.mockReturnValue(undefined);
-    getFinishedSessionMock.mockReturnValue(undefined);
-
     const result = await handleBashChatCommand(buildParams("/bash stop 1234567😀tail"));
 
     expect(result.text).toBe("⚙️ No running bash job found for 1234567….");
@@ -199,7 +164,6 @@ describe("handleBashChatCommand", () => {
   it("returns actionable guidance when canonical cancellation is not admitted", async () => {
     const session = buildRunningSession();
     getSessionMock.mockReturnValue(session);
-    getFinishedSessionMock.mockReturnValue(undefined);
     cancelBackgroundExecSessionMock.mockReturnValue(false);
 
     const result = await handleBashChatCommand(buildParams("/bash stop session-1"));
@@ -216,8 +180,6 @@ describe("handleBashChatCommand", () => {
       .mockResolvedValueOnce(backgroundExecResult("session-first"))
       .mockResolvedValueOnce(backgroundExecResult("session-second"));
     createExecToolMock.mockReturnValue({ execute });
-    getSessionMock.mockReturnValue(undefined);
-    getFinishedSessionMock.mockReturnValue(undefined);
 
     await handleBashChatCommand(buildParams("/bash first"));
     const firstSession = buildRunningSession({ id: "session-first" });
@@ -241,11 +203,9 @@ describe("handleBashChatCommand", () => {
   });
 
   it("passes the global session's prepared owner to exec", async () => {
-    createExecToolMock.mockReturnValue({
-      execute: vi.fn().mockResolvedValue({
-        content: [],
-        details: { status: "completed", exitCode: 0, aggregated: "done" },
-      }),
+    mockExec({
+      content: [],
+      details: { status: "completed", exitCode: 0, aggregated: "done" },
     });
     const params = buildParams("/bash echo done");
     const result = await handleBashChatCommand({
@@ -275,9 +235,17 @@ describe("handleBashChatCommand", () => {
     "explains elevated denial for $sessionKey with policy $policySessionKey",
     async ({ sessionKey, policySessionKey, runtime }) => {
       await withStateDirEnv("bash-denied-owner-", async () => {
-        const params = buildElevatedDeniedParams("/bash pwd");
-        params.sessionKey = sessionKey;
-        params.ctx.RuntimePolicySessionKey = policySessionKey;
+        const params = {
+          ...buildParams("/bash pwd"),
+          agentId: "target",
+          sessionKey,
+          ctx: {
+            SessionKey: "agent:main:telegram:slash-session",
+            commandText: "/bash pwd",
+            RuntimePolicySessionKey: policySessionKey,
+          },
+          elevated: { enabled: true, allowed: false, failures: [] },
+        };
         params.cfg = {
           commands: { bash: true },
           agents: {
