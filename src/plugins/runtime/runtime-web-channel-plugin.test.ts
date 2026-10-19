@@ -75,9 +75,9 @@ function coldOwner(rootDir: string, id: string, source = path.join(rootDir, "ind
   cold.records = [{ id, rootDir, source, origin: "global" }];
 }
 
-function writeSource(root: string, version: string, surfaceDirectory = root) {
+function writeSource(rootDir: string, version: string, surfaceDirectory = rootDir) {
   fs.mkdirSync(surfaceDirectory, { recursive: true });
-  writeFiles(root, { "package.json": '{"type":"module"}' });
+  writeFiles(rootDir, { "package.json": '{"type":"module"}' });
   writeFiles(surfaceDirectory, {
     "state.ts": `let value = ${JSON.stringify(version)};
     export const read = () => value;
