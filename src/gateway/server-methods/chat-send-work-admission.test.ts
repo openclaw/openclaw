@@ -9,6 +9,7 @@ import { enqueueFollowupRun } from "../../auto-reply/reply/queue/enqueue.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
+import { SqliteWorkerError } from "../../infra/sqlite-worker-contract.js";
 import {
   getActiveGatewayRootWorkCount,
   resetGatewayWorkAdmission,
@@ -66,7 +67,10 @@ it.each([
     }),
   ),
   new SessionMutationAuthorizationChangedError({ code: "FORBIDDEN", message: "Access changed." }),
-])("keeps typed startup and authorization refusals non-terminal: %s", (error) => {
+  new Error("Unclassified admission failure"),
+  Object.assign(new Error("Validation failed"), { retryable: false }),
+  Object.assign(new Error("Not a canonical worker outcome"), { code: "outcome-unknown" }),
+])("keeps non-storage admission failures RPC-only: %s", (error) => {
   const respond = vi.fn();
   const terminal = vi.fn();
   respondChatSendAdmissionError(error, respond, terminal);
@@ -74,10 +78,24 @@ it.each([
     false,
     undefined,
     expect.objectContaining({
-      code: error instanceof AgentDatabaseAdmissionError ? "UNAVAILABLE" : "FORBIDDEN",
+      code: error instanceof AgentDatabaseAdmissionError ? "UNAVAILABLE" : "INVALID_REQUEST",
     }),
   );
   expect(terminal).not.toHaveBeenCalled();
+});
+
+it.each([
+  Object.assign(new Error("database or disk is full"), { errcode: 13 }),
+  Object.assign(new Error("No space left on device"), { code: "ENOSPC" }),
+  Object.assign(new Error("disk I/O error"), { code: "SQLITE_IOERR" }),
+  new SqliteWorkerError("Persistence outcome is unknown", "outcome-unknown"),
+  new AggregateError([new SqliteWorkerError("Persistence outcome is unknown", "outcome-unknown")]),
+])("publishes classified storage admission failures: %s", (error) => {
+  const respond = vi.fn();
+  const terminal = vi.fn();
+  respondChatSendAdmissionError(error, respond, terminal);
+  expect(respond).toHaveBeenCalledExactlyOnceWith(false, undefined, expect.anything());
+  expect(terminal).toHaveBeenCalledOnce();
 });
 
 describe("retained chat work admission", () => {

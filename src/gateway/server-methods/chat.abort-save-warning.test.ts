@@ -3,7 +3,6 @@ import type { RpcSourceRef } from "../../sessions/session-controller.rpc-sources
 // oxfmt-ignore
 import { useChatAbortRegistryFixture } from "./chat.abort-registry.test-support.js";
 import { expect, it, vi } from "vitest";
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import * as subagentKill from "../../agents/subagents/registry/subagent-control-kill.js";
 import { registerSubagentRun } from "../../agents/subagents/registry/subagent-registry.js";
 import { enqueueSwarmRun } from "../../agents/subagents/swarm/swarm-scheduler.js";
@@ -21,7 +20,6 @@ import {
   handleChatAbortRequestWithLifecycle,
 } from "./chat-abort-handler.js";
 import { ACTIVE_LEAF_CHANGED_ERROR_REASON } from "./chat-send-active-leaf.js";
-import { ChatSendAdmissionRefusedError } from "./chat-send-admission-errors.js";
 import { handleDirectExternalChatSend } from "./chat-send-external-entry.js";
 import {
   createAbortTestRunState,
@@ -203,12 +201,7 @@ it.each([
         throw refusal;
       }
       if (route === "stop-leaf") {
-        throw new ChatSendAdmissionRefusedError(
-          ACTIVE_LEAF_CHANGED_ERROR_REASON,
-          errorShape(ErrorCodes.INVALID_REQUEST, "active branch changed; review and retry", {
-            details: { reason: ACTIVE_LEAF_CHANGED_ERROR_REASON },
-          }),
-        );
+        throw new Error(ACTIVE_LEAF_CHANGED_ERROR_REASON);
       }
     }
   };

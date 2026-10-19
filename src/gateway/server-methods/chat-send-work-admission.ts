@@ -40,10 +40,7 @@ import {
   terminalizeRestartSafeChatAdmission,
   type RestartSafeChatTerminalState,
 } from "./chat-restart-recovery.js";
-import {
-  ChatSendAdmissionRefusedError,
-  respondChatSendAdmissionError,
-} from "./chat-send-admission-errors.js";
+import { respondChatSendAdmissionError } from "./chat-send-admission-errors.js";
 import {
   prepareChatSendRetryComparison,
   resolveChatSendRequestConflict,
@@ -566,18 +563,10 @@ export function assertChatSendExclusiveAdmission(
       agentId: session.agentId,
     })
   ) {
-    if (request.providerReviewAcknowledgment) {
-      throw new ChatSendAdmissionRefusedError(
-        "The session still has active work. Review its status before continuing.",
-      );
-    }
-    throw new ChatSendAdmissionRefusedError(
-      "goal-session-busy",
-      errorShape(
-        ErrorCodes.UNAVAILABLE,
-        "This session still has active or queued work. Wait for it to finish, then retry the Goal.",
-        { retryable: true, details: { reason: "goal-session-busy" } },
-      ),
+    throw new Error(
+      request.providerReviewAcknowledgment
+        ? "The session still has active work. Review its status before continuing."
+        : "goal-session-busy",
     );
   }
 }

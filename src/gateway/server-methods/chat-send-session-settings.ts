@@ -1,10 +1,8 @@
-import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import {
   normalizeSessionToolOverrides,
   sessionToolOverridesEqual,
 } from "../../config/sessions/session-tool-overrides.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
-import { ChatSendAdmissionRefusedError } from "./chat-send-admission-errors.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 
 export const SESSION_SETTINGS_CHANGED_ERROR_REASON = "session-settings-changed";
@@ -25,12 +23,7 @@ export function captureAdmittedChatSendSessionSettings(params: {
     (expectedToolOverrides !== undefined &&
       !sessionToolOverridesEqual(entry?.toolOverrides, expectedToolOverrides))
   ) {
-    throw new ChatSendAdmissionRefusedError(
-      SESSION_SETTINGS_CHANGED_ERROR_REASON,
-      errorShape(ErrorCodes.INVALID_REQUEST, "Session settings changed before send. Retry.", {
-        details: { reason: SESSION_SETTINGS_CHANGED_ERROR_REASON },
-      }),
-    );
+    throw new Error(SESSION_SETTINGS_CHANGED_ERROR_REASON);
   }
   if (!params.commit) {
     return undefined;

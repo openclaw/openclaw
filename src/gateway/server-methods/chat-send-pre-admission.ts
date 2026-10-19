@@ -1,6 +1,7 @@
 import { ErrorCodes, errorShape } from "../../../packages/gateway-protocol/src/index.js";
 import { isMainSessionRecoveryReconciliationCandidate } from "../../agents/main-session-recovery/main-session-recovery-state.js";
 import { resolveSessionWorkStartError } from "../../config/sessions.js";
+import { SESSION_ROUTING_CHANGED_ERROR_REASON } from "../../config/sessions/main-session.js";
 import { hasRestartRecoveryTerminalRun } from "../../config/sessions/restart-recovery-state.js";
 import { isSessionTranscriptProjectionUnavailableError } from "../../config/sessions/session-transcript-projection-error.js";
 import { resolveSendPolicy } from "../../sessions/send-policy.js";
@@ -33,8 +34,6 @@ import {
 import { resolveDurableChatClaim } from "./chat-restart-recovery.js";
 import { assertExpectedLeafActiveAsync } from "./chat-send-active-leaf.js";
 import {
-  ChatSendAdmissionRefusedError,
-  createChatSessionRoutingChangedError,
   respondChatSendAdmissionError,
   respondChatSessionRoutingChanged,
 } from "./chat-send-admission-errors.js";
@@ -575,7 +574,7 @@ export async function runChatSendPreAdmission(
         const comparison = await prepareChatSendRetryComparison(params);
         const conflict = resolveChatSendRequestConflict(params, comparison);
         if (conflict) {
-          throw new ChatSendAdmissionRefusedError(conflict.message, conflict);
+          throw new Error(conflict.message);
         }
         const workStartError = resolveSessionWorkStartError(sessionKey, recoveryEntry, {
           allowPendingWorkspace: true,
@@ -584,7 +583,7 @@ export async function runChatSendPreAdmission(
           expectedSessionId: session.requestedSessionId ?? session.backingSessionId,
         });
         if (workStartError) {
-          throw new ChatSendAdmissionRefusedError(workStartError);
+          throw new Error(workStartError);
         }
         captureAdmittedChatSendSessionSettings({
           commit: false,
@@ -604,7 +603,7 @@ export async function runChatSendPreAdmission(
           commitGuard: () => {
             params.assertCurrent?.();
             if (sessionRoutingChanged(context.getRuntimeConfig())) {
-              throw createChatSessionRoutingChangedError();
+              throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
             }
           },
           workerPlacementContext: resolveSessionWorkerPlacementContext(context),

@@ -26,7 +26,10 @@ import {
 import { resolveEffectiveAgentRuntime } from "../../agents/thinking-runtime.js";
 import { resolveAgentTimeoutMs } from "../../agents/timeout.js";
 import { resolveTextCommand } from "../../auto-reply/commands-registry.js";
-import { resolveSessionRoutingContract } from "../../config/sessions/main-session.js";
+import {
+  resolveSessionRoutingContract,
+  SESSION_ROUTING_CHANGED_ERROR_REASON,
+} from "../../config/sessions/main-session.js";
 import { prepareQualifiedSessionEntryTarget } from "../../config/sessions/session-accessor.js";
 import type { QualifiedSessionEntryAccessTarget } from "../../config/sessions/session-accessor.types.js";
 import { buildSessionCreationStamp } from "../../config/sessions/session-entry-provenance.js";
@@ -45,7 +48,6 @@ import { authorizeGatewaySessionCreation, resolveCreatorSandbox } from "../opera
 import { hasGatewayAdminScope } from "../operator-scopes.js";
 import { pendingChatSendDedupeKey } from "../server-shared.js";
 import { resolveOperatorSessionCreation } from "../session-creation-provenance.js";
-import { SessionMutationAuthorizationChangedError } from "../session-mutation-authorization-error.js";
 import {
   resolveChatSendSessionKey,
   resolveRequestedSessionAgentId,
@@ -62,10 +64,6 @@ import {
 } from "../session-utils.js";
 import { prepareSkillLibrarySessionCreation } from "../skill-library-session.js";
 import { createRestartSafeChatRequest } from "./chat-restart-recovery.js";
-import {
-  ChatSendAdmissionRefusedError,
-  createChatSessionRoutingChangedError,
-} from "./chat-send-admission-errors.js";
 import type { NormalizedChatSendRequest } from "./chat-send-request.js";
 import { roundedChatSendTimingMs } from "./chat-server-timing.js";
 import { emitSessionsChanged } from "./session-change-event.js";
@@ -184,7 +182,7 @@ export async function prepareChatSendSessionEntry(params: {
   const { cfg, client, agentId, getRuntimeConfig } = params;
   const creationError = authorizeGatewaySessionCreation({ cfg, client, agentId });
   if (creationError) {
-    throw new SessionMutationAuthorizationChangedError(creationError);
+    throw new Error(creationError.message);
   }
   const creation = await prepareSkillLibrarySessionCreation(
     client,
@@ -239,11 +237,9 @@ async function loadChatSendSessionContext(params: {
   const requestedAgentId = requestedAgent.agentId;
   const sessionLoadKey = resolveChatSendSessionKey(runtimeConfig, rawSessionKey, requestedAgentId);
   const sessionLoadOptions = { agentId: requestedAgentId };
-  const assertRoutingCurrent = captureSessionMutationRouting(
-    runtimeConfig,
-    createChatSessionRoutingChangedError,
-    [{ sessionKey: rawSessionKey, agentId: requestedAgentId }],
-  );
+  const assertRoutingCurrent = captureSessionMutationRouting(runtimeConfig, undefined, [
+    { sessionKey: rawSessionKey, agentId: requestedAgentId },
+  ]);
   const assertConfigCurrent = () => assertRoutingCurrent(context.getRuntimeConfig());
   const sessionLoadStartedAtMs = performance.now();
   const sessionLoadResult = await measureDiagnosticsTimelineSpan(
@@ -284,7 +280,7 @@ async function loadChatSendSessionContext(params: {
   if (
     !isDeepStrictEqual(preparationFor(runtimeConfig), preparationFor(context.getRuntimeConfig()))
   ) {
-    throw new ChatSendAdmissionRefusedError("Session preparation changed; retry.");
+    throw new Error("Session preparation changed; retry.");
   }
   const sessionLoadMs = roundedChatSendTimingMs(performance.now() - sessionLoadStartedAtMs);
   const { cfg, agentId, storePath, entry, canonicalKey: sessionKey, legacyKey } = sessionLoadResult;
@@ -464,7 +460,7 @@ function assertCurrentChatSendSession(
   latest: Awaited<ReturnType<typeof loadGatewaySessionEntryReadOnlyInWorker>>,
 ) {
   if (session.sessionRoutingChanged(latest.cfg)) {
-    throw createChatSessionRoutingChangedError();
+    throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
   }
   if (
     latest.agentId !== session.sessionTarget.agentId ||
@@ -472,7 +468,7 @@ function assertCurrentChatSendSession(
     (session.sessionTarget.readSource &&
       !isDeepStrictEqual(latest.capturedReadSource, session.sessionTarget.readSource))
   ) {
-    throw new ChatSendAdmissionRefusedError("Session storage changed while starting work. Retry.");
+    throw new Error("Session storage changed while starting work. Retry.");
   }
 }
 
@@ -485,29 +481,34 @@ export function withCurrentChatSendSession<T>(params: {
   consume: Parameters<typeof withGatewaySessionEntry<T>>[2];
 }) {
   const { session } = params;
-  const assertRoutingCurrent = captureSessionMutationRouting(
-    session.cfg,
-    createChatSessionRoutingChangedError,
-    [session],
-  );
+  const assertRoutingCurrent = captureSessionMutationRouting(session.cfg, undefined, [session]);
   const preparationRequest = { explicitOrigin: session.preparationOrigin };
-  const preparationFor = (config: OpenClawConfig) =>
-    chatSendPreparationConfig(
-      config,
-      session.agentId,
-      session.entry,
-      preparationRequest,
-      session.sessionKey,
-    );
-  const preparationConfig = preparationFor(session.cfg);
+  const preparationConfig = chatSendPreparationConfig(
+    session.cfg,
+    session.agentId,
+    session.entry,
+    preparationRequest,
+    session.sessionKey,
+  );
   const assertConfigCurrent = () => {
     const currentConfig = params.getRuntimeConfig();
     assertRoutingCurrent(currentConfig);
     if (session.sessionRoutingChanged(currentConfig)) {
-      throw createChatSessionRoutingChangedError();
+      throw new Error(SESSION_ROUTING_CHANGED_ERROR_REASON);
     }
-    if (!isDeepStrictEqual(preparationConfig, preparationFor(currentConfig))) {
-      throw new ChatSendAdmissionRefusedError("Session preparation changed; retry.");
+    if (
+      !isDeepStrictEqual(
+        preparationConfig,
+        chatSendPreparationConfig(
+          currentConfig,
+          session.agentId,
+          session.entry,
+          preparationRequest,
+          session.sessionKey,
+        ),
+      )
+    ) {
+      throw new Error("Session preparation changed; retry.");
     }
   };
   const consume: typeof params.consume = (latest, membership, assertSourceCurrent) => {
