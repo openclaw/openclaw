@@ -53,6 +53,7 @@ import { createFixture } from "./managed-image-attachments.test-support.js";
 import {
   insertManagedImageRecord,
   listManagedImageRecordEntries,
+  MANAGED_OUTGOING_ORIGINALS_SUBDIR,
   type ManagedImageRecord,
   readManagedImageRecord,
 } from "./managed-image-record-store.js";
