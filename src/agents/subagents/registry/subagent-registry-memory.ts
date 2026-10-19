@@ -179,16 +179,13 @@ const childSessionCandidatesByKey = new SubagentRunIndex((entry) => entry.childS
 const runsByChildSessionOwner = new SubagentRunIndex(childSessionOwnerKey);
 const runsByRequesterSessionKey = new SubagentRunIndex((entry) => entry.requesterSessionKey);
 const runsByCollectorGroupKey = new SubagentRunIndex(collectorGroupKey);
-const activationRuns = new SubagentRunIndex((entry) =>
-  needsSubagentActivation(entry) ? "activation" : undefined,
-);
+const activationRuns = new Map<string, SubagentRunRecord>();
 const runIndexes = [
   collectorsByChildSessionOwner,
   childSessionCandidatesByKey,
   runsByChildSessionOwner,
   runsByRequesterSessionKey,
   runsByCollectorGroupKey,
-  activationRuns,
 ];
 
 function needsSubagentActivation(entry: SubagentRunRecord): boolean {
@@ -631,11 +628,17 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     for (const index of runIndexes) {
       index.update(runId, entry, "add");
     }
+    if (needsSubagentActivation(entry)) {
+      activationRuns.set(runId, entry);
+    } else {
+      activationRuns.delete(runId);
+    }
     return this;
   }
 
   override delete(runId: string): boolean {
     this.readLookup.set(runId, undefined);
+    activationRuns.delete(runId);
     const prev = this.get(runId);
     if (prev) {
       for (const index of runIndexes) {
@@ -660,6 +663,7 @@ class SubagentRunMap extends Map<string, SubagentRunRecord> {
     for (const index of runIndexes) {
       index.clear();
     }
+    activationRuns.clear();
     publishSubagentRunChanges();
   }
 }
@@ -671,7 +675,7 @@ export function getSubagentActivationRuns(
   runs: ReadonlyMap<string, SubagentRunRecord>,
 ): Iterable<SubagentRunRecord> {
   return runs === subagentRuns
-    ? (activationRuns.get("activation")?.values() ?? [])
+    ? activationRuns.values()
     : [...runs.values()].filter(needsSubagentActivation);
 }
 

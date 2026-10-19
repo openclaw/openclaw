@@ -67,6 +67,7 @@ import {
 import * as nativeSession from "../registry/subagent-control-session.js";
 import { subagentRuns } from "../registry/subagent-registry-memory.js";
 import { subscribeSubagentRunChanges } from "../registry/subagent-registry-publication.js";
+import { prepareSubagentRunsByRunIds } from "../registry/subagent-registry.js";
 import type { SubagentRunRecord } from "../registry/subagent-registry.types.js";
 import {
   createBoundSpawnInvocation,
@@ -584,7 +585,12 @@ export function registerCompletedRequestCustodySpawnCases(options: RequestCustod
             true,
           );
         }
-        const after = expectDefined(subagentRuns.get(childRunId), "native child after Stop");
+        const prepared = await prepareSubagentRunsByRunIds([accepted.runId]);
+        const selected = prepared.consume((runs) => runs.get(accepted.runId));
+        if (!selected.ready) {
+          throw new Error("Native child changed while reading its retained receipt");
+        }
+        const after = expectDefined(selected.value, "native child after Stop");
         if (mode === "consumed-active-revoked") {
           expect(after).toMatchObject({
             execution: { status: "terminal" },

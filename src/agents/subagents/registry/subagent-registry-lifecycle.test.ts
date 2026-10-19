@@ -2982,9 +2982,9 @@ describe("subagent registry lifecycle hardening", () => {
       expect.objectContaining({ runId: entry.runId, childSessionKey: entry.childSessionKey }),
       expect.any(Function),
     );
-    expect(runs.has(entry.runId)).toBe(true);
+    const retained = loadSubagentRegistryFromSqlite().get(entry.runId);
     expect(readLifecycleRun(entry).collectorCompletion).toEqual({ status: "done" });
-    expect(readLifecycleRun(entry).completion?.resultText).toBe("raw collector result");
+    expect(retained?.completion?.resultText).toBe("raw collector result");
     expect(readLifecycleRun(entry).completion?.required).toBe(false);
     expect(readLifecycleRun(entry).requesterSettleWake).toBeUndefined();
     expect(readLifecycleRun(entry).retireAfterRequesterTurn).toBeUndefined();
