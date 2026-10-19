@@ -8,6 +8,7 @@ import {
   runWithOwner,
   Show,
   Switch,
+  untrack,
 } from "solid-js";
 import { registerListener } from "../../../../../src/shared/listeners.js";
 import { PRESENTATION_CHANGED_EVENT, type PresentationBinding } from "../../../lib/presentation.ts";
@@ -110,6 +111,7 @@ function RowContent(props: { value: TranscriptContent }): JSX.Element {
 
 function TranscriptRows(props: {
   snapshot: TranscriptLayoutProps;
+  measureRowRefFor: TranscriptLayoutProps["measureRowRefFor"];
   columnRef: (element: HTMLDivElement) => void;
 }) {
   const virtualRows = createMemo(() => {
@@ -138,18 +140,16 @@ function TranscriptRows(props: {
                   : 0;
               });
               // The keyed row owns one measurement binding for its entire mounted lifetime.
-              let measureRef: ((element?: Element) => void) | undefined;
-              onCleanup(() => measureRef?.(undefined));
+              const initialKey = untrack(() => String(virtualRow().key));
+              const measureRef = props.measureRowRefFor(initialKey);
+              onCleanup(() => measureRef(undefined));
               return (
                 <>
                   <Show when={gap() > 0}>
                     <div aria-hidden="true" style={{ height: `${gap()}px` }} />
                   </Show>
                   <div
-                    ref={(node) => {
-                      measureRef = props.snapshot.measureRowRefFor(String(virtualRow().key));
-                      measureRef(node);
-                    }}
+                    ref={measureRef}
                     class={[
                       "chat-virtual-row",
                       { "chat-virtual-row--first": virtualRow().index === 0 },
@@ -324,6 +324,7 @@ export class ChatTranscriptRenderer {
                 <ContentPresentation value={active}>
                   <TranscriptRows
                     snapshot={snapshot()}
+                    measureRowRefFor={next.measureRowRefFor}
                     columnRef={(element) => {
                       this.column = element;
                     }}
