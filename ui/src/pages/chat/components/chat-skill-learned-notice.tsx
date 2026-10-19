@@ -8,20 +8,16 @@ import { projectGateway } from "../../../lib/reactive/application.ts";
 import { useOptionalApplication } from "../../../lib/reactive/context.ts";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { normalizeAgentId } from "../../../lib/sessions/session-key.ts";
-import { defineSolidBridge } from "../../../lib/solid-bridge.ts";
 import "../../../styles/chat/skill-learned-notice.css";
 
 type UndoState = "idle" | "pending" | "done" | { error: string };
 
 /** One review's changes, with Workshop links and one whole-review Undo operation. */
-export const ChatSkillLearnedNotice = defineSolidBridge<{
-  notice?: SkillWorkshopChangeNotice;
-}>(
-  "openclaw-chat-skill-learned-notice",
-  (props) => {
-    const context = useOptionalApplication();
-    const gateway = context && projectGateway(context.gateway);
-    return (
+export function ChatSkillLearnedNotice(props: { notice?: SkillWorkshopChangeNotice }) {
+  const context = useOptionalApplication();
+  const gateway = context && projectGateway(context.gateway);
+  return (
+    <openclaw-chat-skill-learned-notice>
       <Show when={props.notice} keyed>
         {(notice) => {
           const [undo, setUndo] = createSignal<UndoState>("idle");
@@ -153,7 +149,6 @@ export const ChatSkillLearnedNotice = defineSolidBridge<{
           );
         }}
       </Show>
-    );
-  },
-  { properties: { notice: { default: undefined, attribute: false } } },
-);
+    </openclaw-chat-skill-learned-notice>
+  );
+}

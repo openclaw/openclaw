@@ -191,15 +191,9 @@ declare module "@solidjs/web" {
         ElementProperties<Pick<HTMLElementTagNameMap["openclaw-session-owner-chip"], "owner">> & {
           size?: HTMLElementTagNameMap["openclaw-session-owner-chip"]["size"];
         };
-      "openclaw-chat-pdf-preview": HTMLAttributes<
-        HTMLElementTagNameMap["openclaw-chat-pdf-preview"]
-      > &
-        ElementProperties<
-          Pick<
-            HTMLElementTagNameMap["openclaw-chat-pdf-preview"],
-            "src" | "sourceIdentity" | "label" | "mimeType" | "sizeBytes"
-          >
-        >;
+      "openclaw-chat-pdf-preview": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-pane-versions-menu": HTMLAttributes<HTMLElement>;
+      "openclaw-chat-skill-learned-notice": HTMLAttributes<HTMLElement>;
       "openclaw-agent-row-chip": HTMLAttributes<HTMLElement> & {
         "prop:agentId"?: string;
       };
