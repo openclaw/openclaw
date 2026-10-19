@@ -36,12 +36,9 @@ export const LOCALE_MATCH_RULES: ReadonlyArray<readonly [string, Locale]> = [
   ["^zh.*-(?:tw|hk|mo)(?:-|$)", "zh-TW"],
   ["^zh", "zh-CN"],
   ...SUPPORTED_LOCALES.filter((locale) => locale !== "en" && !locale.startsWith("zh")).map(
-    (locale): readonly [string, Locale] => ["^" + locale.split("-")[0]!.toLowerCase(), locale],
+    (locale): readonly [string, Locale] => ["^" + locale.split("-")[0]!, locale],
   ),
 ];
-const navigatorLocaleRules = LOCALE_MATCH_RULES.map(
-  ([source, locale]) => [new RegExp(source), locale] as const,
-);
 
 export function isSupportedLocale(value: string | null | undefined): value is Locale {
   return SUPPORTED_LOCALES.some((locale) => locale === value);
@@ -49,5 +46,8 @@ export function isSupportedLocale(value: string | null | undefined): value is Lo
 
 export function resolveNavigatorLocale(browserLanguage: string): Locale {
   const language = browserLanguage.toLowerCase();
-  return navigatorLocaleRules.find(([pattern]) => pattern.test(language))?.[1] ?? DEFAULT_LOCALE;
+  return (
+    LOCALE_MATCH_RULES.find(([pattern]) => new RegExp(pattern).test(language))?.[1] ??
+    DEFAULT_LOCALE
+  );
 }
