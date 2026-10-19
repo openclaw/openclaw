@@ -63,6 +63,7 @@ export function correctedVisibleSpawnCall(raw: Record<string, unknown>): string 
       "label",
       "agentId",
       "model",
+      "thinking",
       "runTimeoutSeconds",
       "cwd",
       "expectsCompletionMessage",
