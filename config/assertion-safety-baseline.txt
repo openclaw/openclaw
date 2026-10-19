@@ -377,7 +377,6 @@ extensions/line/src/accounts.ts	3
 extensions/line/src/actions.ts	3
 extensions/line/src/auto-reply-delivery.ts	1
 extensions/line/src/flex-templates/basic-cards.ts	2
-extensions/line/src/flex-templates/media-control-cards.ts	1
 extensions/line/src/gateway.ts	1
 extensions/line/src/monitor.ts	1
 extensions/line/src/outbound.ts	3
@@ -2434,8 +2433,7 @@ src/version.ts	4
 src/video-generation/capability-overlays.ts	1
 src/video-generation/runtime.ts	1
 src/web-fetch/runtime.ts	2
-src/web-search/runtime-execution.ts	1
-src/web-search/runtime.ts	2
+src/web-search/runtime.ts	1
 src/web/provider-runtime-shared.ts	1
 src/wizard/clack-navigation-prompts.ts	11
 src/wizard/clack-prompter.ts	2
