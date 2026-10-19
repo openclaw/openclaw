@@ -21,6 +21,9 @@ import { prepareSubagentSessionContext } from "./subagent-spawn-context.js";
 import { createInitialSubagentSession } from "./subagent-spawn-session-patch.js";
 import * as spawnRuntime from "./subagent-spawn.runtime.js";
 
+const readEntry = (storePath: string, sessionKey: string) =>
+  loadSessionEntry({ agentId: "main", storePath, sessionKey });
+
 it.each(["creation", "fork"] as const)(
   "keeps the selected physical store when its alias changes before child %s",
   async (operation) => {
@@ -28,14 +31,13 @@ it.each(["creation", "fork"] as const)(
       const agentId = "main";
       const parentSessionKey = "agent:main:parent";
       const childSessionKey = "agent:main:subagent:retarget-child";
-      const original = openOpenClawAgentDatabase({
-        agentId,
-        path: state.statePath("original", "store.sqlite"),
-      });
-      const successor = openOpenClawAgentDatabase({
-        agentId,
-        path: state.statePath("successor", "store.sqlite"),
-      });
+      const openDatabase = (name: string) =>
+        openOpenClawAgentDatabase({
+          agentId,
+          path: state.statePath(name, "store.sqlite"),
+        });
+      const original = openDatabase("original");
+      const successor = openDatabase("successor");
       for (const [database, source] of [
         [original, "original"],
         [successor, "successor"],
@@ -119,16 +121,8 @@ it.each(["creation", "fork"] as const)(
         const result =
           operation === "creation"
             ? await createFromParent({
+                ...lineageSpawnParams(parentSessionKey, childSessionKey),
                 cfg,
-                requesterAgentId: agentId,
-                targetAgentId: agentId,
-                childSessionKey,
-                incognito: false,
-                requesterInternalKey: parentSessionKey,
-                creationPolicy: { actor: { type: "agent", id: agentId } },
-                completionOwnerSessionKey: parentSessionKey,
-                modelPatch: {},
-                collect: false,
               })
             : await prepareSubagentSessionContext({
                 cfg,
@@ -140,19 +134,10 @@ it.each(["creation", "fork"] as const)(
               });
         expect(result).toMatchObject({ status: "ok" });
         expect(aliasMoved).toBe(true);
-        const originalChild = loadSessionEntry({
-          agentId,
-          sessionKey: childSessionKey,
-          storePath: original.path,
-        });
-        const successorChild = loadSessionEntry({
-          agentId,
-          sessionKey: childSessionKey,
-          storePath: successor.path,
-        });
+        const originalChild = readEntry(original.path, childSessionKey);
         expect({
           original: originalChild?.sessionId,
-          successor: successorChild?.sessionId,
+          successor: readEntry(successor.path, childSessionKey)?.sessionId,
         }).toEqual({
           original: expect.any(String),
           successor: undefined,
@@ -189,7 +174,7 @@ it.each(["creation", "fork"] as const)(
 function lineageSpawnParams(
   sessionKey: string,
   childSessionKey: string,
-  lineage: { expectedParentSessionId?: string; senderIsOwner: boolean },
+  lineage: { expectedParentSessionId?: string; senderIsOwner?: boolean } = {},
 ) {
   return {
     cfg: {},
@@ -230,7 +215,7 @@ it("rejects replaced parent incarnations and never retains a reused child grant"
     const scope = { storePath, sessionKey };
     const spawn = (lineage: { expectedParentSessionId?: string; senderIsOwner: boolean }) =>
       createFromParent(lineageSpawnParams(sessionKey, childSessionKey, lineage));
-    const child = () => loadSessionEntry({ storePath, sessionKey: childSessionKey });
+    const child = () => readEntry(storePath, childSessionKey);
     await upsertSessionEntryCore(scope, {
       sessionId: "parent-first",
       lifecycleRevision: "first",
@@ -290,7 +275,7 @@ it("inherits admitted skill pins without overwriting a parent refresh", async ()
         }),
       );
       expect(result).toMatchObject({ status: "ok" });
-      const child = loadSessionEntry({ storePath, sessionKey: childSessionKey });
+      const child = readEntry(storePath, childSessionKey);
       expect(child).toMatchObject({
         spawnedBySessionId: "parent-first",
         spawnedBySenderIsOwner: true,
@@ -320,7 +305,7 @@ it("spawns from a parent without a stored row, as before lineage receipts", asyn
         }),
       ),
     ).toMatchObject({ status: "ok" });
-    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
+    expect(readEntry(storePath, childSessionKey)).toMatchObject({
       spawnedBy: sessionKey,
       spawnedBySenderIsOwner: false,
     });
@@ -372,23 +357,13 @@ it.each(["sqlite", "json"] as const)(
       });
       expect(result).toMatchObject({ status: "ok", freshChild: { storePath: configured } });
       expect(
-        loadSessionEntry({
-          agentId: "main",
-          sessionKey: childSessionKey,
-          storePath: state.statePath(
-            "current",
-            extension === "json" ? "store.main.sqlite" : "store.sqlite",
-          ),
-        }),
+        readEntry(
+          state.statePath("current", extension === "json" ? "store.main.sqlite" : "store.sqlite"),
+          childSessionKey,
+        ),
       ).toMatchObject({ spawnedBy: sessionKey, sessionId: expect.any(String) });
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey: childSessionKey, storePath: historical }),
-      ).toBeUndefined();
-      expect(
-        loadSessionEntry({ agentId: "main", sessionKey, storePath: historical }),
-      ).toMatchObject({
-        sessionId: "historical-parent",
-      });
+      expect(readEntry(historical, childSessionKey)).toBeUndefined();
+      expect(readEntry(historical, sessionKey)).toMatchObject({ sessionId: "historical-parent" });
     });
   },
 );
@@ -419,7 +394,7 @@ it("commits group and delivery facts with creation for one host-bound admission"
       throw new Error("Fresh child creation did not return its committed entry");
     }
     const { entry } = result.freshChild;
-    expect(loadSessionEntry({ storePath, sessionKey: childSessionKey })).toMatchObject({
+    expect(readEntry(storePath, childSessionKey)).toMatchObject({
       sessionId: entry.sessionId,
       createdVia: "spawn",
       parentSessionKey: sessionKey,

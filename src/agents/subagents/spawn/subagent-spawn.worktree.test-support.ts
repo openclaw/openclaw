@@ -26,6 +26,10 @@ import {
 } from "./subagent-spawn.production-boundary.test-support.js";
 
 type BoundParent = Awaited<ReturnType<typeof createSpawnBoundaryParent>>;
+const whenIdle = (bound: BoundParent, run: () => void | Promise<void> = () => {}) =>
+  AsyncWorkScope.runWhenAllIdle(() => [bound.execution], run);
+const gitAt = (repository: string, ...args: string[]) =>
+  execFileSync("git", ["-C", repository, ...args], { encoding: "utf8" }).trim();
 
 export function registerManagedWorktreeSpawnCases(options: {
   stateDir: () => string;
@@ -41,8 +45,7 @@ export function registerManagedWorktreeSpawnCases(options: {
   describe("managed worktrees", () => {
     let repository = "";
     let projectId = "";
-    const git = (...args: string[]) =>
-      execFileSync("git", ["-C", repository, ...args], { encoding: "utf8" }).trim();
+    const git = (...args: string[]) => gitAt(repository, ...args);
     let preparationStarted = createDeferred();
     let releasePreparation = createDeferred();
     let modelStarted = createDeferred();
@@ -121,10 +124,7 @@ export function registerManagedWorktreeSpawnCases(options: {
         const bound = ownedBound;
         const gateway = ownedGateway;
         if (bound) {
-          await AsyncWorkScope.runWhenAllIdle(
-            () => [bound.execution],
-            () => {},
-          );
+          await whenIdle(bound);
         }
         if (bound && gateway && childSessionKey) {
           const entry = loadSessionEntry({
@@ -148,10 +148,7 @@ export function registerManagedWorktreeSpawnCases(options: {
         try {
           const bound = ownedBound;
           if (bound) {
-            await AsyncWorkScope.runWhenAllIdle(
-              () => [bound.execution],
-              () => bound.execution.drain(),
-            );
+            await whenIdle(bound, () => bound.execution.drain());
           }
         } finally {
           restoreAllocation?.();
@@ -200,27 +197,15 @@ export function registerManagedWorktreeSpawnCases(options: {
           spawnDepth: 2,
         });
         expect(runEmbeddedAgent).not.toHaveBeenCalled();
-        const executionIdle = AsyncWorkScope.runWhenAllIdle(
-          () => [bound.execution],
-          () => {},
-        );
-        await withinTest(
-          awaitGateBeforeSettlement(
-            preparationStarted.promise,
-            executionIdle,
-            "Child ended before workspace preparation",
-          ),
-          signal,
-        );
+        const executionIdle = whenIdle(bound);
+        const enter = (gate: Promise<void>, stage: string) =>
+          withinTest(
+            awaitGateBeforeSettlement(gate, executionIdle, `Child ended before ${stage}`),
+            signal,
+          );
+        await enter(preparationStarted.promise, "workspace preparation");
         releasePreparation.resolve();
-        await withinTest(
-          awaitGateBeforeSettlement(
-            modelStarted.promise,
-            executionIdle,
-            "Child ended before model entry",
-          ),
-          signal,
-        );
+        await enter(modelStarted.promise, "model entry");
         const child = loadSessionEntry(childScope);
         const checkout = expectDefined(
           await managedWorktrees.findLiveByOwner("session", childSessionKey),
@@ -237,11 +222,7 @@ export function registerManagedWorktreeSpawnCases(options: {
         });
         expect(child?.pendingWorktree).toBeUndefined();
         expect(runEmbeddedAgent.mock.calls[0]?.[0].workspaceDir).toBe(checkout.path);
-        expect(
-          execFileSync("git", ["-C", checkout.path, "branch", "--show-current"], {
-            encoding: "utf8",
-          }).trim(),
-        ).toBe(checkout.branch);
+        expect(gitAt(checkout.path, "branch", "--show-current")).toBe(checkout.branch);
         expect(subagentRuns.get(details.runId)).toMatchObject({
           cleanup,
           requesterSessionKey: bound.parentSessionKey,
@@ -251,13 +232,7 @@ export function registerManagedWorktreeSpawnCases(options: {
         modelResult.resolve({ payloads: [{ text: "done" }], meta: { durationMs: 1 } });
         await withinTest(executionIdle, signal);
         await withinTest(options.settleRegistry(), signal);
-        await withinTest(
-          AsyncWorkScope.runWhenAllIdle(
-            () => [bound.execution],
-            () => {},
-          ),
-          signal,
-        );
+        await withinTest(whenIdle(bound), signal);
         if (cleanup === "delete") {
           expect(loadSessionEntry(childScope)).toBeUndefined();
           await expect(fs.stat(checkout.path)).rejects.toMatchObject({ code: "ENOENT" });

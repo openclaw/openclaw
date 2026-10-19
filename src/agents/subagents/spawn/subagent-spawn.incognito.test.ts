@@ -49,14 +49,13 @@ const skillLibrarySelections = [
 
 beforeEach(() => {
   vi.stubEnv("OPENCLAW_STATE_DIR", "/synthetic/subagent-capabilities");
-  parent = memorySessionActorOwners.get({
-    agentId: "main",
-    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "main" }),
-  });
-  sibling = memorySessionActorOwners.get({
-    agentId: "research",
-    path: resolveIncognitoOpenClawAgentSqlitePath({ agentId: "research" }),
-  });
+  const owner = (agentId: string) =>
+    memorySessionActorOwners.get({
+      agentId,
+      path: resolveIncognitoOpenClawAgentSqlitePath({ agentId }),
+    });
+  parent = owner("main");
+  sibling = owner("research");
 });
 afterEach(() => {
   vi.restoreAllMocks();
@@ -73,19 +72,15 @@ async function create(
   const sessionKey = `agent:${owner.agentId}:${kind}:incognito-${name}`;
   const actor = await owner.acquire({ database: owner.identity, sessionKey }, lifetime);
   try {
+    const entry = {
+      sessionId: name,
+      lifecycleRevision: "original",
+      updatedAt: 1,
+      incognito: true,
+      ...patch,
+    };
     const result = await actor.storage!.mutate(
-      {
-        type: "session.entry.create",
-        input: {
-          entry: {
-            sessionId: name,
-            lifecycleRevision: "original",
-            updatedAt: 1,
-            incognito: true,
-            ...patch,
-          },
-        },
-      },
+      { type: "session.entry.create", input: { entry } },
       authority,
     );
     expect(result.kind).toBe("committed");
@@ -96,10 +91,10 @@ async function create(
 }
 
 async function withMemorySource<T>(owner: MemoryOwner, sessionKey: string, run: () => Promise<T>) {
-  const actor = await owner.acquireExisting(sessionKey, lifetime);
-  if (!actor) {
-    throw new Error("Expected memory session fixture");
-  }
+  const actor = expectDefined(
+    await owner.acquireExisting(sessionKey, lifetime),
+    "memory session fixture",
+  );
   try {
     return await runWithSessionActorStorage(
       { actor, authority, agentId: owner.agentId, path: owner.path },
@@ -109,6 +104,11 @@ async function withMemorySource<T>(owner: MemoryOwner, sessionKey: string, run: 
     await actor.release();
   }
 }
+
+const patchMemory = (owner: MemoryOwner, sessionKey: string, patch: Partial<SessionEntry>) =>
+  withMemorySource(owner, sessionKey, () =>
+    patchSessionEntryCore({ storePath: owner.path, sessionKey }, () => patch),
+  );
 
 it.each([false, true])(
   "resolves current capability envelopes and cross-agent depth (bound=%s)",
@@ -123,32 +123,17 @@ it.each([false, true])(
     });
     const read = async () => {
       const store = resolveSubagentCapabilityStore(childKey, { cfg: {} });
+      const policy = () => resolvePersistedSubagentToolPolicyEnvelope(childKey, { cfg: {}, store });
       expect(resolveStoredSubagentCapabilities(childKey, { cfg: {}, store }).depth).toBe(3);
-      expect(
-        resolvePersistedSubagentToolPolicyEnvelope(childKey, { cfg: {}, store }),
-      ).toMatchObject({
+      expect(policy()).toMatchObject({
         spawnedBy: parentKey,
         inheritedToolAllow: ["read"],
         inheritedToolDeny: ["exec"],
       });
-      await withMemorySource(sibling, childKey, () =>
-        patchSessionEntryCore({ storePath: sibling.path, sessionKey: childKey }, () => ({
-          inheritedToolDeny: ["exec", "write"],
-        })),
-      );
-      expect(
-        resolvePersistedSubagentToolPolicyEnvelope(childKey, { cfg: {}, store }),
-      ).toMatchObject({
-        inheritedToolDeny: ["exec", "write"],
-      });
-      await withMemorySource(sibling, childKey, () =>
-        patchSessionEntryCore({ storePath: sibling.path, sessionKey: childKey }, () => ({
-          spawnDepth: undefined,
-        })),
-      );
-      expect(
-        resolvePersistedSubagentToolPolicyEnvelope(childKey, { cfg: {}, store }),
-      ).toBeUndefined();
+      await patchMemory(sibling, childKey, { inheritedToolDeny: ["exec", "write"] });
+      expect(policy()).toMatchObject({ inheritedToolDeny: ["exec", "write"] });
+      await patchMemory(sibling, childKey, { spawnDepth: undefined });
+      expect(policy()).toBeUndefined();
       expect(getSubagentDepthFromSessionStore(childKey, { cfg: {} })).toBe(3);
       const explicitStore = createSubagentSessionStore(sibling.path, "research");
       expect(explicitStore.getById("capability-child")).toMatchObject({
@@ -258,9 +243,7 @@ it("checks current memory controller depth before cancellation", async () => {
   try {
     await controller.prepare();
     expect(controller.read().controlScope).toBe("children");
-    await withMemorySource(parent, sessionKey, () =>
-      patchSessionEntryCore({ storePath: parent.path, sessionKey }, () => ({ spawnDepth: 3 })),
-    );
+    await patchMemory(parent, sessionKey, { spawnDepth: 3 });
     expect(controller.read().controlScope).toBe("none");
   } finally {
     controller.release();
