@@ -1,4 +1,4 @@
-import { createEffect, createMemo, merge, Show } from "solid-js";
+import { onSettled, createMemo, merge, Show } from "solid-js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { t } from "../../../lib/reactive/i18n.ts";
 import { EnvironmentChangeCounts } from "./chat-details-environment.tsx";
@@ -21,7 +21,6 @@ export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobile
   const requestUncommitted = createMemo(() =>
     props.presented ? props.onRequestUncommitted : undefined,
   );
-  createEffect(requestUncommitted, (request) => request?.());
   const workspace = () => props.details.detailsWorkspace;
   const session = () => props.details.selectedSession;
   const placement = merge(
@@ -43,7 +42,13 @@ export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobile
     const result = props.uncommitted;
     return result && !result.unavailableReason && result.files.length > 0 ? result : undefined;
   };
-  return (
+  return [
+    <Show when={requestUncommitted()} keyed>
+      {(request) => {
+        onSettled(request);
+        return null;
+      }}
+    </Show>,
     <section class="chat-environment-mobile" aria-label={t("chat.sessionDetails.environment")}>
       <h3>{t("chat.sessionDetails.environment")}</h3>
       <div class="chat-environment-mobile__group">
@@ -150,6 +155,6 @@ export function ChatDetailsEnvironmentMobile(props: ChatDetailsEnvironmentMobile
           )}
         </Show>
       </div>
-    </section>
-  );
+    </section>,
+  ];
 }

@@ -1,4 +1,4 @@
-import { Show, createEffect, createMemo, createSignal, merge } from "solid-js";
+import { Show, onSettled, createMemo, createSignal, merge } from "solid-js";
 import type { SessionsDiffResult } from "../../../../../packages/gateway-protocol/src/index.js";
 import { Icon } from "../../../components/solid/icon.tsx";
 import { useScrollState } from "../../../components/solid/scroll-state.ts";
@@ -50,7 +50,6 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
   const requestUncommitted = createMemo(() =>
     props.presented && expanded() ? props.onRequestUncommitted : undefined,
   );
-  createEffect(requestUncommitted, (request) => request?.());
   const session = () => props.details.selectedSession;
   const placement = merge(
     () => ({ session: session() }),
@@ -86,7 +85,13 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
     const result = props.uncommitted;
     return result && !result.unavailableReason && result.files.length > 0 ? result : undefined;
   };
-  return (
+  return [
+    <Show when={requestUncommitted()} keyed>
+      {(request) => {
+        onSettled(request);
+        return null;
+      }}
+    </Show>,
     <ChatDetailsDesktopSection
       section="environment"
       title={t("chat.sessionDetails.environment")}
@@ -222,8 +227,8 @@ export function ChatDetailsEnvironment(props: ChatDetailsEnvironmentDesktopProps
           </Show>
         </div>
       </Show>
-    </ChatDetailsDesktopSection>
-  );
+    </ChatDetailsDesktopSection>,
+  ];
 }
 
 export function ChatDetailsContext(props: Props) {
