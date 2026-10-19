@@ -13,6 +13,7 @@ import { liveValue } from "../../../lib/reactive/live-value.ts";
 import { detectTextDirection } from "../../../lib/text-direction.ts";
 import { insertComposerDictation } from "../composer-dictation.ts";
 import "../../../styles/chat/composer-context-strip.css";
+import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatAttachmentInputs } from "./chat-attachment-inputs.tsx";
 import { handleChatAttachmentPaste } from "./chat-attachments.ts";
 import { AttachmentPreview, AttachmentReadStatus } from "./chat-attachments.tsx";
@@ -57,6 +58,7 @@ export function renderChatComposerView(
   const footerControl = createFooterControlRef();
   const ComposerTextarea = (view: ComposerTextareaProps) =>
     renderComposerTextarea(context, props, state, view);
+  const inputHandle = createChatAttachmentInputHandle();
   const [capabilityOpen, setCapabilityOpen] = createSignal(false);
   const capabilityAvailable = createMemo(() => Boolean(props.capabilityMenu));
   const [capabilityView, setCapabilityView] = createSignal<ChatComposerPlusMenuView>(
@@ -410,6 +412,7 @@ export function renderChatComposerView(
               <ComposerDictationStatus readDictation={() => context().dictation} />
               <ChatAttachmentInputs
                 {...props}
+                inputHandle={inputHandle}
                 disabled={!context().canCompose}
                 cameraActive={context().showComposer && props.cameraActive !== false}
               />
@@ -517,6 +520,7 @@ export function renderChatComposerView(
                 <ChatComposerPlusMenu
                   menu={{
                     attachments: props,
+                    inputHandle,
                     capabilityMenu: props.capabilityMenu,
                     disabled: !context().canCompose || props.suggestionComposer === true,
                     open: capabilityOpen(),

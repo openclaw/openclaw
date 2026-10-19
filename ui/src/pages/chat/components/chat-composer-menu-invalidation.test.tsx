@@ -3,6 +3,7 @@ import { createSignal } from "solid-js";
 import { expect, it, onTestFinished, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { flush, waitForSolid } from "../../../test-helpers/solid-settle.ts";
+import { createChatAttachmentInputHandle } from "./chat-attachment-inputs.ts";
 import { ChatComposerPlusMenu } from "./chat-composer-plus-menu.tsx";
 import type {
   ChatComposerPlusMenuProps,
@@ -21,6 +22,7 @@ it.each<ChatComposerPlusMenuView>([
     const skillName = vi.fn(() => "Focused skill");
     const menu: ChatComposerPlusMenuProps = {
       attachments: {},
+      inputHandle: createChatAttachmentInputHandle(),
       disabled: false,
       open: false,
       view,
