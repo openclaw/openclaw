@@ -12,8 +12,32 @@ import {
 } from "../test-utils/openclaw-test-state.js";
 import { runLegacyMigrationPlans } from "./state-migrations.plugin-state.js";
 
+type ImportPlan = Extract<ChannelLegacyStateMigrationPlan, { kind: "plugin-state-import" }>;
+function importPlan(
+  params: Pick<ImportPlan, "label" | "namespace" | "sourcePath" | "stateDir" | "readEntries"> &
+    Partial<ImportPlan>,
+): ImportPlan {
+  return {
+    kind: "plugin-state-import",
+    pluginId: "migration-fixture",
+    maxEntries: 4,
+    scopeKey: "",
+    targetPath: `plugin state:${params.namespace}`,
+    ...params,
+  };
+}
+
 describe("legacy migration plan failure isolation", () => {
   let state: OpenClawTestState;
+
+  const runExisting = (plans: ChannelLegacyStateMigrationPlan[]) =>
+    runLegacyMigrationPlans(plans.filter((plan) => fs.existsSync(plan.sourcePath)));
+  async function expectRetired(sourcePath: string, original: string, run: () => Promise<unknown>) {
+    expect(fs.existsSync(sourcePath)).toBe(false);
+    expect(fs.readFileSync(`${sourcePath}.migrated`, "utf8")).toBe(original);
+    expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
+    await expect(run()).resolves.toEqual({ changes: [], warnings: [] });
+  }
 
   beforeEach(async () => {
     state = await createOpenClawTestState({ label: "migration-plan-isolation" });
@@ -47,14 +71,10 @@ describe("legacy migration plan failure isolation", () => {
           sourcePath: earlierPath,
           targetPath: `${earlierPath}.moved`,
         },
-        {
-          kind: "plugin-state-import",
+        importPlan({
           label: "Replacement import",
           sourcePath,
-          targetPath: "plugin state:failure-isolation",
-          pluginId: "migration-fixture",
           namespace: "failure-isolation",
-          maxEntries: 4,
           scopeKey: "scope",
           stateDir: importStateDir,
           cleanupSource: "rename",
@@ -69,7 +89,7 @@ describe("legacy migration plan failure isolation", () => {
             }
             throw error;
           },
-        },
+        }),
         {
           kind: "copy",
           label: "Later artifact",
@@ -77,8 +97,7 @@ describe("legacy migration plan failure isolation", () => {
           targetPath: `${laterPath}.copied`,
         },
       ];
-      const run = () =>
-        runLegacyMigrationPlans(plans.filter((plan) => fs.existsSync(plan.sourcePath)));
+      const run = () => runExisting(plans);
 
       const failed = await run();
 
@@ -104,10 +123,7 @@ describe("legacy migration plan failure isolation", () => {
         expect.stringContaining("Migrated 1 Replacement import entry"),
       );
       expect(await store.lookup("scope:conflict")).toBe("incoming");
-      expect(fs.existsSync(sourcePath)).toBe(false);
-      expect(fs.readFileSync(`${sourcePath}.migrated`, "utf8")).toBe("legacy source\n");
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-      await expect(run()).resolves.toEqual({ changes: [], warnings: [] });
+      await expectRetired(sourcePath, "legacy source\n", run);
     },
   );
 
@@ -134,15 +150,11 @@ describe("legacy migration plan failure isolation", () => {
       await counter.register(failure === "capacity" ? "occupied" : "counter", { counter: 1 });
       let shouldFail = true;
       const counterObservedMove: boolean[] = [];
-      const counterPlan: ChannelLegacyStateMigrationPlan = {
-        kind: "plugin-state-import",
+      const counterPlan = importPlan({
         label: "Reply counter",
         sourcePath,
-        targetPath: "plugin state:shared-counter",
-        pluginId: "migration-fixture",
         namespace: "shared-counter",
         maxEntries: 1,
-        scopeKey: "",
         stateDir: importStateDir,
         readEntries: () => {
           counterObservedMove.push(fs.existsSync(`${unrelatedPath}.moved`));
@@ -159,21 +171,16 @@ describe("legacy migration plan failure isolation", () => {
           }
           return true;
         },
-      };
-      const cachePlan: ChannelLegacyStateMigrationPlan = {
-        kind: "plugin-state-import",
+      });
+      const cachePlan = importPlan({
         label: "Expired reply cache",
         sourcePath,
-        targetPath: "plugin state:shared-cache",
-        pluginId: "migration-fixture",
         namespace: "shared-cache",
-        maxEntries: 4,
-        scopeKey: "",
         stateDir: importStateDir,
         cleanupSource: "rename",
         cleanupWhenEmpty: true,
         readEntries: () => [],
-      };
+      });
       const unrelatedPlan: ChannelLegacyStateMigrationPlan = {
         kind: "move",
         label: "Unrelated artifact",
@@ -183,8 +190,7 @@ describe("legacy migration plan failure isolation", () => {
       const plans = cleanupFirst
         ? [cachePlan, unrelatedPlan, counterPlan]
         : [counterPlan, cachePlan, unrelatedPlan];
-      const run = () =>
-        runLegacyMigrationPlans(plans.filter((plan) => fs.existsSync(plan.sourcePath)));
+      const run = () => runExisting(plans);
 
       const first = await run();
 
@@ -196,9 +202,7 @@ describe("legacy migration plan failure isolation", () => {
       );
       if (failure === "empty") {
         expect(first.warnings).toEqual([]);
-        expect(fs.existsSync(sourcePath)).toBe(false);
-        expect(fs.readFileSync(`${sourcePath}.migrated`, "utf8")).toBe(original);
-        await expect(run()).resolves.toEqual({ changes: [], warnings: [] });
+        await expectRetired(sourcePath, original, run);
         return;
       }
 
@@ -216,10 +220,7 @@ describe("legacy migration plan failure isolation", () => {
 
       expect(repaired.warnings).toEqual([]);
       expect(await counter.lookup("counter")).toEqual({ counter: 9000 });
-      expect(fs.existsSync(sourcePath)).toBe(false);
-      expect(fs.readFileSync(`${sourcePath}.migrated`, "utf8")).toBe(original);
-      expect(process.env.OPENCLAW_STATE_DIR).toBe(state.stateDir);
-      await expect(run()).resolves.toEqual({ changes: [], warnings: [] });
+      await expectRetired(sourcePath, original, run);
     },
   );
 
@@ -242,15 +243,10 @@ describe("legacy migration plan failure isolation", () => {
       const cleanupScopes: Array<string | undefined> = [];
       const laterObservedCleanup: boolean[] = [];
       const plans: ChannelLegacyStateMigrationPlan[] = [
-        {
-          kind: "plugin-state-import",
+        importPlan({
           label: "Scoped rows",
           sourcePath: "plugin state:old-rows",
-          targetPath: "plugin state:first-import",
-          pluginId: "migration-fixture",
           namespace: "first-import",
-          maxEntries: 4,
-          scopeKey: "",
           stateDir: importStateDir,
           readEntries: () => [{ key: "first", value: "imported" }],
           removeSource: async () => {
@@ -261,23 +257,18 @@ describe("legacy migration plan failure isolation", () => {
             const scopedStore = createPluginStateKeyedStore("migration-fixture", storeOptions);
             await scopedStore.delete("legacy");
           },
-        },
-        {
-          kind: "plugin-state-import",
+        }),
+        importPlan({
           label: "Later rows",
           sourcePath: "plugin state:unrelated-rows",
-          targetPath: "plugin state:later-import",
-          pluginId: "migration-fixture",
           namespace: "later-import",
-          maxEntries: 4,
-          scopeKey: "",
           stateDir: importStateDir,
           readEntries: async () => {
             const scopedStore = createPluginStateKeyedStore("migration-fixture", storeOptions);
             laterObservedCleanup.push((await scopedStore.lookup("legacy")) === undefined);
             return [{ key: "later", value: "completed" }];
           },
-        },
+        }),
       ];
 
       const result = await runLegacyMigrationPlans(plans);
