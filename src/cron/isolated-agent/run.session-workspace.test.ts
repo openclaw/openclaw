@@ -7,7 +7,7 @@ import {
   interruptSessionControllerEffects,
   runSessionMutation,
 } from "../../sessions/session-controller.lifecycle.js";
-import { makeIsolatedAgentJobFixture, makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
+import { makeIsolatedAgentParamsFixture } from "./job-fixtures.js";
 import { setupRunCronIsolatedAgentTurnSuite } from "./run.suite-helpers.js";
 import {
   ensureAgentWorkspaceMock,
@@ -69,11 +69,11 @@ function run(sessionTarget = `session:${sessionKey}`, key = sessionKey) {
     makeIsolatedAgentParamsFixture({
       sessionKey: key,
       cfg: { tools: { fs: { workspaceOnly: true } }, plugins: { enabled: false } },
-      job: makeIsolatedAgentJobFixture({
+      job: {
         sessionTarget,
         delivery: { mode: "none" },
         payload: { kind: "agentTurn", message: "read the saved report", toolsAllow: ["read"] },
-      }),
+      },
     }),
   );
 }
@@ -157,17 +157,10 @@ it("drains admitted workspace preparation before a lifecycle owner removes its b
 
 it.each(["custom", "current"])("keeps the configured workspace for %s runs", async (target) => {
   const custom = target === "custom";
-  resolveCronSessionMock.mockReturnValue(
-    makeCronSession(
-      custom
-        ? {}
-        : {
-            sessionEntry: makeCronSessionEntry({
-              spawnedCwd: tempDirs.make("cron-detached-source-"),
-            }),
-          },
-    ),
+  const sessionEntry = makeCronSessionEntry(
+    custom ? {} : { spawnedCwd: tempDirs.make("cron-detached-source-") },
   );
+  resolveCronSessionMock.mockReturnValue(makeCronSession({ sessionEntry }));
   loadSessionEntryMock.mockReturnValue(undefined);
   const result = await run(
     custom ? "session:custom-id" : "current",

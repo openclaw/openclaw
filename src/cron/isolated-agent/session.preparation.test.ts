@@ -5,7 +5,6 @@ import type { Worker } from "node:worker_threads";
 import { asOptionalRecord } from "@openclaw/normalization-core/record-coerce";
 import { afterAll, afterEach, beforeAll, expect, it, vi } from "vitest";
 import { observeHostDataSql } from "../../../test/helpers/sqlite-statement-execution-counter.js";
-import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import { writeSessionEntry } from "../../config/sessions/session-accessor.sqlite-entry-store.js";
 import {
   replaceSessionEntry,
@@ -21,7 +20,7 @@ import {
   createOpenClawTestState,
   type OpenClawTestState,
 } from "../../test-utils/openclaw-test-state.js";
-import { loadCronSessionEntryLatest, prepareCronSession, resolveCronSession } from "./session.js";
+import { loadCronSessionEntryLatest, prepareCronSession } from "./session.js";
 
 let state: OpenClawTestState;
 beforeAll(async () => {
@@ -193,34 +192,4 @@ it.each(["revoked", "redirected"])("rejects a %s read at dispatch", async (inter
     await closing;
     expect(fs.existsSync(database.path)).toBe(true);
   }
-});
-
-it("keeps a provider-owned CLI session with the default reset policy", () => {
-  const nowMs = 1_737_600_000_000;
-  const startedAt = nowMs - 24 * 60 * 60 * 1000;
-  const sessionKey = "agent:main:cron:daily-job";
-  const entry = {
-    sessionId: "old-session-id",
-    updatedAt: startedAt,
-    sessionStartedAt: startedAt,
-    lastInteractionAt: startedAt,
-    modelProvider: "claude-cli",
-    cliSessionBindings: { "claude-cli": { sessionId: "cli-conversation-xyz" } },
-  };
-  const result = resolveCronSession({
-    cfg: { session: {} },
-    sessionKey,
-    agentId: "main",
-    nowMs,
-    forceNew: false,
-    store: { [sessionKey]: entry },
-    lifecycleTimestamps: { sessionStartedAt: startedAt, lastInteractionAt: startedAt },
-  });
-  expect(result).toMatchObject({
-    isNewSession: false,
-    sessionEntry: { sessionId: "old-session-id" },
-  });
-  expect(getCliSessionBinding(result.sessionEntry, "claude-cli")).toEqual({
-    sessionId: "cli-conversation-xyz",
-  });
 });

@@ -160,15 +160,15 @@ it.each<AccountCase>([
         jobId: job.id,
       });
       const tasks = readCronRunRecordsForTests(job.id);
-      expect(history.entries).toHaveLength(1);
-      expect(tasks).toHaveLength(1);
       const expectedStatus = fails ? "error" : "ok";
       expect(persisted?.state.lastRunStatus).toBe(expectedStatus);
-      expect(history.entries[0]).toMatchObject({
-        status: expectedStatus,
-        completionStatus: fails ? "failed" : "succeeded",
-      });
-      expect(tasks[0]?.status).toBe(fails ? "failed" : "succeeded");
+      expect(history.entries).toMatchObject([
+        {
+          status: expectedStatus,
+          completionStatus: fails ? "failed" : "succeeded",
+        },
+      ]);
+      expect(tasks).toMatchObject([{ status: fails ? "failed" : "succeeded" }]);
       expect(events.filter((event) => event.action === "finished")).toEqual([
         expect.objectContaining({ status: expectedStatus }),
       ]);

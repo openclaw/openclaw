@@ -1,16 +1,17 @@
 import { expect, it, vi } from "vitest";
+import { getCliSessionBinding } from "../../config/sessions/cli-session-binding.js";
 import type { SessionEntry } from "../../config/sessions/types.js";
 import { normalizeLegacySessionEntryDelivery } from "../../infra/state-migrations.legacy-session-store.js";
-import { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
+import type { projectSessionDeliveryFields } from "../../utils/delivery-context.shared.js";
 
 vi.mock("../../config/sessions/paths.js", () => ({
   resolveSessionStorePathCore: vi.fn().mockReturnValue("/tmp/test-store.json"),
   resolveSessionFilePathOptions: vi.fn().mockReturnValue({ sessionsDir: "/tmp" }),
   resolveSessionFilePathCore: vi.fn((sessionId: string) => `/tmp/${sessionId}.jsonl`),
 }));
-vi.mock("../../config/sessions/reset-policy.js", () => ({
+vi.mock("../../config/sessions/reset-policy.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../config/sessions/reset-policy.js")>()),
   evaluateSessionFreshness: vi.fn().mockReturnValue({ fresh: true }),
-  resolveSessionResetPolicy: vi.fn().mockReturnValue({ mode: "idle", idleMinutes: 60 }),
 }));
 
 import { evaluateSessionFreshness } from "../../config/sessions/reset-policy.js";
@@ -44,7 +45,7 @@ function resolveWithStoredEntry(params?: {
     store[sessionKey] = params.targetEntry;
   }
   vi.mocked(evaluateSessionFreshness).mockReturnValue({ fresh: params?.fresh ?? true });
-  const result = resolveCronSession({
+  return resolveCronSession({
     cfg: {},
     sessionKey,
     sourceSessionKey,
@@ -55,13 +56,6 @@ function resolveWithStoredEntry(params?: {
     store,
     lifecycleTimestamps: {},
   });
-  return {
-    ...result,
-    sessionEntry: {
-      ...result.sessionEntry,
-      ...projectSessionDeliveryFields(result.sessionEntry.delivery),
-    },
-  };
 }
 
 const delivery = {
@@ -86,18 +80,6 @@ const boundContext = {
   worktree: { id: "worktree-1", branch: "task", repoRoot: "/repo" },
   projectId: "project",
 } satisfies Partial<SessionEntry>;
-
-function expectNoDelivery(entry: ReturnType<typeof resolveWithStoredEntry>["sessionEntry"]) {
-  for (const field of [
-    "lastChannel",
-    "lastTo",
-    "lastAccountId",
-    "lastThreadId",
-    "deliveryContext",
-  ] as const) {
-    expect(entry[field]).toBeUndefined();
-  }
-}
 
 // Spawned children and memory-audience leases bind to the parent's exact
 // revision, so a run that reuses an incarnation in place must not rotate it.
@@ -124,47 +106,42 @@ it.each([
 });
 
 it.each([
-  { forceNew: true, heartbeat: false, initializing: false },
-  { forceNew: true, heartbeat: true, initializing: true },
-  { forceNew: false, heartbeat: true, initializing: false },
+  { forceNew: true, heartbeat: false, initializing: false, rolls: false },
+  { forceNew: true, heartbeat: true, initializing: true, rolls: false },
+  { forceNew: false, heartbeat: true, initializing: false, rolls: false },
+  { forceNew: true, heartbeat: true, initializing: false, rolls: true },
 ])(
-  "blocks forced=$forceNew, heartbeat=$heartbeat, initializing=$initializing",
-  ({ forceNew, heartbeat, initializing }) => {
+  "guards archived sessions: forced=$forceNew, heartbeat=$heartbeat, initializing=$initializing",
+  ({ forceNew, heartbeat, initializing, rolls }) => {
     const sessionKey = `agent:main:main${heartbeat ? ":heartbeat" : ""}`;
-    const error = initializing
-      ? "is still initializing. Retry after initialization completes."
-      : "is archived. Restore it before starting new work.";
-    expect(() =>
+    const resolve = () =>
       resolveWithStoredEntry({
         sessionKey,
         forceNew,
         entry: {
-          sessionId: "blocked-session",
+          sessionId: "archived-heartbeat-session",
           archivedAt: NOW_MS,
           ...(heartbeat ? { heartbeatIsolatedBaseSessionKey: "agent:main:main" } : {}),
           ...(initializing ? { initializationPending: true as const } : {}),
         },
-      }),
-    ).toThrow(`Session "${sessionKey}" ${error}`);
+      });
+    if (!rolls) {
+      const error = initializing
+        ? "is still initializing. Retry after initialization completes."
+        : "is archived. Restore it before starting new work.";
+      expect(resolve).toThrow(`Session "${sessionKey}" ${error}`);
+    } else {
+      const result = resolve();
+      expect(result).toMatchObject({
+        isNewSession: true,
+        previousSessionId: "archived-heartbeat-session",
+      });
+      expect(result.sessionEntry.sessionId).not.toBe("archived-heartbeat-session");
+      expect(result.sessionEntry.archivedAt).toBeUndefined();
+      expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
+    }
   },
 );
-
-it("rolls an archived isolated heartbeat session into a fresh run", () => {
-  const result = resolveWithStoredEntry({
-    sessionKey: "agent:main:main:heartbeat",
-    forceNew: true,
-    entry: {
-      sessionId: "archived-heartbeat-session",
-      archivedAt: NOW_MS,
-      heartbeatIsolatedBaseSessionKey: "agent:main:main",
-    },
-  });
-  expect(result.isNewSession).toBe(true);
-  expect(result.previousSessionId).toBe("archived-heartbeat-session");
-  expect(result.sessionEntry.sessionId).not.toBe("archived-heartbeat-session");
-  expect(result.sessionEntry.archivedAt).toBeUndefined();
-  expect(result.sessionEntry.heartbeatIsolatedBaseSessionKey).toBeUndefined();
-});
 
 it.each([
   { forceNew: false, existingTarget: false },
@@ -251,7 +228,7 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
   });
   expect(result.lifecycleRevision).not.toBe("old-revision");
   expect(result.sessionEntry.agentHarnessId).toBeUndefined();
-  expectNoDelivery(result.sessionEntry);
+  expect(result.sessionEntry.delivery).toBeUndefined();
   if (forceNew) {
     expect(result.sessionEntry.sessionId).not.toBe("old-session");
     expect(result.sessionEntry).toMatchObject(preferences);
@@ -269,9 +246,30 @@ it.each([true, false])("resets routing and runtime handles (forced=$0)", (forceN
     expect(result.sessionEntry.claudeCliSessionId).toBeUndefined();
     expect(result.sessionEntry).not.toHaveProperty("sessionFile");
     expect(result.resetBoundaryPending).toMatchObject({ reason: "cron-stale" });
-    expect(result.sessionEntry.channel).toBeUndefined();
-    expect(result.sessionEntry.origin).toBeUndefined();
   }
+});
+
+it("keeps a provider-owned CLI session with the default reset policy", () => {
+  const startedAt = NOW_MS - 86_400_000;
+  const result = resolveWithStoredEntry({
+    sessionKey: "agent:main:cron:daily-job",
+    fresh: false,
+    entry: {
+      sessionId: "old-session-id",
+      updatedAt: startedAt,
+      sessionStartedAt: startedAt,
+      lastInteractionAt: startedAt,
+      modelProvider: "claude-cli",
+      cliSessionBindings: { "claude-cli": { sessionId: "cli-conversation-xyz" } },
+    },
+  });
+  expect(result).toMatchObject({
+    isNewSession: false,
+    sessionEntry: { sessionId: "old-session-id" },
+  });
+  expect(getCliSessionBinding(result.sessionEntry, "claude-cli")).toEqual({
+    sessionId: "cli-conversation-xyz",
+  });
 });
 
 it.each([

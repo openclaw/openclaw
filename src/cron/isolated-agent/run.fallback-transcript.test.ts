@@ -2,6 +2,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, expect, it, vi } from "vitest";
+import { createDueIsolatedJob } from "../../../test/helpers/cron/service-regression-fixtures.js";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { providerResponse } from "../../agents/embedded-agent-runner.wire.test-support.js";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
@@ -22,8 +23,8 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-it("continues one cron user turn when the primary times out after provider dispatch", async () => {
-  await withOpenClawTestState({ label: "cron-fallback-transcript" }, async (state) => {
+it("continues one cron user turn when the primary times out after provider dispatch", () =>
+  withOpenClawTestState({ label: "cron-fallback-transcript" }, async (state) => {
     await mkdir(state.agentDir(), { recursive: true });
     await writeFile(
       path.join(state.agentDir(), "settings.json"),
@@ -74,7 +75,7 @@ it("continues one cron user turn when the primary times out after provider dispa
     );
     const requests: string[] = [];
     const timeoutAdvances: ReturnType<typeof vi.advanceTimersByTimeAsync>[] = [];
-    const fetchProvider = vi.fn<typeof fetch>(async (_url, options) => {
+    vi.spyOn(globalThis, "fetch").mockImplementation(async (_url, options) => {
       const request = new Request(_url, options);
       expect(request.headers.get("authorization")).toBe("Bearer synthetic-cron-key");
       const body = JSON.parse(await request.text()) as { model: string };
@@ -104,9 +105,8 @@ it("continues one cron user turn when the primary times out after provider dispa
         timeoutAdvances.push(advance);
       });
     });
-    vi.spyOn(globalThis, "fetch").mockImplementation(fetchProvider);
-
-    const running = runCronIsolatedAgentTurn({
+    const message = "Reply exactly Fallback report";
+    const result = await runCronIsolatedAgentTurn({
       cfg: config,
       onExecutionPhase: ({ phase, model }) => {
         if (phase === "model_call_started" && model === "primary") {
@@ -117,32 +117,21 @@ it("continues one cron user turn when the primary times out after provider dispa
       deliveryAttemptFence: null,
       agentId: "main",
       sessionKey: "cron:fallback-transcript",
-      message: "Reply exactly Fallback report",
+      message,
       job: {
-        id: "fallback-transcript",
+        ...createDueIsolatedJob({ id: "fallback-transcript", nowMs: 1, nextRunAtMs: 1 }),
         inferenceBinding,
         name: "Fallback transcript proof",
         enabled: false,
-        createdAtMs: 1,
-        updatedAtMs: 1,
         schedule: { kind: "every", everyMs: 3_600_000 },
-        sessionTarget: "isolated",
         wakeMode: "now",
-        payload: {
-          kind: "agentTurn",
-          message: "Reply exactly Fallback report",
-          timeoutSeconds: 120,
-          toolsAllow: [],
-        },
-        delivery: { mode: "none" },
+        payload: { kind: "agentTurn", message, timeoutSeconds: 120, toolsAllow: [] },
         state: {},
       },
     });
 
-    const result = await running;
     await Promise.all(timeoutAdvances);
     vi.useRealTimers();
-
     expect(result, JSON.stringify({ result, requests })).toMatchObject({
       status: "ok",
       outputText: "Fallback report",
@@ -153,7 +142,7 @@ it("continues one cron user turn when the primary times out after provider dispa
       sessionKey: result.sessionKey!,
       storePath: path.join(state.agentDir(), "openclaw-agent.sqlite"),
     });
-    expect(messages.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(messages.filter((entry) => entry.role === "user")).toHaveLength(1);
     expect(messages.map(readModelFallbackNotice).filter(Boolean)).toMatchObject([
       {
         kind: "model-fallback",
@@ -164,11 +153,10 @@ it("continues one cron user turn when the primary times out after provider dispa
     ]);
     expect(
       messages.filter(
-        (message) =>
-          message.role === "assistant" &&
-          message.stopReason === "stop" &&
-          !readModelFallbackNotice(message),
+        (entry) =>
+          entry.role === "assistant" &&
+          entry.stopReason === "stop" &&
+          !readModelFallbackNotice(entry),
       ),
     ).toHaveLength(1);
-  });
-});
+  }));
