@@ -280,7 +280,7 @@ async function createStoredJob(
 }
 
 describe("requester continuation persisted automation management", () => {
-  it("rejects creation through the ordinary tool after a real requester handoff", async () => {
+  it("blocks creation after requester handoff", async () => {
     const config: OpenClawConfig = { ...cfg, tools: { allow: [AUTOMATIONS_TOOL_NAME] } };
     setRuntimeConfigSnapshot(config);
     const fixture = createCronFixture(undefined, config);
@@ -301,7 +301,7 @@ describe("requester continuation persisted automation management", () => {
     });
   });
   it.each(["cli", "embedded"] as const)(
-    "preserves independent %s writes after requester Cron revocation",
+    "keeps %s file writes admitted after Cron revocation",
     { timeout: 30_000 },
     async (transport) => {
       const config: OpenClawConfig = {
@@ -325,6 +325,12 @@ describe("requester continuation persisted automation management", () => {
         const committedPath = path.join(stateDir, `committed-${transport}.txt`);
         const laterPath = path.join(stateDir, `continued-${transport}.txt`);
         const content = "Independent file work remains admitted.\n";
+        const write = async (file: string) => {
+          await expect(tools.invoke("write", { path: file, content })).resolves.toMatchObject({
+            content: [{ type: "text", text: expect.stringContaining("Successfully wrote") }],
+          });
+          expect(await readFile(file, "utf8")).toBe(content);
+        };
         const originalWriteHostFile = hostFileWrite.writeHostFile;
         let revokedAcrossWrite = false;
         const writeSpy = vi
@@ -338,25 +344,16 @@ describe("requester continuation persisted automation management", () => {
             }
           });
         try {
-          await expect(
-            tools.invoke("write", { path: committedPath, content }),
-          ).resolves.toMatchObject({
-            content: [{ type: "text", text: expect.stringContaining("Successfully wrote") }],
-          });
+          await write(committedPath);
           expect(revokedAcrossWrite).toBe(true);
-          expect(await readFile(committedPath, "utf8")).toBe(content);
           expect(isCronCurrent()).toBe(false);
           expect(getAdmittedRunDelegatedAuthority(admitted)).toBe(delegated);
           expect(assertRunActive).not.toThrow();
-          expect(creator.active).toBe(true);
-          expect(creator.signal.aborted).toBe(false);
+          expect(creator).toMatchObject({ active: true, signal: { aborted: false } });
           if (mcpGrant) {
             expect(mcpGrant.isCurrent()).toBe(true);
           }
-          await expect(tools.invoke("write", { path: laterPath, content })).resolves.toMatchObject({
-            content: [{ type: "text", text: expect.stringContaining("Successfully wrote") }],
-          });
-          expect(await readFile(laterPath, "utf8")).toBe(content);
+          await write(laterPath);
           await expect(
             tools.invoke(AUTOMATIONS_TOOL_NAME, {
               action: "update",
@@ -377,38 +374,35 @@ describe("requester continuation persisted automation management", () => {
     [false, "cron.update"],
     ["channel-owner", "cron.update"],
     ["channel-owner", "cron.remove"],
-  ] as const)(
-    "permits the stored mutation only for an admitted manager (%s) with a matching grant (%s)",
-    async (admin, grantMethod) => {
-      const fixture = await createStoredJob();
-      const [ok, result, error] = await withSuccessor(admin, (identity) =>
-        fixture.updateWithGrantFor(grantMethod, identity),
-      );
-      const permitted = Boolean(admin) && grantMethod === "cron.update";
-      expect(ok).toBe(permitted);
-      if (permitted) {
-        expect(result).toMatchObject({ name: "Reviewed maintenance", enabled: true });
-        expect(await fixture.read()).toMatchObject([
-          {
-            name: "Reviewed maintenance",
-            enabled: true,
-            scheduledToolPolicy: { version: 1, mode: "trusted" },
-            owner: fixture.before[0]!.owner,
-            schedule: { kind: "every", everyMs: 3_600_000 },
-            payload: { kind: "agentTurn", message: "Reviewed health check" },
-          },
-        ]);
-        expect(await fixture.readRuntimeAuthority()).toEqual(fixture.runtimeAuthority);
-      } else {
-        // An absent or wrong-method grant stops at the method-scope fence.
-        expect(error).toMatchObject({ message: "missing scope: operator.admin" });
-        expect(await fixture.read()).toEqual(fixture.before);
-      }
-    },
-  );
+  ] as const)("requires admitted manager %s and matching grant %s", async (admin, grantMethod) => {
+    const fixture = await createStoredJob();
+    const [ok, result, error] = await withSuccessor(admin, (identity) =>
+      fixture.updateWithGrantFor(grantMethod, identity),
+    );
+    const permitted = Boolean(admin) && grantMethod === "cron.update";
+    expect(ok).toBe(permitted);
+    if (permitted) {
+      expect(result).toMatchObject({ name: "Reviewed maintenance", enabled: true });
+      expect(await fixture.read()).toMatchObject([
+        {
+          name: "Reviewed maintenance",
+          enabled: true,
+          scheduledToolPolicy: { version: 1, mode: "trusted" },
+          owner: fixture.before[0]!.owner,
+          schedule: { kind: "every", everyMs: 3_600_000 },
+          payload: { kind: "agentTurn", message: "Reviewed health check" },
+        },
+      ]);
+      expect(await fixture.readRuntimeAuthority()).toEqual(fixture.runtimeAuthority);
+    } else {
+      // An absent or wrong-method grant stops at the method-scope fence.
+      expect(error).toMatchObject({ message: "missing scope: operator.admin" });
+      expect(await fixture.read()).toEqual(fixture.before);
+    }
+  });
 
   it.each(["fresh user turn", "session reset", "global owner removal"])(
-    "rejects %s revocation while the real update awaits validation",
+    "rejects %s during update validation",
     async (reason) => {
       const entered = createDeferred();
       const release = createDeferred();

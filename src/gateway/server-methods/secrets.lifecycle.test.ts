@@ -6,27 +6,11 @@ import type { GatewayQuestionCall } from "../../agents/tools/gateway-question-li
 import * as gatewayTransport from "../../agents/tools/gateway.js";
 import { createSecretsTool } from "../../agents/tools/secrets-tool.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
-import {
-  claimAgentRunDelegatedAuthority,
-  clearAgentRunContext,
-  releaseAgentRunDelegatedAuthority,
-} from "../../infra/agent-run-registry.js";
-import {
-  activateSecretsRuntimeSnapshot,
-  clearSecretsRuntimeSnapshot,
-  getActiveSecretsRuntimeSnapshot,
-  prepareSecretsRuntimeSnapshot,
-} from "../../secrets/runtime.js";
-import {
-  listSecretStoreEntries,
-  readSecretStoreValue,
-  writeSecretStoreEntry,
-} from "../../secrets/store/secret-store.js";
+import * as runRegistry from "../../infra/agent-run-registry.js";
+import * as secretRuntime from "../../secrets/runtime.js";
+import * as secretStore from "../../secrets/store/secret-store.js";
 import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-clock.js";
-import {
-  withOpenClawTestState,
-  type OpenClawTestState,
-} from "../../test-utils/openclaw-test-state.js";
+import * as testState from "../../test-utils/openclaw-test-state.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import { QuestionManager } from "../question-manager.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
@@ -35,7 +19,7 @@ import { createSecretsHandlers, createSecretStoreWriteService } from "./secrets.
 import type { GatewayClient, RespondFn } from "./types.js";
 
 afterEach(() => {
-  clearSecretsRuntimeSnapshot();
+  secretRuntime.clearSecretsRuntimeSnapshot();
   resetPendingAskUserQuestionsForTest();
   vi.restoreAllMocks();
 });
@@ -68,12 +52,12 @@ async function invoke(
 
 const resolveSecrets = async () => ({ assignments: [], diagnostics: [], inactiveRefPaths: [] });
 const scope = { kind: "team" } as const;
-const readSecret = (name: string) => readSecretStoreValue({ scope, name });
+const readSecret = (name: string) => secretStore.readSecretStoreValue({ scope, name });
 const seedSecret = (name: string, value: string) =>
-  writeSecretStoreEntry({ scope, name, value, kind: "secret", updatedBy: "test" });
+  secretStore.writeSecretStoreEntry({ scope, name, value, kind: "secret", updatedBy: "test" });
 
-function withState(run: (state: OpenClawTestState) => Promise<void>) {
-  return withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+function withState(run: (state: testState.OpenClawTestState) => Promise<void>) {
+  return testState.withOpenClawTestState({ scenario: "minimal" }, async (state) => {
     setRuntimeConfigSnapshot({});
     reloadSecrets = vi.fn(async () => ({ warningCount: 0 }));
     log = {};
@@ -90,7 +74,10 @@ function withState(run: (state: OpenClawTestState) => Promise<void>) {
 
 function claimRun(name: string) {
   const runId = `${name}-run`;
-  const authority = claimAgentRunDelegatedAuthority({ instanceId: `${name}-instance`, runId });
+  const authority = runRegistry.claimAgentRunDelegatedAuthority({
+    instanceId: `${name}-instance`,
+    runId,
+  });
   const identity = {
     kind: "agentRuntime" as const,
     agentId: "main",
@@ -103,14 +90,14 @@ function claimRun(name: string) {
     identity,
     client: { internal: { agentRuntimeIdentity: identity } } as GatewayClient,
     close: () => {
-      releaseAgentRunDelegatedAuthority(authority);
-      clearAgentRunContext(runId);
+      runRegistry.releaseAgentRunDelegatedAuthority(authority);
+      runRegistry.clearAgentRunContext(runId);
     },
   };
 }
 
 describe("secret store mutation lifecycle", () => {
-  it("rejects a redaction sentinel without replacing the stored credential", async () => {
+  it("rejects sentinel writes without replacing credentials", async () => {
     await withState(async () => {
       const name = "OPENCLAW_GATEWAY_TOKEN";
       const value = "synthetic-gateway-token";
@@ -133,7 +120,7 @@ describe("secret store mutation lifecycle", () => {
   });
 
   it.each(["dispatch continuation", "mutation logging"] as const)(
-    "does not delete when admitted authority closes during %s",
+    "rejects delete after %s revokes authority",
     async (closure) => {
       await withState(async () => {
         const name = "SYNTHETIC_DELETE_KEY";
@@ -143,7 +130,7 @@ describe("secret store mutation lifecycle", () => {
         const { authority, identity, client } = run;
         log.debug = () => {
           if (closure === "mutation logging") {
-            releaseAgentRunDelegatedAuthority(authority);
+            runRegistry.releaseAgentRunDelegatedAuthority(authority);
           }
         };
         try {
@@ -152,7 +139,7 @@ describe("secret store mutation lifecycle", () => {
             invoke("secrets.store.delete", { name }, client),
           );
           if (closure === "dispatch continuation") {
-            releaseAgentRunDelegatedAuthority(authority);
+            runRegistry.releaseAgentRunDelegatedAuthority(authority);
           }
           expect(await dispatched).toMatchObject([false, undefined, { code: "INVALID_REQUEST" }]);
           expect(await readSecret(name)).toEqual({ ok: true, value });
@@ -170,7 +157,7 @@ describe("secret store mutation lifecycle", () => {
     },
   );
 
-  it("reports only committed safe facts when the operator replaces proposed hosts", async () => {
+  it("reports committed operator policy without secrets", async () => {
     await withState(async () => {
       const run = claimRun("tool");
       const client = {
@@ -215,7 +202,7 @@ describe("secret store mutation lifecycle", () => {
           name: "APPROVED_POLICY_KEY",
           allowedHosts: ["proposed.example.test"],
         });
-        expect(await listSecretStoreEntries({ scope: { kind: "team" } })).toMatchObject([
+        expect(await secretStore.listSecretStoreEntries({ scope })).toMatchObject([
           { name: "APPROVED_POLICY_KEY", allowedHosts: ["approved.example.test"] },
         ]);
         expect(result.details).toEqual({
@@ -236,7 +223,7 @@ describe("secret store mutation lifecycle", () => {
   });
 
   it.each(["api_key", "token"] as const)(
-    "refreshes an auth-profile-only %s ref on create, rotation, and delete",
+    "refreshes auth-profile %s refs on create, rotate, and delete",
     async (type) => {
       await withState(async (state) => {
         const name = "AUTH_PROFILE_ONLY_KEY";
@@ -260,10 +247,14 @@ describe("secret store mutation lifecycle", () => {
           manifestRegistry: { plugins: [] },
           allowUnavailableSecretOwners: true,
         };
-        activateSecretsRuntimeSnapshot(await prepareSecretsRuntimeSnapshot(runtimeOptions));
+        secretRuntime.activateSecretsRuntimeSnapshot(
+          await secretRuntime.prepareSecretsRuntimeSnapshot(runtimeOptions),
+        );
         const currentCredential = () => {
           const profile =
-            getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles[profileId];
+            secretRuntime.getActiveSecretsRuntimeSnapshot()?.authStores[0]?.store.profiles[
+              profileId
+            ];
           return profile?.type === "api_key"
             ? profile.key
             : profile?.type === "token"
@@ -272,18 +263,18 @@ describe("secret store mutation lifecycle", () => {
         };
         const expectCold = () => {
           expect(currentCredential()).toBeUndefined();
-          expect(getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
+          expect(secretRuntime.getActiveSecretsRuntimeSnapshot()?.degradedOwners).toMatchObject([
             { ownerKind: "account", degradationState: "cold" },
           ]);
         };
         expectCold();
         reloadSecrets.mockImplementation(
           async (options?: { forceColdRefKeys?: ReadonlySet<string> }) => {
-            const snapshot = await prepareSecretsRuntimeSnapshot({
+            const snapshot = await secretRuntime.prepareSecretsRuntimeSnapshot({
               ...runtimeOptions,
               forceColdRefKeys: options?.forceColdRefKeys,
             });
-            activateSecretsRuntimeSnapshot(snapshot);
+            secretRuntime.activateSecretsRuntimeSnapshot(snapshot);
             return { warningCount: snapshot.warnings.length };
           },
         );
@@ -315,7 +306,7 @@ describe("secret store mutation lifecycle", () => {
         ).toMatchObject([true, { ok: true, reloaded: false }]);
         expect(reloadSecrets).toHaveBeenCalledTimes(3);
         expect(await readSecret("UNRELATED_SETTING")).toEqual({ ok: true, value: "enabled" });
-        clearSecretsRuntimeSnapshot();
+        secretRuntime.clearSecretsRuntimeSnapshot();
       });
     },
   );

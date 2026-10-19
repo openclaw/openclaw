@@ -23,20 +23,11 @@ vi.mock("../../secrets/runtime-state.js", async (importOriginal) => ({
 
 // mock-isolation: Observe mutation dispatch without opening the real secret database.
 vi.mock("../../secrets/store/secret-store.js", () => {
-  class SecretStoreValidationError extends Error {
-    constructor(
-      readonly code: string,
-      message: string,
-    ) {
-      super(message);
-      this.name = "SecretStoreValidationError";
-    }
-  }
   return {
     deleteSecretStoreEntry: storeMocks.deleteEntry,
     listSecretStoreEntries: storeMocks.listEntries,
     purgeExpiredSecretStoreEntries: storeMocks.purgeEntries,
-    SecretStoreValidationError,
+    SecretStoreValidationError: class extends Error {},
     writeSecretStoreEntry: storeMocks.writeEntry,
     writeSecretStoreEntries: vi.fn(),
     updateSecretStoreAllowedHosts: vi.fn(),
@@ -67,10 +58,8 @@ let handlers: ReturnType<typeof createSecretsHandlers>;
 let respond: ReturnType<typeof vi.fn>;
 
 async function invoke(method: string, params: Record<string, unknown> = {}, response = respond) {
-  await expectDefined(
-    handlers[method],
-    `handler ${method}`,
-  )({
+  const handler = expectDefined(handlers[method], `handler ${method}`);
+  await handler({
     req: { type: "req", id: "1", method },
     params,
     client: method.startsWith("secrets.store.") ? storeClient : null,

@@ -28,7 +28,6 @@ vi.mock("../../infra/gateway-lock.js", () => ({
 }));
 
 const restartTarget = { pid: process.pid, ownerId: "gateway-owner", port: 18_789 };
-const lockIdentity = { ...restartTarget, createdAt: "2026-07-16T12:00:00.000Z" };
 
 async function invokeHandler(method: string, params: unknown) {
   const respond = vi.fn();
@@ -98,23 +97,15 @@ async function invokeRestartRequestThroughGateway(params: unknown) {
   return respond;
 }
 
-function mockScheduledRestart(preflight: { safe: boolean; summary: string }) {
-  scheduleSafeGatewayRestart.mockReturnValueOnce({
-    ok: true,
-    status: "scheduled",
-    preflight: { ...preflight, counts: {}, blockers: [] },
-  });
-}
-
 describe("gateway restart handlers", () => {
   beforeEach(() => {
     resetGatewayWorkAdmission();
-    scheduleSafeGatewayRestart.mockClear();
+    scheduleSafeGatewayRestart.mockReset().mockReturnValue({ ok: true, status: "scheduled" });
     createSafeGatewayRestartPreflight.mockReset();
     requestGatewayRestartWithSignalAdmission.mockReset();
     requestGatewayRestartWithSignalAdmission.mockReturnValue({ status: "emitted" });
     readActiveGatewayLockIdentity.mockReset();
-    readActiveGatewayLockIdentity.mockResolvedValue(lockIdentity);
+    readActiveGatewayLockIdentity.mockResolvedValue(restartTarget);
   });
 
   afterEach(() => {
@@ -126,15 +117,7 @@ describe("gateway restart handlers", () => {
       safe: false,
       counts: {
         queueSize: 1,
-        pendingReplies: 2,
-        embeddedRuns: 3,
-        cronRuns: 4,
-        backgroundExecSessions: 5,
-        rootRequests: 6,
-        agentRuns: 7,
-        acpRuns: 0,
-        mediaRuns: 0,
-        totalActive: 28,
+        totalActive: 1,
       },
       blockers: [{ kind: "queue", count: 1, message: "1 queued or active operation(s)" }],
       summary: "restart deferred: 1 queued or active operation(s)",
@@ -168,8 +151,6 @@ describe("gateway restart handlers", () => {
   );
 
   it("schedules a safe restart only after matching the target lock owner", async () => {
-    mockScheduledRestart({ safe: false, summary: "restart deferred" });
-
     const respond = await invokeTargetedRestart({ safe: true, skipDeferral: true });
 
     expect(scheduleSafeGatewayRestart).toHaveBeenCalledWith({
@@ -209,9 +190,8 @@ describe("gateway restart handlers", () => {
     const suspension = prepareSuspension();
     if (signals === 0) {
       readActiveGatewayLockIdentity.mockResolvedValue({
-        ...lockIdentity,
+        ...restartTarget,
         ownerId: "replacement-owner",
-        createdAt: "2026-07-16T12:00:01.000Z",
       });
     } else {
       requestGatewayRestartWithSignalAdmission.mockReturnValueOnce({ status: "failed" });
@@ -244,7 +224,7 @@ describe("gateway restart handlers", () => {
     });
     await vi.waitFor(() => expect(readActiveGatewayLockIdentity).toHaveBeenCalledOnce());
     expect(suspension?.release()).toBe(true);
-    resolveLock(lockIdentity);
+    resolveLock(restartTarget);
 
     const respond = await request;
     expect(requestGatewayRestartWithSignalAdmission).toHaveBeenCalledOnce();
@@ -263,8 +243,6 @@ describe("gateway restart handlers", () => {
   });
 
   it("backs off before an emoji that crosses the reason limit", async () => {
-    mockScheduledRestart({ safe: true, summary: "safe to restart now" });
-
     await invokeRestartRequest({ reason: "x".repeat(199) + "🧠tail" });
 
     expect(scheduleSafeGatewayRestart).toHaveBeenCalledWith({

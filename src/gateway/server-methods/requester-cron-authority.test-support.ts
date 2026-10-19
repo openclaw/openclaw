@@ -2,38 +2,15 @@ import path from "node:path";
 import { expectDefined } from "@openclaw/normalization-core";
 import { afterEach, beforeEach, expect, vi } from "vitest";
 import { useAutoCleanupTempDirTracker } from "../../../test/helpers/temp-dir.js";
-import {
-  getAdmittedRunDelegatedAuthority,
-  resolveAdmittedRunActiveAssertion,
-  type AdmittedRunContext,
-  type AdmittedRunOperatorAuthority,
-} from "../../agents/admitted-run-context.js";
+import * as runContext from "../../agents/admitted-run-context.js";
 import { createOpenClawCodingTools } from "../../agents/agent-tools.js";
-import {
-  buildCliMcpGrantContext,
-  finalizeCliMcpGrant,
-} from "../../agents/cli-runner/mcp-grant-context.js";
-import {
-  createCronCreatorAuthorityCapability,
-  runWithCronCreatorAuthorityCapability,
-  type CronCreatorAuthorityCapability,
-} from "../../agents/cron-creator-authority-context.js";
+import * as cliGrants from "../../agents/cli-runner/mcp-grant-context.js";
+import * as cronAuthority from "../../agents/cron-creator-authority-context.js";
 import { withPreparedEmbeddedGatewayTools } from "../../agents/embedded-agent-runner/run/attempt-gateway-tools.js";
 import { revokeRequesterCronAuthority } from "../../agents/subagents/requester-cron-authority.js";
-import {
-  captureFinalEffectiveCronCreatorToolAllowlist,
-  type CronCreatorToolAllowlistEntry,
-  type CronToolsAllowCaptureRef,
-} from "../../agents/tools/cron-tool.js";
-import {
-  getGatewayToolCallerIdentity,
-  withGatewayToolCallerIdentity,
-} from "../../agents/tools/gateway-caller-context.js";
-import {
-  clearRuntimeConfigSnapshot,
-  getRuntimeConfig,
-  setRuntimeConfigSnapshot,
-} from "../../config/config.js";
+import * as cronTools from "../../agents/tools/cron-tool.js";
+import * as gatewayCaller from "../../agents/tools/gateway-caller-context.js";
+import * as runtimeConfig from "../../config/config.js";
 import { replaceSessionEntrySync } from "../../config/sessions/session-accessor.js";
 import type { OpenClawConfig } from "../../config/types.openclaw.js";
 import { CronService } from "../../cron/service.js";
@@ -47,19 +24,12 @@ import { createTestGatewayScheduler } from "../../test-utils/gateway-scheduler-c
 import { cleanupSessionStateForTest } from "../../test-utils/session-state-cleanup.js";
 import { createAgentRuntimeApprovalAuthorityValidator } from "../agent-runtime-approval-authority.js";
 import type { AgentRuntimeIdentity } from "../agent-runtime-identity-token.js";
-import {
-  activateMcpLoopbackClientGrantCapture,
-  mintMcpLoopbackClientGrant,
-  revokeMcpLoopbackClientGrant,
-} from "../mcp-grant-store.js";
+import * as mcpGrants from "../mcp-grant-store.js";
 import { json, prepareAdmission, request } from "../mcp-http-request.test-support.js";
 import { getActiveMcpLoopbackRuntime } from "../mcp-http.loopback-runtime.js";
 import { createDirectChatContext } from "../server-chat.agent-events.test-helpers.js";
 import { createRequestGatewayMethodRegistry } from "../server-methods.js";
-import {
-  resolveGatewayCronCreatorAuthorityAdmission,
-  type GatewayCronCreatorAuthorityAdmission,
-} from "./cron-creator-authority-admission.js";
+import * as cronAdmission from "./cron-creator-authority-admission.js";
 import type { GatewayClient } from "./types.js";
 
 export const SESSION = "agent:main:control-ui";
@@ -75,7 +45,7 @@ export function installRequesterCronAuthorityTestHooks() {
   beforeEach(() => {
     stateDir = tempDirs.make("openclaw-requester-cron-authority-");
     vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
-    setRuntimeConfigSnapshot(cfg);
+    runtimeConfig.setRuntimeConfigSnapshot(cfg);
     replaceSessionEntrySync(
       { sessionKey: SESSION },
       { sessionId: SESSION_ID, updatedAt: 1, lifecycleRevision: "original", createdActor: CREATOR },
@@ -88,7 +58,7 @@ export function installRequesterCronAuthorityTestHooks() {
     revokeRequesterCronAuthority(SESSION);
     await cleanupSessionStateForTest({ stateDir });
     closeOpenClawAgentDatabasesForTest(stateDir);
-    clearRuntimeConfigSnapshot();
+    runtimeConfig.clearRuntimeConfigSnapshot();
     vi.unstubAllEnvs();
   });
 }
@@ -99,22 +69,20 @@ export function admission(
   childSessionKey?: string,
   isCurrent?: () => boolean,
 ) {
-  return resolveGatewayCronCreatorAuthorityAdmission({
+  return cronAdmission.resolveGatewayCronCreatorAuthorityAdmission({
     runId,
     resolvedSessionKey: SESSION,
     sessionId: SESSION_ID,
     client,
     isCurrent,
     request: { message: "Update the maintenance automation", idempotencyKey: runId },
-    ...(childSessionKey
+    inputProvenance: childSessionKey
       ? {
-          inputProvenance: {
-            kind: "inter_session" as const,
-            sourceTool: "subagent_settle",
-            sourceSessionKey: childSessionKey,
-          },
+          kind: "inter_session",
+          sourceTool: "subagent_settle",
+          sourceSessionKey: childSessionKey,
         }
-      : {}),
+      : undefined,
     hasRestoredCronContinuation: false,
     isOneShotModelRun: false,
     isRestartRecoveryResumeRun: false,
@@ -123,47 +91,43 @@ export function admission(
 
 export type RequesterRun<T> = (
   identity: AgentRuntimeIdentity,
-  admittedRun: AdmittedRunContext,
-  creator?: CronCreatorAuthorityCapability,
+  admittedRun: runContext.AdmittedRunContext,
+  creator?: cronAuthority.CronCreatorAuthorityCapability,
 ) => Promise<T>;
 
 export async function inRun<T>(
   runId: string,
-  admitted: GatewayCronCreatorAuthorityAdmission | undefined,
+  admitted: cronAdmission.GatewayCronCreatorAuthorityAdmission | undefined,
   run: RequesterRun<T>,
-  operatorAuthority?: AdmittedRunOperatorAuthority,
+  operatorAuthority?: runContext.AdmittedRunOperatorAuthority,
 ) {
   const runAdmission = prepareAdmission(runId, "requester-cron-test", {
-    cfg: getRuntimeConfig(),
+    cfg: runtimeConfig.getRuntimeConfig(),
     operatorAuthority,
   });
   try {
     const admittedRun = await runAdmission.admit("gateway", runId);
     const { operationalRunInstance } = admittedRun;
-    const authority = expectDefined(getAdmittedRunDelegatedAuthority(admittedRun), "admitted run");
+    const authority = expectDefined(
+      runContext.getAdmittedRunDelegatedAuthority(admittedRun),
+      "admitted run",
+    );
     registerAgentRunContext(runId, { agentId: "main", sessionKey: SESSION, sessionId: SESSION_ID });
+    const caller = { agentId: "main", sessionKey: SESSION, operationalRunInstance };
     const identity: AgentRuntimeIdentity = {
       kind: "agentRuntime",
-      agentId: "main",
-      sessionKey: SESSION,
-      operationalRunInstance,
+      ...caller,
       delegatedAuthority: { kind: "local", ...authority },
     };
-    const execute = (creator?: CronCreatorAuthorityCapability) =>
-      withGatewayToolCallerIdentity(
-        {
-          agentId: "main",
-          sessionKey: SESSION,
-          operationalRunInstance,
-          approvalAuthority: authority,
-        },
-        () => run(identity, admittedRun, creator),
+    const execute = (creator?: cronAuthority.CronCreatorAuthorityCapability) =>
+      gatewayCaller.withGatewayToolCallerIdentity({ ...caller, approvalAuthority: authority }, () =>
+        run(identity, admittedRun, creator),
       );
     if (!admitted) {
       return await execute();
     }
     const capability = expectDefined(
-      createCronCreatorAuthorityCapability(
+      cronAuthority.createCronCreatorAuthorityCapability(
         runId,
         admitted.callerOrigin,
         admitted.managementEntitlement,
@@ -175,7 +139,9 @@ export async function inRun<T>(
       "admitted cron capability",
     );
     admitted.bindRunScope?.(capability);
-    return await runWithCronCreatorAuthorityCapability(capability, () => execute(capability));
+    return await cronAuthority.runWithCronCreatorAuthorityCapability(capability, () =>
+      execute(capability),
+    );
   } finally {
     runAdmission.close();
     clearAgentRunContext(runId);
@@ -218,8 +184,8 @@ export type CreatorTransportTools = {
 export async function createCreatorTransportTools(params: {
   transport: "cli" | "embedded";
   config: OpenClawConfig;
-  admitted: AdmittedRunContext;
-  creator?: CronCreatorAuthorityCapability;
+  admitted: runContext.AdmittedRunContext;
+  creator?: cronAuthority.CronCreatorAuthorityCapability;
   senderIsOwner: boolean;
   workspaceDir?: string;
 }): Promise<CreatorTransportTools> {
@@ -235,29 +201,27 @@ export async function createCreatorTransportTools(params: {
   let sequence = 0;
   if (transport === "cli") {
     const runtime = expectDefined(getActiveMcpLoopbackRuntime(), "MCP runtime");
-    const grant = mintMcpLoopbackClientGrant({
+    const context = cliGrants.buildCliMcpGrantContext({
+      run: {
+        ...toolContext,
+        sessionFile: path.join(workspaceDir, "creator.jsonl"),
+        provider: "claude-cli",
+        model: "creator-fixture",
+        prompt: "Update an automation",
+        timeoutMs: 30_000,
+        cronCreatorCallerOrigin: creator?.callerOrigin,
+      },
+      config,
+      agentId: "main",
+      modelProvider: "anthropic",
+      modelId: "creator-fixture",
+      requireExplicitMessageTarget: true,
+    });
+    const grant = mcpGrants.mintMcpLoopbackClientGrant({
       ...expectDefined(
-        finalizeCliMcpGrant(
-          buildCliMcpGrantContext({
-            run: {
-              ...toolContext,
-              sessionFile: path.join(workspaceDir, "creator.jsonl"),
-              provider: "claude-cli",
-              model: "creator-fixture",
-              prompt: "Update an automation",
-              timeoutMs: 30_000,
-              cronCreatorCallerOrigin: creator?.callerOrigin,
-            },
-            config,
-            agentId: "main",
-            modelProvider: "anthropic",
-            modelId: "creator-fixture",
-            requireExplicitMessageTarget: true,
-          }),
-          toolsAllow,
-          false,
-          { assertCurrent: resolveAdmittedRunActiveAssertion(admitted) },
-        ),
+        cliGrants.finalizeCliMcpGrant(context, toolsAllow, false, {
+          assertCurrent: runContext.resolveAdmittedRunActiveAssertion(admitted),
+        }),
         "prepared CLI grant",
       ),
       runtimeOwnerToken: runtime.ownerToken,
@@ -293,14 +257,14 @@ export async function createCreatorTransportTools(params: {
       return message.result;
     };
     try {
-      expect(activateMcpLoopbackClientGrantCapture(mcpCapture)).not.toBe(false);
+      expect(mcpGrants.activateMcpLoopbackClientGrantCapture(mcpCapture)).not.toBe(false);
       expect((await rpc("tools/list"))?.tools).toEqual(expectedTools);
       return {
         invoke: (name, args) => rpc("tools/call", { name, arguments: args }),
         mcpCapture,
       };
     } catch (error) {
-      revokeMcpLoopbackClientGrant(grant.token);
+      mcpGrants.revokeMcpLoopbackClientGrant(grant.token);
       throw error;
     }
   }
@@ -315,13 +279,13 @@ export async function createCreatorTransportTools(params: {
         ...session,
         agentHarnessId: "openclaw",
       },
-      async () => getGatewayToolCallerIdentity(),
+      async () => gatewayCaller.getGatewayToolCallerIdentity(),
     ),
     "embedded Gateway caller",
   );
-  const creatorTools: CronCreatorToolAllowlistEntry[] = [];
-  const creatorCapture: CronToolsAllowCaptureRef = {};
-  const tools = await withGatewayToolCallerIdentity(callerIdentity, () =>
+  const creatorTools: cronTools.CronCreatorToolAllowlistEntry[] = [];
+  const creatorCapture: cronTools.CronToolsAllowCaptureRef = {};
+  const tools = await gatewayCaller.withGatewayToolCallerIdentity(callerIdentity, () =>
     createOpenClawCodingTools({
       config,
       agentId: "main",
@@ -337,7 +301,7 @@ export async function createCreatorTransportTools(params: {
       },
     }),
   );
-  captureFinalEffectiveCronCreatorToolAllowlist(
+  cronTools.captureFinalEffectiveCronCreatorToolAllowlist(
     creatorTools,
     creatorCapture,
     tools,
@@ -350,7 +314,7 @@ export async function createCreatorTransportTools(params: {
         tools.find((entry) => entry.name === name),
         `embedded ${name} tool`,
       );
-      return withGatewayToolCallerIdentity(callerIdentity, () =>
+      return gatewayCaller.withGatewayToolCallerIdentity(callerIdentity, () =>
         tool.execute(`creator-${++sequence}`, args),
       );
     },
