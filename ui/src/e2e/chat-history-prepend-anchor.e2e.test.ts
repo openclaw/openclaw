@@ -1,6 +1,4 @@
-import path from "node:path";
 import { expect, it } from "vitest";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -41,7 +39,6 @@ suite.define(() => {
       activeTouch = false,
       momentum = false,
     }) => {
-      const artifactDir = createControlUiE2eArtifactDir("chat-history-prepend-anchor");
       const context = await suite.newBrowserContext({
         locale: "en-US",
         serviceWorkers: "block",
@@ -53,9 +50,6 @@ suite.define(() => {
             }
           : {}),
         viewport: { height: 900, width: 1280 },
-        ...(process.env.OPENCLAW_CAPTURE_UI_PROOF === "1"
-          ? { recordVideo: { dir: artifactDir, size: { height: 900, width: 1280 } } }
-          : {}),
       });
       const page = await context.newPage();
       const message = (seq: number) => ({
@@ -123,7 +117,6 @@ suite.define(() => {
         await anchor.waitFor();
         const before = await anchor.boundingBox();
         expect(before).not.toBeNull();
-        await page.screenshot({ path: path.join(artifactDir, "before-prepend.png") });
         await page.evaluate(
           (messageKey) => {
             const frames: AnchorFrames = { frame: 0, positions: [], readerDelta: 0 };
@@ -225,25 +218,12 @@ suite.define(() => {
         await expect
           .poll(() => thread.evaluate((element) => element.scrollTop))
           .toBeGreaterThan(heldOffset + (momentum ? 40 : 0) + 100);
-        await page.screenshot({ path: path.join(artifactDir, "after-prepend.png") });
         const frames = await page.evaluate(() => {
           const probe = (window as AnchorWindow).prependFrames;
           cancelAnimationFrame(probe.frame);
           return probe.positions;
         });
         const after = await anchor.boundingBox();
-        console.log(
-          JSON.stringify({
-            sharedGroup,
-            manual,
-            onlyGroup,
-            more,
-            before,
-            after,
-            frames,
-            artifactDir,
-          }),
-        );
         expect(after, "the message being read must remain rendered").not.toBeNull();
         expect(
           Math.abs(after!.y + (momentum ? 40 : 0) - before!.y),

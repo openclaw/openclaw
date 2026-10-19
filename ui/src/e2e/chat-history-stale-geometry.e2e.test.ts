@@ -1,5 +1,3 @@
-import { writeFile } from "node:fs/promises";
-import path from "node:path";
 import { expect, it } from "vitest";
 import type { GatewaySessionRow } from "../api/types.ts";
 import type { ChatPageHost } from "../pages/chat/chat-state-host.ts";
@@ -8,8 +6,6 @@ import {
   CHAT_SNAPSHOT_STORE_NAME,
 } from "../pages/chat/session-snapshot-database.ts";
 import { resolveChatSnapshotKey } from "../pages/chat/session-snapshot-key.ts";
-import { createControlUiE2eArtifactDir } from "../test-helpers/control-ui-e2e-artifacts.ts";
-import { takeControlUiViewportScreenshot } from "../test-helpers/control-ui-e2e-screenshot.ts";
 import {
   createChatFlowE2eSuite,
   installMockGateway,
@@ -37,40 +33,34 @@ function historyMessage(seq: number, text: string) {
 
 suite.define(() => {
   it("discards stale transcript geometry before restored history bootstrap", async () => {
-    const artifactRoot = process.env.OPENCLAW_UI_E2E_ARTIFACT_DIR?.trim();
-    const artifactDir = artifactRoot
-      ? createControlUiE2eArtifactDir("chat-history-stale-geometry", artifactRoot)
-      : undefined;
     const context = await suite.newBrowserContext({
       locale: "en-US",
       serviceWorkers: "block",
       viewport: { height: 600, width: 520 },
-      ...(artifactDir
-        ? { recordVideo: { dir: artifactDir, size: { height: 600, width: 520 } } }
-        : {}),
     });
     const page = await context.newPage();
-    const proofVideo = page.video();
     const recentMessages = Array.from({ length: 16 }, (_, index) =>
       historyMessage(
         index + 3,
         `Restored message ${index + 3}: ${"prior narrow presentation text ".repeat(18)}`,
       ),
     );
-    const compactRecentMessages = recentMessages.map((message, index) =>
+    const compactRecentMessages = recentMessages.map((_, index) =>
       historyMessage(index + 3, `Restored message ${index + 3}`),
     );
     const olderMessages = [historyMessage(1, "Older 1"), historyMessage(2, "Older 2")];
     const totalMessages = compactRecentMessages.length + olderMessages.length;
+    const startup = (messages: unknown[], hasMore: boolean) => ({
+      messages,
+      hasMore,
+      sessionInfo,
+      sessionId,
+      ...(hasMore ? { nextOffset: messages.length } : {}),
+      totalMessages: hasMore ? totalMessages : messages.length,
+    });
     const gateway = await installMockGateway(page, {
       methodResponses: {
-        "chat.startup": {
-          hasMore: false,
-          messages: recentMessages,
-          sessionInfo,
-          sessionId,
-          totalMessages: recentMessages.length,
-        },
+        "chat.startup": startup(recentMessages, false),
       },
       sessionKey: "agent:main:main",
       sessions: [sessionInfo],
@@ -86,14 +76,6 @@ suite.define(() => {
         }),
       );
       expect(rowKeys.length).toBeGreaterThan(0);
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, "00-prior-narrow-transcript.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-            page.getByText("Restored message 18:", { exact: false }),
-          ]),
-        );
-      }
       const snapshotHost = await page
         .locator(".chat-pane-cache__pane--active")
         .evaluate((element) => {
@@ -178,14 +160,7 @@ suite.define(() => {
         )
         .toBe(true);
 
-      await gateway.setMethodResponse("chat.startup", {
-        hasMore: true,
-        messages: compactRecentMessages,
-        nextOffset: compactRecentMessages.length,
-        sessionInfo,
-        sessionId,
-        totalMessages,
-      });
+      await gateway.setMethodResponse("chat.startup", startup(compactRecentMessages, true));
       await gateway.setMethodResponse("chat.history", {
         cases: [
           {
@@ -226,19 +201,8 @@ suite.define(() => {
           }),
         )
         .toBeLessThanOrEqual(1);
-      if (artifactDir) {
-        await writeFile(
-          path.join(artifactDir, "01-restored-without-phantom-gap.png"),
-          await takeControlUiViewportScreenshot(page, page.locator(".shell"), [
-            page.getByText("Older 1", { exact: true }),
-          ]),
-        );
-      }
     } finally {
       await suite.closeBrowserContext(context);
-      if (artifactDir && proofVideo) {
-        await proofVideo.saveAs(path.join(artifactDir, "stale-transcript-geometry.webm"));
-      }
     }
   }, 120_000);
 });

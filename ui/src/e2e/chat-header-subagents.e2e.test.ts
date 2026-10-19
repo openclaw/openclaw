@@ -66,6 +66,31 @@ suite.define(() => {
             "session.members.listEvidence",
           ],
         });
+        const at = (
+          row: GatewaySessionRow,
+          offset: number,
+          changes: Partial<GatewaySessionRow>,
+        ) => ({
+          ...row,
+          ...changes,
+          updatedAt: now + offset,
+          snapshotAt: now + offset,
+        });
+        const emit = async (
+          session: GatewaySessionRow,
+          ancestors: GatewaySessionRow[],
+          reason: string,
+          rows: GatewaySessionRow[],
+        ) => {
+          await gateway.setSessionsListResponse(sessionsListResponse([...rows, next]));
+          await gateway.emitGatewayEvent("sessions.changed", {
+            sessionKey: session.key,
+            reason,
+            ts: session.updatedAt,
+            session,
+            ancestorSessions: ancestors,
+          });
+        };
         await page.goto(controlUiSessionUrl(suite.server.baseUrl, parent.key));
         const activePane = page.locator(".chat-pane-cache__pane--active");
         const panel = activePane.locator("openclaw-chat-subagents-panel");
@@ -93,40 +118,32 @@ suite.define(() => {
         assert(send.params && typeof send.params === "object" && "idempotencyKey" in send.params);
         const runId = send.params.idempotencyKey;
         assert(typeof runId === "string");
-        const runningParent: GatewaySessionRow = {
-          ...parent,
+        const runningParent = at(parent, 1, {
           status: "running",
           hasActiveRun: true,
           hasActiveSubagentRun: true,
           activeRunIds: [runId],
           startedAt: now,
-          updatedAt: now + 1,
-          snapshotAt: now + 1,
           childSessions: ["agent:main:subagent:backend-review"],
-        };
-        const child: GatewaySessionRow = {
-          key: "agent:main:subagent:backend-review",
-          sessionId: "backend-review",
-          kind: "direct",
-          classification: "subagent",
-          label: "Backend review",
-          spawnedBy: parent.key,
-          parentSessionKey: parent.key,
-          status: "running",
-          hasActiveRun: true,
-          activeRunIds: ["backend-run"],
-          startedAt: now,
-          updatedAt: now + 1,
-          snapshotAt: now + 1,
-        };
-        await gateway.setSessionsListResponse(sessionsListResponse([runningParent, child, next]));
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: child.key,
-          reason: "run-start",
-          ts: now + 1,
-          session: child,
-          ancestorSessions: [runningParent],
         });
+        const child = at(
+          {
+            key: "agent:main:subagent:backend-review",
+            sessionId: "backend-review",
+            kind: "direct",
+            classification: "subagent",
+            label: "Backend review",
+            spawnedBy: parent.key,
+            parentSessionKey: parent.key,
+            status: "running",
+            hasActiveRun: true,
+            activeRunIds: ["backend-run"],
+            startedAt: now,
+          },
+          1,
+          {},
+        );
+        await emit(child, [runningParent], "run-start", [runningParent, child]);
         const runningCount = activePane.locator(".chat-pane__subagents-running");
         await runningCount.waitFor();
         expect(await panel.isVisible()).toBe(false);
@@ -158,14 +175,11 @@ suite.define(() => {
           timestamp: now + 3,
           __openclaw: { id: "yield-result", seq: 4, runId },
         };
-        const waitingParent: GatewaySessionRow = {
-          ...runningParent,
+        const waitingParent = at(runningParent, 3, {
           hasActiveRun: false,
           activeRunIds: [],
           endedAt: now + 3,
-          updatedAt: now + 3,
-          snapshotAt: now + 3,
-        };
+        });
         await gateway.setSessionsListResponse(sessionsListResponse([waitingParent, child, next]));
         await gateway.setMethodResponse("chat.history", {
           messages: [
@@ -220,51 +234,24 @@ suite.define(() => {
         await selectChatLayoutAction(activePane, "Subagents");
         await panelRow.waitFor();
 
-        const settledChild: GatewaySessionRow = {
-          ...child,
+        const settledChild = at(child, 66_000, {
           status: "done",
           hasActiveRun: false,
           activeRunIds: [],
           endedAt: now + 66_000,
-          updatedAt: now + 66_000,
-          snapshotAt: now + 66_000,
-        };
-        const settledParent: GatewaySessionRow = {
-          ...waitingParent,
-          hasActiveSubagentRun: false,
-          updatedAt: now + 66_000,
-          snapshotAt: now + 66_000,
-        };
-        await gateway.setSessionsListResponse(
-          sessionsListResponse([settledParent, settledChild, next]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: child.key,
-          reason: "run-settled",
-          ts: now + 66_000,
-          session: settledChild,
-          ancestorSessions: [settledParent],
         });
+        const settledParent = at(waitingParent, 66_000, {
+          hasActiveSubagentRun: false,
+        });
+        await emit(settledChild, [settledParent], "run-settled", [settledParent, settledChild]);
         await waitLine.waitFor({ state: "hidden" });
-        const resumedParent: GatewaySessionRow = {
-          ...settledParent,
+        const resumedParent = at(settledParent, 67_000, {
           status: "running",
           hasActiveRun: true,
           activeRunIds: ["parent-resumed"],
           startedAt: now + 67_000,
-          updatedAt: now + 67_000,
-          snapshotAt: now + 67_000,
-        };
-        await gateway.setSessionsListResponse(
-          sessionsListResponse([resumedParent, settledChild, next]),
-        );
-        await gateway.emitGatewayEvent("sessions.changed", {
-          sessionKey: parent.key,
-          reason: "run-start",
-          ts: now + 67_000,
-          session: resumedParent,
-          ancestorSessions: [],
         });
+        await emit(resumedParent, [], "run-start", [resumedParent, settledChild]);
         await activePane.locator(".chat-working-indicator").waitFor();
         expect(await activePane.locator(".agent-chat__composer-run-status").count()).toBe(0);
         expect(await waitLine.count()).toBe(0);
