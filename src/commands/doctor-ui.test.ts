@@ -136,6 +136,7 @@ it("reads committed nested protocol changes from the real complete-package git p
 it("does not report stale assets when git history is unavailable", async () => {
   const root = await createOpenClawRoot();
   await buildUi(root);
+  await touch(path.join(root, "packages/gateway-protocol/src/schema.ts"), new Date("2026-01-02"));
   mockGitLog(null);
   await expect(inspectRoot(root)).resolves.toEqual([]);
 });

@@ -267,7 +267,7 @@ it("stops replaying resolved state migration warnings without erasing history", 
       'Plugin "unfinished" state migration is pending: The plugin has not reported completion.',
       "Unrelated update warning",
       'Plugin "resolved" state migration is pending: The plugin has not reported completion.',
-    ];
+    ] as const;
     const run = createUpdateRun({ trigger: "cli" });
     for (const [index, detail] of warnings.entries()) {
       recordWarning(run.runId, detail, 1, `:${index}`);

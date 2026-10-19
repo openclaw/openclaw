@@ -53,6 +53,8 @@ it.each([
         payload: {
           pid: process.pid,
           createdAt: new Date().toISOString(),
+          configPath: state.configPath,
+          stateDir: state.stateDir,
           role: "gateway",
         },
       });

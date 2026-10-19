@@ -36,7 +36,9 @@ function resolved<T extends (...args: never[]) => unknown>(
   return vi.fn<T>().mockResolvedValue(value);
 }
 
-function configWriteResult(nextConfig: OpenClawConfig) {
+function configWriteResult(
+  nextConfig: OpenClawConfig,
+): Awaited<ReturnType<PluginRuntime["config"]["replaceConfigFile"]>> {
   return {
     path: "/tmp/openclaw.json",
     previousHash: null,

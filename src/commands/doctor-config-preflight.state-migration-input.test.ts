@@ -32,10 +32,12 @@ vi.mock("../infra/state-migrations.state-dir.js", () => ({
   autoMigrateLegacyStateDir: vi.fn(async () => makeStateMigrationResult([], false)),
 }));
 
+// mock-isolation: observe migration inputs without running plugin repairs.
 vi.mock("../infra/state-migrations.plugin-doctor.js", () => ({
   autoMigrateLegacyPluginDoctorState: mocks.plugins,
 }));
 
+// mock-isolation: observe machine-state migration order without changing stored state.
 vi.mock("../infra/state-migrations.config-machine-state.js", () => ({
   migrateLegacyConfigMachineState: mocks.machine,
 }));
@@ -44,11 +46,13 @@ vi.mock("../infra/state-migrations.media-persistence.js", () => ({
   migrateLegacyMediaPersistence: vi.fn(() => ({ changes: [], warnings: [] })),
 }));
 
+// mock-isolation: observe cron repair inputs without executing persistent repairs.
 vi.mock("./doctor/cron/legacy-repair.js", () => ({
   collectCronCodexRuntimePolicyTargetsReadOnly: vi.fn(async () => ({ targets: [], warnings: [] })),
   repairLegacyCronStoreWithoutPrompt: mocks.cron,
 }));
 
+// mock-isolation: supply synthetic config snapshots without reading operator config.
 vi.mock("../config/io.js", () => ({
   readConfigFileSnapshot: mocks.snapshot,
   readConfigFileSnapshotWithPluginMetadata: vi.fn(),
@@ -61,6 +65,7 @@ vi.mock("./doctor/shared/legacy-config-issues.js", () => ({
   findDoctorLegacyConfigIssues: vi.fn(() => []),
 }));
 
+// mock-isolation: capture Doctor notices without terminal output.
 vi.mock("../../packages/terminal-core/src/note.js", () => ({ note: mocks.note }));
 
 const { runDoctorConfigPreflight } = await import("./doctor-config-preflight.js");

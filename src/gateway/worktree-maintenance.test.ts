@@ -41,7 +41,7 @@ function maintenanceFixture(config: OpenClawConfig = {}) {
     clock,
     ...params,
     track: (work: Promise<void>) => pending.push(work),
-    start(overrides: Partial<typeof params> = {}) {
+    start: (overrides: Partial<typeof params> = {}) => {
       const owner = startWorktreeMaintenance({ ...params, ...overrides });
       owners.push(owner);
       return owner;

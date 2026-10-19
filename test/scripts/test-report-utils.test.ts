@@ -23,7 +23,7 @@ vi.mock("node:child_process", async () => {
   const actual = await vi.importActual<typeof import("node:child_process")>("node:child_process");
   return {
     ...actual,
-    spawnSync: spawnSyncMock,
+    spawnSync: spawnSyncMock.mockImplementation(actual.spawnSync),
   };
 });
 

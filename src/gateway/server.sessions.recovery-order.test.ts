@@ -79,7 +79,7 @@ test.each([false, true])("queues cloud recovery (revoked=%s)", async (revokeAuth
     workerSessionPlacementService: { getMany: () => new Map([[sourceSessionId, placement]]) },
   };
   type RecoveryPayload = { key: string; sessionId: string };
-  const recover = (options: Parameters<typeof directSessionReq>[2]) =>
+  const recover = (options: Parameters<typeof directSessionReq<RecoveryPayload>>[2]) =>
     directSessionReq<RecoveryPayload>("sessions.recover", { key: sourceKey }, options);
   const first = recover({ context });
   await reclaimEntered.promise;

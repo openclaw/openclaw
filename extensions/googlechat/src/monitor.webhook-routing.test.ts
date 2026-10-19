@@ -12,6 +12,7 @@ import type { ResolvedGoogleChatAccount } from "./accounts.js";
 import { verifyGoogleChatRequest } from "./auth.js";
 import { registerGoogleChatWebhookTarget } from "./monitor-routing.js";
 
+// mock-isolation: routing cases supply verification outcomes without live Google credentials.
 vi.mock("./auth.js", () => ({ verifyGoogleChatRequest: vi.fn() }));
 
 function request(authorization = "", payload?: unknown): IncomingMessage {

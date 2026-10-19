@@ -4,7 +4,7 @@ import {
   clearRuntimeAuthProfileStoreSnapshots,
   loadAuthProfileStoreForSecretsRuntime,
 } from "openclaw/plugin-sdk/agent-runtime";
-import type { MigrationProviderContext as Context } from "openclaw/plugin-sdk/plugin-entry";
+import type { MigrationProviderContext } from "openclaw/plugin-sdk/plugin-entry";
 import {
   closeOpenClawAgentDatabasesAsync,
   closeOpenClawStateDatabaseAsync,
@@ -28,13 +28,6 @@ const credentialStorage = vi.hoisted(() => ({
   accountType: "apiKey",
   accountReadFails: false,
 }));
-export {
-  closeCredentialReader,
-  nativeCredentialReaderStart,
-  appServerRequest,
-  sourceAppServerClientScope,
-  credentialStorage,
-};
 
 vi.mock("../app-server/managed-binary.js", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../app-server/managed-binary.js")>()),
@@ -85,64 +78,106 @@ vi.mock("../app-server/request.js", () => ({
 
 const tempWorkspaces: TempWorkspace[] = [];
 
-const noop = () => {};
-const logger = { info: noop, warn: noop, error: noop, debug: noop };
+const logger = {
+  info() {},
+  warn() {},
+  error() {},
+  debug() {},
+};
 
-export async function writeFile(filePath: string, content = ""): Promise<void> {
+async function writeFile(filePath: string, content = ""): Promise<void> {
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, content, "utf8");
 }
 
-export function makeContext({
-  workspaceDir,
-  verifyPluginApps,
-  ...params
-}: Pick<Context, "source" | "stateDir"> &
-  Partial<Context> & {
-    workspaceDir: string;
-    verifyPluginApps?: boolean;
-  }): Context {
+function makeContext(params: {
+  source: string;
+  stateDir: string;
+  workspaceDir: string;
+  overwrite?: boolean;
+  includeSecrets?: boolean;
+  targetAgentId?: string;
+  itemKinds?: readonly string[];
+  verifyPluginApps?: boolean;
+  providerOptions?: MigrationProviderContext["providerOptions"];
+  reportDir?: string;
+  config?: MigrationProviderContext["config"];
+  runtime?: MigrationProviderContext["runtime"];
+}): MigrationProviderContext {
   return {
-    ...params,
-    config: params.config ?? { agents: { defaults: { workspace: workspaceDir } } },
+    config:
+      params.config ??
+      ({
+        agents: {
+          defaults: {
+            workspace: params.workspaceDir,
+          },
+        },
+      } as MigrationProviderContext["config"]),
+    runtime: params.runtime,
+    source: params.source,
+    stateDir: params.stateDir,
+    includeSecrets: params.includeSecrets,
+    targetAgentId: params.targetAgentId,
+    itemKinds: params.itemKinds,
+    overwrite: params.overwrite,
     providerOptions:
-      params.providerOptions ?? (verifyPluginApps ? { verifyPluginApps: true } : undefined),
+      params.providerOptions ?? (params.verifyPluginApps ? { verifyPluginApps: true } : undefined),
+    reportDir: params.reportDir,
     logger,
   };
 }
 
-export function findItem(items: readonly { id?: string }[], id: string) {
+function findItem(items: readonly { id?: string }[], id: string) {
   const item = items.find((entry) => entry.id === id);
-  expect(item, `Expected migration item ${id}`).toBeDefined();
+  if (!item) {
+    throw new Error(`Expected migration item ${id}`);
+  }
   return item as Record<string, unknown>;
 }
 
-export function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
-  expect(record).toEqual(expect.objectContaining(expected));
-  return record as Record<string, unknown>;
+function expectRecordFields(record: unknown, expected: Record<string, unknown>) {
+  if (!record || typeof record !== "object") {
+    throw new Error("Expected record");
+  }
+  const actual = record as Record<string, unknown>;
+  for (const [key, value] of Object.entries(expected)) {
+    expect(actual[key]).toEqual(value);
+  }
+  return actual;
 }
 
-export function fakeJwt(payload: Record<string, unknown>): string {
+function fakeJwt(payload: Record<string, unknown>): string {
   const header = Buffer.from(JSON.stringify({ alg: "none", typ: "JWT" })).toString("base64url");
   const body = Buffer.from(JSON.stringify(payload)).toString("base64url");
   return `${header}.${body}.signature`;
 }
 
-export function targetAgentDir(fixture: { stateDir: string }, agentId = "main"): string {
+function targetAgentDir(fixture: { stateDir: string }, agentId = "main"): string {
   return path.join(fixture.stateDir, "agents", agentId, "agent");
 }
 
-export function loadTargetAuthStore(fixture: { stateDir: string }, agentId = "main") {
+function loadTargetAuthStore(fixture: { stateDir: string }, agentId = "main") {
   return loadAuthProfileStoreForSecretsRuntime(targetAgentDir(fixture, agentId));
 }
 
-export async function createCodexFixture() {
+async function createCodexTestRoot(): Promise<string> {
   const workspace = await tempWorkspace({
     rootDir: resolvePreferredOpenClawTmpDir(),
     prefix: "openclaw-migrate-codex-",
   });
   tempWorkspaces.push(workspace);
-  const root = workspace.dir;
+  return workspace.dir;
+}
+
+async function createCodexFixture(): Promise<{
+  root: string;
+  homeDir: string;
+  codexHome: string;
+  stateDir: string;
+  workspaceDir: string;
+}> {
+  const root = await createCodexTestRoot();
   const homeDir = path.join(root, "home");
   const codexHome = path.join(root, ".codex");
   const stateDir = path.join(root, "state");
@@ -150,52 +185,70 @@ export async function createCodexFixture() {
   vi.stubEnv("HOME", homeDir);
   vi.stubEnv("OPENCLAW_STATE_DIR", stateDir);
   vi.stubEnv("OPENCLAW_AGENT_DIR", "");
+  await writeFile(path.join(codexHome, "skills", "tweet-helper", "SKILL.md"), "# Tweet helper\n");
+  await writeFile(path.join(codexHome, "skills", ".system", "system-skill", "SKILL.md"));
   await writeFile(path.join(homeDir, ".agents", "skills", "personal-style", "SKILL.md"));
-  const files = {
-    "skills/tweet-helper/SKILL.md": "# Tweet helper\n",
-    "skills/.system/system-skill/SKILL.md": "",
-    "plugins/cache/openai-primary-runtime/documents/1.0.0/.codex-plugin/plugin.json":
-      '{"name":"documents"}',
-    "config.toml": 'model = "gpt-5.5"\n',
-    "hooks/hooks.json": "{}\n",
-  };
-  for (const [file, content] of Object.entries(files)) {
-    await writeFile(path.join(codexHome, file), content);
-  }
+  await writeFile(
+    path.join(
+      codexHome,
+      "plugins",
+      "cache",
+      "openai-primary-runtime",
+      "documents",
+      "1.0.0",
+      ".codex-plugin",
+      "plugin.json",
+    ),
+    JSON.stringify({ name: "documents" }),
+  );
+  await writeFile(path.join(codexHome, "config.toml"), 'model = "gpt-5.5"\n');
+  await writeFile(path.join(codexHome, "hooks", "hooks.json"), "{}\n");
   return { root, homeDir, codexHome, stateDir, workspaceDir };
 }
 
-export function createConfigRuntime(
-  configState: Context["config"],
-  writeError?: Error,
-): Context["runtime"] {
-  type Config = NonNullable<Context["runtime"]>["config"];
-  const config: Pick<Config, "current" | "mutateConfigFile"> = {
-    current: () => configState,
-    mutateConfigFile: async (params) => {
-      if (writeError) {
-        throw writeError;
-      }
-      const result = await params.mutate(configState, {
-        snapshot: {} as never,
-        previousHash: null,
-      });
-      return {
-        path: "/tmp/openclaw.json",
-        previousHash: null,
-        persistedHash: "test-persisted-hash",
-        snapshot: {} as never,
-        nextConfig: configState,
-        afterWrite: { mode: "auto" },
-        followUp: { mode: "auto", requiresRestart: false },
-        result,
-      };
+function createConfigRuntime(
+  configState: MigrationProviderContext["config"],
+): MigrationProviderContext["runtime"] {
+  type Runtime = NonNullable<MigrationProviderContext["runtime"]>;
+  type MutateConfigFileParams = Parameters<Runtime["config"]["mutateConfigFile"]>[0];
+  type MutateConfigFileResult = Awaited<ReturnType<Runtime["config"]["mutateConfigFile"]>>;
+  return {
+    config: {
+      current: () => configState,
+      mutateConfigFile: async (params: MutateConfigFileParams): Promise<MutateConfigFileResult> => {
+        const result = await params.mutate(configState, {
+          snapshot: {} as never,
+          previousHash: null,
+        });
+        return {
+          path: "/tmp/openclaw.json",
+          previousHash: null,
+          persistedHash: "test-persisted-hash",
+          snapshot: {} as never,
+          nextConfig: configState,
+          afterWrite: { mode: "auto" },
+          followUp: { mode: "auto", requiresRestart: false },
+          result,
+        };
+      },
     },
-  };
-  return { config } as unknown as Context["runtime"];
+  } as unknown as MigrationProviderContext["runtime"];
 }
 
-type Request = (params: { method: string; requestParams?: unknown }) => Promise<unknown>;
+function createFailingConfigRuntime(
+  configState: MigrationProviderContext["config"],
+): MigrationProviderContext["runtime"] {
+  type Runtime = NonNullable<MigrationProviderContext["runtime"]>;
+  type MutateConfigFileParams = Parameters<Runtime["config"]["mutateConfigFile"]>[0];
+  return {
+    config: {
+      current: () => configState,
+      mutateConfigFile: async (_params: MutateConfigFileParams): Promise<never> => {
+        throw new Error("config write failed");
+      },
+    },
+  } as unknown as MigrationProviderContext["runtime"];
+}
 
 beforeEach(() => {
   closeCredentialReader.mockResolvedValue({ exited: true, cleanup: "closed" });
@@ -205,8 +258,12 @@ beforeEach(() => {
   credentialStorage.accountReadFails = false;
   appServerRequest.mockRejectedValue(new Error("codex app-server unavailable"));
   sourceAppServerClientScope.mockImplementation(
-    async (options: Record<string, unknown>, run: (request: Request) => Promise<unknown>) =>
-      await run(async (request) => await appServerRequest({ ...options, ...request })),
+    async (
+      options: Record<string, unknown>,
+      run: (
+        request: (params: { method: string; requestParams?: unknown }) => Promise<unknown>,
+      ) => Promise<unknown>,
+    ) => await run(async (request) => await appServerRequest({ ...options, ...request })),
   );
 });
 
@@ -225,3 +282,22 @@ afterEach(async () => {
   await closeOpenClawStateDatabaseAsync();
   await Promise.all(tempWorkspaces.splice(0).map((workspace) => workspace.cleanup()));
 });
+
+export {
+  writeFile,
+  makeContext,
+  findItem,
+  expectRecordFields,
+  fakeJwt,
+  targetAgentDir,
+  loadTargetAuthStore,
+  createCodexTestRoot,
+  createCodexFixture,
+  createConfigRuntime,
+  createFailingConfigRuntime,
+  closeCredentialReader,
+  nativeCredentialReaderStart,
+  appServerRequest,
+  sourceAppServerClientScope,
+  credentialStorage,
+};

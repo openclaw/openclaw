@@ -167,11 +167,10 @@ describe("handleMessageUpdate text signatures", () => {
       }
       await endMessage(context, { message: finalPartial });
 
-      expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual(
-        [...updates.map((text) => [text, "update"]), ["Working...", "end"]].map(
-          ([progressText, phase]) => preamble(progressText, phase),
-        ),
-      );
+      expect(onAgentEvent.mock.calls.map(([event]) => event)).toEqual([
+        ...updates.map((text) => preamble(text, "update")),
+        preamble("Working...", "end"),
+      ]);
 
       expect(context.state.deltaBuffer).toBe("Working...");
       expect(context.blockChunker.bufferedText).toBe("");

@@ -53,12 +53,15 @@ vi.mock("../../agents/subagents/registry/subagent-registry-read.js", async () =>
   };
 });
 
+// mock-isolation: capture replacement without changing the shared subagent registry.
 vi.mock("../../agents/subagents/registry/subagent-registry.js", () => ({
   replaceSubagentRunAfterSteerCore: mocks.replace,
 }));
+// mock-isolation: observe collector termination without starting cleanup work.
 vi.mock("../../agents/subagents/spawn/subagent-spawn-cleanup.js", () => ({
   terminateAcceptedCollectorRun: mocks.terminate,
 }));
+// mock-isolation: supply send outcomes without executing external chat turns.
 vi.mock("./chat-send-external-entry.js", () => ({
   handleDirectExternalChatSend: mocks.send,
 }));

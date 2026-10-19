@@ -88,11 +88,15 @@ function registerMethods(
   names = Object.keys(registry.gatewayHandlers),
 ) {
   for (const name of names) {
+    const handler = registry.gatewayHandlers[name];
+    if (!handler) {
+      throw new Error(`Missing fixture handler: ${name}`);
+    }
     registry.gatewayMethodDescriptors.push(
       createPluginGatewayMethodDescriptor({
         pluginId: "request-start-proof",
         name,
-        handler: registry.gatewayHandlers[name],
+        handler,
       }),
     );
   }

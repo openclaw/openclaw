@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { resolveMessagingToolPayloadDedupe } from "../auto-reply/reply/reply-payloads-dedupe.js";
 import type { ChannelPlugin } from "../channels/plugins/types.public.js";
 import { setActivePluginRegistry } from "../plugins/runtime.js";
@@ -24,14 +24,17 @@ const plugins: ExtractionPlugin[] = [
           ? { to: args.to, threadImplicit: true }
           : null,
       extractToolSendResult: ({ result }) => {
-        const toolSend = (result as { details?: { toolSend?: Record<string, unknown> } })?.details
+        const send = (result as { details?: { toolSend?: Record<string, unknown> } })?.details
           ?.toolSend;
-        if (typeof toolSend?.to !== "string" || !toolSend.to) {
+        if (typeof send?.to !== "string" || !send.to) {
           return null;
         }
+        const threadId = typeof send.threadId === "string" ? send.threadId : undefined;
         return {
-          to: toolSend.to,
-          ...(toolSend.threadSuppressed === true ? { threadSuppressed: true } : {}),
+          to: send.to,
+          ...(threadId ? { threadId } : {}),
+          ...(send.threadImplicit === true ? { threadImplicit: true } : {}),
+          ...(send.threadSuppressed === true ? { threadSuppressed: true } : {}),
         };
       },
     },
@@ -39,7 +42,15 @@ const plugins: ExtractionPlugin[] = [
   },
   {
     ...createChannelTestPluginBase({ id: "telegram" }),
-    threading: { resolveAutoThreadId: () => undefined },
+    messaging: { normalizeTarget: (raw) => (raw.trim() ? "telegram:" + raw.trim() : undefined) },
+    actions: {
+      extractToolSend: ({ args }) =>
+        args.action === "sendMessage" && typeof args.to === "string" ? { to: args.to } : null,
+    },
+    threading: {
+      resolveAutoThreadId: ({ to, toolContext }) =>
+        to.includes(":topic:") ? undefined : toolContext?.currentThreadTs,
+    },
   },
   {
     ...createChannelTestPluginBase({ id: "slack" }),
@@ -50,20 +61,32 @@ const plugins: ExtractionPlugin[] = [
       },
       extractToolSend: ({ args }) => {
         if (
-          (args.action !== "sendMessage" && args.action !== "send") ||
+          (args.action !== "sendMessage" &&
+            args.action !== "uploadFile" &&
+            args.action !== "send" &&
+            args.action !== "upload-file") ||
           typeof args.to !== "string"
         ) {
           return null;
         }
-        const threadId = [
-          args.action === "send" ? args.replyTo : undefined,
-          args.threadTs,
-          args.threadId,
-        ].find((value): value is string => typeof value === "string");
+        const nativeThreadId =
+          typeof args.threadTs === "string"
+            ? args.threadTs
+            : typeof args.threadId === "string"
+              ? args.threadId
+              : undefined;
+        const replyTo = typeof args.replyTo === "string" ? args.replyTo : undefined;
+        const threadId =
+          args.action === "send"
+            ? (replyTo ?? nativeThreadId)
+            : args.action === "upload-file"
+              ? (nativeThreadId ?? replyTo)
+              : nativeThreadId;
         const threadSuppressed =
           args.topLevel === true || args.threadTs === null || args.threadId === null;
         return {
           to: args.to,
+          accountId: typeof args.accountId === "string" ? args.accountId : undefined,
           threadId,
           threadSuppressed,
           threadImplicit: !threadId && !threadSuppressed,
@@ -95,115 +118,164 @@ beforeEach(() => {
 });
 afterEach(() => setActivePluginRegistry(createTestRegistry()));
 
-function send(
-  args: Record<string, unknown>,
-  options?: Parameters<typeof extractMessagingToolSend>[2],
-) {
-  return extractMessagingToolSend("message", { action: "send", ...args }, options);
-}
-function expectThread(
-  result: ReturnType<typeof extractMessagingToolSend>,
-  id?: string,
-  implicit?: boolean,
-  suppressed?: boolean,
-) {
-  const actual = [result?.threadId, result?.threadImplicit, result?.threadSuppressed];
-  expect(actual).toEqual([id, implicit, suppressed]);
-}
+describe("extractMessagingToolSend", () => {
+  it("records opaque conversation targets", () => {
+    expect(
+      extractMessagingToolSend("conversations_send", {
+        conversationRef: "conv_0123456789abcdef0123456789abcdef",
+        message: "hello",
+      }),
+    ).toEqual({
+      tool: "conversations_send",
+      provider: "conversation",
+      to: "conv_0123456789abcdef0123456789abcdef",
+    });
+  });
 
-it("records opaque conversation targets", () => {
-  const conversationRef = "conv_0123456789abcdef0123456789abcdef";
-  expect(extractMessagingToolSend("conversations_send", { conversationRef })).toEqual({
-    tool: "conversations_send",
-    provider: "conversation",
-    to: conversationRef,
+  it("extracts provider-declared delivery aliases", () => {
+    expect(
+      extractMessagingToolSend("message", {
+        action: "reply",
+        provider: "slack",
+        chatGuid: "Channel:C1",
+      }),
+    ).toMatchObject({ tool: "message", provider: "slack", to: "channel:c1" });
+  });
+
+  it("does not treat message-id aliases as delivery targets", () => {
+    const args = { action: "reply", provider: "slack", messageId: "message-1" };
+    expect(
+      extractMessagingToolSend("message", args, { currentMessagingTarget: "user:u123" }),
+    ).toMatchObject({ tool: "message", provider: "slack", to: "user:u123" });
+    expect(extractMessagingToolSend("message", args)).toBeUndefined();
+  });
+
+  it("keeps explicit thread evidence with an implicit provider", () => {
+    expect(
+      extractMessagingToolSend("message", {
+        action: "send",
+        to: "channel:123",
+        threadId: "456",
+      }),
+    ).toMatchObject({ provider: "message", threadId: "456" });
+  });
+
+  it("uses send transport thread precedence", () => {
+    const result = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "slack",
+      target: "channel:C1",
+      threadId: "111.000",
+      replyTo: "999.000",
+    });
+    expect(result?.to).toBe("channel:c1");
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBe("999.000");
+  });
+
+  it("does not infer native threads without a reply mode", () => {
+    const result = extractMessagingToolSend(
+      "slack",
+      { action: "sendMessage", to: "Channel:C1" },
+      {
+        currentChannelId: "channel:c1",
+        currentThreadId: "171.222",
+      },
+    );
+    expect(result?.threadImplicit).toBeUndefined();
+    expect(result?.threadId).toBeUndefined();
+  });
+
+  it("infers a native first-mode thread without consuming reply state", () => {
+    const hasRepliedRef = { value: false };
+    const result = extractMessagingToolSend(
+      "slack",
+      { action: "sendMessage", to: "Channel:C1" },
+      {
+        currentChannelId: "channel:c1",
+        currentThreadId: "171.222",
+        replyToMode: "first",
+        hasRepliedRef,
+      },
+    );
+    expect(result?.threadImplicit).toBe(true);
+    expect(result?.threadId).toBe("171.222");
+    expect(hasRepliedRef.value).toBe(false);
+  });
+
+  it("records explicit suppression of implicit message threading", () => {
+    const topLevel = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "telegram",
+      to: "123",
+      topLevel: true,
+    });
+    const nullThread = extractMessagingToolSend("message", {
+      action: "send",
+      provider: "telegram",
+      to: "123",
+      threadId: null,
+    });
+    expect(topLevel?.threadSuppressed).toBe(true);
+    expect(topLevel?.threadImplicit).toBeUndefined();
+    expect(nullThread?.threadSuppressed).toBe(true);
+    expect(nullThread?.threadImplicit).toBeUndefined();
   });
 });
 
-it("extracts provider-declared delivery aliases", () => {
-  expect(send({ action: "reply", provider: "slack", chatGuid: "Channel:C1" })).toMatchObject({
-    tool: "message",
-    provider: "slack",
-    to: "channel:c1",
+describe("extractMessagingToolSendResult thread evidence", () => {
+  it("preserves implicit thread evidence and reply dedupe when the result omits it", () => {
+    const pending = extractMessagingToolSend(
+      "message",
+      {
+        action: "send",
+        provider: "partialthreadprovider",
+        to: "channel:abc",
+        message: "answer",
+      },
+      {
+        currentChannelId: "channel:abc",
+        currentMessagingTarget: "channel:abc",
+        currentThreadId: "root-1",
+        replyToMode: "all",
+      },
+    );
+    expect(pending?.threadImplicit).toBe(true);
+    expect(pending?.threadId).toBe("root-1");
+    const confirmed = extractMessagingToolSendResult(pending!, {
+      details: { toolSend: { to: "channel:abc" } },
+    });
+    expect(confirmed.threadImplicit).toBe(true);
+    expect(confirmed.threadId).toBe("root-1");
+    expect(
+      resolveMessagingToolPayloadDedupe({
+        messageProvider: "partialthreadprovider",
+        originatingTo: "channel:abc",
+        originatingThreadId: "root-1",
+        messagingToolSentTargets: [confirmed],
+      }).matchingRoute,
+    ).toBe(true);
   });
-});
 
-it("does not treat message-id aliases as delivery targets", () => {
-  const args = { action: "reply", provider: "slack", messageId: "message-1" };
-  expect(send(args, { currentMessagingTarget: "user:u123" })).toMatchObject({
-    tool: "message",
-    provider: "slack",
-    to: "user:u123",
+  it("provider suppression replaces pending implicit evidence", () => {
+    const confirmed = extractMessagingToolSendResult(
+      {
+        tool: "message",
+        provider: "partialthreadprovider",
+        to: "channel:abc",
+        threadId: "root-1",
+        threadImplicit: true,
+      },
+      { details: { toolSend: { to: "channel:abc", threadSuppressed: true } } },
+    );
+    expect({
+      threadId: confirmed.threadId,
+      threadImplicit: confirmed.threadImplicit,
+      threadSuppressed: confirmed.threadSuppressed,
+    }).toEqual({
+      threadId: undefined,
+      threadImplicit: undefined,
+      threadSuppressed: true,
+    });
   });
-  expect(send(args)).toBeUndefined();
-});
-
-it("keeps explicit thread evidence with an implicit provider", () => {
-  expect(send({ to: "channel:123", threadId: "456" })).toMatchObject({
-    provider: "message",
-    threadId: "456",
-  });
-});
-
-it("uses send transport thread precedence", () => {
-  const result = send({
-    provider: "slack",
-    target: "channel:C1",
-    threadId: "111.000",
-    replyTo: "999.000",
-  });
-  expect(result?.to).toBe("channel:c1");
-  expectThread(result, "999.000");
-});
-
-it.each([false, true])("infers a native thread only with reply mode (first=%s)", (first) => {
-  const hasRepliedRef = { value: false };
-  const result = extractMessagingToolSend(
-    "slack",
-    { action: "sendMessage", to: "Channel:C1" },
-    {
-      currentChannelId: "channel:c1",
-      currentThreadId: "171.222",
-      ...(first ? { replyToMode: "first" as const, hasRepliedRef } : {}),
-    },
-  );
-  expectThread(result, first ? "171.222" : undefined, first ? true : undefined);
-  expect(hasRepliedRef.value).toBe(false);
-});
-
-it("records explicit suppression of implicit message threading", () => {
-  for (const override of [{ topLevel: true }, { threadId: null }]) {
-    const result = send({ provider: "telegram", to: "123", ...override });
-    expectThread(result, undefined, undefined, true);
-  }
-});
-it.each([false, true])("preserves or suppresses implicit result threads (%s)", (suppressed) => {
-  const pending = send(
-    { provider: "partialthreadprovider", to: "channel:abc" },
-    {
-      currentChannelId: "channel:abc",
-      currentMessagingTarget: "channel:abc",
-      currentThreadId: "root-1",
-      replyToMode: "all",
-    },
-  );
-  expectThread(pending, "root-1", true);
-  const confirmed = extractMessagingToolSendResult(pending!, {
-    details: {
-      toolSend: { to: "channel:abc", ...(suppressed ? { threadSuppressed: true } : {}) },
-    },
-  });
-  if (suppressed) {
-    expectThread(confirmed, undefined, undefined, true);
-    return;
-  }
-  expectThread(confirmed, "root-1", true);
-  expect(
-    resolveMessagingToolPayloadDedupe({
-      messageProvider: "partialthreadprovider",
-      originatingTo: "channel:abc",
-      originatingThreadId: "root-1",
-      messagingToolSentTargets: [confirmed],
-    }).matchingRoute,
-  ).toBe(true);
 });

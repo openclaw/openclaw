@@ -35,9 +35,12 @@ vi.mock("openclaw/plugin-sdk/routing", async (importOriginal) => ({
   resolveAgentRoute: inboundMocks.resolveAgentRoute,
 }));
 
+// mock-isolation: capture delivery without issuing Google Chat API requests.
 vi.mock("./api.js", () => apiMocks);
+// mock-isolation: this routing fixture supplies its admitted access result.
 vi.mock("./monitor-access.js", () => accessMocks);
 
+// mock-isolation: capture the event processor without registering shared webhook state.
 vi.mock("./monitor-routing.js", () => ({
   registerGoogleChatWebhookTarget: vi.fn(),
   setGoogleChatWebhookEventProcessor: (eventProcessor: EventProcessor) => {

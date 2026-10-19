@@ -36,11 +36,11 @@ function timedTraffic(style: Parameters<typeof setLogStyle>[0], consoleLevel: "d
   const frames: Array<{ connId: string; id: string; method: string }> = [];
   return {
     clock,
-    request(frame: (typeof frames)[number]) {
+    request: (frame: (typeof frames)[number]) => {
       frames.push(frame);
       logWs("in", "req", frame);
     },
-    respond(frame: (typeof frames)[number], expected: string | false | null, ok = true) {
+    respond: (frame: (typeof frames)[number], expected: string | false | null, ok = true) => {
       output.mockClear();
       logWs("out", "res", { ...frame, ok });
       if (expected === null) {

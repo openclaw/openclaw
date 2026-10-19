@@ -19,8 +19,13 @@ afterEach(() => {
 });
 
 const origin = "https://control.example.invalid";
-const writerScopes = ["operator.sessions.write"];
-async function configureWriters(identityScopes: Record<string, string[]>, required = true) {
+const writerScopes: NonNullable<GatewayAuthConfig["identityScopes"]>[string] = [
+  "operator.sessions.write",
+];
+async function configureWriters(
+  identityScopes: NonNullable<GatewayAuthConfig["identityScopes"]>,
+  required = true,
+) {
   const dedicated = { provider: "device", settings: { device: "paired", inference: "worker" } };
   const auth: GatewayAuthConfig = {
     mode: "trusted-proxy",

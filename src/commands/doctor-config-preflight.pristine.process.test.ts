@@ -37,7 +37,7 @@ function createRuntime(root: string, entry: Parameters<typeof resolveRuntimeWork
   return { runtimeRoot, sourceUrl, runtimeUrl, processEntrypointsUrl };
 }
 function childEnv(values: NodeJS.ProcessEnv, omitted: string[] = []) {
-  const env = { ...process.env, NO_COLOR: "1", ...values };
+  const env: NodeJS.ProcessEnv = { ...process.env, NO_COLOR: "1", ...values };
   for (const key of ["NODE_ENV", "VITEST", "VITEST_POOL_ID", "VITEST_WORKER_ID", ...omitted]) {
     delete env[key];
   }
