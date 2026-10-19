@@ -4,6 +4,7 @@ import { flush } from "solid-js";
 import { afterEach, expect, it, vi } from "vitest";
 import { mountSolid } from "../../../test-helpers/mount-solid.ts";
 import { openSubmenu } from "../../../test-helpers/session-menu.ts";
+import { chatPaneLayoutModel } from "./chat-header-panel-actions.tsx";
 import type { HeaderSessionMenuPage } from "./chat-header-session-menu-mobile.tsx";
 import "./chat-header-session-menu.ts";
 
@@ -142,4 +143,88 @@ it("dismisses the controlled Advanced page after a fork action", async () => {
   fork!.click();
   expect(onAction).toHaveBeenCalledExactlyOnceWith({ kind: "fork" });
   expect(close).toHaveBeenCalledOnce();
+});
+
+it("closes the originating split pane from mobile Advanced without exposing legacy View", async () => {
+  const first = await menuFixture(true);
+  const second = await menuFixture(true);
+  const focusedAtClose: (Element | null)[] = [];
+  const onClosePane = vi.fn(() => {
+    focusedAtClose.push(document.activeElement);
+  });
+  const trigger = second.menu.querySelector<HTMLButtonElement>(
+    ".chat-header-session-menu__trigger",
+  )!;
+  second.close.mockImplementation(() => trigger.focus());
+  const secondLayout = {
+    paneId: "pane-second",
+    narrow: true,
+    mobile: true,
+    actionsDisabled: true,
+    onClosePane,
+  };
+  first.menu.viewActions = chatPaneLayoutModel({
+    ...secondLayout,
+    paneId: "pane-first",
+    actionsDisabled: false,
+  }).allActions;
+  second.menu.viewActions = chatPaneLayoutModel(secondLayout).allActions;
+  second.menu.deleteAllowed = true;
+  await second.menu.updateComplete;
+  expect(second.menu.querySelector('[value="compact:open-view"]')).toBeNull();
+  second.menu.querySelector<HTMLButtonElement>('[value="mobile-advanced"]')!.click();
+  flush();
+  const page = second.open.mock.calls[0]![0];
+  second.menu.mobilePageOpen = true;
+  const mounted = mountSolid(() => page.content);
+  flush();
+  const session = () =>
+    [...mounted.container.querySelectorAll("section")].find(
+      (section) => section.querySelector("h3")?.textContent === "Session",
+    )!;
+  const closePaneButton = () =>
+    [...session().querySelectorAll<HTMLButtonElement>("button")].find(
+      (button) => button.textContent?.trim() === "Close pane",
+    )!;
+  expect(closePaneButton()).toBeDefined();
+  expect(closePaneButton().disabled).toBe(true);
+  closePaneButton().click();
+  expect(onClosePane).not.toHaveBeenCalled();
+  expect(second.close).not.toHaveBeenCalled();
+
+  secondLayout.actionsDisabled = false;
+  second.menu.viewActions = chatPaneLayoutModel(secondLayout).allActions;
+  await second.menu.updateComplete;
+  flush();
+  const labels = [...session().querySelectorAll("button")].map((button) =>
+    button.textContent?.trim(),
+  );
+  expect(labels).toContain("Delete");
+  expect(labels.indexOf("Close pane")).toBeLessThan(labels.indexOf("Delete"));
+  expect(closePaneButton().disabled).toBe(false);
+  closePaneButton().focus();
+  closePaneButton().click();
+  expect(onClosePane).toHaveBeenCalledExactlyOnceWith("pane-second");
+  expect(focusedAtClose).toEqual([trigger]);
+  expect(second.close).toHaveBeenCalledOnce();
+  expect(first.close).not.toHaveBeenCalled();
+  expect(first.onAction).not.toHaveBeenCalled();
+  expect(second.onAction).not.toHaveBeenCalled();
+});
+
+it("omits pane closure from mobile Advanced for a single pane", async () => {
+  const { menu, open } = await menuFixture(true);
+  menu.viewActions = chatPaneLayoutModel({
+    paneId: "only-pane",
+    narrow: true,
+    mobile: true,
+  }).allActions;
+  await menu.updateComplete;
+  menu.querySelector<HTMLButtonElement>('[value="mobile-advanced"]')!.click();
+  flush();
+  menu.mobilePageOpen = true;
+  const mounted = mountSolid(() => open.mock.calls[0]![0].content);
+  flush();
+  expect(mounted.container.textContent).not.toContain("Close pane");
+  expect(menu.querySelector('[value="compact:open-view"]')).toBeNull();
 });

@@ -139,12 +139,14 @@ export function createMobileHeaderSessionMenu(options: {
       .compact(name)
       .filter((entry) => !entry.id.startsWith("compact:back") && entry.id !== "back-divider");
   const select = (item: MenuItem) => {
-    if (item.id === "open-command-palette") {
+    // Restore the trigger before pane removal starts its survivor-focus handoff.
+    const closeBeforeAction = item.id === "open-command-palette" || item.id === "layout:close-pane";
+    if (closeBeforeAction) {
       options.host()?.close();
     }
     options.select(item);
     if (
-      item.id !== "open-command-palette" &&
+      !closeBeforeAction &&
       item.closeOnSelect !== false &&
       !item.id.startsWith("communication:")
     ) {
@@ -286,13 +288,22 @@ export function createMobileHeaderSessionMenu(options: {
                     <h3>{t("sessionsView.session")}</h3>
                     <div class="session-actions-page__group">
                       <PageEntries
-                        entries={body("advanced").filter(
-                          (entry) =>
-                            !entry.id.includes("copy") &&
-                            !entry.id.includes("open-in") &&
-                            !entry.id.startsWith("communication") &&
-                            entry.id !== "delete-divider",
-                        )}
+                        entries={body("advanced")
+                          .filter(
+                            (entry) =>
+                              !entry.id.includes("copy") &&
+                              !entry.id.includes("open-in") &&
+                              !entry.id.startsWith("communication") &&
+                              entry.id !== "delete-divider",
+                          )
+                          .flatMap((entry) =>
+                            entry.id === "delete"
+                              ? options
+                                  .viewOptions()
+                                  .filter((action) => action.id === "layout:close-pane")
+                                  .concat(entry)
+                              : [entry],
+                          )}
                         select={(item) =>
                           item.id === "compact:open-icon" ? openPage("icon", page) : select(item)
                         }
