@@ -37,15 +37,23 @@ function createHarness(eventLedger: AcpEventLedger, rejectSend = false) {
     }
     return { ok: true };
   });
-  const agent = createAcpGatewayAgent(
-    connection,
-    createAcpGateway(request as GatewayClient["request"]),
-    {
-      eventLedger,
-      sessionStore,
-    },
+  const gateway = createAcpGateway(request as GatewayClient["request"]);
+  const agent = createAcpGatewayAgent(connection, gateway, { eventLedger, sessionStore });
+  return {
+    agent,
+    request,
+    sessionStore,
+    sent,
+    updates: () => connection["__sessionUpdateMock"].mock.calls.map(([n]) => n.update),
+    load: (id: string) => agent.loadSession(createLoadSessionRequest(id)),
+    prompt: (id: string, text: string) => agent.prompt(createPromptRequest(id, text)),
+  };
+}
+
+async function userPrompts(ledger: AcpEventLedger, ref: { sessionId: string; sessionKey: string }) {
+  return (await ledger.readReplay(ref)).events.filter(
+    ({ update }) => update.sessionUpdate === "user_message_chunk",
   );
-  return { agent, request, sessionStore, sent, updates: connection["__sessionUpdateMock"] };
 }
 
 function sessionRef(harness: ReturnType<typeof createHarness>, sessionId: string) {
@@ -77,10 +85,15 @@ const replayTypes = [
   "available_commands_update",
 ];
 
+function expectReplay(harness: ReturnType<typeof createHarness>) {
+  expect(harness.request.mock.calls.map(([method]) => method)).not.toContain("sessions.get");
+  expect(harness.updates().map((update) => update.sessionUpdate)).toEqual(replayTypes);
+}
+
 describe("ACP translator event ledger replay", () => {
   it("replays complete sessions by ACP ID and Gateway key into one canonical ledger", async () => {
     const ledger = createTestAcpEventLedger();
-    const recorded = createDeferred();
+    let recorded = createDeferred();
     const recordPrompt = ledger.recordUserPrompt.bind(ledger);
     vi.spyOn(ledger, "recordUserPrompt").mockImplementation(async (params) => {
       await recordPrompt(params);
@@ -89,7 +102,7 @@ describe("ACP translator event ledger replay", () => {
     const first = createHarness(ledger);
     const { sessionId } = await first.agent.newSession(createNewSessionRequest());
     const ref = sessionRef(first, sessionId);
-    const prompt = first.agent.prompt(createPromptRequest(sessionId, "Question"));
+    const prompt = first.prompt(sessionId, "Question");
     const runId = await first.sent.promise;
     await recorded.promise;
     for (const phase of ["start", "result"]) {
@@ -115,10 +128,9 @@ describe("ACP translator event ledger replay", () => {
     await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
 
     const second = createHarness(ledger);
-    await second.agent.loadSession(createLoadSessionRequest(sessionId));
-    const updates = second.updates.mock.calls.map(([notification]) => notification.update);
-    expect(second.request.mock.calls.map(([method]) => method)).not.toContain("sessions.get");
-    expect(updates.map((update) => update.sessionUpdate)).toEqual(replayTypes);
+    await second.load(sessionId);
+    const updates = second.updates();
+    expectReplay(second);
     expect(updates[2]).toEqual({
       sessionUpdate: "user_message_chunk",
       content: { type: "text", text: "Question" },
@@ -127,35 +139,20 @@ describe("ACP translator event ledger replay", () => {
       sessionUpdate: "agent_message_chunk",
       content: { type: "text", text: "Answer" },
     });
-    expect(
-      (await ledger.readReplay(ref)).events.filter(
-        ({ update }) => update.sessionUpdate === "user_message_chunk",
-      ),
-    ).toHaveLength(1);
+    expect(await userPrompts(ledger, ref)).toHaveLength(1);
 
     const listed = createHarness(ledger);
-    await listed.agent.loadSession(createLoadSessionRequest(ref.sessionKey));
-    expect(listed.request.mock.calls.map(([method]) => method)).not.toContain("sessions.get");
-    expect(
-      listed.updates.mock.calls.map(([notification]) => notification.update.sessionUpdate),
-    ).toEqual(replayTypes);
-    const followUpRecorded = createDeferred();
-    vi.mocked(ledger.recordUserPrompt).mockImplementation(async (params) => {
-      await recordPrompt(params);
-      followUpRecorded.resolve();
-    });
-    const followUp = listed.agent.prompt(createPromptRequest(ref.sessionKey, "Follow-up"));
+    await listed.load(ref.sessionKey);
+    expectReplay(listed);
+    recorded = createDeferred();
+    const followUp = listed.prompt(ref.sessionKey, "Follow-up");
     const followUpRun = await listed.sent.promise;
-    await followUpRecorded.promise;
+    await recorded.promise;
     await listed.agent.handleGatewayEvent(
       chat(ref.sessionKey, followUpRun, "final", "Follow-up answer"),
     );
     await expect(followUp).resolves.toEqual({ stopReason: "end_turn" });
-    expect(
-      (await ledger.readReplay(ref)).events.filter(
-        ({ update }) => update.sessionUpdate === "user_message_chunk",
-      ),
-    ).toHaveLength(2);
+    expect(await userPrompts(ledger, ref)).toHaveLength(2);
     await expect(ledger.readReplayBySessionId({ sessionId: ref.sessionKey })).resolves.toEqual({
       complete: false,
       events: [],
@@ -167,40 +164,34 @@ describe("ACP translator event ledger replay", () => {
     const first = createHarness(ledger, true);
     const { sessionId } = await first.agent.newSession(createNewSessionRequest());
     const ref = sessionRef(first, sessionId);
-    await expect(
-      first.agent.prompt(createPromptRequest(sessionId, "Never accepted")),
-    ).rejects.toThrow("send failed before acceptance");
-    expect(
-      (await ledger.readReplay(ref)).events.map(({ update }) => update.sessionUpdate),
-    ).not.toContain("user_message_chunk");
+    await expect(first.prompt(sessionId, "Never accepted")).rejects.toThrow(
+      "send failed before acceptance",
+    );
+    expect(await userPrompts(ledger, ref)).toHaveLength(0);
     const loaded = createHarness(ledger);
-    await loaded.agent.loadSession(createLoadSessionRequest(sessionId));
-    expect(
-      loaded.updates.mock.calls.map(([notification]) => notification.update.sessionUpdate),
-    ).not.toContain("user_message_chunk");
+    await loaded.load(sessionId);
+    expect(loaded.updates().map((update) => update.sessionUpdate)).not.toContain(
+      "user_message_chunk",
+    );
   });
 
   it("marks replay incomplete when an accepted prompt cannot be recorded", async () => {
-    const inner = createTestAcpEventLedger();
+    const ledger = createTestAcpEventLedger();
     const incomplete = createDeferred();
-    const ledger: AcpEventLedger = {
-      ...inner,
-      recordUserPrompt: async () => {
-        throw new Error("ledger write failed");
-      },
-      markIncomplete: async (params) => {
-        await inner.markIncomplete(params);
-        incomplete.resolve();
-      },
-    };
+    vi.spyOn(ledger, "recordUserPrompt").mockRejectedValue(new Error("ledger write failed"));
+    const markIncomplete = ledger.markIncomplete.bind(ledger);
+    vi.spyOn(ledger, "markIncomplete").mockImplementation(async (params) => {
+      await markIncomplete(params);
+      incomplete.resolve();
+    });
     const harness = createHarness(ledger);
     const { sessionId } = await harness.agent.newSession(createNewSessionRequest());
     const ref = sessionRef(harness, sessionId);
-    const prompt = harness.agent.prompt(createPromptRequest(sessionId, "Question"));
+    const prompt = harness.prompt(sessionId, "Question");
     const runId = await harness.sent.promise;
     await incomplete.promise;
     await harness.agent.handleGatewayEvent(chat(ref.sessionKey, runId, "final", "Answer"));
     await expect(prompt).resolves.toEqual({ stopReason: "end_turn" });
-    await expect(inner.readReplay(ref)).resolves.toEqual({ complete: false, events: [] });
+    await expect(ledger.readReplay(ref)).resolves.toEqual({ complete: false, events: [] });
   });
 });
