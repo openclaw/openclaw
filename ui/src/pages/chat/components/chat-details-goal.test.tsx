@@ -72,6 +72,7 @@ it("retains the objective while hidden and keeps recovery available after the go
 it("edits multiline objectives through the native modal and retires it on session change", async () => {
   const restore = installDialogPolyfill();
   const pending = createDeferred<boolean>();
+  let submissionError: string | null = null;
   const onSubmit = vi.fn().mockReturnValueOnce(pending.promise).mockResolvedValue(true);
   const [sessionId, setSessionId] = createSignal("session-original");
   const view = mountSolid(() => (
@@ -83,6 +84,7 @@ it("edits multiline objectives through the native modal and retires it on sessio
       canAct
       onGoalAction={vi.fn()}
       onGoalSubmit={onSubmit}
+      getGoalSubmitError={() => submissionError}
     />
   ));
   try {
@@ -93,10 +95,11 @@ it("edits multiline objectives through the native modal and retires it on sessio
     const save = modal.querySelector<HTMLButtonElement>('button[type="submit"]')!;
     expect(input.value).toBe(goal.objective);
     expect(save.disabled).toBe(true);
-    const objective = "Check the release\nAsk for a documentation review";
+    const objective = "  " + goal.objective + "\n";
     input.value = objective;
     input.dispatchEvent(new Event("input", { bubbles: true }));
     flush();
+    expect(save.disabled).toBe(false);
     save.click();
     flush();
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith({
@@ -109,11 +112,12 @@ it("edits multiline objectives through the native modal and retires it on sessio
     const cancelled = new CustomEvent("modal-cancel", { cancelable: true });
     modal.dispatchEvent(cancelled);
     expect(cancelled.defaultPrevented).toBe(true);
+    submissionError = "Goal update is invalid. Check the objective and try again.";
     pending.resolve(false);
     await pending.promise;
     await Promise.resolve();
     flush();
-    expect(modal.querySelector('[role="alert"]')?.textContent).toContain("Couldn't save the goal");
+    expect(modal.querySelector('[role="alert"]')?.textContent).toBe(submissionError);
     expect(input.value).toBe(objective);
     expect(save.disabled).toBe(false);
     setSessionId("session-replacement");

@@ -29,6 +29,8 @@ export type ChatDetailsGoalProps = {
   recovery?: ChatGoalRecovery;
   onGoalAction?: (goalId: string, action: ChatGoalAction) => void;
   onGoalSubmit?: (draft: ChatGoalDraft, submissionAction?: Event) => Promise<boolean>;
+  /** Reads the native owner's failure after submission settles. */
+  getGoalSubmitError?: () => string | null | undefined;
   /** The sheet's scroll owner attaches its existing observer to this actual scrollport. */
   scrollRef?: (element: HTMLDivElement) => void;
 };
@@ -48,7 +50,7 @@ function GoalEditDialog(props: {
   });
   let submitting = false;
   let input!: HTMLTextAreaElement;
-  const unchanged = () => !draft().trim() || draft().trim() === initial.trim();
+  const unchanged = () => !draft().trim() || draft() === initial;
   const submit = async (event: SubmitEvent) => {
     event.preventDefault();
     if (submitting || unchanged()) {
@@ -58,7 +60,7 @@ function GoalEditDialog(props: {
     setState({ pending: true, error: null });
     let error: string | null;
     try {
-      error = await props.submit(input.value.trim());
+      error = await props.submit(input.value);
     } catch (cause) {
       error = formatUiError(cause);
     }
@@ -191,7 +193,7 @@ export function ChatDetailsGoal(props: ChatDetailsGoalProps) {
         goalId: goal.id,
         objective,
       });
-      return saved ? null : t("chat.goals.editFailed");
+      return saved ? null : (props.getGoalSubmitError?.() ?? t("chat.goals.editFailed"));
     };
     try {
       await withPromiseModalHost<void>({ signal: controller.signal, value: undefined }, (modal) => {
