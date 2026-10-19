@@ -79,7 +79,6 @@ export async function recordSessionProviderReview(params: {
   params.assertCurrent();
   const { readSessionProviderReview, compareSessionProviderReview } =
     await import("../config/sessions/provider-review-store.js");
-  params.assertCurrent();
   const entry = await readSessionProviderReview(params.target, params.assertCurrent);
   params.assertCurrent();
   const previous = entry?.providerReview;
@@ -156,7 +155,6 @@ export async function issueProviderReviewAcknowledgment(params: {
     throw new Error("Provider review cannot be continued in an incognito session");
   }
   const { readSessionProviderReview } = await import("../config/sessions/provider-review-store.js");
-  params.assertCurrent();
   const target = Object.freeze({ ...params.target });
   const entry = await readSessionProviderReview(target, params.assertCurrent);
   params.assertCurrent();
@@ -272,7 +270,6 @@ export async function assertSessionProviderReviewWorkStart(params: {
 }): Promise<void> {
   params.assertCurrent();
   const { readSessionProviderReview } = await import("../config/sessions/provider-review-store.js");
-  params.assertCurrent();
   const entry = await readSessionProviderReview(params.target, params.assertCurrent);
   params.assertCurrent();
   if (params.acknowledgment) {
@@ -337,10 +334,9 @@ export async function acceptProviderReviewAcknowledgment(
   const assertOperationCurrent = accepted.assertCurrent;
   const assertAcceptanceCurrent = () => {
     assertOperationCurrent?.();
-    readState(acknowledgment);
+    return readState(acknowledgment);
   };
-  assertAcceptanceCurrent();
-  const state = readState(acknowledgment);
+  const state = assertAcceptanceCurrent();
   if (
     accepted.runId !== state.nextRunId ||
     (state.review.runtimeId === "codex" &&
@@ -358,7 +354,6 @@ export async function acceptProviderReviewAcknowledgment(
   }
   const { compareSessionProviderReview } =
     await import("../config/sessions/provider-review-store.js");
-  assertAcceptanceCurrent();
   await compareSessionProviderReview(state.target, {
     expectedReview: state.review,
     nextReview: undefined,
