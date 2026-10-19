@@ -5,6 +5,7 @@ import { afterEach, expect, it, vi } from "vitest";
 import { persistAuthProfileBatch } from "../../agents/auth-profiles/upsert-with-lock.js";
 import { createEmbeddedAgentRunnerOpenAiConfig } from "../../agents/test-helpers/embedded-agent-runner-e2e-fixtures.js";
 import { setRuntimeConfigSnapshot } from "../../config/runtime-snapshot.js";
+import type { AgentModelEntryConfig } from "../../config/types.agent-defaults.js";
 import { toErrorObject } from "../../infra/errors.js";
 import { readTranscriptMessages } from "../../sessions/user-turn-transcript.test-support.js";
 import { readModelFallbackNotice } from "../../shared/model-fallback-notice.js";
@@ -21,12 +22,13 @@ afterEach(() => {
 });
 
 function successfulResponse(model: string) {
+  const text = "Fallback report";
   const item = {
     id: "fallback-message",
     type: "message",
     role: "assistant",
     status: "completed",
-    content: [{ type: "output_text", text: "Fallback report", annotations: [] }],
+    content: [{ type: "output_text", text, annotations: [] }],
   };
   const response = {
     id: "fallback-response",
@@ -35,30 +37,17 @@ function successfulResponse(model: string) {
     output: [item],
     usage: { input_tokens: 10, output_tokens: 2, total_tokens: 12 },
   };
+  const cursor = { item_id: item.id, output_index: 0, content_index: 0 };
   const events = [
     { type: "response.created", response: { ...response, status: "in_progress", output: [] } },
     { type: "response.output_item.added", output_index: 0, item: { ...item, content: [] } },
     {
       type: "response.content_part.added",
-      item_id: item.id,
-      output_index: 0,
-      content_index: 0,
+      ...cursor,
       part: { type: "output_text", text: "", annotations: [] },
     },
-    {
-      type: "response.output_text.delta",
-      item_id: item.id,
-      output_index: 0,
-      content_index: 0,
-      delta: "Fallback report",
-    },
-    {
-      type: "response.output_text.done",
-      item_id: item.id,
-      output_index: 0,
-      content_index: 0,
-      text: "Fallback report",
-    },
+    { type: "response.output_text.delta", ...cursor, delta: text },
+    { type: "response.output_text.done", ...cursor, text },
     { type: "response.output_item.done", output_index: 0, item },
     { type: "response.completed", response },
   ];
@@ -91,21 +80,16 @@ it("continues one cron user turn when the primary times out after provider dispa
       profiles: { "mock-openai:cron-fixture": { provider: "mock-openai", mode: "api_key" } },
       order: { "mock-openai": ["mock-openai:cron-fixture"] },
     };
+    const modelConfig = (): AgentModelEntryConfig => ({
+      agentRuntime: { id: "openclaw" },
+      params: { transport: "sse", openaiWsWarmup: false },
+    });
     config.agents = {
       entries: { main: { agentDir: state.agentDir(), workspace: state.workspaceDir } },
       defaults: {
         workspace: state.workspaceDir,
         model: { primary: "mock-openai/primary", fallbacks: ["mock-openai/backup"] },
-        models: {
-          "mock-openai/primary": {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
-          },
-          "mock-openai/backup": {
-            agentRuntime: { id: "openclaw" },
-            params: { transport: "sse", openaiWsWarmup: false },
-          },
-        },
+        models: { "mock-openai/primary": modelConfig(), "mock-openai/backup": modelConfig() },
       },
     };
     setRuntimeConfigSnapshot(config);
