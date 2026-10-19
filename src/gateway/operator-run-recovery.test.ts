@@ -19,6 +19,7 @@ import {
   restoreActivePluginRegistrySnapshot,
   stageActivePluginRegistry,
 } from "../plugins/runtime.js";
+import { withPluginRuntimeGatewayRequestScope } from "../plugins/runtime/gateway-request-scope.js";
 import { createPluginRecord } from "../plugins/status.test-helpers.js";
 import { openOpenClawStateDatabase } from "../state/openclaw-state-db.js";
 import { setCanonicalUserProfileDisplayName } from "../state/user-profile-writes.js";
@@ -37,7 +38,12 @@ import {
 import { retireDeviceTokenClients } from "./device-token-client-lifecycle.js";
 import { captureGatewayOperatorRunAuthority } from "./operator-run-authority.js";
 import { createOperatorRecoveryFixture } from "./operator-run-recovery.test-support.js";
+import {
+  captureOperatorToolGatewayContinuationContext,
+  withOperatorToolGatewayAuthority,
+} from "./server-plugin-in-process-authority.js";
 import { createContext } from "./server-plugin-in-process-dispatch.test-support.js";
+import { createSyntheticPluginRuntimeClient } from "./server-plugin-runtime-client.js";
 import {
   enforceSharedGatewaySessionGenerationForConfigWrite,
   SharedGatewaySessionGenerationState,
@@ -63,6 +69,51 @@ function pairedOperator(): PairedDevice {
 }
 
 describe("restart recovery authenticated operator source", () => {
+  it("keeps an accepted continuation current after its recovered requester claim retires", async () => {
+    await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
+      const profile = ensureProfileForEmail("recovered-continuation@example.test");
+      const fixture = await createOperatorRecoveryFixture({
+        stateDir: state.stateDir,
+        context: createContext(),
+        profileId: profile.id,
+        config: {},
+        device: pairedOperator(),
+      });
+      const restored = expectDefined(await fixture.restore(), "recovered requester authority");
+      const client = createSyntheticPluginRuntimeClient({
+        authenticatedUserProfile: fixture.client.authenticatedUserProfile,
+        operatorRoleActor: { kind: "operator", profileId: restored.authority.profileId },
+        operatorRunAuthority: restored.authority,
+        scopes: ["operator.write"],
+      });
+      const child = expectDefined(
+        await withPluginRuntimeGatewayRequestScope(
+          { client, context: fixture.context, isWebchatConnect: () => false },
+          () =>
+            withOperatorToolGatewayAuthority(
+              { operatorRunAuthority: restored.authority, scopes: ["operator.write"] },
+              async () => await captureOperatorToolGatewayContinuationContext(),
+            ),
+        ),
+        "accepted continuation authority",
+      );
+      try {
+        // A recovered parent's work claim retires when it settles; its accepted child continues.
+        fixture.retire();
+        restored.release();
+        expect(restored.authority.assertCurrent).toThrow("Recovery claim retired");
+        expect(child.assertCurrent).not.toThrow();
+        expect(child.signal.aborted).toBe(false);
+        // Device revocation still ends the continuation's authority.
+        invalidateGatewayDeviceRevocation(fixture.context, "recovery-device", "operator");
+        expect(child.assertCurrent).toThrow();
+        expect(child.signal.aborted).toBe(true);
+      } finally {
+        child.release();
+        restored.release();
+      }
+    });
+  });
   it("keeps restored authority current during unrelated issuance", async () => {
     await withOpenClawTestState({ scenario: "minimal" }, async (state) => {
       const profile = ensureProfileForEmail("publication-lifetime@example.test");

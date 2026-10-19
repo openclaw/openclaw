@@ -164,6 +164,7 @@ export function captureOperatorToolGatewayContinuationContextInternal(
     client: resolved.operatorSourceClient,
     context: resolved.context,
     hasCurrentClientAuthority: resolved.hasCurrentClientAuthority,
+    independentContinuation: true,
   }).then((captured) => {
     try {
       captured?.authority.assertCurrent();
@@ -210,7 +211,15 @@ export function captureOperatorToolGatewayContinuationContextInternal(
       const assertCurrent = () => {
         lifetime.signal.throwIfAborted();
         captured?.authority.assertCurrent();
-        resolved.assertSourceCurrent();
+        if (captured) {
+          if (
+            (resolveGatewayContext ? resolveGatewayContext() : scope?.context) !== resolved.context
+          ) {
+            throw new Error("Gateway continuation instance binding is no longer active");
+          }
+        } else {
+          resolved.assertSourceCurrent();
+        }
         lifetime.signal.throwIfAborted();
       };
       return {
